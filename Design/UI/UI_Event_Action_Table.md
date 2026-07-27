@@ -1,7 +1,5 @@
 # UI Event-Action Table
-  
-
-  
+    
 ## 1. 상태 구성  
   
 ### 1.1 최상위 상태  
@@ -55,14 +53,14 @@
 #### 2.1.1 Upper Status Bar의 region_1(API Display)
 | ID | 현재 상태 | EVENT | 가드·판정 조건 | Action | 다음 상태 |
 | ---- | ----------------- | ------------------- | ------------------------- | ------------------------------------- | ----------------- |
-| U1-01 | 시작 | None | None | 1) API OFFLINE을 빨간색 글씨로 표시 | API_OFFLINE |
+| U1-01 | Initail Pseudo State | None | None | 1) API OFFLINE을 빨간색 글씨로 표시 | API_OFFLINE |
 | U1-02 | API_OFFLINE | API_CONNECTED | None | 1) API ONLINE을 초록 글씨로 표시 | API_ONLINE |
 | U1-03 | API_ONLINE | API_DISCONNECTED | None | 1) API OFFLINE을 빨간색 글씨로 표시 | API_OFFLINE |
   
 #### 2.1.2 Upper Status Bar의 region_2(매매 중지 버튼)
 | ID | 현재 상태 | EVENT | 가드·판정 조건 | Action | 다음 상태 |
 | ---- | ----------------- | ------------------- | ------------------------- | ------------------------------------- | ----------------- |
-| U2-01 | 시작 | None | None | 1) 매매 중지 버튼을 표시 | DISABLE_STOP_TRADING_POPUP |
+| U2-01 | Initail Pseudo State | None | None | 1) 매매 중지 버튼을 표시 | DISABLE_STOP_TRADING_POPUP |
 | U2-02 | DISABLE_STOP_TRADING_POPUP | STOP_BUTTON_CLICKED | 포지션 보유 X | 1) 포지션 보유X에 해당하는 팝업을 출력 | STOP_POPUP_DISPLAYED |
 | U2-03 | DISABLE_STOP_TRADING_POPUP | STOP_BUTTON_CLICKED | 포지션 보유 O | 1) 포지션 보유O에 해당하는 팝업을 출력 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED |
 | U2-04 | STOP_POPUP_DISPLAYED | STOP_CONFIRMED | None | 1) 자동매매 중단, 2) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
@@ -73,17 +71,61 @@
 #### 2.1.3 Upper Status Bar의 region_3(자동매매 실행 버튼)
 | ID | 현재 상태 | EVENT | 가드·판정 조건 | Action | 다음 상태 |
 | ---- | ----------------- | ------------------- | ------------------------- | ------------------------------------- | ----------------- |
-| U3-01 | 시작 | None | None | 1) '자동매매 실행' 버튼을 표시 | DISABLE_START_TRADING_POPUP |
+| U3-01 | Initail Pseudo State | None | None | 1) '자동매매 실행' 버튼을 표시 | DISABLE_START_TRADING_POPUP |
 | U3-02 | DISABLE_START_TRADING_POPUP | START_BUTTON_CLICKED | REGIME 선택 O | 1) REGIME 선택 o에 해당하는 팝업을 출력 | DISPLAY_START_TRADING_POPUP |
 | U3-03 | DISABLE_START_TRADING_POPUP | START_BUTTON_CLICKED | REGIME 선택 X | 1) REGIME 선택 x에 해당하는 팝업을 출력 | DISPLAY_SELECT_REGIME_POPUP |
-| U3-04 | DISPLAY_START_TRADING_POPUP | START_CONFIRMED | None | 1) 팝업 제거, 2) 거래 시작, 3) '자동매매 실행 중'으로 버튼을 변경 | AUTO_TRADING_RUNNING |
+| U3-04 | DISPLAY_START_TRADING_POPUP | START_CONFIRMED | None | 1) 팝업 제거, 2) 거래 Initail Pseudo State, 3) '자동매매 실행 중'으로 버튼을 변경 | AUTO_TRADING_RUNNING |
 | U3-05 | DISPLAY_START_TRADING_POPUP | START_CANCELED | None | 1) 팝업 제거 | DISABLE_START_TRADING_POPUP |
 | U3-06 | DISPLAY_SELECT_REGIME_POPUP | CONFIRMED | None | 1) 팝업 제거, 2) REGIME 영역에 점등 5회 | DISABLE_START_TRADING_POPUP |
 | U3-07 | AUTO_TRADING_RUNNING | FORCE_SELL_AND_STOP_CONFIRMED | None | 1) '자동매매 실행'으로 버튼 변경 | DISABLE_START_TRADING_POPUP |
 | U3-08 | AUTO_TRADING_RUNNING | STOP_CONFIRMED | None | 1) '자동매매 실행'으로 버튼 변경 | DISABLE_START_TRADING_POPUP |
 
 
-### 2.2 Etire UI System의 Region_1(Upper Status Bar)
+### 2.2 Etire UI System의 Region_2(Main Screen & Trade detail)
 
+#### 2.2.1 Main Screen Wrapper 상태
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| MW-01 | SHOW_ALL_TRADING_DETAILS | None | None | 1) 거래내역 상세보기 페이지로 이동 | TRADING_DETAILS |
+
+##### 2.2.1.1 Main Screen의 Region1(REGIME Pannel)
+###### 2.2.1.1.1 REGIME Pannel의 Region1(추천 type 표시)
+###### 2.2.1.1.2 REGIME Pannel의 Region2(type 선택 상태 표시)
+###### 2.2.1.1.3 REGIME Pannel의 Region3(type 지표 표시)
+
+##### 2.2.1.2 Main Screen의 Region2(Display Chart)
+###### 2.2.1.2.1 Main Screen의 Region1(봉 변경)
+###### 2.2.1.2.2 Main Screen의 Region2(지표 설정)
+###### 2.2.1.2.3 Main Screen의 Region3(Active State 표시)
+###### 2.2.1.2.4 Main Screen의 Region4(전체 화면)
+###### 2.2.1.2.5 Main Screen의 Region5(선 긋기 표시)
+
+##### 2.2.1.3 Main Screen의 Region3(Display Account Info)
+###### 2.2.1.3.1 Display Account Info의 Region1(현재 투자 로직 표시)
+###### 2.2.1.3.2 Display Account Info의 Region2(보유 자산 표시)
+###### 2.2.1.3.3 Display Account Info의 Region3(분할 매수 / 매도 관리)
+###### 2.2.1.3.3.1 분할 매수 / 매도 관리의 Region1(분할 매수)
+###### 2.2.1.3.3.1 분할 매수 / 매도 관리의 Region2(분할 매도)
+
+##### 2.2.1.4 Main Screen의 Region4(체결 내역 & 실시간 지표 탭)
+
+#### 2.2.2 Trading Details 상태
+
+##### 2.2.2.1 Trading Details의 Region1(계좌 내역 상세)
+###### 2.2.2.1.1 계좌 내역 상세의 Region1(수익률 표시)
+###### 2.2.2.1.2 계좌 내역 상세의 Region2(매도 성과 표시)
+###### 2.2.2.1.3 계좌 내역 상세의 Region3(ETH 보유 수량 표시)
+###### 2.2.2.1.4 계좌 내역 상세의 Region4(당일 수수료 표시)
+
+##### 2.2.2.2 Trading Details의 Region2(표시할 기간 선택)
+
+##### 2.2.2.3 Trading Details의 Region3(매도/매수 표시 선택)
+
+##### 2.2.2.4 Trading Details의 Region4(CSV 내보내기)
+
+###### 2.2.2.4.1 CSV 내보내기의 Region1(파일 저장 위치 선택)
+###### 2.2.2.4.2 CSV 내보내기의 Region2(불러올 기간 선택)
+###### 2.2.2.4.3 CSV 내보내기의 Region3(저장할 파일 이름 입력)
+
+
+### 2.3 Etire UI System의 Region_3(프로그램 종료)
