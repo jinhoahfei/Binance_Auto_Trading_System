@@ -1,49 +1,282 @@
 # UI Event-Action Table
     
-## 1. 상태 구성  
-  
-### 1.1 최상위 상태  
+## 1. 상태 구성
+
+상태 번호는 composite state와 그 내부 region의 포함관계를 그대로 반영한다. 같은 상태 ID가 서로 다른 region에 반복되는 경우에는 각 region의 독립 상태로 해석한다. 각 region의 `Initial Pseudo State`는 아래 표에서 반복 기재하지 않고, 2절의 해당 Event-Action Table에 정의된 초기 전이를 따른다.
+
+### 1.1 최상위 상태
 
 | STATE ID | STM 표기 | 의미 |
-| ----------------- | -------------- | ------------------------------------------- |
-|  | Logic 가동 State | 하단 BB 감시와 진입·매매 관리를 포함하는 최상위 복합 상태 |
+| --- | --- | --- |
+| ETIRE_UI_SYSTEM | Etire UI System | `Region_1`(Upper Status Bar), `Region_2`(MAIN_SCREEN & TRADING_DETAILS), `Region_3`(프로그램 종료)를 병렬로 포함하는 최상위 orthogonal composite state |
 
-  
-### 1.2 병렬 진입·포지션 소유권 영역 (Region_1)  
+### 1.2 Etire UI System의 Region_1 — Upper Status Bar 복합 상태
 
-| 상태 ID              | STM 표기                                   |
-| ------------------ | ---------------------------------------- |
-| NO_POSITION        | 포지션 미보유                                  |
-| CASE_B_POSITION_MANAGEMENT | Case B 포지션 관리 복합 상태                |
-| CASE_B_HOLDING     | Lower_BB_30M_Pullback (Case_B) 포지션 보유    |
-| CASE_B_TREND_HOLD  | 강한 반등 상태 (TREND_HOLD)                    |
-| CASE_B_CLOSED      | Lower_BB_30m_Pullback (case_B) 포지션 청산 완료 |
-| CASE_C_POSITION_MANAGEMENT | Case C 포지션 관리 복합 상태                |
-| CASE_C_HOLDING     | Blade_Catching (Case_C) 포지션 보유           |
-| CASE_C_TP_TRAILING | 익절권 진입 (TP_TRAILING)                     |
-| CASE_C_CLOSED      | Blade_Catching (case_C) 포지션 청산 완료        |
-| CASE_C_RECOVERY_SUCCEEDED | realtime %B >= 0.25 만족               |
-  
-  
-### 1.3 Case B 신호 검사 Region  
+`UPPER_STATUS_BAR`는 API 상태 표시, 매매 중지 버튼, 자동매매 실행 버튼의 세 region을 병렬로 포함한다.
 
-| 상태 ID                     | STM 표기                          |
-| ------------------------- | ------------------------------- |
-| B_WAIT_TOUCH              | case_B 1차 조건 대기                 |
-| B_WAIT_SIGNAL             | case_B 1차 조건 만족 (WAIT_SIGNAL)   |
-| B_WAIT_PULLBACK           | case_B 2차 조건 만족 (WAIT_PULLBACK) |
-| B_POSITION_OPEN_SIGNALLED | case_B 3차 조건 만족 (POSITION_OPEN) |
-| CASE_B_FINAL_STATE        | case_B 신호 검사 종료                 |
-  
-  
-### 1.4 Case C 신호 검사 Region  
+#### 1.2.1 Upper Status Bar의 Region_1 — API Display
 
-| 상태 ID                | STM 표기                  |
-| -------------------- | ----------------------- |
-| C_WAIT_SETUP         | case_C 1차 조건 대기         |
-| C_SETUP              | case_C 1차 조건 만족 (SETUP) |
-| C_RECOVERY_SUCCEEDED | case_C 회복 성공            |
-| CASE_C_FINAL_STATE   | case_C 신호 검사 종료         |
+| 상태 ID | STM 표기 |
+| --- | --- |
+| API_OFFLINE | API 연결 끊김 표시 |
+| API_ONLINE | API 연결 정상 표시 |
+
+#### 1.2.2 Upper Status Bar의 Region_2 — 매매 중지 버튼
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| DISABLE_STOP_TRADING_POPUP | 매매 중지 팝업 비표시 |
+| STOP_POPUP_DISPLAYED | 포지션 미보유 매매 중지 확인 팝업 표시 |
+| FORCE_SELL_AND_STOP_POPUP_DISPLAYED | 포지션 보유 강제 매도 후 중지 확인 팝업 표시 |
+
+#### 1.2.3 Upper Status Bar의 Region_3 — 자동매매 실행 버튼
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| DISABLE_START_TRADING_POPUP | 자동매매 실행 팝업 비표시 |
+| DISPLAY_START_TRADING_POPUP | 자동매매 실행 확인 팝업 표시 |
+| DISPLAY_SELECT_REGIME_POPUP | REGIME 선택 안내 팝업 표시 |
+| AUTO_TRADING_RUNNING | 자동매매 실행 중 |
+
+### 1.3 Etire UI System의 Region_2 — MAIN_SCREEN & TRADING_DETAILS
+
+| 상태 ID | STM 표기 | 의미 |
+| --- | --- | --- |
+| MAIN_SCREEN_WRAPPER | Main Screen 복합 상태 | 메인 화면의 네 region을 병렬로 포함 |
+| TRADING_DETAILS | Trading Details 복합 상태 | 거래 내역 상세 화면의 네 region을 병렬로 포함 |
+| H* | Deep History Pseudo State | `TRADING_DETAILS`에서 메인 화면으로 복귀할 때 `MAIN_SCREEN_WRAPPER`의 직전 활성 상태 구성을 복원 |
+
+#### 1.3.1 MAIN_SCREEN_WRAPPER 복합 상태
+
+`MAIN_SCREEN_WRAPPER`는 `Region_1`(REGIME Pannel), `Region_2`(Display Chart), `Region_3`(Display Account Info), `Region_4`(체결 내역 & 실시간 지표 탭)를 병렬로 포함한다.
+
+##### 1.3.1.1 MAIN_SCREEN의 Region_1 — REGIME Pannel 복합 상태
+
+REGIME Pannel은 추천 type 표시, type 선택 상태 표시, type 지표 표시의 세 region을 병렬로 포함한다.
+
+###### 1.3.1.1.1 REGIME Pannel의 Region_1 — 추천 type 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| RECOMANDED_TYPE_DISPLAYED | 현재 추천 type 표시 |
+
+###### 1.3.1.1.2 REGIME Pannel의 Region_2 — type 선택 상태 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| TYPE_SELECTION | REGIME type 선택 및 선택 상태 표시 |
+| TYPE_CHANGING_POPUP_DISPLAYED | 자동매매 실행 중 type 변경 확인 팝업 표시 |
+
+###### 1.3.1.1.3 REGIME Pannel의 Region_3 — type 지표 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| DISPLAY_TYPE_INDICATOR | REGIME 판단 지표의 실시간 값 표시 |
+
+##### 1.3.1.2 MAIN_SCREEN의 Region_2 — Display Chart 복합 상태
+
+Display Chart는 봉 변경, 지표 설정, Active State 표시, 전체 화면, 선 긋기 표시, 그려놓은 선 지우기의 여섯 region을 병렬로 포함한다.
+
+###### 1.3.1.2.1 Display Chart의 Region_1 — 봉 변경
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| 30_M_CHART_DISPLAY | 30분봉 차트 표시 |
+| 1_M_CHART_DISPLAY | 1분봉 차트 표시 |
+| 4_H_CHART_DISPLAY | 4시간봉 차트 표시 |
+| 1_DAY_CHART_DISPLAY | 1일봉 차트 표시 |
+
+###### 1.3.1.2.2 Display Chart의 Region_2 — 지표 설정
+
+| 상태 ID | STM 표기 | 의미 |
+| --- | --- | --- |
+| INDICATOR_SETTINGS_POPUP_CLOSED | 지표 설정 팝업 닫힘 | 지표 설정 팝업이 표시되지 않는 상태 |
+| INDICATOR_SETTINGS_POPUP_OPENED | 지표 설정 팝업 열림 복합 상태 | 볼린저밴드, EMA, 거래량 설정 region을 병렬로 포함 |
+
+###### 1.3.1.2.2.1 INDICATOR_SETTINGS_POPUP_OPENED의 Region_1 — 볼린저밴드 설정
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| SELECTED_BB_DISPLAY | 저장된 볼린저밴드 표시 상태 반영 |
+| BB_DISPLAY_OFF | 볼린저밴드 표시 OFF |
+| BB_DISPLAY_ON | 볼린저밴드 표시 ON |
+
+###### 1.3.1.2.2.2 INDICATOR_SETTINGS_POPUP_OPENED의 Region_2 — EMA 설정
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| SELECTED_EMA_DISPLAY | 저장된 EMA 표시 상태 반영 |
+| EMA_DISPLAY_OFF | EMA 표시 OFF |
+| EMA_DISPLAY_ON | EMA 표시 ON |
+
+###### 1.3.1.2.2.3 INDICATOR_SETTINGS_POPUP_OPENED의 Region_3 — 거래량 설정
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| SELECTED_VOLUME_DISPLAY | 저장된 거래량 표시 상태 반영 |
+| VOLUME_DISPLAY_OFF | 거래량 표시 OFF |
+| VOLUME_DISPLAY_ON | 거래량 표시 ON |
+
+###### 1.3.1.2.3 Display Chart의 Region_3 — Active State 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| ACTIVE_TRADING_LOGIC_STATE_DISPLAY | 현재 투자 로직 상태 표시 |
+
+###### 1.3.1.2.4 Display Chart의 Region_4 — 전체 화면
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| NORMAL_VIEW_DISPLAY | 일반 화면 크기로 차트 표시 |
+| FULL_SCREEN_VIEW_DISPLAY | 전체 화면 크기로 차트 표시 |
+
+###### 1.3.1.2.5 Display Chart의 Region_5 — 선 긋기 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| DRAWING_DEACTIVATED | 선 그리기 비활성화 |
+| DRAWING_WAIT | 선 그리기 입력 대기 |
+| USER_DRAWING | 사용자가 선을 그리는 중 |
+
+###### 1.3.1.2.6 Display Chart의 Region_6 — 그려놓은 선 지우기
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| AWAITING_SELECTION | 그려진 선 선택 대기 |
+| DRAWED_LINE_HIGHLIGHTED | 커서가 올라간 선 강조 표시 |
+| CONTEXTED_MENU_OPENED | 선택한 선의 컨텍스트 메뉴 표시 |
+
+##### 1.3.1.3 MAIN_SCREEN의 Region_3 — Display Account Info 복합 상태
+
+Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분할 매수/매도 관리의 세 region을 병렬로 포함한다.
+
+###### 1.3.1.3.1 Display Account Info의 Region_1 — 현재 투자 로직 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| TRADING_LOGIC_STATUS_DISPLAYED | 현재 투자 로직 상태 및 수익률 표시 |
+
+###### 1.3.1.3.2 Display Account Info의 Region_2 — 보유 자산 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| ASSET_SUMMARY_DISPLAYED | KRW 및 ETH 보유 자산 표시 |
+
+###### 1.3.1.3.3 Display Account Info의 Region_3 — 분할 매수/매도 관리 복합 상태
+
+분할 매수/매도 관리는 분할 매수와 분할 매도의 두 region을 병렬로 포함한다.
+
+###### 1.3.1.3.3.1 분할 매수/매도 관리의 Region_1 — 분할 매수
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| SCALE_IN_ORDER | 분할 매수 비율 설정 및 표시 |
+
+###### 1.3.1.3.3.2 분할 매수/매도 관리의 Region_2 — 분할 매도
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| SCALE_OUT_ORDER | 분할 매도 비율 설정 및 표시 |
+
+##### 1.3.1.4 MAIN_SCREEN의 Region_4 — 체결 내역 & 실시간 지표 탭
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| TRADE_HISTORY_DISPLAYED | 체결 내역 탭 표시 |
+| REALTIME_INDICATOR_DISPLAYED | 실시간 지표 탭 표시 |
+
+#### 1.3.2 TRADING_DETAILS 복합 상태
+
+`TRADING_DETAILS`는 `Region_1`(계좌 내역 상세), `Region_2`(표시할 기간 선택), `Region_3`(매도/매수 표시 선택), `Region_4`(CSV 내보내기)를 병렬로 포함한다.
+
+##### 1.3.2.1 TRADING_DETAILS의 Region_1 — 계좌 내역 상세 복합 상태
+
+계좌 내역 상세는 수익률 표시, 매도 성과 표시, ETH 보유 수량 표시, 당일 수수료 표시의 네 region을 병렬로 포함한다.
+
+###### 1.3.2.1.1 계좌 내역 상세의 Region_1 — 수익률 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| PROFIT_RATE_DISPLAYED | 입출금을 보정한 수익률 표시 |
+
+###### 1.3.2.1.2 계좌 내역 상세의 Region_2 — 매도 성과 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| TRADE_PERFORMANCE_DISPLAYED | 누적 매도 성과 표시 |
+
+###### 1.3.2.1.3 계좌 내역 상세의 Region_3 — ETH 보유 수량 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| ETH_HOLDINGS_DISPLAYED | ETH 보유 수량 표시 |
+
+###### 1.3.2.1.4 계좌 내역 상세의 Region_4 — 당일 수수료 표시
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| DAILY_TRADING_FEE_DISPLAYED | 당일 발생 수수료 표시 |
+
+##### 1.3.2.2 TRADING_DETAILS의 Region_2 — 표시할 기간 선택
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| TODAY_TRADE_HISTORY_DISPLAYED | 오늘 거래 내역 표시 |
+| WEEKLY_TRADE_HISTORY_DISPLAYED | 최근 7일 거래 내역 표시 |
+| MONTHLY_TRADE_HISTORY_DISPLAYED | 최근 30일 거래 내역 표시 |
+| ALL_TRADE_HISTORY_DISPLAYED | 전체 기간 거래 내역 표시 |
+
+##### 1.3.2.3 TRADING_DETAILS의 Region_3 — 매도/매수 표시 선택
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| ALL_TRADE_HISTORY_DISPLAYED | 매수·매도 전체 거래 내역 표시 |
+| BUY_TRADE_HISTORY_DISPLAYED | 매수 거래 내역만 표시 |
+| SELL_TRADE_HISTORY_DISPLAYED | 매도 거래 내역만 표시 |
+
+##### 1.3.2.4 TRADING_DETAILS의 Region_4 — CSV 내보내기
+
+| 상태 ID | STM 표기 | 의미 |
+| --- | --- | --- |
+| AWAITING_CSV_EXPORT_POPUP | CSV 내보내기 팝업 열기 대기 | CSV 내보내기 팝업이 표시되지 않는 상태 |
+| CSV_EXPORT_POPUP_DISPLAYED | CSV 내보내기 팝업 표시 복합 상태 | 파일 저장 위치, 불러올 기간, 파일 이름 입력 region을 병렬로 포함 |
+| CSV_EXPORT_COMPLETE | CSV 내보내기 완료 | 내보내기 완료 팝업 표시 |
+
+###### 1.3.2.4.1 CSV_EXPORT_POPUP_DISPLAYED의 Region_1 — 파일 저장 위치 선택
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| FILE_BROWSER_CLOSED | 파일 탐색기 닫힘 |
+| FILE_BROWSER_OPENED | 파일 탐색기 열림 |
+
+###### 1.3.2.4.2 CSV_EXPORT_POPUP_DISPLAYED의 Region_2 — 불러올 기간 선택
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| CSV_TODAY_TRADE_HISTORY | 내보낼 기간을 오늘로 설정 |
+| CSV_WEEKLY_TRADE_HISTORY | 내보낼 기간을 최근 7일로 설정 |
+| CSV_MONTHLY_TRADE_HISTORY | 내보낼 기간을 최근 30일로 설정 |
+| CSV_SELECT_DATE | 사용자 지정 기간 선택 진입 상태 |
+| CSV_DATE_SELECT | 사용자 지정 기간 선택 활성 상태 |
+| CSV_START_DATE | 시작일 달력 팝업 표시 |
+| CSV_FINISH_DATE | 종료일 달력 팝업 표시 |
+
+###### 1.3.2.4.3 CSV_EXPORT_POPUP_DISPLAYED의 Region_3 — 저장할 파일 이름 입력
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| DEFAULT_FILE_NAME | 기본 파일 이름 표시 |
+| NEW_FILE_NAME_TYPED | 새 파일 이름 입력 중 |
+| FILE_NAME_WRITED | 입력한 파일 이름 적용 |
+
+### 1.4 Etire UI System의 Region_3 — 프로그램 종료
+
+| 상태 ID | STM 표기 |
+| --- | --- |
+| AWAITING_EXIT | 프로그램 종료 요청 대기 |
+| FORCE_SELL_EXIT_POPUP_DISPLAYED | 포지션 보유 중 강제 매도 후 종료 확인 팝업 표시 |
+| EXIT_POPUP_DISPLAYED | 포지션 미보유 종료 확인 팝업 표시 |
+| UI_FINAL_STATE | UI 종료 Final State |
   
   
 ## 2. Event-Action Table  
@@ -243,7 +476,7 @@
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | D2-01 | Initial Pseudo State | None | None | 1) 프로그램 실행 이후에 기록 된 매도 성과(수익 실현 여부, 평균 수익률, 총 수익)을 가져온다, 2) 가져온 정보를 표시한다 | TRADE_PERFORMANCE_DISPLAYED |
-| D2-02 | NEW_SELL_EXCUTION | None | None | 1) 갱신된 매도 성과(수익 실현 여부, 평균 수익률, 총 수익)을 가져온다, 2) 가져온 정보를 표시한다 | TRADE_PERFORMANCE_DISPLAYED |
+| D2-02 | TRADE_PERFORMANCE_DISPLAYED | None | None | 1) 갱신된 매도 성과(수익 실현 여부, 평균 수익률, 총 수익)을 가져온다, 2) 가져온 정보를 표시한다 | TRADE_PERFORMANCE_DISPLAYED |
 
 ###### 2.2.2.1.3 계좌 내역 상세의 Region3(ETH 보유 수량 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
