@@ -9,6 +9,7 @@
 | STATE ID | STM 표기 | 의미 |
 | --- | --- | --- |
 | ETIRE_UI_SYSTEM | Etire UI System | `Region_1`(Upper Status Bar), `Region_2`(MAIN_SCREEN & TRADING_DETAILS), `Region_3`(프로그램 종료)를 병렬로 포함하는 최상위 orthogonal composite state |
+| UI_FINAL_STATE | UI 종료 Final State | 모든 병렬 region을 종료하고 Etire UI System 전체를 종료하는 최상위 Final State |
 
 ### 1.2 Etire UI System의 Region_1 — Upper Status Bar 복합 상태
 
@@ -28,6 +29,7 @@
 | DISABLE_STOP_TRADING_POPUP | 매매 중지 팝업 비표시 |
 | STOP_POPUP_DISPLAYED | 포지션 미보유 매매 중지 확인 팝업 표시 |
 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED | 포지션 보유 강제 매도 후 중지 확인 팝업 표시 |
+| FORCE_SELL_AND_STOP_PROCESSING | 포지션 강제 매도 처리 중 |
 
 #### 1.2.3 Upper Status Bar의 Region_3 — 자동매매 실행 버튼
 
@@ -36,6 +38,7 @@
 | DISABLE_START_TRADING_POPUP | 자동매매 실행 팝업 비표시 |
 | DISPLAY_START_TRADING_POPUP | 자동매매 실행 확인 팝업 표시 |
 | DISPLAY_SELECT_REGIME_POPUP | REGIME 선택 안내 팝업 표시 |
+| DISPLAY_API_CONNECTION_REQUIRED_POPUP | API 연결 필요 안내 팝업 표시 |
 | AUTO_TRADING_RUNNING | 자동매매 실행 중 |
 
 ### 1.3 Etire UI System의 Region_2 — MAIN_SCREEN & TRADING_DETAILS
@@ -48,26 +51,26 @@
 
 #### 1.3.1 MAIN_SCREEN_WRAPPER 복합 상태
 
-`MAIN_SCREEN_WRAPPER`는 `Region_1`(REGIME Pannel), `Region_2`(Display Chart), `Region_3`(Display Account Info), `Region_4`(체결 내역 & 실시간 지표 탭)를 병렬로 포함한다.
+`MAIN_SCREEN_WRAPPER`는 `Region_1`(REGIME Panel), `Region_2`(Display Chart), `Region_3`(Display Account Info), `Region_4`(체결 내역 & 실시간 지표 탭)를 병렬로 포함한다.
 
-##### 1.3.1.1 MAIN_SCREEN의 Region_1 — REGIME Pannel 복합 상태
+##### 1.3.1.1 MAIN_SCREEN의 Region_1 — REGIME Panel 복합 상태
 
-REGIME Pannel은 추천 type 표시, type 선택 상태 표시, type 지표 표시의 세 region을 병렬로 포함한다.
+REGIME Panel은 추천 type 표시, type 선택 상태 표시, type 지표 표시의 세 region을 병렬로 포함한다.
 
-###### 1.3.1.1.1 REGIME Pannel의 Region_1 — 추천 type 표시
+###### 1.3.1.1.1 REGIME Panel의 Region_1 — 추천 type 표시
 
 | 상태 ID | STM 표기 |
 | --- | --- |
-| RECOMANDED_TYPE_DISPLAYED | 현재 추천 type 표시 |
+| RECOMMENDED_TYPE_DISPLAYED | 현재 추천 type 표시 |
 
-###### 1.3.1.1.2 REGIME Pannel의 Region_2 — type 선택 상태 표시
+###### 1.3.1.1.2 REGIME Panel의 Region_2 — type 선택 상태 표시
 
 | 상태 ID | STM 표기 |
 | --- | --- |
 | TYPE_SELECTION | REGIME type 선택 및 선택 상태 표시 |
 | TYPE_CHANGING_POPUP_DISPLAYED | 자동매매 실행 중 type 변경 확인 팝업 표시 |
 
-###### 1.3.1.1.3 REGIME Pannel의 Region_3 — type 지표 표시
+###### 1.3.1.1.3 REGIME Panel의 Region_3 — type 지표 표시
 
 | 상태 ID | STM 표기 |
 | --- | --- |
@@ -97,7 +100,7 @@ Display Chart는 봉 변경, 지표 설정, Active State 표시, 전체 화면, 
 
 | 상태 ID | STM 표기 |
 | --- | --- |
-| SELECTED_BB_DISPLAY | 저장된 볼린저밴드 표시 상태 반영 |
+| BB_DISPLAY_CHOICE | 저장된 볼린저밴드 표시 상태에 따른 Choice Pseudo State |
 | BB_DISPLAY_OFF | 볼린저밴드 표시 OFF |
 | BB_DISPLAY_ON | 볼린저밴드 표시 ON |
 
@@ -105,7 +108,7 @@ Display Chart는 봉 변경, 지표 설정, Active State 표시, 전체 화면, 
 
 | 상태 ID | STM 표기 |
 | --- | --- |
-| SELECTED_EMA_DISPLAY | 저장된 EMA 표시 상태 반영 |
+| EMA_DISPLAY_CHOICE | 저장된 EMA 표시 상태에 따른 Choice Pseudo State |
 | EMA_DISPLAY_OFF | EMA 표시 OFF |
 | EMA_DISPLAY_ON | EMA 표시 ON |
 
@@ -113,7 +116,7 @@ Display Chart는 봉 변경, 지표 설정, Active State 표시, 전체 화면, 
 
 | 상태 ID | STM 표기 |
 | --- | --- |
-| SELECTED_VOLUME_DISPLAY | 저장된 거래량 표시 상태 반영 |
+| VOLUME_DISPLAY_CHOICE | 저장된 거래량 표시 상태에 따른 Choice Pseudo State |
 | VOLUME_DISPLAY_OFF | 거래량 표시 OFF |
 | VOLUME_DISPLAY_ON | 거래량 표시 ON |
 
@@ -143,8 +146,8 @@ Display Chart는 봉 변경, 지표 설정, Active State 표시, 전체 화면, 
 | 상태 ID | STM 표기 |
 | --- | --- |
 | AWAITING_SELECTION | 그려진 선 선택 대기 |
-| DRAWED_LINE_HIGHLIGHTED | 커서가 올라간 선 강조 표시 |
-| CONTEXTED_MENU_OPENED | 선택한 선의 컨텍스트 메뉴 표시 |
+| DRAWN_LINE_HIGHLIGHTED | 커서가 올라간 선 강조 표시 |
+| CONTEXT_MENU_OPENED | 선택한 선의 컨텍스트 메뉴 표시 |
 
 ##### 1.3.1.3 MAIN_SCREEN의 Region_3 — Display Account Info 복합 상태
 
@@ -240,7 +243,9 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | --- | --- | --- |
 | AWAITING_CSV_EXPORT_POPUP | CSV 내보내기 팝업 열기 대기 | CSV 내보내기 팝업이 표시되지 않는 상태 |
 | CSV_EXPORT_POPUP_DISPLAYED | CSV 내보내기 팝업 표시 복합 상태 | 파일 저장 위치, 불러올 기간, 파일 이름 입력 region을 병렬로 포함 |
+| CSV_EXPORT_IN_PROGRESS | CSV 내보내기 처리 중 | 검증된 설정으로 CSV 파일을 생성하는 상태 |
 | CSV_EXPORT_COMPLETE | CSV 내보내기 완료 | 내보내기 완료 팝업 표시 |
+| CSV_EXPORT_ERROR | CSV 내보내기 실패 | 내보내기 실패 원인을 표시하고 확인을 대기하는 상태 |
 
 ###### 1.3.2.4.1 CSV_EXPORT_POPUP_DISPLAYED의 Region_1 — 파일 저장 위치 선택
 
@@ -256,8 +261,7 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | CSV_TODAY_TRADE_HISTORY | 내보낼 기간을 오늘로 설정 |
 | CSV_WEEKLY_TRADE_HISTORY | 내보낼 기간을 최근 7일로 설정 |
 | CSV_MONTHLY_TRADE_HISTORY | 내보낼 기간을 최근 30일로 설정 |
-| CSV_SELECT_DATE | 사용자 지정 기간 선택 진입 상태 |
-| CSV_DATE_SELECT | 사용자 지정 기간 선택 활성 상태 |
+| CSV_SELECT_DATE | 사용자 지정 기간 선택 활성 상태 |
 | CSV_START_DATE | 시작일 달력 팝업 표시 |
 | CSV_FINISH_DATE | 종료일 달력 팝업 표시 |
 
@@ -267,7 +271,7 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | --- | --- |
 | DEFAULT_FILE_NAME | 기본 파일 이름 표시 |
 | NEW_FILE_NAME_TYPED | 새 파일 이름 입력 중 |
-| FILE_NAME_WRITED | 입력한 파일 이름 적용 |
+| FILE_NAME_WRITTEN | 입력한 파일 이름 적용 |
 
 ### 1.4 Etire UI System의 Region_3 — 프로그램 종료
 
@@ -275,8 +279,8 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | --- | --- |
 | AWAITING_EXIT | 프로그램 종료 요청 대기 |
 | FORCE_SELL_EXIT_POPUP_DISPLAYED | 포지션 보유 중 강제 매도 후 종료 확인 팝업 표시 |
+| FORCE_SELL_EXIT_PROCESSING | 강제 매도 체결 확인 대기 |
 | EXIT_POPUP_DISPLAYED | 포지션 미보유 종료 확인 팝업 표시 |
-| UI_FINAL_STATE | UI 종료 Final State |
   
   
 ## 2. Event-Action Table  
@@ -286,32 +290,39 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 #### 2.1.1 Upper Status Bar의 region_1(API Display)
 | ID | 현재 상태 | EVENT | 가드·판정 조건 | Action | 다음 상태 |
 | ---- | ----------------- | ------------------- | ------------------------- | ------------------------------------- | ----------------- |
-| U1-01 | Initail Pseudo State | None | None | 1) API OFFLINE을 빨간색 글씨로 표시 | API_OFFLINE |
+| U1-01 | Initial Pseudo State | None | None | 1) API OFFLINE을 빨간색 글씨로 표시 | API_OFFLINE |
 | U1-02 | API_OFFLINE | API_CONNECTED | None | 1) API ONLINE을 초록 글씨로 표시 | API_ONLINE |
 | U1-03 | API_ONLINE | API_DISCONNECTED | None | 1) API OFFLINE을 빨간색 글씨로 표시 | API_OFFLINE |
   
 #### 2.1.2 Upper Status Bar의 region_2(매매 중지 버튼)
 | ID | 현재 상태 | EVENT | 가드·판정 조건 | Action | 다음 상태 |
 | ---- | ----------------- | ------------------- | ------------------------- | ------------------------------------- | ----------------- |
-| U2-01 | Initail Pseudo State | None | None | 1) 매매 중지 버튼을 표시 | DISABLE_STOP_TRADING_POPUP |
-| U2-02 | DISABLE_STOP_TRADING_POPUP | STOP_BUTTON_CLICKED | 포지션 보유 X | 1) 포지션 보유X에 해당하는 팝업을 출력 | STOP_POPUP_DISPLAYED |
-| U2-03 | DISABLE_STOP_TRADING_POPUP | STOP_BUTTON_CLICKED | 포지션 보유 O | 1) 포지션 보유O에 해당하는 팝업을 출력 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED |
-| U2-04 | STOP_POPUP_DISPLAYED | STOP_CONFIRMED | None | 1) 자동매매 중단, 2) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
-| U2-05 | STOP_POPUP_DISPLAYED | STOP_CANCELED | None | 1) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
-| U2-06 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED | FORCE_SELL_AND_STOP_CONFIRMED | None | 1) 포지션 강제 매도, 2) 자동매매 중단, 3) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
-| U2-07 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED | FORCE_SELL_AND_STOP_CANCELED | None | 1) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
+| U2-01 | Initial Pseudo State | None | None | 1) 매매 중지 버튼을 표시 | DISABLE_STOP_TRADING_POPUP |
+| U2-02 | DISABLE_STOP_TRADING_POPUP | STOP_BUTTON_CLICKED | 자동매매 실행 중 O && 포지션 보유 X | 1) 포지션 미보유에 해당하는 팝업을 출력 | STOP_POPUP_DISPLAYED |
+| U2-03 | DISABLE_STOP_TRADING_POPUP | STOP_BUTTON_CLICKED | 자동매매 실행 중 O && 포지션 보유 O | 1) 포지션 보유에 해당하는 팝업을 출력 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED |
+| U2-04 | DISABLE_STOP_TRADING_POPUP | STOP_BUTTON_CLICKED | 자동매매 실행 중 X | 1) 자동매매가 실행 중이 아님을 표시 | DISABLE_STOP_TRADING_POPUP |
+| U2-05 | STOP_POPUP_DISPLAYED | STOP_CONFIRMED | None | 1) 자동매매 중단, 2) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
+| U2-06 | STOP_POPUP_DISPLAYED | STOP_CANCELED | None | 1) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
+| U2-07 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED | FORCE_SELL_AND_STOP_CONFIRMED | None | 1) 포지션 강제 매도 주문 제출, 2) 강제 매도 처리 중 상태 표시 | FORCE_SELL_AND_STOP_PROCESSING |
+| U2-08 | FORCE_SELL_AND_STOP_PROCESSING | FORCE_SELL_AND_STOP_SUCCEEDED | None | 1) 자동매매 중단, 2) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
+| U2-09 | FORCE_SELL_AND_STOP_PROCESSING | FORCE_SELL_AND_STOP_FAILED | None | 1) 강제 매도 실패 원인을 표시, 2) 강제 매도 후 중지 확인 팝업을 다시 표시 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED |
+| U2-10 | FORCE_SELL_AND_STOP_POPUP_DISPLAYED | FORCE_SELL_AND_STOP_CANCELED | None | 1) 팝업 제거 | DISABLE_STOP_TRADING_POPUP |
 
 #### 2.1.3 Upper Status Bar의 region_3(자동매매 실행 버튼)
 | ID | 현재 상태 | EVENT | 가드·판정 조건 | Action | 다음 상태 |
 | ---- | ----------------- | ------------------- | ------------------------- | ------------------------------------- | ----------------- |
-| U3-01 | Initail Pseudo State | None | None | 1) '자동매매 실행' 버튼을 표시 | DISABLE_START_TRADING_POPUP |
-| U3-02 | DISABLE_START_TRADING_POPUP | START_BUTTON_CLICKED | REGIME 선택 O | 1) REGIME 선택 o에 해당하는 팝업을 출력 | DISPLAY_START_TRADING_POPUP |
-| U3-03 | DISABLE_START_TRADING_POPUP | START_BUTTON_CLICKED | REGIME 선택 X | 1) REGIME 선택 x에 해당하는 팝업을 출력 | DISPLAY_SELECT_REGIME_POPUP |
-| U3-04 | DISPLAY_START_TRADING_POPUP | START_CONFIRMED | None | 1) 팝업 제거, 2) 거래 Initail Pseudo State, 3) '자동매매 실행 중'으로 버튼을 변경 | AUTO_TRADING_RUNNING |
-| U3-05 | DISPLAY_START_TRADING_POPUP | START_CANCELED | None | 1) 팝업 제거 | DISABLE_START_TRADING_POPUP |
-| U3-06 | DISPLAY_SELECT_REGIME_POPUP | CONFIRMED | None | 1) 팝업 제거, 2) REGIME 영역에 점등 5회 | DISABLE_START_TRADING_POPUP |
-| U3-07 | AUTO_TRADING_RUNNING | FORCE_SELL_AND_STOP_CONFIRMED | None | 1) '자동매매 실행'으로 버튼 변경 | DISABLE_START_TRADING_POPUP |
-| U3-08 | AUTO_TRADING_RUNNING | STOP_CONFIRMED | None | 1) '자동매매 실행'으로 버튼 변경 | DISABLE_START_TRADING_POPUP |
+| U3-01 | Initial Pseudo State | None | None | 1) '자동매매 실행' 버튼을 표시 | DISABLE_START_TRADING_POPUP |
+| U3-02 | DISABLE_START_TRADING_POPUP | START_BUTTON_CLICKED | REGIME 선택 O && API 연결 O | 1) 자동매매 실행 확인 팝업을 출력 | DISPLAY_START_TRADING_POPUP |
+| U3-03 | DISABLE_START_TRADING_POPUP | START_BUTTON_CLICKED | REGIME 선택 X | 1) REGIME 선택 안내 팝업을 출력 | DISPLAY_SELECT_REGIME_POPUP |
+| U3-04 | DISABLE_START_TRADING_POPUP | START_BUTTON_CLICKED | REGIME 선택 O && API 연결 X | 1) API 연결 필요 안내 팝업을 출력 | DISPLAY_API_CONNECTION_REQUIRED_POPUP |
+| U3-05 | DISPLAY_START_TRADING_POPUP | START_CONFIRMED | API 연결 O | 1) 팝업 제거, 2) 거래 로직을 초기화한 뒤 자동매매 시작, 3) '자동매매 실행 중'으로 버튼 변경 | AUTO_TRADING_RUNNING |
+| U3-06 | DISPLAY_START_TRADING_POPUP | START_CONFIRMED | API 연결 X | 1) 자동매매 실행 확인 팝업 제거, 2) API 연결 필요 안내 팝업 출력 | DISPLAY_API_CONNECTION_REQUIRED_POPUP |
+| U3-07 | DISPLAY_START_TRADING_POPUP | START_CANCELED | None | 1) 팝업 제거 | DISABLE_START_TRADING_POPUP |
+| U3-08 | DISPLAY_SELECT_REGIME_POPUP | SELECT_REGIME_NOTICE_CONFIRMED | None | 1) 팝업 제거, 2) REGIME 영역에 점등 5회 | DISABLE_START_TRADING_POPUP |
+| U3-09 | DISPLAY_API_CONNECTION_REQUIRED_POPUP | API_CONNECTION_NOTICE_CONFIRMED | None | 1) 팝업 제거 | DISABLE_START_TRADING_POPUP |
+| U3-10 | AUTO_TRADING_RUNNING | FORCE_SELL_AND_STOP_SUCCEEDED | None | 1) '자동매매 실행'으로 버튼 변경 | DISABLE_START_TRADING_POPUP |
+| U3-11 | AUTO_TRADING_RUNNING | STOP_CONFIRMED | None | 1) '자동매매 실행'으로 버튼 변경 | DISABLE_START_TRADING_POPUP |
+| U3-12 | AUTO_TRADING_RUNNING | API_DISCONNECTED | None | 1) 신규 주문 생성 중단, 2) 자동매매 중단, 3) '자동매매 실행'으로 버튼 변경, 4) API 연결 필요 안내 팝업 출력 | DISPLAY_API_CONNECTION_REQUIRED_POPUP |
 
 
 ### 2.2 Etire UI System의 Region_2(MAIN_SCREEN & TRADING_DETAILS)
@@ -323,26 +334,26 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 
 #### 2.2.1 MAIN_SCREEN_WRAPPER 상태
 
-##### 2.2.1.1 MAIN_SCREEN의 Region1(REGIME Pannel)
-###### 2.2.1.1.1 REGIME Pannel의 Region1(추천 type 표시)
+##### 2.2.1.1 MAIN_SCREEN의 Region1(REGIME Panel)
+###### 2.2.1.1.1 REGIME Panel의 Region1(추천 type 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| R1-01 | Inital Pseudo State | None | None | 1) 현재 추천 타입을 표시 | RECOMANDED_TYPE_DISPLAYED |
-| R1-02 | RECOMANDED_TYPE_DISPLAYED | TYPE_RECOMANDED | None | 1) 추천 타입을 갱신하여 표시 | RECOMANDED_TYPE_DISPLAYED |
+| R1-01 | Initial Pseudo State | None | None | 1) 현재 추천 타입을 표시 | RECOMMENDED_TYPE_DISPLAYED |
+| R1-02 | RECOMMENDED_TYPE_DISPLAYED | TYPE_RECOMMENDED | None | 1) 추천 타입을 갱신하여 표시 | RECOMMENDED_TYPE_DISPLAYED |
 
-###### 2.2.1.1.2 REGIME Pannel의 Region2(type 선택 상태 표시)
+###### 2.2.1.1.2 REGIME Panel의 Region2(type 선택 상태 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| R2-01 | Inital Pseudo State | None | None | 1) type0 ~ type4 버튼에 색칠되어있지 않은 상태로 표시 | TYPE_SELECTION |
+| R2-01 | Initial Pseudo State | None | None | 1) type0 ~ type4 버튼에 색칠되어있지 않은 상태로 표시 | TYPE_SELECTION |
 | R2-02 | TYPE_SELECTION | TYPE_CLICKED | 자동매매 실행 중 O | 1) 색칠되어있는 버튼의 색칠을 제거, 2) 이번에 선택된 해당 type 버튼에 색칠하여 표시, 3) 팝업창 표시 | TYPE_CHANGING_POPUP_DISPLAYED |
 | R2-03 | TYPE_SELECTION | TYPE_CLICKED | 자동매매 실행 중 X | 1) 색칠되어있는 버튼의 색칠을 제거, 2) 이번에 선택된 해당 type 버튼에 색칠하여 표시, 3) 선택된 type으로 투자 로직을 불러오기 | TYPE_SELECTION |
 | R2-04 | TYPE_CHANGING_POPUP_DISPLAYED | CONFIRM_TYPE_CHANGE | None | 1) 팝업 제거, 2) 선택된 type으로 투자 로직을 불러오기 | TYPE_SELECTION |
 | R2-05 | TYPE_CHANGING_POPUP_DISPLAYED | CANCEL_TYPE_CHANGE | None | 1) 팝업 제거, 2) 이전에 구동중이었던 type 버튼에 색칠하여 표시 | TYPE_SELECTION |
 
-###### 2.2.1.1.3 REGIME Pannel의 Region3(type 지표 표시)
+###### 2.2.1.1.3 REGIME Panel의 Region3(type 지표 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| R3-01 | Inital Pseudo State | None | None | 1) REGIME 판단 지표의 실시간 값을 표시 | DISPLAY_TYPE_INDICATOR |
+| R3-01 | Initial Pseudo State | None | None | 1) REGIME 판단 지표의 실시간 값을 표시 | DISPLAY_TYPE_INDICATOR |
 | R3-02 | DISPLAY_TYPE_INDICATOR | REGIME_INDICATOR_UPDATED | None | 1) 전달받은 지표의 실시간 값을 표시(양수는 초록, 음수는 빨강) | DISPLAY_TYPE_INDICATOR |
 
 
@@ -350,7 +361,7 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 ###### 2.2.1.2.1 Display Chart의 Region1(봉 변경)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| DC1-01 | Inital Pseudo State | None | None | 1) 30분봉 차트 표시 | 30_M_CHART_DISPLAY |
+| DC1-01 | Initial Pseudo State | None | None | 1) 30분봉 차트 표시, 2) 30분봉 차트에 그린 그림이 있다면 불러온다, 3) 설정된 지표를 차트에 표시 | 30_M_CHART_DISPLAY |
 | DC1-02 | 30_M_CHART_DISPLAY | 1_M_BUTTON_CLICKED | None | 1) 1분 봉 차트 표시, 2) 1분 봉 차트에 그린 그림이 있다면 불러온다, 3) 설정된 지표를 차트에 표시 | 1_M_CHART_DISPLAY |
 | DC1-03 | 30_M_CHART_DISPLAY | 4_H_BUTTON_CLICKED | None | 1) 4시간 봉 차트 표시, 2) 4시간 봉 차트에 그린 그림이 있다면 불러온다, 3) 설정된 지표를 차트에 표시 | 4_H_CHART_DISPLAY |
 | DC1-04 | 30_M_CHART_DISPLAY | 1_DAY_BUTTON_CLICKED | None | 1) 1일 봉 차트 표시, 2) 1일 봉 차트에 그린 그림이 있다면 불러온다, 3) 설정된 지표를 차트에 표시 | 1_DAY_CHART_DISPLAY |
@@ -367,31 +378,32 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 ###### 2.2.1.2.2 Display Chart의 Region2(지표 설정)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| DC2-01 | INDICATOR_SETTINGS_POPUP_CLOSED | INDICATOR_SETTINGS_BUTTON_CLICKED | None | 1) 지표 설정 팝업 표시 | INDICATOR_SETTINGS_POPUP_OPENED |
-| DC2-02 | INDICATOR_SETTINGS_POPUP_OPENED | INDICATOR_POPUP_OUTSIDE_CLICKED | None | 1) 지표 설정 팝업 제거 | INDICATOR_SETTINGS_POPUP_CLOSED |
+| DC2-01 | Initial Pseudo State | None | None | None | INDICATOR_SETTINGS_POPUP_CLOSED |
+| DC2-02 | INDICATOR_SETTINGS_POPUP_CLOSED | INDICATOR_SETTINGS_BUTTON_CLICKED | None | 1) 지표 설정 팝업 표시 | INDICATOR_SETTINGS_POPUP_OPENED |
+| DC2-03 | INDICATOR_SETTINGS_POPUP_OPENED | INDICATOR_POPUP_OUTSIDE_CLICKED | None | 1) 지표 설정 팝업 제거 | INDICATOR_SETTINGS_POPUP_CLOSED |
 ###### 2.2.1.2.2.1 INDICATOR_SETTINGS_POPUP_OPENED의 Region1(볼린저밴드 설정)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| IP1-01 | Initial Pseudo State | None | None | 1) 현재 BB 표시 상태 불러오기, 2) 불러온 BB 상태를 BB 스위치로 표시 | SELECTED_BB_DISPLAY |
-| IP1-02 | SELECTED_BB_DISPLAY | BB_DISPLAY_OFF_CLICKED | 현재 상태 값 != off | 1) 차트에서 BB 표시를 제거, 2) BB 스위치를 off로 슬라이드, 3) 현재 BB 표시 상태를 off로 저장 | BB_DISPLAY_OFF |
-| IP1-03 | SELECTED_BB_DISPLAY | BB_DISPLAY_ON_CLICKED | 현재 상태 값 != on | 1) 차트에서 BB를 표시, 2) BB 스위치를 on으로 슬라이드, 3) 현재 BB 표시 상태를 on으로 저장 | BB_DISPLAY_ON |
+| IP1-01 | Initial Pseudo State | None | None | 1) 현재 BB 표시 상태 불러오기 | BB_DISPLAY_CHOICE |
+| IP1-02 | BB_DISPLAY_CHOICE | None | 불러온 BB 표시 상태 = off | 1) 차트에서 BB 표시를 제거, 2) BB 스위치를 off로 표시 | BB_DISPLAY_OFF |
+| IP1-03 | BB_DISPLAY_CHOICE | None | 불러온 BB 표시 상태 = on | 1) 차트에서 BB를 표시, 2) BB 스위치를 on으로 표시 | BB_DISPLAY_ON |
 | IP1-04 | BB_DISPLAY_OFF | BB_DISPLAY_ON_CLICKED | None | 1) 차트에서 BB를 표시, 2) BB 스위치를 on으로 슬라이드, 3) 현재 BB 표시 상태를 on으로 저장 | BB_DISPLAY_ON |
 | IP1-05 | BB_DISPLAY_ON | BB_DISPLAY_OFF_CLICKED | None | 1) 차트에서 BB 표시를 제거, 2) BB 스위치를 off로 슬라이드, 3) 현재 BB 표시 상태를 off로 저장 | BB_DISPLAY_OFF |
 ###### 2.2.1.2.2.2 INDICATOR_SETTINGS_POPUP_OPENED의 Region2(EMA 설정)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| IP2-01 | Initial Pseudo State | None | None | 1) 현재 EMA 표시 상태 불러오기, 2) 불온 EMA 상태를 EMA 스위치로 표시 | SELECTED_EMA_DISPLAY |
-| IP2-02 | SELECTED_EMA_DISPLAY | EMA_DISPLAY_OFF_CLICKED | 현재 상태 값 != off | 1) 차트에서 EMA 표시를 제거, 2) EMA 스위치를 off로 슬라이드, 3) 현재 EMA 표시 상태를 off로 저장 | EMA_DISPLAY_OFF |
-| IP2-03 | SELECTED_EMA_DISPLAY | EMA_DISPLAY_ON_CLICKED | 현재 상태 값 != on | 1) 차트에서 EMA를 표시, 2) EMA 스위치를 on으로 슬라이드, 3) 현재 EMA 표시 상태를 on으로 저장 | EMA_DISPLAY_ON |
+| IP2-01 | Initial Pseudo State | None | None | 1) 현재 EMA 표시 상태 불러오기 | EMA_DISPLAY_CHOICE |
+| IP2-02 | EMA_DISPLAY_CHOICE | None | 불러온 EMA 표시 상태 = off | 1) 차트에서 EMA 표시를 제거, 2) EMA 스위치를 off로 표시 | EMA_DISPLAY_OFF |
+| IP2-03 | EMA_DISPLAY_CHOICE | None | 불러온 EMA 표시 상태 = on | 1) 차트에서 EMA를 표시, 2) EMA 스위치를 on으로 표시 | EMA_DISPLAY_ON |
 | IP2-04 | EMA_DISPLAY_OFF | EMA_DISPLAY_ON_CLICKED | None | 1) 차트에서 EMA를 표시, 2) EMA 스위치를 on으로 슬라이드, 3) 현재 EMA 표시 상태를 on으로 저장 | EMA_DISPLAY_ON |
 | IP2-05 | EMA_DISPLAY_ON | EMA_DISPLAY_OFF_CLICKED | None | 1) 차트에서 EMA 표시를 제거, 2) EMA 스위치를 off로 슬라이드, 3) 현재 EMA 표시 상태를 off로 저장 | EMA_DISPLAY_OFF |
 ###### 2.2.1.2.2.3 INDICATOR_SETTINGS_POPUP_OPENED의 Region3(거래량 설정)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| IP3-01 | Initial Pseudo State | None | None | 1) 현재 거래량 표시 상태 불러오기, 2) 불러온 거래량 상태를 거래량 스위치로 표시 | SELECTED_VOLUME_DISPLAY |
-| IP3-02 | SELECTED_VOLUME_DISPLAY | VOLUME_DISPLAY_OFF_CLICKED | 현재 상태 값 != off | 1) 차트에서 거래량 표시를 제거, 2) 거래량 스위치를 off로 슬라이드, 3) 현재 거래량 표시 상태를 off로 저장 | VOLUME_DISPLAY_OFF |
-| IP3-03 | SELECTED_VOLUME_DISPLAY | VOLUME_DISPLAY_ON_CLICKED | 현재 상태 값 != on | 1) 차트에서 거래량를 표시, 2) 거래량 스위치를 on으로 슬라이드, 3) 현재 거래량 표시 상태를 on으로 저장 | VOLUME_DISPLAY_ON |
-| IP3-04 | VOLUME_DISPLAY_OFF | VOLUME_DISPLAY_ON_CLICKED | None | 1) 차트에서 거래량를 표시, 2) 거래량 스위치를 on으로 슬라이드, 3) 현재 거래량 표시 상태를 on으로 저장 | VOLUME_DISPLAY_ON |
+| IP3-01 | Initial Pseudo State | None | None | 1) 현재 거래량 표시 상태 불러오기 | VOLUME_DISPLAY_CHOICE |
+| IP3-02 | VOLUME_DISPLAY_CHOICE | None | 불러온 거래량 표시 상태 = off | 1) 차트에서 거래량 표시를 제거, 2) 거래량 스위치를 off로 표시 | VOLUME_DISPLAY_OFF |
+| IP3-03 | VOLUME_DISPLAY_CHOICE | None | 불러온 거래량 표시 상태 = on | 1) 차트에서 거래량을 표시, 2) 거래량 스위치를 on으로 표시 | VOLUME_DISPLAY_ON |
+| IP3-04 | VOLUME_DISPLAY_OFF | VOLUME_DISPLAY_ON_CLICKED | None | 1) 차트에서 거래량을 표시, 2) 거래량 스위치를 on으로 슬라이드, 3) 현재 거래량 표시 상태를 on으로 저장 | VOLUME_DISPLAY_ON |
 | IP3-05 | VOLUME_DISPLAY_ON | VOLUME_DISPLAY_OFF_CLICKED | None | 1) 차트에서 거래량 표시를 제거, 2) 거래량 스위치를 off로 슬라이드, 3) 현재 거래량 표시 상태를 off로 저장 | VOLUME_DISPLAY_OFF |
 
 ###### 2.2.1.2.3 Display Chart의 Region3(Active State 표시)
@@ -410,21 +422,23 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 ###### 2.2.1.2.5 Display Chart의 Region5(선 긋기 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| DC5-01 | Initial Pseudo State | None | None | 1) None | DRAWING_DEACTIVATED |
-| DC5-02 | DRAWING_DEACTIVATED | DRAWING_TOOL_CLICKED | None | 1) 그리기를 시작할 수 있도록 환경을 세팅한다| DRAWING_WAIT |
-| DC5-03 | DRAWING_WAIT | USER_START_DRAWING | None | 1) 그리는 중인 선을 표시| USER_DRAWING |
+| DC5-01 | Initial Pseudo State | None | None | None | DRAWING_DEACTIVATED |
+| DC5-02 | DRAWING_DEACTIVATED | DRAWING_TOOL_CLICKED | Region6 현재 상태 = AWAITING_SELECTION | 1) 그리기를 시작할 수 있도록 환경을 세팅한다 | DRAWING_WAIT |
+| DC5-03 | DRAWING_WAIT | USER_START_DRAWING | None | 1) 그리는 중인 선을 표시 | USER_DRAWING |
 | DC5-04 | DRAWING_WAIT | DRAWING_TOOL_CLICKED | None | 1) 그리기 비활성화 | DRAWING_DEACTIVATED |
-| DC5-05 | USER_DRAWING | USER_FINISH_DRAWING | None | 1) 그리기 완료 된 선을 표시| DRAWING_WAIT |
+| DC5-05 | USER_DRAWING | USER_FINISH_DRAWING | None | 1) 그리기 완료된 선을 표시 | DRAWING_WAIT |
+| DC5-06 | USER_DRAWING | DRAWING_CANCELED | None | 1) 그리는 중인 선을 제거 | DRAWING_WAIT |
+| DC5-07 | USER_DRAWING | DRAWING_TOOL_CLICKED | None | 1) 그리는 중인 선을 제거, 2) 그리기 비활성화 | DRAWING_DEACTIVATED |
 
 ###### 2.2.1.2.6 Display Chart의 Region6(그려놓은 선 지우기)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| DC5-01 | Initial Pseudo State | None | None | 1) None | AWAITING_SELECTION |
-| DC5-02 | AWAITING_SELECTION | CURSOR_HOVER_ENTER | None | 1) 커서가 올라간 선을 하이라이트 처리 한다 | DRAWED_LINE_HIGHLIGHTED |
-| DC5-03 | DRAWED_LINE_HIGHLIGHTED | HIGHLIGHTED_LINE_RIGHT_CLICKED | None | 1) 커서의 바로 우측에 붙여서 컨텍스트 메뉴를 표시한다 | CONTEXTED_MENU_OPENED |
-| DC5-04 | DRAWED_LINE_HIGHLIGHTED | CURSOR_HOVER_EXIT | None | 1) 커서가 올라간 선의 하이라이트를 제거한다 | AWAITING_SELECTION |
-| DC5-05 | CONTEXTED_MENU_OPENED | DELETE_LINE | None | 1) 선택한 선을 제거한다 | AWAITING_SELECTION |
-| DC5-06 | CONTEXTED_MENU_OPENED | CONTEXT_MENU_OUTSIDE_CLICKED | None | 1) 컨텍스트 메뉴를 제거한다 | AWAITING_SELECTION |
+| DC6-01 | Initial Pseudo State | None | None | None | AWAITING_SELECTION |
+| DC6-02 | AWAITING_SELECTION | CURSOR_HOVER_ENTER | Region5 현재 상태 != USER_DRAWING | 1) 커서가 올라간 선을 하이라이트 처리한다 | DRAWN_LINE_HIGHLIGHTED |
+| DC6-03 | DRAWN_LINE_HIGHLIGHTED | HIGHLIGHTED_LINE_RIGHT_CLICKED | Region5 현재 상태 != USER_DRAWING | 1) 커서의 바로 우측에 붙여서 컨텍스트 메뉴를 표시한다 | CONTEXT_MENU_OPENED |
+| DC6-04 | DRAWN_LINE_HIGHLIGHTED | CURSOR_HOVER_EXIT | None | 1) 커서가 올라간 선의 하이라이트를 제거한다 | AWAITING_SELECTION |
+| DC6-05 | CONTEXT_MENU_OPENED | DELETE_LINE | None | 1) 선택한 선을 제거, 2) 컨텍스트 메뉴를 제거 | AWAITING_SELECTION |
+| DC6-06 | CONTEXT_MENU_OPENED | CONTEXT_MENU_OUTSIDE_CLICKED | None | 1) 컨텍스트 메뉴를 제거한다 | AWAITING_SELECTION |
 
 
 ##### 2.2.1.3 MAIN_SCREEN의 Region3(Display Account Info)
@@ -447,7 +461,7 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | SI-01 | Initial Pseudo State | None | None | 1) 초기 세팅 값 가져오기, 2) 가져온 초기값을 화면에 표시 | SCALE_IN_ORDER |
 | SI-02 | SCALE_IN_ORDER | SCALE_IN_LEVEL_CHANGED | None | 1) 사용자가 선택한 값을 향후 매수 %에 적용, 2) 변경된 값으로 UI를 표시 | SCALE_IN_ORDER |
 
-###### 2.2.1.3.3.1 분할 매수 / 매도 관리의 Region2(분할 매도)
+###### 2.2.1.3.3.2 분할 매수 / 매도 관리의 Region2(분할 매도)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | SO-01 | Initial Pseudo State | None | None | 1) 초기 세팅 값 가져오기, 2) 가져온 초기값을 화면에 표시 | SCALE_OUT_ORDER |
@@ -458,10 +472,13 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | M4-01 | Initial Pseudo State | None | None | 1) 프로그램 실행 이후의 '체결 내역을 저장한 파일' 가져오기, 2) 가져온 체결 내역을 화면에 표시 | TRADE_HISTORY_DISPLAYED |
 | M4-02 | TRADE_HISTORY_DISPLAYED | BUY_ORDER_EXECUTED | None | 1) 체결된 매수 주문의 정보 가져오기, 2) 가져온 매수 주문의 정보를 '체결 내역을 저장한 파일'에 저장, 3) 가져온 매수 정보를 체결 내역 상단에 표시 | TRADE_HISTORY_DISPLAYED |
-| M4-03 | TRADE_HISTORY_DISPLAYED | SELL_ORDER_EXECUTED | None | 1) 체결된 매도 주문의 정보 가져오기, 2) 가져온 매도 주문의 정보를 주문 파일에 저장, 3) 가져온 매도 정보를 체결 내역 상단에 표시 | TRADE_HISTORY_DISPLAYED |
+| M4-03 | TRADE_HISTORY_DISPLAYED | SELL_ORDER_EXECUTED | None | 1) 체결된 매도 주문의 정보 가져오기, 2) 가져온 매도 주문의 정보를 '체결 내역을 저장한 파일'에 저장, 3) 가져온 매도 정보를 체결 내역 상단에 표시 | TRADE_HISTORY_DISPLAYED |
 | M4-04 | TRADE_HISTORY_DISPLAYED | REALTIME_INDICATOR_CLICKED | None | 1) 현재 투자 상태에서 사용하는 지표의 목록을 가져온다, 2) 가져온 목록 속 지표의 값을 가져온다, 3) 가져온 지표 값을 표시, 4) 실시간 지표쪽으로 흰색 사각형이 슬라이드하여 이동한다 | REALTIME_INDICATOR_DISPLAYED |
-| M4-05 | REALTIME_INDICATOR_DISPLAYED | TRADING_STATUS_UPDATED | None | 1) 변경된 투자 상태에서 사용하는 지표의 목록을 가져온다, 2) 가져온 목록 속 지표의 값을 가져온다, 3) 가져온 지표 값을 표시 | REALTIME_INDICATOR_DISPLAYED |
-| M4-06 | REALTIME_INDICATOR_DISPLAYED | TRADING_HISTORY_CLICKED | None | 1) 프로그램 실행 이후의 '체결 내역을 저장한 파일' 가져오기, 2) 가져온 체결 내역을 화면에 표시 | TRADE_HISTORY_DISPLAYED |
+| M4-05 | REALTIME_INDICATOR_DISPLAYED | REALTIME_INDICATOR_UPDATED | None | 1) 갱신된 실시간 지표 값을 가져온다, 2) 가져온 지표 값을 표시 | REALTIME_INDICATOR_DISPLAYED |
+| M4-06 | REALTIME_INDICATOR_DISPLAYED | TRADING_STATUS_UPDATED | None | 1) 변경된 투자 상태에서 사용하는 지표의 목록을 가져온다, 2) 가져온 목록 속 지표의 값을 가져온다, 3) 가져온 지표 값을 표시 | REALTIME_INDICATOR_DISPLAYED |
+| M4-07 | REALTIME_INDICATOR_DISPLAYED | BUY_ORDER_EXECUTED | None | 1) 체결된 매수 주문의 정보 가져오기, 2) 가져온 매수 주문의 정보를 '체결 내역을 저장한 파일'에 저장 | REALTIME_INDICATOR_DISPLAYED |
+| M4-08 | REALTIME_INDICATOR_DISPLAYED | SELL_ORDER_EXECUTED | None | 1) 체결된 매도 주문의 정보 가져오기, 2) 가져온 매도 주문의 정보를 '체결 내역을 저장한 파일'에 저장 | REALTIME_INDICATOR_DISPLAYED |
+| M4-09 | REALTIME_INDICATOR_DISPLAYED | TRADING_HISTORY_CLICKED | None | 1) 프로그램 실행 이후의 '체결 내역을 저장한 파일' 가져오기, 2) 가져온 체결 내역을 화면에 표시 | TRADE_HISTORY_DISPLAYED |
 
 #### 2.2.2 TRADING_DETAILS 상태
 
@@ -476,13 +493,14 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | D2-01 | Initial Pseudo State | None | None | 1) 프로그램 실행 이후에 기록 된 매도 성과(수익 실현 여부, 평균 수익률, 총 수익)을 가져온다, 2) 가져온 정보를 표시한다 | TRADE_PERFORMANCE_DISPLAYED |
-| D2-02 | TRADE_PERFORMANCE_DISPLAYED | None | None | 1) 갱신된 매도 성과(수익 실현 여부, 평균 수익률, 총 수익)을 가져온다, 2) 가져온 정보를 표시한다 | TRADE_PERFORMANCE_DISPLAYED |
+| D2-02 | TRADE_PERFORMANCE_DISPLAYED | SELL_ORDER_EXECUTED | None | 1) 갱신된 매도 성과(수익 실현 여부, 평균 수익률, 총 수익)을 가져온다, 2) 가져온 정보를 표시한다 | TRADE_PERFORMANCE_DISPLAYED |
 
 ###### 2.2.2.1.3 계좌 내역 상세의 Region3(ETH 보유 수량 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | D3-01 | Initial Pseudo State | None | None | 1) ETH 보유 수량을 가져온다, 2) 가져온 정보를 표시한다 | ETH_HOLDINGS_DISPLAYED |
-| D3-02 | ETH_HOLDINGS_DISPLAYED | NEW_BUY_EXCUTION | None | 1) ETH 보유 수량을 가져온다, 2) 가져온 정보를 표시한다 | ETH_HOLDINGS_DISPLAYED |
+| D3-02 | ETH_HOLDINGS_DISPLAYED | BUY_ORDER_EXECUTED | None | 1) ETH 보유 수량을 가져온다, 2) 가져온 정보를 표시한다 | ETH_HOLDINGS_DISPLAYED |
+| D3-03 | ETH_HOLDINGS_DISPLAYED | SELL_ORDER_EXECUTED | None | 1) ETH 보유 수량을 가져온다, 2) 가져온 정보를 표시한다 | ETH_HOLDINGS_DISPLAYED |
 
 ###### 2.2.2.1.4 계좌 내역 상세의 Region4(당일 수수료 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
@@ -493,44 +511,51 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 ##### 2.2.2.2 TRADING_DETAILS의 Region2(표시할 기간 선택)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| TD2-01 | Initial Pseudo State | None | None | 1) 오늘 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | TODAY_TRADE_HISTORY_DISPLAYED |
-| TD2-02 | TODAY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_WEEKLY_HISTORY | None | 1) 7일간 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | WEEKLY_TRADE_HISTORY_DISPLAYED |
-| TD2-03 | TODAY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_MONTHLY_HISTORY | None | 1) 30일간 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | MONTHLY_TRADE_HISTORY_DISPLAYED |
-| TD2-04 | TODAY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_ALL_HISTORY | None | 1) 그동안의 전체 거래 내역을 가져온다, 2) 가져온 거래 내역을 표시한다 | ALL_TRADE_HISTORY_DISPLAYED |
-| TD2-05 | WEEKLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_TODAY_HISTORY | None | 1) 오늘 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | TODAY_TRADE_HISTORY_DISPLAYED |
-| TD2-06 | WEEKLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_MONTHLY_HISTORY | None | 1) 30일간 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | MONTHLY_TRADE_HISTORY_DISPLAYED |
-| TD2-07 | WEEKLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_ALL_HISTORY | None | 1) 그동안의 전체 거래 내역을 가져온다, 2) 가져온 거래 내역을 표시한다 | ALL_TRADE_HISTORY_DISPLAYED |
-| TD2-08 | MONTHLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_TODAY_HISTORY | None | 1) 오늘 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | TODAY_TRADE_HISTORY_DISPLAYED |
-| TD2-09 | MONTHLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_WEEKLY_HISTORY | None | 1) 7일간 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | WEEKLY_TRADE_HISTORY_DISPLAYED |
-| TD2-10 | MONTHLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_ALL_HISTORY | None | 1) 그동안의 전체 거래 내역을 가져온다, 2) 가져온 거래 내역을 표시한다 | ALL_TRADE_HISTORY_DISPLAYED |
-| TD2-11 | ALL_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_TODAY_HISTORY | None | 1) 오늘 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | TODAY_TRADE_HISTORY_DISPLAYED |
-| TD2-12 | ALL_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_WEEKLY_HISTORY | None | 1) 7일간 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | WEEKLY_TRADE_HISTORY_DISPLAYED |
-| TD2-13 | ALL_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_MONTHLY_HISTORY | None | 1) 30일간 발생한 거래 내역만을 가져온다, 2) 가져온 거래 내역을 표시한다 | MONTHLY_TRADE_HISTORY_DISPLAYED |
+| TD2-01 | Initial Pseudo State | None | None | 1) 기간 필터를 오늘로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | TODAY_TRADE_HISTORY_DISPLAYED |
+| TD2-02 | TODAY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_WEEKLY_HISTORY | None | 1) 기간 필터를 최근 7일로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | WEEKLY_TRADE_HISTORY_DISPLAYED |
+| TD2-03 | TODAY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_MONTHLY_HISTORY | None | 1) 기간 필터를 최근 30일로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | MONTHLY_TRADE_HISTORY_DISPLAYED |
+| TD2-04 | TODAY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_ALL_HISTORY | None | 1) 기간 필터를 전체 기간으로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | ALL_TRADE_HISTORY_DISPLAYED |
+| TD2-05 | WEEKLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_TODAY_HISTORY | None | 1) 기간 필터를 오늘로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | TODAY_TRADE_HISTORY_DISPLAYED |
+| TD2-06 | WEEKLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_MONTHLY_HISTORY | None | 1) 기간 필터를 최근 30일로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | MONTHLY_TRADE_HISTORY_DISPLAYED |
+| TD2-07 | WEEKLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_ALL_HISTORY | None | 1) 기간 필터를 전체 기간으로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | ALL_TRADE_HISTORY_DISPLAYED |
+| TD2-08 | MONTHLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_TODAY_HISTORY | None | 1) 기간 필터를 오늘로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | TODAY_TRADE_HISTORY_DISPLAYED |
+| TD2-09 | MONTHLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_WEEKLY_HISTORY | None | 1) 기간 필터를 최근 7일로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | WEEKLY_TRADE_HISTORY_DISPLAYED |
+| TD2-10 | MONTHLY_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_ALL_HISTORY | None | 1) 기간 필터를 전체 기간으로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | ALL_TRADE_HISTORY_DISPLAYED |
+| TD2-11 | ALL_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_TODAY_HISTORY | None | 1) 기간 필터를 오늘로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | TODAY_TRADE_HISTORY_DISPLAYED |
+| TD2-12 | ALL_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_WEEKLY_HISTORY | None | 1) 기간 필터를 최근 7일로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | WEEKLY_TRADE_HISTORY_DISPLAYED |
+| TD2-13 | ALL_TRADE_HISTORY_DISPLAYED | SELECT_DISPLAY_MONTHLY_HISTORY | None | 1) 기간 필터를 최근 30일로 설정, 2) Region3의 현재 매수/매도 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | MONTHLY_TRADE_HISTORY_DISPLAYED |
 
 ##### 2.2.2.3 TRADING_DETAILS의 Region3(매도/매수 표시 선택)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| TD3-01 | Initial Pseudo State | None | None | 1) 모든 거래 내역을 표시한다 | ALL_TRADE_HISTORY_DISPLAYED |
-| TD3-02 | ALL_TRADE_HISTORY_DISPLAYED | BUY_TRADE_HISTORY_SELECTED | None | 1) 매수 거래 내역을 표시한다 | BUY_TRADE_HISTORY_DISPLAYED |
-| TD3-03 | ALL_TRADE_HISTORY_DISPLAYED | SELL_TRADE_HISTORY_SELECTED | None | 1) 매도 거래 내역을 표시한다 | SELL_TRADE_HISTORY_DISPLAYED |
-| TD3-04 | BUY_TRADE_HISTORY_DISPLAYED | ALL_TRADE_HISTORY_SELECTED | None | 1) 모든 거래 내역을 표시한다 | ALL_TRADE_HISTORY_DISPLAYED |
-| TD3-05 | BUY_TRADE_HISTORY_DISPLAYED | SELL_TRADE_HISTORY_SELECTED | None | 1) 매도 거래 내역을 표시한다 | SELL_TRADE_HISTORY_DISPLAYED |
-| TD3-06 | SELL_TRADE_HISTORY_DISPLAYED | ALL_TRADE_HISTORY_SELECTED | None | 1) 모든 거래 내역을 표시한다 | ALL_TRADE_HISTORY_DISPLAYED |
-| TD3-07 | SELL_TRADE_HISTORY_DISPLAYED | BUY_TRADE_HISTORY_SELECTED | None | 1) 매수 거래 내역을 표시한다 | BUY_TRADE_HISTORY_DISPLAYED |
+| TD3-01 | Initial Pseudo State | None | None | 1) 거래 종류 필터를 전체로 설정, 2) Region2의 현재 기간 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | ALL_TRADE_HISTORY_DISPLAYED |
+| TD3-02 | ALL_TRADE_HISTORY_DISPLAYED | BUY_TRADE_HISTORY_SELECTED | None | 1) 거래 종류 필터를 매수로 설정, 2) Region2의 현재 기간 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | BUY_TRADE_HISTORY_DISPLAYED |
+| TD3-03 | ALL_TRADE_HISTORY_DISPLAYED | SELL_TRADE_HISTORY_SELECTED | None | 1) 거래 종류 필터를 매도로 설정, 2) Region2의 현재 기간 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | SELL_TRADE_HISTORY_DISPLAYED |
+| TD3-04 | BUY_TRADE_HISTORY_DISPLAYED | ALL_TRADE_HISTORY_SELECTED | None | 1) 거래 종류 필터를 전체로 설정, 2) Region2의 현재 기간 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | ALL_TRADE_HISTORY_DISPLAYED |
+| TD3-05 | BUY_TRADE_HISTORY_DISPLAYED | SELL_TRADE_HISTORY_SELECTED | None | 1) 거래 종류 필터를 매도로 설정, 2) Region2의 현재 기간 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | SELL_TRADE_HISTORY_DISPLAYED |
+| TD3-06 | SELL_TRADE_HISTORY_DISPLAYED | ALL_TRADE_HISTORY_SELECTED | None | 1) 거래 종류 필터를 전체로 설정, 2) Region2의 현재 기간 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | ALL_TRADE_HISTORY_DISPLAYED |
+| TD3-07 | SELL_TRADE_HISTORY_DISPLAYED | BUY_TRADE_HISTORY_SELECTED | None | 1) 거래 종류 필터를 매수로 설정, 2) Region2의 현재 기간 필터와 결합, 3) 결합 조건에 맞는 거래 내역을 표시 | BUY_TRADE_HISTORY_DISPLAYED |
 
 ##### 2.2.2.4 TRADING_DETAILS의 Region4(CSV 내보내기)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| TD4-01 | AWAITING_CSV_EXPORT_POPUP | CSV_EXPORT_CLICKED | None | 1) CSV 내보내기 팝업 화면을 표시한다 | CSV_EXPORT_POPUP_DISPLAYED |
-| TD4-02 | CSV_EXPORT_POPUP_DISPLAYED | CLOSE_CSV_EXPORT_POPUP | None | 1) CSV 내보내기 팝업 화면을 제거한다 | AWAITING_CSV_EXPORT_POPUP |
-| TD4-03 | CSV_EXPORT_POPUP_DISPLAYED | EXPORT_CSV | None | 1) 선택된 설정을 적용하여 CSV를 내보낸다, 2) 내보내기 완료 팝업을 출력 | CSV_EXPORT_COMPLETE |
-| TD4-04 | CSV_EXPORT_COMPLETE | ACCEPT_CLOSE_ALL_POPUP | None | 1) 내보내기 완료 팝업을 제거, 2) CSV 내보내기 팝업 화면을 제거 | AWAITING_CSV_EXPORT_POPUP |
+| TD4-01 | Initial Pseudo State | None | None | None | AWAITING_CSV_EXPORT_POPUP |
+| TD4-02 | AWAITING_CSV_EXPORT_POPUP | CSV_EXPORT_CLICKED | None | 1) CSV 내보내기 팝업 화면을 표시한다 | CSV_EXPORT_POPUP_DISPLAYED |
+| TD4-03 | CSV_EXPORT_POPUP_DISPLAYED | CLOSE_CSV_EXPORT_POPUP | None | 1) CSV 내보내기 팝업 화면을 제거한다 | AWAITING_CSV_EXPORT_POPUP |
+| TD4-04 | CSV_EXPORT_POPUP_DISPLAYED | EXPORT_CSV | 저장 위치 선택 O && 파일명 유효 O && 기간 유효 O | 1) 선택된 설정을 적용하여 CSV 파일 생성 시작, 2) 내보내기 처리 중 상태 표시 | CSV_EXPORT_IN_PROGRESS |
+| TD4-05 | CSV_EXPORT_POPUP_DISPLAYED | EXPORT_CSV | 저장 위치 선택 X \|\| 파일명 유효 X \|\| 기간 유효 X | 1) 유효하지 않은 설정 항목을 강조 표시, 2) 오류 원인을 표시 | CSV_EXPORT_POPUP_DISPLAYED |
+| TD4-06 | CSV_EXPORT_IN_PROGRESS | CSV_EXPORT_SUCCEEDED | None | 1) 내보내기 처리 중 표시 제거, 2) 내보내기 완료 팝업 출력 | CSV_EXPORT_COMPLETE |
+| TD4-07 | CSV_EXPORT_IN_PROGRESS | CSV_EXPORT_FAILED | None | 1) 내보내기 처리 중 표시 제거, 2) 내보내기 실패 원인 표시 | CSV_EXPORT_ERROR |
+| TD4-08 | CSV_EXPORT_ERROR | CSV_EXPORT_ERROR_CONFIRMED | None | 1) 내보내기 실패 팝업 제거, 2) 기존 CSV 내보내기 설정 화면 표시 | CSV_EXPORT_POPUP_DISPLAYED |
+| TD4-09 | CSV_EXPORT_COMPLETE | ACCEPT_CLOSE_ALL_POPUP | None | 1) 내보내기 완료 팝업 제거, 2) CSV 내보내기 팝업 화면 제거 | AWAITING_CSV_EXPORT_POPUP |
 
 ###### 2.2.2.4.1 CSV_EXPORT_POPUP_DISPLAYED의 Region1(파일 저장 위치 선택)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| CR1-01 | FILE_BROWSER_CLOSED | SAVE_LOCATION_SELECT_CLICKED | None | 1) 파일탐색기 window를 표시 | FILE_BROWSER_OPENED |
-| CR1-02 | FILE_BROWSER_OPENED | SAVE_LOCATION_CONFIRMED | None | 1) 해당 경로를 파일 저장 경로로 설정, 2) 파일탐색기 window를 제거 | FILE_BROWSER_CLOSED |
+| CR1-01 | Initial Pseudo State | None | None | None | FILE_BROWSER_CLOSED |
+| CR1-02 | FILE_BROWSER_CLOSED | SAVE_LOCATION_SELECT_CLICKED | None | 1) 파일탐색기 window를 표시 | FILE_BROWSER_OPENED |
+| CR1-03 | FILE_BROWSER_OPENED | SAVE_LOCATION_CONFIRMED | None | 1) 해당 경로를 파일 저장 경로로 설정, 2) 파일탐색기 window를 제거 | FILE_BROWSER_CLOSED |
+| CR1-04 | FILE_BROWSER_OPENED | SAVE_LOCATION_CANCELED | None | 1) 기존 파일 저장 경로를 유지, 2) 파일탐색기 window를 제거 | FILE_BROWSER_CLOSED |
 
 ###### 2.2.2.4.2 CSV_EXPORT_POPUP_DISPLAYED의 Region2(불러올 기간 선택)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
@@ -545,24 +570,28 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | CR2-08 | CSV_MONTHLY_TRADE_HISTORY | SELECT_CSV_TODAY_HISTORY | None | 1) 오늘로 기간 설정 | CSV_TODAY_TRADE_HISTORY |
 | CR2-09 | CSV_MONTHLY_TRADE_HISTORY | SELECT_CSV_WEEKLY_HISTORY | None | 1) 7일로 기간 설정 | CSV_WEEKLY_TRADE_HISTORY |
 | CR2-10 | CSV_MONTHLY_TRADE_HISTORY | SELECT_CSV_DATE | None | 1) 시작일, 종료일 칸의 색 변화(회색 -> 파란색), 2) 시작일과 종료일 옆에 달력 아이콘의 등장 | CSV_SELECT_DATE |
-| CR2-11 | CSV_DATE_SELECT | SELECT_CSV_TODAY_HISTORY | None | 1) 오늘로 기간 설정, 2) 시작일, 종료일 칸의 색 변화(파란색 -> 회색), 2) 시작일과 종료일 옆에 달력 아이콘의 삭제 | CSV_TODAY_TRADE_HISTORY |
-| CR2-12 | CSV_DATE_SELECT | SELECT_CSV_WEEKLY_HISTORY | None | 1) 7일로 기간 설정, 2) 시작일, 종료일 칸의 색 변화(파란색 -> 회색), 2) 시작일과 종료일 옆에 달력 아이콘의 삭제 | CSV_WEEKLY_TRADE_HISTORY |
-| CR2-13 | CSV_DATE_SELECT | SELECT_CSV_MONTHLY_HISTORY | None | 1) 30일로 기간 설정, 2) 시작일, 종료일 칸의 색 변화(파란색 -> 회색), 2) 시작일과 종료일 옆에 달력 아이콘의 삭제 | CSV_MONTHLY_TRADE_HISTORY |
-| CR2-14 | CSV_DATE_SELECT | START_CSV_START_DATE_SELECTION | None | 1) 시작일 달력 팝업 open | CSV_START_DATE |
-| CR2-15 | CSV_DATE_SELECT | START_CSV_FINISH_DATE_SELECTION | None | 1) 종료일 달력 팝업 open | CSV_FINISH_DATE |
-| CR2-16 | CSV_START_DATE | START_DATE_SELECTED | None | 1) 선택한 날짜를 파란색으로 표시, 2) 시작일 설정 반영 | CSV_START_DATE |
-| CR2-17 | CSV_START_DATE | START_DATE_CALENDAR_OUTSIDE_CLICKED | None | 1) 시작일 달력 팝업 close | CSV_DATE_SELECT |
-| CR2-18 | CSV_FINISH_DATE | FINISH_DATE_SELECTED | None | 1) 선택한 날짜를 파란색으로 표시, 2) 종료일 설정 반영 | CSV_FINISH_DATE |
-| CR2-19 | CSV_FINISH_DATE | FINISH_DATE_CALENDAR_OUTSIDE_CLICKED | None | 1) 종료일 달력 팝업 close | CSV_DATE_SELECT |
+| CR2-11 | CSV_SELECT_DATE | SELECT_CSV_TODAY_HISTORY | None | 1) 오늘로 기간 설정, 2) 시작일, 종료일 칸의 색 변화(파란색 -> 회색), 3) 시작일과 종료일 옆에 달력 아이콘의 삭제 | CSV_TODAY_TRADE_HISTORY |
+| CR2-12 | CSV_SELECT_DATE | SELECT_CSV_WEEKLY_HISTORY | None | 1) 7일로 기간 설정, 2) 시작일, 종료일 칸의 색 변화(파란색 -> 회색), 3) 시작일과 종료일 옆에 달력 아이콘의 삭제 | CSV_WEEKLY_TRADE_HISTORY |
+| CR2-13 | CSV_SELECT_DATE | SELECT_CSV_MONTHLY_HISTORY | None | 1) 30일로 기간 설정, 2) 시작일, 종료일 칸의 색 변화(파란색 -> 회색), 3) 시작일과 종료일 옆에 달력 아이콘의 삭제 | CSV_MONTHLY_TRADE_HISTORY |
+| CR2-14 | CSV_SELECT_DATE | START_CSV_START_DATE_SELECTION | None | 1) 시작일 달력 팝업 open | CSV_START_DATE |
+| CR2-15 | CSV_SELECT_DATE | START_CSV_FINISH_DATE_SELECTION | None | 1) 종료일 달력 팝업 open | CSV_FINISH_DATE |
+| CR2-16 | CSV_START_DATE | START_DATE_SELECTED | 종료일 미선택 \|\| 선택한 시작일 <= 종료일 | 1) 선택한 날짜를 파란색으로 표시, 2) 시작일 설정 반영 | CSV_START_DATE |
+| CR2-17 | CSV_START_DATE | START_DATE_SELECTED | 종료일 선택 O && 선택한 시작일 > 종료일 | 1) 시작일이 종료일보다 늦을 수 없음을 표시 | CSV_START_DATE |
+| CR2-18 | CSV_START_DATE | START_DATE_CALENDAR_OUTSIDE_CLICKED | None | 1) 시작일 달력 팝업 close | CSV_SELECT_DATE |
+| CR2-19 | CSV_FINISH_DATE | FINISH_DATE_SELECTED | 시작일 미선택 \|\| 시작일 <= 선택한 종료일 | 1) 선택한 날짜를 파란색으로 표시, 2) 종료일 설정 반영 | CSV_FINISH_DATE |
+| CR2-20 | CSV_FINISH_DATE | FINISH_DATE_SELECTED | 시작일 선택 O && 시작일 > 선택한 종료일 | 1) 종료일이 시작일보다 이를 수 없음을 표시 | CSV_FINISH_DATE |
+| CR2-21 | CSV_FINISH_DATE | FINISH_DATE_CALENDAR_OUTSIDE_CLICKED | None | 1) 종료일 달력 팝업 close | CSV_SELECT_DATE |
 
 ###### 2.2.2.4.3 CSV_EXPORT_POPUP_DISPLAYED의 Region3(저장할 파일 이름 입력)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | CR3-01 | Initial Pseudo State | None | None | 1) 파일의 저장 이름 기본값을 표시 | DEFAULT_FILE_NAME |
 | CR3-02 | DEFAULT_FILE_NAME | FILE_NAME_CLICKED | None | 1) 타이핑으로 파일 이름 입력 가능 | NEW_FILE_NAME_TYPED |
-| CR3-03 | NEW_FILE_NAME_TYPED | ENTER_KEY_TYPED | None | 1) 저장할 파일명으로 설정 | FILE_NAME_WRITED |
-| CR3-04 | NEW_FILE_NAME_TYPED | CLICK_ANYWHERE | None | 1) 저장할 파일명으로 설정 | FILE_NAME_WRITED |
-| CR3-05 | FILE_NAME_WRITED | FILE_NAME_CLICKED | None | 1) 타이핑으로 파일 이름 입력 가능 | NEW_FILE_NAME_TYPED |
+| CR3-03 | NEW_FILE_NAME_TYPED | ENTER_KEY_TYPED | 파일명 유효 O | 1) 저장할 파일명으로 설정 | FILE_NAME_WRITTEN |
+| CR3-04 | NEW_FILE_NAME_TYPED | FILE_NAME_INPUT_FOCUS_LOST | 파일명 유효 O | 1) 저장할 파일명으로 설정 | FILE_NAME_WRITTEN |
+| CR3-05 | NEW_FILE_NAME_TYPED | ENTER_KEY_TYPED | 파일명 유효 X | 1) 빈 파일명 또는 사용할 수 없는 문자를 강조 표시 | NEW_FILE_NAME_TYPED |
+| CR3-06 | NEW_FILE_NAME_TYPED | FILE_NAME_INPUT_FOCUS_LOST | 파일명 유효 X | 1) 빈 파일명 또는 사용할 수 없는 문자를 강조 표시 | NEW_FILE_NAME_TYPED |
+| CR3-07 | FILE_NAME_WRITTEN | FILE_NAME_CLICKED | None | 1) 타이핑으로 파일 이름 입력 가능 | NEW_FILE_NAME_TYPED |
 
 ### 2.3 Etire UI System의 Region_3(프로그램 종료)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
@@ -570,7 +599,9 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | ES3-01 | Initial Pseudo State | None | None | None | AWAITING_EXIT |
 | ES3-02 | AWAITING_EXIT | EXIT_CLICKED | 포지션 보유 중 O | 1) 종료 시 보유한 포지션이 강제 매도됨을 알리는 팝업 표시 | FORCE_SELL_EXIT_POPUP_DISPLAYED |
 | ES3-03 | AWAITING_EXIT | EXIT_CLICKED | 포지션 보유 중 X | 1) 종료 확인 팝업 표시 | EXIT_POPUP_DISPLAYED |
-| ES3-04 | FORCE_SELL_EXIT_POPUP_DISPLAYED | FORCE_SELL_EXIT_CALCELED | None | 1) 종료 시 보유한 포지션이 강제 매도됨을 알리는 팝업 제거 | AWAITING_EXIT |
-| ES3-05 | FORCE_SELL_EXIT_POPUP_DISPLAYED | FORCE_SELL_EXIT_CONFIRMED | None | 1) 프로그램 종료 | UI_FINAL_STATE |
-| ES3-06 | EXIT_POPUP_DISPLAYED | EXIT_CALCELED | None | 1) 종료 확인 팝업 제거 | AWAITING_EXIT |
-| ES3-07 | EXIT_POPUP_DISPLAYED | EXIT_CONFIRMED | None | 1) 프로그램 종료 | UI_FINAL_STATE |
+| ES3-04 | FORCE_SELL_EXIT_POPUP_DISPLAYED | FORCE_SELL_EXIT_CANCELED | None | 1) 종료 시 보유한 포지션이 강제 매도됨을 알리는 팝업 제거 | AWAITING_EXIT |
+| ES3-05 | FORCE_SELL_EXIT_POPUP_DISPLAYED | FORCE_SELL_EXIT_CONFIRMED | None | 1) 포지션 강제 매도 주문 제출, 2) 강제 매도 처리 중 상태 표시 | FORCE_SELL_EXIT_PROCESSING |
+| ES3-06 | FORCE_SELL_EXIT_PROCESSING | FORCE_SELL_EXIT_SUCCEEDED | None | 1) 자동매매 중단, 2) API 및 WebSocket 연결 종료, 3) 저장 데이터 반영, 4) 프로그램 종료 | UI_FINAL_STATE |
+| ES3-07 | FORCE_SELL_EXIT_PROCESSING | FORCE_SELL_EXIT_FAILED | None | 1) 강제 매도 실패 원인을 표시, 2) 프로그램 종료 취소, 3) 강제 매도 후 종료 확인 팝업을 다시 표시 | FORCE_SELL_EXIT_POPUP_DISPLAYED |
+| ES3-08 | EXIT_POPUP_DISPLAYED | EXIT_CANCELED | None | 1) 종료 확인 팝업 제거 | AWAITING_EXIT |
+| ES3-09 | EXIT_POPUP_DISPLAYED | EXIT_CONFIRMED | None | 1) 자동매매 중단, 2) API 및 WebSocket 연결 종료, 3) 저장 데이터 반영, 4) 프로그램 종료 | UI_FINAL_STATE |
