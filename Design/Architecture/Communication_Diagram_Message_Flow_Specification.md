@@ -178,7 +178,7 @@ stopTrading() : void
 | `7` | `User -> AppShellUI` | `startConfirmed() : void` | 없음 | `void` | 사용자가 시작 확인 팝업에서 거래 시작을 확정한다. | Boundary가 `7.1`로 확인 event를 전달한다. |
 | `7.1` | `AppShellUI -> UIStateController` | `startTrading() : void` | 없음 | `void` | 자동매매 시작 UI event를 전달한다. | UI 상태 전이 후 실제 trading 시작을 `7.1.1`에 위임한다. |
 | `7.1.1` | `UIStateController -> TradingController` | `startTrading() : void` | 없음 | `void` | TradingController에 자동매매 시작을 요청한다. | Controller는 먼저 `7.1.1.1`에서 runtime context를 초기화하고, 그 context로 `7.1.1.2`의 STM을 실행한다. |
-| `7.1.1.1` | `TradingController -> TradingContext` | `initialize(account : Account, selectedRegime : RegimeType, position : Position, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void` | 계좌, 선택 REGIME, 현재 포지션, 분할 비율 | `void` | **이 부분은 diagram에서 추가되어야함.** TradingSTM이 사용할 시작 context를 초기화한다. | Start/Stop 그림에 기존 클래스인 `:TradingContext` lifeline도 함께 추가한다. `positionOwner`, pending 주문 값, `tradingPhase`, `lowerEventId` 등 runtime 값을 일관된 시작값으로 만들고 계좌·포지션·설정 참조를 연결한다. |
+| `7.1.1.1` | `TradingController -> TradingContext` | `init(account : Account, selectedRegime : RegimeType, position : Position, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void` | 계좌, 선택 REGIME, 현재 포지션, 분할 비율 | `void` | **이 부분은 diagram에서 추가되어야함.** TradingSTM이 사용할 시작 context를 초기화한다. | Start/Stop 그림에 기존 클래스인 `:TradingContext` lifeline도 함께 추가한다. `positionOwner`, pending 주문 값, `tradingPhase`, `lowerEventId` 등 runtime 값을 일관된 시작값으로 만들고 계좌·포지션·설정 참조를 연결한다. |
 | `7.1.1.2` | `TradingController -> TradingSTM` | `run(context : TradingContext) : TradingSTMResult` | 초기화가 끝난 TradingContext | 초기 trading action | TradingSTM을 실행한다. | 원본 그림의 번호는 `7.1.1.1`이다. STM은 시작 가능 조건과 초기 상태를 결정하고, 반환 action은 TradingController가 함수 반환값으로 소비한다. |
 
 ### 4.7 자동매매 중지와 전량 매도
@@ -223,7 +223,7 @@ stopTrading() : void
 | `10` | `TradingController -> Order` | `buildExecutionSummary() : ExecutionSummary` | 없음 | 체결 요약 | Order의 여러 fill을 하나의 주문 체결 결과로 집계한다. | 총 체결 수량, 총 체결 금액, 가중평균 `fillPrice`, 총 수수료 및 체결 시각을 계산한다. |
 | `11` | `TradingController -> Position` | `getCostBasis(executedQuantity : Decimal) : Decimal` | 실제 매도 체결 수량 | 해당 수량의 취득원가 | `[매도인 경우]` 실현손익 계산에 필요한 원가를 얻는다. | 매수 case에서는 호출하지 않는다. |
 | `12` | `TradingController -> Position` | `applyExecution(summary : ExecutionSummary) : void` | 체결 요약 | `void` | 실제 체결을 Position에 반영한다. | 매수면 수량과 평균 진입가를 증가시키고, 매도면 수량을 감소시키며 전량 매도 시 포지션을 닫는다. |
-| `13` | `TradingController -> TradeHistoryController` | `recordOrderExecution(order : Order, summary : ExecutionSummary, costBasis : Decimal?) : void` | Order, 체결 요약, 매도 시 원가 | `void` | 완료된 주문 체결을 이력, 성과, 저장소에 기록하도록 위임한다. | `13.1`~`13.5`를 조정한다. PNG/PDF 라벨은 `recordOrderExecution()`이며 VPP 내부 모델명에만 `recordOrderExcution()` 오탈자가 있다. |
+| `13` | `TradingController -> TradeHistoryController` | `recordOrderExecution(order : Order, summary : ExecutionSummary, costBasis : Decimal?) : void` | Order, 체결 요약, 매도 시 원가 | `void` | 완료된 주문 체결을 이력, 성과, 저장소에 기록하도록 위임한다. | `13.1`~`13.5`를 조정한다. |
 | `13.1` | `TradeHistoryController -> Performance` | `calculateRealizedResult(summary : ExecutionSummary, costBasis : Decimal) : RealizedResult` | 매도 체결 요약, 취득원가 | 이번 매도의 실현 결과 | 이번 매도의 실현손익과 수익률을 계산한다. | 노트가 명시한 매도 의미의 하위 호출이다. 매수에서는 실현 결과를 만들지 않는다. |
 | `13.2` | `TradeHistoryController -> Trade` | `Trade(order : Order, summary : ExecutionSummary, realizedResult : RealizedResult?) : Trade` | Order, 체결 요약, 선택적 실현 결과 | Trade | 실제 체결 기록 entity를 만든다. | 요청 정보와 실제 fill 정보, 전략, 손익 및 청산 사유를 한 레코드에 보존한다. |
 | `13.3` | `TradeHistoryController -> TradeHistory` | `addTrade(trade : Trade) : void` | 새 Trade | `void` | 새 체결을 인메모리 거래 이력에 추가한다. | 이후 최근 체결, 상세 조회, CSV 조회의 원천이 된다. |
@@ -253,7 +253,7 @@ TradingContext 생성/초기화는 주문 실행 이전인 Case 1의 자동매�
 | `1.1.2.2` | `TradeHistoryController -> TradeHistory` | `find(query : TradeHistoryQuery) : List<Trade>` | 메시지 `1.1.2.1`의 query | 조건에 맞는 Trade 목록 | 인메모리 거래 이력에서 조건에 맞는 체결을 찾는다. | 조건과 일치하는 목록을 `1.1.2`의 TradeDetailsResult에 포함한다. |
 | `1.1.2.3` | `TradeHistoryController -> Account` | `getHoldings(asset : String = "ETH") : Decimal` | 자산 symbol | 현재 ETH 보유 수량 | 상세 화면 요약 카드에 표시할 보유량을 조회한다. | Account의 최신 REST/WebSocket 반영값을 반환한다. 별도 reply 메시지는 없다. |
 | `1.1.2.4` | `TradeHistoryController -> Performance` | `getPerformance() : Performance` | 없음 | 현재 Performance snapshot | 수익률, 매도 성과, 실현손익 및 수수료를 조회한다. | UI Rule의 당일 전체 수익률, 매도 성과, 당일 수수료 표시에 필요한 값을 제공한다. |
-| `1.1.3` | `UIStateController -> TradeHistoryUI` | `displayTradeDetails(details : TradeDetailsResult) : void` | 결합된 상세 표시 결과 | `void` | 상세 화면을 렌더링한다. | 거래 테이블, 기간/side 기본 선택, ETH 보유량, 수익률, 매도 성과, 수수료를 한 번에 표시한다. 원본 수신자 이름은 `TradeHostoryUI`이다. |
+| `1.1.3` | `UIStateController -> TradeHistoryUI` | `displayTradeDetails(details : TradeDetailsResult) : void` | 결합된 상세 표시 결과 | `void` | 상세 화면을 렌더링한다. | 거래 테이블, 기간/side 기본 선택, ETH 보유량, 수익률, 매도 성과, 수수료를 한 번에 표시한다. |
 
 ### 6.2 기간 및 매수·매도 필터 변경
 
@@ -333,31 +333,13 @@ CSV PNG의 진입 Boundary 이름은 `TradingHistoryUI`이지만 History PNG의 
 | `4.1.6b` | `UIStateController -> csvPopup : PopupUI` | `showExportComplete(path : Path) : void` | 생성된 CSV 경로 | `void` | `[성공 시]` 내보내기 완료 상태를 표시한다. | 진행 표시를 제거하고 저장 결과를 사용자에게 알린다. |
 
 
-
-## 8. Diagram에서 추가되어야 하는 필수 메시지 요약
-
-새 기능 제안이 아니라 현재 collaboration과 이미 등장한 클래스를 실제로 동작시키기 위한 누락만 정리하면 다음 두 건이다.
-
-| Case | 최종 번호 | 추가 메시지 | 필요한 이유 | 기존 번호 변경 |
-|---|---|---|---|---|
-| 자동매매 시작 | `7.1.1.1` | `TradingController -> TradingContext: initialize(...) : void` | TradingSTM 실행 전에 계좌, 선택 REGIME, 포지션, 분할 비율 및 runtime 상태를 가진 TradingContext가 필요하다. Start/Stop 그림에는 기존 클래스 `:TradingContext` lifeline도 함께 추가해야 한다. | 기존 `7.1.1.1 run()` -> `7.1.1.2` |
-| 자동매매 중지 | `8.1.1.1` | `TradingController -> TradingSTM: handle(event : TradingEvent, context : TradingContext) : TradingSTMResult` (`event = STOP_CONFIRMED`) | 매도 API 호출만으로는 TradingSTM에 신규 진입 차단과 중지 절차 시작 의도가 전달되지 않는다. | 기존 `8.1.1.1` -> `8.1.1.2`, 기존 `8.1.1.1.1` -> `8.1.1.2.1` |
-
-다음은 추가 대상으로 보지 않는다.
-
-- API 또는 파일 시스템의 함수 반환을 나타내는 reply 메시지
-- Buy and Sell의 별도 WebSocket 체결 처리 경로
-- CSV stream의 별도 close 메시지
-- 필터 변경 때 변하지 않은 요약 정보를 다시 조회하는 메시지
-- 현재 문서에 없는 신규 기능, 재시도 정책 또는 별도 상태 머신
-
-## 9. 전체 클래스 Attribute 및 Operation
+## 8. 전체 클래스 Attribute 및 Operation
 
 이 절은 네 다이어그램에 등장한 모든 시스템 클래스를 한 번씩 정리한다. `TradeHostoryUI`와 `TradingHistoryUI`는 기능상 같은 Boundary이므로 `TradeHistoryUI` 아래에 원본 alias를 함께 적었다. `User`, `Binance REST API`, `Binance WebSocket`, `Local File System`/`File System`은 외부 Actor이므로 클래스 목록과 분리해 10절에 정리한다.
 
 Operation 목록은 다이어그램에서 실제로 수신하는 메시지와 8절에서 필수로 확정한 두 메시지를 기준으로 한다. 다이어그램에 없는 새로운 public operation은 추가하지 않는다.
 
-### 9.1 AppShellUI
+### 8.1 AppShellUI
 
 기능: 앱의 전역 UI Boundary로서 interface를 시작하고 REGIME 선택, 자동매매 시작 확인, 중지 확인을 받는다.
 
@@ -374,7 +356,7 @@ Operation
 - `startConfirmed() : void`
 - `stopConfirmed() : void`
 
-### 9.2 UIStateController
+### 8.2 UIStateController
 
 기능: UI Boundary의 event를 UISTM과 업무 Controller에 전달하고, 선택된 UI action을 화면에 반영하는 façade이다.
 
@@ -403,7 +385,7 @@ Operation
 - `csvOptionChanged(period : CSVPeriod, startDate : LocalDate?, endDate : LocalDate?, fileName : String) : void`
 - `exportCSV() : void`
 
-### 9.3 UISTM
+### 8.3 UISTM
 
 기능: UI Event-Action Table에 따라 화면, popup, filter 및 export 표시 상태를 결정한다.
 
@@ -416,7 +398,7 @@ Operation
 - `run(initialEvent : UIEvent = APP_STARTED) : UITransitionResult`
 - `handle(event : UIEvent) : UITransitionResult`
 
-### 9.4 TradingController
+### 8.4 TradingController
 
 기능: 계좌 로드, 선택 전략 연결, 자동매매 시작·중지 및 주문 실행을 조정한다. 거래 상태 결정은 TradingSTM에 위임한다.
 
@@ -439,7 +421,7 @@ Operation
 - `startTrading() : void`
 - `stopTrading() : void`
 
-### 9.5 TradingSTM
+### 8.5 TradingSTM
 
 기능: trading event와 TradingContext를 사용해 자동매매 상태 및 수행 action을 결정한다.
 
@@ -456,7 +438,7 @@ Operation
 - `handle(event : TradingEvent, context : TradingContext) : TradingSTMResult`
 - `orderFinished() : void`
 
-### 9.6 TradingContext
+### 8.6 TradingContext
 
 기능: TradingSTM의 판정과 주문 실행에 필요한 runtime 값, 선택 REGIME, 분할 비율 및 현재 주문 의도를 보존한다.
 
@@ -479,7 +461,7 @@ Operation
 - `applyTradingSTMResult(result : TradingSTMResult) : void`
 - `getSplitRatio() : Decimal`
 
-### 9.7 MarketDataController
+### 8.7 MarketDataController
 
 기능: REST 과거 봉과 초기화 중 WebSocket buffer를 병합해 일관된 MarketSnapshot을 만들고 4H REGIME 계산을 시작한다.
 
@@ -496,7 +478,7 @@ Operation
 
 - `InitializeMarketData(symbol : String = "ETHUSDT") : MarketSnapshot`
 
-### 9.8 APIGateway
+### 8.8 APIGateway
 
 기능: Binance REST API의 Kline, 계좌 및 주문 기능을 내부 타입으로 캡슐화한다.
 
@@ -513,7 +495,7 @@ Operation
 - `submitOrder(order : Order) : OrderResult`
 - `queryOrderResult(symbol : String, orderId : Long) : OrderResult`
 
-### 9.9 WebSocketGateway
+### 8.9 WebSocketGateway
 
 기능: Binance WebSocket 구독을 만들고 Kline 및 account event를 내부 형식으로 정규화한다.
 
@@ -531,7 +513,7 @@ Operation
 - `startAllKlineBuffering(symbol : String, intervals : Set<Interval>) : Subscription`
 - `startAccountInfoStream() : Subscription`
 
-### 9.10 MarketSnapshot
+### 8.10 MarketSnapshot
 
 기능: 동일 평가 시점의 시간대별 Kline과 현재 ETH 가격을 보존한다.
 
@@ -547,7 +529,7 @@ Operation
 - `update(klines : Map<Interval, List<Kline>>) : void`
 - `getCurrentETHPrice() : Decimal`
 
-### 9.11 RegimeController
+### 8.11 RegimeController
 
 기능: MarketSnapshot에서 4H 판정 입력을 만들고 RegimeSTM을 실행하며 사용자 선택 REGIME을 거래 logic에 연결한다.
 
@@ -566,7 +548,7 @@ Operation
 - `recommendRegime(indicators : IndicatorSnapshot) : RegimeType`
 - `setRegimeType(regimeType : RegimeType) : void`
 
-### 9.12 IndicatorSnapshot
+### 8.12 IndicatorSnapshot
 
 기능: 동일 평가 시점의 REGIME 판정용 4H 지표를 보존한다.
 
@@ -583,7 +565,7 @@ Operation
 
 - `update(ema9Series : List<Decimal>, ema9Slope : Decimal, swingStructure : SwingStructure, liveEma9 : Decimal) : void`
 
-### 9.13 RegimeSTM
+### 8.13 RegimeSTM
 
 기능: 4H 지표와 REGIME Event-Action 규칙으로 추천 REGIME을 결정한다.
 
@@ -595,7 +577,7 @@ Operation
 
 - `run(indicators : IndicatorSnapshot) : RegimeType`
 
-### 9.14 Order
+### 8.14 Order
 
 기능: 실제 거래소 주문 전 로컬 주문 의도와 Binance 주문/fill 결과를 하나의 aggregate로 보존한다.
 
@@ -622,7 +604,7 @@ Operation
 - `reapplyOrderResult(result : OrderResult) : void`
 - `buildExecutionSummary() : ExecutionSummary`
 
-### 9.15 Position
+### 8.15 Position
 
 기능: 현재 전략 소유 포지션의 수량, 평균 진입가, 취득원가 및 상태를 보존한다.
 
@@ -642,7 +624,7 @@ Operation
 - `getCostBasis(executedQuantity : Decimal) : Decimal`
 - `applyExecution(summary : ExecutionSummary) : void`
 
-### 9.16 Trade
+### 8.16 Trade
 
 기능: 실제 체결 결과를 조회와 영속화에 적합한 단일 거래 기록으로 보존한다.
 
@@ -665,7 +647,7 @@ Operation
 
 - `Trade(order : Order, summary : ExecutionSummary, realizedResult : RealizedResult?) : Trade`
 
-### 9.17 TradeHistory
+### 8.17 TradeHistory
 
 기능: 인메모리 Trade 목록을 보관하고 조건 조회의 원천이 된다.
 
@@ -679,7 +661,7 @@ Operation
 - `addTrade(trade : Trade) : void`
 - `find(query : TradeHistoryQuery) : List<Trade>`
 
-### 9.18 Performance
+### 8.18 Performance
 
 기능: 거래 이력으로부터 당일/누적 수익률, 실현손익, 수수료 및 매도 성과를 계산하고 보존한다.
 
@@ -702,7 +684,7 @@ Operation
 - `applyNewTrade(trade : Trade) : void`
 - `getPerformance() : Performance`
 
-### 9.19 TradeHistoryController
+### 8.19 TradeHistoryController
 
 기능: 거래 저장, 상세 조회, 성과 계산, repository 접근 및 CSV 내보내기를 조정한다.
 
@@ -721,7 +703,7 @@ Operation
 - `getTradeDetails(period : HistoryPeriod = TODAY, side : TradeSide = ALL) : TradeDetailsResult`
 - `exportCSV(options : CSVExportOptions) : CSVExportResult`
 
-### 9.20 TradeHistoryRepository
+### 8.20 TradeHistoryRepository
 
 기능: 로컬 파일에 저장된 Trade의 전체 읽기, 단건 저장 및 streaming 조회를 담당한다.
 
@@ -736,7 +718,7 @@ Operation
 - `saveThisTradeByOrderID(orderId : Long, trade : Trade) : void`
 - `streamTrades(query : TradeHistoryQuery) : Stream<Trade>`
 
-### 9.21 Account
+### 8.21 Account
 
 기능: 자산별 잔액, ETH 보유량, 현재가와 평가금액을 보존한다.
 
@@ -751,7 +733,7 @@ Operation
 
 - `getHoldings(asset : String = "ETH") : Decimal`
 
-### 9.22 RecentOrderUI
+### 8.22 RecentOrderUI
 
 기능: 메인 화면의 최근 체결 목록과 거래 상세 화면 진입점을 제공한다.
 
@@ -764,7 +746,7 @@ Operation
 
 - `showAllTradingDetails() : void`
 
-### 9.23 TradeHistoryUI
+### 8.23 TradeHistoryUI
 
 기능: 거래 내역 상세, 요약, 기간/side filter 및 CSV 내보내기 진입점을 표시한다.
 
@@ -788,7 +770,7 @@ Operation
 - `displayFilteredTrades(trades : List<Trade>) : void`
 - `clickCSVExport() : void`
 
-### 9.24 TradeHistoryQuery
+### 8.24 TradeHistoryQuery
 
 기능: 기간과 거래 side를 결합한 불변 조회 조건을 표현한다.
 
@@ -802,7 +784,7 @@ Operation
 
 - `TradeHistoryQuery(startDate : LocalDate, endDate : LocalDate, side : TradeSide = ALL) : TradeHistoryQuery`
 
-### 9.25 PopupUI
+### 8.25 PopupUI
 
 기능: 역할명 `csvPopup`으로 CSV option 입력, validation 오류, 진행 상태 및 완료/실패를 표시한다.
 
@@ -826,7 +808,7 @@ Operation
 - `showExportError(reason : String) : void`
 - `showExportComplete(path : Path) : void`
 
-### 9.26 CSVExportOptions
+### 8.26 CSVExportOptions
 
 기능: CSV 저장 위치, 기간, 시작일/종료일 및 파일명을 하나의 임시 option 객체로 보존하고 검증한다.
 
@@ -845,7 +827,7 @@ Operation
 - `apply(period : CSVPeriod, startDate : LocalDate?, endDate : LocalDate?, fileName : String) : void`
 - `validate() : ValidationResult`
 
-### 9.27 CSVFileGateway
+### 8.27 CSVFileGateway
 
 기능: OS directory picker와 CSV 파일 쓰기를 UI/Controller에서 분리한다.
 
@@ -858,11 +840,11 @@ Operation
 - `chooseDirectory() : Path?`
 - `writeCSV(trades : Stream<Trade>, options : CSVExportOptions) : CSVExportResult`
 
-## 10. 외부 Actor의 호출 계약
+## 9. 외부 Actor의 호출 계약
 
 외부 Actor는 시스템 클래스의 Attribute/Operation 목록 대상은 아니지만, 다이어그램에서 호출되는 계약을 구현 참고용으로 정리한다.
 
-### 10.1 Binance REST API
+### 9.1 Binance REST API
 
 - `get1mKlines(symbol : String, limit : int) : List<Kline>`
 - `get30mKlines(symbol : String, limit : int) : List<Kline>`
@@ -874,12 +856,12 @@ Operation
 - `getAccountTrades(symbol : String, orderId : Long) : List<Fill>`
 - `sellAllPosition(symbol : String, quantity : Decimal) : BinanceOrderResponse`
 
-### 10.2 Binance WebSocket
+### 9.2 Binance WebSocket
 
 - `subscribeAllKlineStreams(symbol : String, intervals : Set<Interval>) : Subscription`
 - `subscribeAccountInfo() : Subscription`
 
-### 10.3 Local File System / File System
+### 9.3 Local File System / File System
 
 - `read(path : Path) : String`
 - `write(path : Path, data : String) : void`
