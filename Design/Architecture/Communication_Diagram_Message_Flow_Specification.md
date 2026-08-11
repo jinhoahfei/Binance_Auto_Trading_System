@@ -58,6 +58,24 @@ find(query : TradeHistoryQuery) : List<Trade>
 stopTrading() : void
 ```
 
+### 2.3 `UI` Boundary와 HTML/CSS/JavaScript 구현의 관계
+
+이 문서의 `AppShellUI`, `RecentOrderUI`, `TradeHistoryUI`, `PopupUI`는 UML의 논리적인 `<<boundary>>` classifier이다. 사용자와 시스템 사이에서 입력을 받고 결과를 표시하는 역할을 표현하며, JavaScript의 `class` 문법이나 CSS의 class selector를 뜻하지 않는다. 이름에 `UI`가 포함되더라도 `UIStateController`와 `UISTM`은 화면 Boundary가 아니라 UI 흐름과 상태를 제어하는 요소이다.
+
+웹 구현에서 각 UML 요소는 다음과 같이 해석한다.
+
+| UML 표현 | HTML/CSS/JavaScript에서의 대응 | 의미 |
+|---|---|---|
+| `<<boundary>> TradeHistoryUI` | HTML 구조 + CSS 스타일 + JavaScript/TypeScript UI 모듈 또는 component | 거래 내역 화면이라는 하나의 논리적인 UI 역할 |
+| Boundary의 Attribute | JavaScript가 실제로 보관하는 화면 상태, 선택값 또는 표시 데이터 | 예: 선택 기간, 선택 side, 현재 표시 중인 거래 목록 |
+| `User -> UI` Operation | click, change, submit 등의 DOM event listener | 예: `selectFilter(...)`, `clickCSVExport()` |
+| `Controller -> UI` Operation | DOM 갱신 또는 component render 함수 | 예: `displayTradeDetails(...)`, `displayFilteredTrades(...)` |
+| CSS class | UML Class와 직접 대응하지 않음 | HTML 요소를 선택하고 스타일을 적용하기 위한 selector |
+
+HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용자 event 처리, Controller 호출 및 화면 갱신은 JavaScript/TypeScript의 event handler나 render 함수가 담당한다. 이때 반드시 `class TradeHistoryUI { ... }`와 같은 ES class로 구현할 필요는 없으며, 일반 함수, module 또는 framework component가 같은 Boundary 계약을 구현해도 된다.
+
+이 문서의 클래스 목록은 분석·설계 수준에서 UI의 책임과 호출 계약을 보여준다. 따라서 클래스 다이어그램에는 위 UI 요소를 `<<boundary>>`로 표시한다. 구현 수준 클래스 다이어그램을 별도로 작성할 때는 JavaScript UI 모듈이나 component가 실제로 소유하는 상태만 Attribute로 남기고, Controller가 소유하는 상태는 해당 Controller에 배치해야 한다. `TradeHistoryUI -> trade-history.html + trade-history.css + trade-history.js`와 같은 실제 파일 구성은 필요하면 별도의 Component Diagram으로 표현한다.
+
 ## 3. 공통 타입과 원본 표기 정합성
 
 ### 3.1 공통 타입
@@ -335,11 +353,15 @@ CSV PNG의 진입 Boundary 이름은 `TradingHistoryUI`이지만 History PNG의 
 
 ## 8. 전체 클래스 Attribute 및 Operation
 
-이 절은 네 다이어그램에 등장한 모든 시스템 클래스를 한 번씩 정리한다. `TradeHostoryUI`와 `TradingHistoryUI`는 기능상 같은 Boundary이므로 `TradeHistoryUI` 아래에 원본 alias를 함께 적었다. `User`, `Binance REST API`, `Binance WebSocket`, `Local File System`/`File System`은 외부 Actor이므로 클래스 목록과 분리해 10절에 정리한다.
+이 절은 네 다이어그램에 등장한 모든 시스템 클래스를 한 번씩 정리한다. `User`, `Binance REST API`, `Binance WebSocket`, `Local File System`/`File System`은 외부 Actor이므로 클래스 목록과 분리해 10절에 정리한다.
+
+`AppShellUI`, `RecentOrderUI`, `TradeHistoryUI`, `PopupUI`는 2.3절에서 설명한 웹 UI용 `<<boundary>>` classifier이다. 아래 Attribute와 Operation은 논리적인 UI 상태와 호출 계약이며, CSS class나 ES class 사용을 요구하는 목록이 아니다.
 
 Operation 목록은 다이어그램에서 실제로 수신하는 메시지와 8절에서 필수로 확정한 두 메시지를 기준으로 한다. 다이어그램에 없는 새로운 public operation은 추가하지 않는다.
 
 ### 8.1 AppShellUI
+
+Stereotype: `<<boundary>>`
 
 기능: 앱의 전역 UI Boundary로서 interface를 시작하고 REGIME 선택, 자동매매 시작 확인, 중지 확인을 받는다.
 
@@ -499,7 +521,6 @@ Operation
 
 기능: Binance WebSocket 구독을 만들고 Kline 및 account event를 내부 형식으로 정규화한다.
 
-Buy and Sell PNG의 동일 클래스 표기는 `WebsocketGateway`이다.
 
 Attribute
 
@@ -735,6 +756,8 @@ Operation
 
 ### 8.22 RecentOrderUI
 
+Stereotype: `<<boundary>>`
+
 기능: 메인 화면의 최근 체결 목록과 거래 상세 화면 진입점을 제공한다.
 
 Attribute
@@ -748,12 +771,9 @@ Operation
 
 ### 8.23 TradeHistoryUI
 
+Stereotype: `<<boundary>>`
+
 기능: 거래 내역 상세, 요약, 기간/side filter 및 CSV 내보내기 진입점을 표시한다.
-
-원본 alias:
-
-- History PNG: `TradeHostoryUI`
-- CSV PNG: `TradingHistoryUI`
 
 Attribute
 
@@ -785,6 +805,8 @@ Operation
 - `TradeHistoryQuery(startDate : LocalDate, endDate : LocalDate, side : TradeSide = ALL) : TradeHistoryQuery`
 
 ### 8.25 PopupUI
+
+Stereotype: `<<boundary>>`
 
 기능: 역할명 `csvPopup`으로 CSV option 입력, validation 오류, 진행 상태 및 완료/실패를 표시한다.
 
