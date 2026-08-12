@@ -81,7 +81,7 @@ def main():
 
 ### 함수 주석
 
-함수 선언 바로 아래에 큰따옴표 3개(`"""`)로 감싼 docstring을 작성한다. 함수의 기능, 인자와 반환값을 설명한다.
+함수 선언 바로 아래에 큰따옴표 3개(`"""`)로 감싼 docstring을 작성한다. 함수의 이름, 기능, 인자, 반환값, 작성 날짜를 설명한다.
 
 ```python
 def add_two_integers(operand1, operand2):
@@ -94,6 +94,23 @@ def add_two_integers(operand1, operand2):
     작성 날짜: 2026/08/10
     """
     return operand1 + operand2
+```
+
+### 클래스 주석
+
+클래스 선언 바로 아래에 큰따옴표 3개(`"""`)로 감싼 docstring을 작성한다. 클래스의 이름, 기능, 작성 날짜를 설명한다.
+
+```python
+class AccountInfo:
+    """
+    클래스 이름: AccountInfo
+    기능: 계좌의 잔액 정보를 관리한다.
+    작성 날짜: 2026/08/12
+    """
+
+    def __init__(self, asset_name, available_balance):
+        self.asset_name = asset_name
+        self.available_balance = available_balance
 ```
 
 ### 블록 주석
