@@ -1,0 +1,107 @@
+.card {
+    min-width: 0;
+    height: 162px;
+    padding: 14px 20px;
+    overflow: hidden;
+    background: var(--color-bg-surface-raised);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-control);
+}
+
+.header {
+    display: grid;
+    grid-template-columns: 1fr auto 8px;
+    gap: 15px;
+    align-items: center;
+    color: var(--color-text-secondary);
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 16px;
+}
+
+.header strong {
+    font-weight: 600;
+}
+
+.statusDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.positive {
+    color: var(--color-status-positive);
+}
+
+.negative {
+    color: var(--color-status-negative);
+}
+
+.neutral {
+    color: var(--color-text-primary);
+}
+
+.statusDot.positive {
+    background-color: var(--color-status-positive);
+}
+
+.statusDot.negative {
+    background-color: var(--color-status-negative);
+}
+
+.statusDot.neutral {
+    background-color: var(--color-text-primary);
+}
+
+.card dl {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin: 21px 0 0;
+}
+
+.card dl > div {
+    display: grid;
+    grid-template-columns: minmax(102px, 1fr) auto;
+    align-items: start;
+}
+
+.card dt,
+.card dd {
+    margin: 0;
+    font-size: 16px;
+    line-height: 21px;
+}
+
+.card dt {
+    color: var(--color-text-secondary);
+    font-weight: 400;
+}
+
+.card dd {
+    overflow: hidden;
+    color: var(--color-text-primary);
+    font-family: var(--font-numeric);
+    font-weight: 600;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card .profit {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.profit strong {
+    color: var(--color-status-positive);
+}
+
+.profit small {
+    color: var(--color-text-secondary);
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 18px;
+}

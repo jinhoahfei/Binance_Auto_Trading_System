@@ -33,3 +33,6 @@ env/
 build/
 dist/
 *.egg-info/
+
+# JavaScript package stores
+.pnpm-store/

@@ -1,0 +1,45 @@
+:root {
+  color-scheme: dark;
+  --color-bg-canvas: #0b0e11;
+  --color-bg-header: #090d10;
+  --color-bg-surface: #192633;
+  --color-bg-surface-raised: #263645;
+  --color-bg-control: #253240;
+  --color-bg-control-strong: #141c25;
+  --color-bg-overlay: rgb(2 7 11 / 82%);
+  --color-border-default: #3b4755;
+  --color-border-strong: #596675;
+  --color-text-primary: #f0f1f2;
+  --color-text-secondary: #a7afbb;
+  --color-text-tertiary: #828a96;
+  --color-status-positive: #0eb77b;
+  --color-status-positive-strong: #0ea66b;
+  --color-status-negative: #f03858;
+  --color-status-negative-strong: #e63752;
+  --color-status-info: #1768d4;
+  --color-status-info-strong: #1454c5;
+  --color-status-warning: #f0b90b;
+  --color-focus: #007aff;
+  --shadow-control: 0 4px 10px -3px rgb(9 14 23 / 24%), inset 0 1px 0 rgb(255 255 255 / 8%);
+  --shadow-modal: 0 20px 52px rgb(0 0 0 / 48%);
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --header-height: 72px;
+  --content-padding: 32px;
+  --font-ui: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', sans-serif;
+  --font-numeric: 'Inter', 'IBM Plex Sans KR', sans-serif;
+}
+
+@media (max-width: 1240px) {
+  :root {
+    --content-padding: 22px;
+  }
+}

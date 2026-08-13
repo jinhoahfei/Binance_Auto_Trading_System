@@ -1,0 +1,8 @@
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+storybook-static/
+.vite/
+apps/desktop/src-tauri/target/
+*.log

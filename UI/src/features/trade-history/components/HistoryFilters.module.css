@@ -1,0 +1,128 @@
+.toolbar {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  width: 100%;
+  height: 64px;
+  padding: 14px 20px 14px 16px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-control);
+  color: var(--color-text-primary);
+}
+
+.toolbarLabel {
+  flex: 0 0 auto;
+  width: 52px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.group {
+  display: flex;
+  gap: 8px;
+}
+
+.filterButton,
+.exportButton {
+  box-sizing: border-box;
+  height: 34px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: var(--color-bg-control);
+  box-shadow: var(--shadow-control);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  transition: border-color 140ms ease, background-color 140ms ease, filter 140ms ease;
+}
+
+.filterButton {
+  min-width: 66px;
+  padding: 0 12px;
+}
+
+.filterButton:hover:not(:disabled),
+.exportButton:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.filterButton:focus-visible,
+.exportButton:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.filterButton:disabled,
+.exportButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.activePeriod {
+  border-color: var(--color-status-info);
+  background: var(--color-status-info-strong);
+  color: var(--color-text-primary);
+}
+
+.separator {
+  width: 1px;
+  height: 24px;
+  margin: 0 12px;
+  background: var(--color-border-default);
+}
+
+.buy {
+  border-color: color-mix(in srgb, var(--color-status-positive) 65%, var(--color-border-default));
+  color: var(--color-status-positive);
+}
+
+.sell {
+  border-color: color-mix(in srgb, var(--color-status-negative) 65%, var(--color-border-default));
+  color: var(--color-status-negative);
+}
+
+.all.activeSide {
+  border-color: var(--color-text-secondary);
+  background: var(--color-bg-control-strong);
+}
+
+.buy.activeSide {
+  background: color-mix(in srgb, var(--color-status-positive-strong) 26%, var(--color-bg-control));
+}
+
+.sell.activeSide {
+  background: color-mix(in srgb, var(--color-status-negative-strong) 26%, var(--color-bg-control));
+}
+
+.exportButton {
+  min-width: 126px;
+  margin-left: auto;
+  padding: 0 18px;
+  border-color: color-mix(in srgb, var(--color-status-info) 42%, var(--color-text-primary));
+  background: var(--color-bg-surface);
+  color: var(--color-status-info);
+}
+
+@media (max-width: 920px) {
+  .toolbar {
+    height: auto;
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .separator {
+    display: none;
+  }
+
+  .exportButton {
+    margin-left: 0;
+  }
+}

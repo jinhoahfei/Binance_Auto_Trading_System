@@ -1,0 +1,17 @@
+.frame {
+  width: 1440px;
+  min-height: 1024px;
+  overflow: hidden;
+  background: var(--color-bg-canvas);
+}
+
+.dashboardBody {
+  min-height: calc(1024px - var(--header-height));
+  padding: 24px var(--content-padding) 32px;
+}
+
+.frozenHighlight :global(section[aria-labelledby='regime-panel-title']) {
+  animation: none;
+  border-color: var(--color-status-info);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-status-info) 35%, transparent), var(--shadow-control);
+}

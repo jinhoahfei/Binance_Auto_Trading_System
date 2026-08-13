@@ -1,0 +1,365 @@
+.overlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  background: var(--color-bg-overlay);
+  backdrop-filter: blur(1px);
+}
+
+.dialog {
+  position: fixed;
+  z-index: 81;
+  top: 50%;
+  left: 50%;
+  box-sizing: border-box;
+  width: 560px;
+  height: 408px;
+  min-height: 408px;
+  padding: 25px 27px 24px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 12px;
+  background: var(--color-bg-surface-raised);
+  box-shadow: var(--shadow-modal);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  transform: translate(-50%, -50%);
+}
+
+.dialog:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.dialogWithErrors {
+  top: calc(50% + 6px);
+  height: 420px;
+  min-height: 420px;
+}
+
+.heading {
+  display: flex;
+  gap: 12px;
+  height: 56px;
+}
+
+.icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 50px;
+  height: 50px;
+  color: var(--color-bg-canvas);
+  font-family: var(--font-numeric);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.icon img {
+  position: absolute;
+  width: 50px;
+  height: 50px;
+  inset: 0;
+}
+
+.icon strong {
+  position: relative;
+  z-index: 1;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.heading h2 {
+  margin: 1px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.heading p {
+  margin: 2px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.section {
+  position: relative;
+  margin-top: 18px;
+}
+
+.section + .section {
+  margin-top: 22px;
+}
+
+.section h3 {
+  margin: 0 0 8px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.locationRow {
+  display: grid;
+  grid-template-columns: 1fr 126px;
+  gap: 12px;
+}
+
+.locationField,
+.dateField,
+.fileNameField {
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: var(--color-bg-control-strong);
+}
+
+.locationField {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 46px;
+  padding: 6px 14px;
+  overflow: hidden;
+}
+
+.locationField span,
+.dateField span,
+.fileNameField label {
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 14px;
+}
+
+.locationField strong,
+.dateField strong {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chooseButton,
+.periods button,
+.cancelButton,
+.exportButton {
+  border: 1px solid var(--color-border-strong);
+  border-radius: 7px;
+  background: var(--color-bg-control);
+  box-shadow: var(--shadow-control);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chooseButton {
+  height: 46px;
+  border-color: color-mix(in srgb, var(--color-status-info) 50%, var(--color-text-primary));
+  color: var(--color-status-info);
+}
+
+.chooseButton:hover:not(:disabled),
+.periods button:hover:not(:disabled),
+.cancelButton:hover:not(:disabled),
+.exportButton:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.chooseButton:focus-visible,
+.periods button:focus-visible,
+.dateField:focus-visible,
+.cancelButton:focus-visible,
+.exportButton:focus-visible,
+.fileNameField input:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.periods {
+  display: flex;
+  gap: 8px;
+}
+
+.periods button {
+  height: 34px;
+  padding: 0 18px;
+}
+
+.periods button.selectedPeriod {
+  border-color: var(--color-status-info);
+  background: var(--color-status-info-strong);
+}
+
+.dateRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.dialogWithErrors .dateRow {
+  margin-top: 24px;
+}
+
+.dateAnchor {
+  position: relative;
+}
+
+.dateField {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  width: 100%;
+  height: 56px;
+  padding: 8px 38px 8px 14px;
+  text-align: left;
+}
+
+.dateField:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.dateEnabled {
+  border-color: color-mix(in srgb, var(--color-status-info) 70%, var(--color-border-strong));
+  cursor: pointer;
+  opacity: 1;
+}
+
+.dateOpen {
+  border-color: var(--color-focus);
+}
+
+.dateIcon {
+  position: absolute;
+  top: 17px;
+  right: 14px;
+  color: var(--color-status-info) !important;
+  font-size: 18px !important;
+}
+
+.startCalendar,
+.endCalendar {
+  position: absolute;
+  z-index: 3;
+  top: 68px;
+}
+
+.startCalendar {
+  left: 0;
+}
+
+.endCalendar {
+  right: 0;
+}
+
+.footer {
+  display: grid;
+  grid-template-columns: 286px 92px 104px;
+  justify-content: space-between;
+  margin-top: 24px;
+}
+
+.fileNameField {
+  position: relative;
+  height: 34px;
+  padding: 0 12px;
+}
+
+.fileNameField label {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.fileNameField input {
+  width: 100%;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-numeric);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cancelButton,
+.exportButton {
+  height: 34px;
+}
+
+.exportButton {
+  border-color: var(--color-status-info);
+  background: var(--color-status-info-strong);
+  color: var(--color-text-primary);
+}
+
+.chooseButton:disabled,
+.periods button:disabled,
+.cancelButton:disabled,
+.exportButton:disabled,
+.fileNameField input:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.invalid {
+  border-color: var(--color-status-negative);
+}
+
+.error {
+  margin: 2px 0 -4px;
+  color: var(--color-status-negative);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 15px;
+}
+
+.section > .error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+}
+
+.fileError,
+.exportError {
+  margin: 4px 0 0;
+}
+
+@media (max-width: 640px) {
+  .dialog {
+    width: calc(100vw - 32px);
+    padding-inline: 20px;
+  }
+
+  .locationRow,
+  .dateRow,
+  .footer {
+    grid-template-columns: 1fr;
+  }
+
+  .periods {
+    flex-wrap: wrap;
+  }
+
+  .startCalendar,
+  .endCalendar {
+    right: auto;
+    left: 0;
+  }
+}

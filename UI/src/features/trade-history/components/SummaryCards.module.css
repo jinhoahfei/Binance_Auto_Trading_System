@@ -1,0 +1,165 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.card {
+  box-sizing: border-box;
+  height: 110px;
+  overflow: hidden;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-control);
+  color: var(--color-text-primary);
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 18px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.accent {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+}
+
+.dailyAccent,
+.sellAccent {
+  background: var(--color-status-positive-strong);
+}
+
+.positionAccent {
+  background: var(--color-bg-control-strong);
+}
+
+.feeAccent {
+  background: var(--color-text-tertiary);
+}
+
+.dailyValue,
+.sellRate,
+.sellCount,
+.positionValue,
+.feeValue,
+.sellDetails strong {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+}
+
+.dailyValue {
+  margin: -1px 0 0;
+  font-size: 36px;
+  font-weight: 600;
+  line-height: 46px;
+  letter-spacing: -0.36px;
+}
+
+.sellCard {
+  padding-inline: 16px;
+}
+
+.sellHeadline {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  height: 34px;
+}
+
+.sellRate,
+.sellCount {
+  margin: 0;
+  font-weight: 600;
+}
+
+.sellRate {
+  font-size: 24px;
+  line-height: 30px;
+  letter-spacing: -0.24px;
+}
+
+.sellCount {
+  padding-bottom: 1px;
+  color: var(--color-text-primary);
+  font-size: 20px;
+  line-height: 24px;
+  letter-spacing: -0.2px;
+}
+
+.sellDetails {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 3px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.sellDetails strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.positionValue {
+  margin: 12px 0 0;
+  color: var(--color-text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 30px;
+  text-align: center;
+  letter-spacing: -0.24px;
+}
+
+.feeValue {
+  margin: 4px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 30px;
+  letter-spacing: -0.24px;
+}
+
+.feeHelper {
+  overflow: hidden;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.positive {
+  color: var(--color-status-positive-strong);
+}
+
+.negative {
+  color: var(--color-status-negative-strong);
+}
+
+.neutral {
+  color: var(--color-text-tertiary);
+}
+
+@media (max-width: 1120px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

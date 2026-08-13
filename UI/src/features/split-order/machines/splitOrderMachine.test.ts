@@ -1,0 +1,45 @@
+import { createActor } from 'xstate';
+import { describe, expect, it } from 'vitest';
+import { FakeUiCommandAdapter } from '../../../shared/testing';
+import { create_split_order_machine } from './splitOrderMachine';
+
+/**
+ * 함수 이름: wait_for_actor_settlement()
+ * 기능: 분할 주문 저장 Promise의 최신 결과가 actor snapshot에 반영될 때까지 기다린다.
+ * 인자: 없음
+ * 반환값: 다음 event loop turn에서 완료되는 Promise
+ * 작성 날짜: 2026/08/12
+ */
+async function wait_for_actor_settlement(): Promise<void> {
+    await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+    });
+}
+
+describe('splitOrderMachine', () => {
+    it('SI-02/SO-02: 저장 중에도 연속 slider 입력의 최신 비율을 즉시 표시하고 저장한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_split_order_machine(command_adapter, {
+            scale_in_percentage: 40,
+            scale_out_percentage: 40,
+        }));
+
+        actor.start();
+        actor.send({ type: 'SCALE_IN_LEVEL_CHANGED', percentage: 50 });
+        actor.send({ type: 'SCALE_IN_LEVEL_CHANGED', percentage: 60 });
+        actor.send({ type: 'SCALE_IN_LEVEL_CHANGED', percentage: 70 });
+
+        expect(actor.getSnapshot().context.scale_in_percentage).toBe(70);
+        expect(actor.getSnapshot().matches('saving')).toBe(true);
+
+        await wait_for_actor_settlement();
+
+        expect(actor.getSnapshot().matches('ready')).toBe(true);
+        expect(actor.getSnapshot().context.scale_in_percentage).toBe(70);
+        expect(command_adapter.command_records.at(-1)).toEqual({
+            name: 'update_split_order',
+            payload: { order_side: 'scale_in', percentage: 70 },
+        });
+        actor.stop();
+    });
+});

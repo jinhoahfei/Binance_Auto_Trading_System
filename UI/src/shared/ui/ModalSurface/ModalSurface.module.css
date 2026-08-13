@@ -1,0 +1,75 @@
+.overlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  background: var(--color-bg-overlay);
+  backdrop-filter: blur(5px);
+}
+
+.content {
+  position: fixed;
+  z-index: 81;
+  top: 50%;
+  left: 50%;
+  max-height: calc(100vh - 48px);
+  overflow: visible;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface-raised);
+  box-shadow: var(--shadow-modal);
+  color: var(--color-text-primary);
+}
+
+.compact {
+  width: 420px;
+  padding: 18px 17px 17px;
+}
+
+.compact.fixedHeight {
+  display: flex;
+  flex-direction: column;
+  height: 232px;
+}
+
+.compact.fixedHeight > .headingWithVisual {
+  flex: 0 0 62px;
+}
+
+.compact.fixedHeight .description {
+  font-size: 12px;
+}
+
+.wide {
+  width: 560px;
+  padding: 26px 28px 28px;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.headingWithVisual {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.leadingVisual {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+}
+
+.description {
+  margin: 2px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+  line-height: 18px;
+  word-break: keep-all;
+}

@@ -1,0 +1,53 @@
+.button {
+  min-height: 40px;
+  padding: 0 20px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-control);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-control);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  transition: border-color 140ms ease, filter 140ms ease, transform 140ms ease;
+}
+
+.button:hover:not(:disabled) {
+  filter: brightness(1.09);
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.button:disabled {
+  opacity: 0.48;
+}
+
+.compact {
+  min-height: 34px;
+  padding: 0 16px;
+  font-size: 12.5px;
+}
+
+.positive {
+  border-color: var(--color-status-positive);
+  background: var(--color-status-positive-strong);
+  color: white;
+}
+
+.negative {
+  border-color: var(--color-status-negative);
+  background: var(--color-status-negative-strong);
+  color: white;
+}
+
+.info {
+  border-color: #87aaf0;
+  background: #0f3a76;
+  color: #8ab5ff;
+}
+
+.neutral {
+  background: var(--color-bg-control);
+}

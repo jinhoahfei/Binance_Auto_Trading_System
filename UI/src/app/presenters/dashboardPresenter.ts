@@ -1,0 +1,300 @@
+import type { PriceChartIntent } from '../../features/price-chart';
+import type { RecentOrderViewModel, TraderPanelIntent } from '../../features/recent-orders';
+import type { RegimePanelIntent } from '../../features/regime-selection';
+import type { SplitOrderIntent } from '../../features/split-order';
+import {
+    DEFAULT_DASHBOARD_PROPS,
+    type DashboardPageProps,
+} from '../../routes/dashboard';
+import type { TradeRecord } from '../../shared/contracts';
+import type { AppViewModel } from '../control';
+import type { UiApplicationController } from '../runtime';
+
+const DASHBOARD_ORDER_BY_ID = new Map(
+    DEFAULT_DASHBOARD_PROPS.trader.orders.map((order) => [order.id, order]),
+);
+
+const STRATEGY_LABEL_BY_REGIME: Readonly<Record<NonNullable<AppViewModel['regime']['applied']>, string>> = {
+    type0: 'Basic Iterative',
+    type1: 'First Buy',
+    type2: 'Momentum',
+    type3: 'Risk Off',
+    type4: 'Defensive',
+};
+
+const WON_FORMATTER = new Intl.NumberFormat('ko-KR', {
+    maximumFractionDigits: 0,
+});
+
+/**
+ * 함수 이름: format_recent_trade_time()
+ * 기능: actor의 ISO 체결 시각을 최근 체결 카드의 KST 시각으로 표시한다.
+ * 인자: occurred_at -> ISO 체결 시각
+ * 반환값: HH:mm:ss 형식의 KST 시각
+ * 작성 날짜: 2026/08/12
+ */
+function format_recent_trade_time(occurred_at: string): string {
+    return new Intl.DateTimeFormat('ko-KR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: 'Asia/Seoul',
+    }).format(new Date(occurred_at));
+}
+
+/**
+ * 함수 이름: create_recent_order_view_model()
+ * 기능: 최근 체결 actor record를 Figma 행 fixture 또는 안전한 기본 표시 모델로 변환한다.
+ * 인자: trade_record -> actor가 보관한 정규화 체결 기록
+ * 반환값: TraderPanel 최근 체결 행 ViewModel
+ * 작성 날짜: 2026/08/12
+ */
+function create_recent_order_view_model(trade_record: TradeRecord): RecentOrderViewModel {
+    const fixture_order = DASHBOARD_ORDER_BY_ID.get(trade_record.id);
+
+    if (fixture_order !== undefined) {
+        return fixture_order;
+    }
+
+    return {
+        id: trade_record.id,
+        side: trade_record.side,
+        strategy: trade_record.strategy,
+        time: format_recent_trade_time(trade_record.occurred_at),
+        price: `₩ ${WON_FORMATTER.format(Number(trade_record.price))}`,
+        secondaryValue: trade_record.side === 'buy'
+            ? `${trade_record.quantity} ETH`
+            : `${trade_record.profit_rate ?? '0'}%`,
+    };
+}
+
+/**
+ * 함수 이름: handle_chart_intent()
+ * 기능: PriceChart Boundary intent를 facade의 Event-Action intent로 변환한다.
+ * 인자: intent -> 차트 컴포넌트 intent, view_model -> 현재 차트 상태, controller -> UI actor controller
+ * 반환값: 없음
+ * 작성 날짜: 2026/08/12
+ */
+function handle_chart_intent(
+    intent: PriceChartIntent,
+    view_model: AppViewModel,
+    controller: UiApplicationController,
+): void {
+    switch (intent.type) {
+        case 'CHART_INTERVAL_REQUESTED':
+            controller.dispatch({
+                type: 'CHART_INTERVAL_SELECTED',
+                interval: intent.interval,
+            });
+            break;
+        case 'INDICATOR_SETTINGS_REQUESTED':
+            controller.dispatch({ type: 'CHART_INDICATOR_SETTINGS_TOGGLED' });
+            break;
+        case 'INDICATOR_SETTINGS_CLOSED':
+            controller.dispatch({ type: 'CHART_INDICATOR_SETTINGS_OUTSIDE_CLICKED' });
+            break;
+        case 'INDICATOR_VISIBILITY_REQUESTED':
+            controller.dispatch({
+                type: 'CHART_INDICATOR_CHANGED',
+                indicator: intent.indicator === 'bollingerBand'
+                    ? 'bollinger_bands'
+                    : intent.indicator,
+                is_visible: intent.visible,
+            });
+            break;
+        case 'DRAWING_MODE_REQUESTED':
+            controller.dispatch({ type: 'CHART_DRAWING_TOOL_CLICKED' });
+            break;
+        case 'DRAWING_STARTED':
+            controller.dispatch({ type: 'CHART_DRAWING_STARTED' });
+            break;
+        case 'DRAWING_FINISHED':
+            controller.dispatch({
+                type: 'CHART_DRAWING_FINISHED',
+                drawing: intent.drawing,
+            });
+            break;
+        case 'DRAWING_CANCELED':
+            controller.dispatch({ type: 'CHART_DRAWING_CANCELED' });
+            break;
+        case 'CHART_FULLSCREEN_REQUESTED':
+            controller.dispatch({
+                type: 'CHART_FULLSCREEN_CHANGED',
+                is_fullscreen: !view_model.chart.is_fullscreen,
+            });
+            break;
+        case 'DRAWING_LINE_HOVER_ENTERED':
+            controller.dispatch({
+                type: 'CHART_LINE_HOVER_ENTERED',
+                line_id: intent.lineId,
+            });
+            break;
+        case 'DRAWING_LINE_HOVER_EXITED':
+            controller.dispatch({ type: 'CHART_LINE_HOVER_EXITED' });
+            break;
+        case 'DRAWING_LINE_CONTEXT_MENU_REQUESTED':
+            controller.dispatch({
+                type: 'CHART_LINE_CONTEXT_MENU_REQUESTED',
+                x: intent.x,
+                y: intent.y,
+            });
+            break;
+        case 'DRAWING_LINE_DELETE_REQUESTED':
+            controller.dispatch({ type: 'CHART_LINE_DELETE_REQUESTED' });
+            break;
+        case 'DRAWING_LINE_CONTEXT_MENU_CLOSED':
+            controller.dispatch({ type: 'CHART_LINE_CONTEXT_MENU_OUTSIDE_CLICKED' });
+            break;
+    }
+}
+
+/**
+ * 함수 이름: handle_trader_panel_intent()
+ * 기능: 트레이딩 패널 탭과 전체 보기 intent를 소유 actor 또는 route actor로 전달한다.
+ * 인자: intent -> TraderPanel Boundary intent, controller -> UI actor controller
+ * 반환값: 없음
+ * 작성 날짜: 2026/08/12
+ */
+function handle_trader_panel_intent(
+    intent: TraderPanelIntent,
+    controller: UiApplicationController,
+): void {
+    if (intent.type === 'ALL_ORDERS_REQUESTED') {
+        controller.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+        return;
+    }
+
+    controller.dispatch({
+        type: intent.tab === 'recent'
+            ? 'RECENT_ORDERS_TAB_SELECTED'
+            : 'REALTIME_INDICATORS_TAB_SELECTED',
+    });
+}
+
+/**
+ * 함수 이름: handle_regime_intent()
+ * 기능: REGIME Boundary의 후보 선택 intent를 regime actor로 전달한다.
+ * 인자: intent -> REGIME 패널 intent, controller -> UI actor controller
+ * 반환값: 없음
+ * 작성 날짜: 2026/08/12
+ */
+function handle_regime_intent(
+    intent: RegimePanelIntent,
+    controller: UiApplicationController,
+): void {
+    controller.dispatch({
+        type: 'REGIME_TYPE_CLICKED',
+        regime: intent.regime,
+    });
+}
+
+/**
+ * 함수 이름: handle_split_order_intent()
+ * 기능: 분할 매수·매도 Boundary intent를 해당 비율 actor event로 전달한다.
+ * 인자: intent -> 분할 주문 intent, controller -> UI actor controller
+ * 반환값: 없음
+ * 작성 날짜: 2026/08/12
+ */
+function handle_split_order_intent(
+    intent: SplitOrderIntent,
+    controller: UiApplicationController,
+): void {
+    controller.dispatch({
+        type: intent.side === 'buy' ? 'SCALE_IN_CHANGED' : 'SCALE_OUT_CHANGED',
+        percentage: intent.percentage,
+    });
+}
+
+/**
+ * 함수 이름: present_dashboard_props()
+ * 기능: 단일 AppViewModel을 정적 Figma fixture와 결합해 제어형 DashboardPage props로 투영한다.
+ * 인자: view_model -> facade의 최신 화면 모델, controller -> 사용자 intent 전달 controller
+ * 반환값: 모든 대시보드 feature Boundary에 전달할 props
+ * 작성 날짜: 2026/08/12
+ */
+export function present_dashboard_props(
+    view_model: AppViewModel,
+    controller: UiApplicationController,
+): DashboardPageProps {
+    const applied_strategy = view_model.regime.applied === null
+        ? '선택 필요'
+        : STRATEGY_LABEL_BY_REGIME[view_model.regime.applied];
+    const strategy_status = view_model.connection.is_online
+        ? view_model.trading.is_trading
+            ? '정상 작동'
+            : '매매 중지'
+        : 'API 연결 대기';
+    const strategy_status_tone = view_model.connection.is_online && view_model.trading.is_trading
+        ? 'positive' as const
+        : 'negative' as const;
+    const fixture_indicator_groups = DEFAULT_DASHBOARD_PROPS.trader.indicatorGroups;
+    const primary_indicator_group = fixture_indicator_groups[0];
+    const dynamic_indicator_groups = primary_indicator_group === undefined
+        ? fixture_indicator_groups
+        : [
+            {
+                ...primary_indicator_group,
+                indicators: view_model.trader_panel.realtime_indicators.map((indicator, index) => ({
+                    id: primary_indicator_group.indicators[index]?.id ?? indicator.id,
+                    label: indicator.label,
+                    tone: indicator.tone,
+                    value: indicator.value,
+                })),
+            },
+            ...fixture_indicator_groups.slice(1),
+        ];
+
+    return {
+        regime: {
+            recommended: view_model.regime.recommended,
+            applied: view_model.regime.applied,
+            candidate: view_model.regime.candidate,
+            metrics: view_model.regime.metrics,
+            disabled: view_model.regime.is_pending,
+            highlight: view_model.regime.is_highlighted,
+            onIntent: (intent) => handle_regime_intent(intent, controller),
+        },
+        chart: {
+            ...DEFAULT_DASHBOARD_PROPS.chart,
+            activeState: applied_strategy,
+            interval: view_model.chart.interval,
+            isFullscreen: view_model.chart.is_fullscreen,
+            drawingActive: view_model.chart.drawing_mode !== 'deactivated',
+            drawings: view_model.chart.drawings,
+            selectedLineId: view_model.chart.selected_line_id,
+            lineContextMenuOpen: view_model.chart.line_selection_state === 'context_menu',
+            contextMenuPosition: view_model.chart.context_menu_position,
+            indicatorSettingsOpen: view_model.chart.is_indicator_settings_open,
+            indicatorSettings: {
+                ema9: view_model.chart.indicators.ema9,
+                bollingerBand: view_model.chart.indicators.bollinger_bands,
+                volume: view_model.chart.indicators.volume,
+            },
+            onIntent: (intent) => handle_chart_intent(intent, view_model, controller),
+        },
+        trader: {
+            ...DEFAULT_DASHBOARD_PROPS.trader,
+            activeTab: view_model.trader_panel.active_tab === 'recent_orders'
+                ? 'recent'
+                : 'realtime',
+            orders: view_model.trader_panel.trades.map(create_recent_order_view_model),
+            indicatorGroups: dynamic_indicator_groups,
+            onIntent: (intent) => handle_trader_panel_intent(intent, controller),
+        },
+        account: {
+            asset: view_model.account_summary.asset,
+            strategy: {
+                ...view_model.account_summary.strategy,
+                status: strategy_status,
+                statusTone: strategy_status_tone,
+                appliedState: applied_strategy,
+            },
+        },
+        splitOrder: {
+            buyPercentage: view_model.split_order.scale_in_percentage,
+            sellPercentage: view_model.split_order.scale_out_percentage,
+            onIntent: (intent) => handle_split_order_intent(intent, controller),
+        },
+    };
+}

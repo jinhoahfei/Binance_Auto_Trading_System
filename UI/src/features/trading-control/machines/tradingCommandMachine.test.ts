@@ -1,0 +1,97 @@
+import { createActor } from 'xstate';
+import { describe, expect, it } from 'vitest';
+import { FakeUiCommandAdapter } from '../../../shared/testing';
+import { create_trading_command_machine } from './tradingCommandMachine';
+
+/**
+ * 함수 이름: wait_for_actor_settlement()
+ * 기능: invoked Promise actor의 microtask 완료가 snapshot에 반영될 때까지 기다린다.
+ * 인자: 없음
+ * 반환값: 다음 event loop turn에서 완료되는 Promise
+ * 작성 날짜: 2026/08/12
+ */
+async function wait_for_actor_settlement(): Promise<void> {
+    await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+    });
+}
+
+describe('tradingCommandMachine', () => {
+    it('U3-03/VR-01: REGIME 미선택 시작은 명령 없이 안내 상태로 전이한다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter));
+
+        actor.start();
+        actor.send({ type: 'START_BUTTON_CLICKED', regime: null, is_online: true });
+
+        expect(actor.getSnapshot().matches('select_regime_notice')).toBe(true);
+        expect(command_adapter.command_records).toHaveLength(0);
+        actor.stop();
+    });
+
+    it('U3-05: 확인된 온라인 시작은 한 번만 호출하고 실행 상태가 된다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter));
+
+        actor.start();
+        actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type2', is_online: true });
+        actor.send({ type: 'START_CONFIRMED', is_online: true });
+        actor.send({ type: 'START_CONFIRMED', is_online: true });
+        await wait_for_actor_settlement();
+
+        expect(actor.getSnapshot().matches('running')).toBe(true);
+        expect(command_adapter.command_records).toEqual([
+            { name: 'start_trading', payload: { regime_type: 'type2' } },
+        ]);
+        actor.stop();
+    });
+
+    it('U2-03/U2-09: 강제 매도 실패는 확인 상태로 돌아가고 실행 상태를 유지한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.queue_failure('force_sell_and_stop', new Error('test sell failure'));
+        const actor = createActor(create_trading_command_machine(command_adapter));
+
+        actor.start();
+        actor.send({ type: 'BACKEND_TRADING_STARTED' });
+        actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+        actor.send({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' });
+        await wait_for_actor_settlement();
+
+        expect(actor.getSnapshot().matches('force_sell_confirmation')).toBe(true);
+        expect(actor.getSnapshot().context.is_trading).toBe(true);
+        expect(actor.getSnapshot().context.has_open_position).toBe(true);
+        expect(actor.getSnapshot().context.error?.message).toBe('test sell failure');
+        actor.stop();
+    });
+
+    it('U2-03/U2-10: 강제 매도 중지 취소 후에도 backend 포지션 snapshot을 보존한다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter));
+
+        actor.start();
+        actor.send({ type: 'BACKEND_TRADING_STARTED' });
+        actor.send({ type: 'POSITION_UPDATED', has_open_position: true });
+        actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+        actor.send({ type: 'FORCE_SELL_AND_STOP_CANCELED' });
+
+        expect(actor.getSnapshot().matches('running')).toBe(true);
+        expect(actor.getSnapshot().context.has_open_position).toBe(true);
+        actor.stop();
+    });
+
+    it('U2-08: 강제 매도 후 중지가 성공한 경우에만 포지션 snapshot을 비운다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter));
+
+        actor.start();
+        actor.send({ type: 'BACKEND_TRADING_STARTED' });
+        actor.send({ type: 'POSITION_UPDATED', has_open_position: true });
+        actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+        actor.send({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' });
+        await wait_for_actor_settlement();
+
+        expect(actor.getSnapshot().matches('stopped')).toBe(true);
+        expect(actor.getSnapshot().context.has_open_position).toBe(false);
+        actor.stop();
+    });
+});

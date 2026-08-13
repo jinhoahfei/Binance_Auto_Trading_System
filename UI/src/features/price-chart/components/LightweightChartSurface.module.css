@@ -1,0 +1,16 @@
+.surface {
+    position: absolute;
+    z-index: 0;
+    top: -22px;
+    right: 46px;
+    left: 0;
+    height: 350px;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.surface > div,
+.surface table {
+    width: 100% !important;
+    height: 100% !important;
+}

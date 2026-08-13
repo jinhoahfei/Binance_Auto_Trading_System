@@ -1,0 +1,188 @@
+.panel {
+    position: relative;
+    min-width: 0;
+    height: 116px;
+    padding: 15px 20px 15px 24px;
+    overflow: hidden;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-control);
+}
+
+.highlight {
+    animation: regime-highlight 800ms ease-in-out 5;
+}
+
+.content {
+    display: grid;
+    grid-template-columns: minmax(170px, 206px) 1px minmax(340px, 376px) 1px minmax(250px, 272px);
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+    height: 86px;
+}
+
+.summary {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+    height: 86px;
+}
+
+.title,
+.indicatorTitle {
+    margin: 0;
+    font-weight: 600;
+}
+
+.title {
+    height: 24px;
+    color: var(--color-text-primary);
+    font-size: 17px;
+    line-height: 24px;
+    letter-spacing: -0.17px;
+}
+
+.currentState {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    height: 55px;
+    padding: 3px 9px;
+    overflow: hidden;
+    background: var(--color-bg-control);
+    border: 1px solid color-mix(in srgb, var(--color-status-info) 30%, transparent);
+    border-radius: var(--radius-md);
+}
+
+.currentLabel {
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+}
+
+.currentValue {
+    color: color-mix(in srgb, var(--color-status-info) 38%, var(--color-text-primary));
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 21px;
+}
+
+.appliedValue {
+    color: var(--color-text-tertiary);
+    font-size: 10px;
+    line-height: 11px;
+}
+
+.divider {
+    width: 1px;
+    height: 78px;
+    background: var(--color-border-default);
+}
+
+.manualSelection {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+    height: 86px;
+    overflow: hidden;
+}
+
+.notice {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+    height: 22px;
+}
+
+.manualBadge {
+    display: inline-flex;
+    flex: 0 0 68px;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    color: color-mix(in srgb, var(--color-status-info) 88%, var(--color-text-primary));
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 16px;
+    background: color-mix(in srgb, var(--color-status-info-strong) 15%, var(--color-bg-control-strong));
+    border: 1px solid color-mix(in srgb, var(--color-status-info) 35%, var(--color-text-primary));
+    border-radius: 6px;
+    box-shadow: var(--shadow-control);
+}
+
+.manualNote {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.options {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    height: 52px;
+    overflow-x: auto;
+}
+
+.indicators {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+    height: 89px;
+    overflow: hidden;
+}
+
+.indicatorTitle {
+    height: 17px;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+    line-height: 17px;
+}
+
+.metricGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 8px;
+}
+
+@keyframes regime-highlight {
+    0%,
+    100% {
+        border-color: var(--color-border-default);
+        box-shadow: var(--shadow-control);
+    }
+
+    50% {
+        border-color: var(--color-focus);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 42%, transparent), var(--shadow-control);
+    }
+}
+
+@media (max-width: 1320px) {
+    .content {
+        grid-template-columns: minmax(170px, 0.8fr) 1px minmax(340px, 1.5fr) 1px minmax(240px, 1fr);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .highlight {
+        animation: none;
+        border-color: var(--color-focus);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 42%, transparent), var(--shadow-control);
+    }
+}

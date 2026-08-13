@@ -1,0 +1,253 @@
+.card {
+  box-sizing: border-box;
+  width: 100%;
+  height: 564px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-control);
+}
+
+.scrollArea {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  outline: none;
+  scrollbar-color: color-mix(in srgb, var(--color-text-secondary) 76%, var(--color-bg-control)) var(--color-bg-control);
+  scrollbar-width: thin;
+}
+
+.scrollArea:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.scrollArea::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollArea::-webkit-scrollbar-track {
+  border-radius: 3px;
+  background: var(--color-bg-control);
+}
+
+.scrollArea::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-text-secondary) 76%, var(--color-bg-control));
+}
+
+.table {
+  width: 100%;
+  min-width: 1342px;
+  border-spacing: 0;
+  border-collapse: separate;
+  table-layout: fixed;
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.timeColumn {
+  width: 174px;
+}
+
+.sideColumn {
+  width: 96px;
+}
+
+.regimeColumn {
+  width: 92px;
+}
+
+.strategyColumn {
+  width: 132px;
+}
+
+.entryColumn,
+.executionColumn {
+  width: 131px;
+}
+
+.quantityColumn {
+  width: 111px;
+}
+
+.amountColumn {
+  width: 122px;
+}
+
+.feeColumn {
+  width: 106px;
+}
+
+.returnColumn {
+  width: 127px;
+}
+
+.pnlColumn {
+  width: 120px;
+}
+
+.table thead {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+}
+
+.table th {
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.table th:first-child,
+.table th:nth-child(4) {
+  padding-left: 18px;
+  text-align: left;
+}
+
+.table td {
+  box-sizing: border-box;
+  height: 58px;
+  overflow: hidden;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-bg-surface);
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--color-bg-surface) 84%, var(--color-bg-surface-raised));
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table td.time,
+.table td.strategy {
+  padding-left: 18px;
+  text-align: left;
+}
+
+.time,
+.numeric,
+.regime {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+}
+
+.regime,
+.strategy {
+  color: color-mix(in srgb, var(--color-text-primary) 82%, var(--color-text-secondary));
+  font-weight: 600;
+}
+
+.sideValue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: 58px;
+  font-weight: 600;
+}
+
+.sideDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  background: currentColor;
+}
+
+.buy,
+.positive {
+  color: var(--color-status-positive);
+}
+
+.sell,
+.negative {
+  color: var(--color-status-negative);
+}
+
+.secondary {
+  color: var(--color-text-secondary);
+}
+
+.emphasized {
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--color-text-tertiary);
+  font-weight: 600;
+}
+
+.emptyRow td {
+  height: 518px;
+  background: var(--color-bg-surface);
+}
+
+.emptyContent {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  text-align: center;
+  white-space: normal;
+}
+
+.emptyContent strong {
+  margin-bottom: 16px;
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.emptyContent p {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.emptyContent button {
+  height: 40px;
+  margin-top: 18px;
+  padding: 0 24px;
+  border: 1px solid var(--color-status-positive);
+  border-radius: 7px;
+  background: var(--color-status-positive-strong);
+  box-shadow: var(--shadow-control);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.emptyContent button:hover {
+  filter: brightness(1.08);
+}
+
+.emptyContent button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

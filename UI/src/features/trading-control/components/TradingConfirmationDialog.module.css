@@ -1,0 +1,68 @@
+.notice {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 64px;
+  margin: 10px 0 19px;
+  padding: 11px 12px 10px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-control-strong);
+}
+
+.notice > span:first-child {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.notice strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.notice i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.positive {
+  color: var(--color-status-positive);
+}
+
+.negative {
+  color: var(--color-status-negative);
+}
+
+.info {
+  color: #79a9ff;
+}
+
+.progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-status-positive) 60%, transparent 60%);
+  animation: pulse 1.25s ease-in-out infinite alternate;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@keyframes pulse {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}

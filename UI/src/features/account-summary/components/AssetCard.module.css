@@ -1,0 +1,68 @@
+.card {
+    min-width: 0;
+    height: 162px;
+    padding: 14px 20px;
+    overflow: hidden;
+    background: var(--color-bg-surface-raised);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-control);
+}
+
+.title {
+    display: block;
+    color: var(--color-text-secondary);
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 16px;
+}
+
+.total {
+    display: block;
+    margin-top: 6px;
+    color: var(--color-text-primary);
+    font-family: var(--font-numeric);
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 26px;
+    letter-spacing: -0.2px;
+}
+
+.card dl {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 7px 0 0;
+}
+
+.card dl > div {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+}
+
+.card dt,
+.card dd {
+    margin: 0;
+    font-family: var(--font-numeric);
+    font-size: 13.5px;
+    line-height: 18px;
+}
+
+.card dt {
+    color: var(--color-text-secondary);
+    font-weight: 500;
+}
+
+.card dd {
+    overflow: hidden;
+    color: var(--color-text-primary);
+    font-weight: 600;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card dd.profit {
+    color: var(--color-status-positive);
+}

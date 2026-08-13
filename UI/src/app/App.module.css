@@ -1,0 +1,28 @@
+.application {
+    width: 100%;
+    min-height: 100vh;
+    background: var(--color-bg-canvas);
+}
+
+.dashboardRoute {
+    padding-top: 24px;
+    padding-bottom: 32px;
+}
+
+.finalState {
+    display: grid;
+    min-height: 100vh;
+    place-content: center;
+    gap: 8px;
+    background: var(--color-bg-canvas);
+    text-align: center;
+}
+
+.finalState strong {
+    font-size: 18px;
+}
+
+.finalState span {
+    color: var(--color-text-secondary);
+    font-size: 13px;
+}
