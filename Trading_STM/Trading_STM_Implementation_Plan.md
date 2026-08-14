@@ -2,8 +2,9 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | Proposed — 구현 전 설계 검토용 |
+| 문서 상태 | Proposed — Event-Action Table 책임 분리 반영 완료, 구현 전 설계 검토용 |
 | 작성일 | 2026-08-14 |
+| 최종 명세 반영일 | 2026-08-14 |
 | 대상 | `TradingSTM`, `TradingController`, `TradingContext` 및 주문 결과 피드백 경계 |
 | 핵심 목표 | Event-Action Table의 상태·Guard·우선순위는 `TradingSTM`이 판정하고, 모든 Action과 외부 효과는 `TradingController`가 수행하도록 책임을 분리한다. |
 
@@ -22,8 +23,9 @@
 - `TradingSTM`은 `TradingContext`, `Account`, `Position`, 주문, 파일, 네트워크, timer, event queue를 직접 변경하거나 호출하지 않는다.
 - `TradingController`만 `TradingSTMResult`의 Action 요청을 해석하고 `TradingContext`, `APIGateway`, `Position`, `TradeHistoryController` 등을 호출한다.
 - Action 수행 결과는 Controller가 새로운 `TradingEvent`로 직렬화된 event queue에 넣는다. STM이 자기 자신을 재귀 호출하거나 즉시 무한 retry하지 않는다.
-- 주문 요청과 체결 완료를 분리한다. `position_owner`는 매수 주문 요청 시점이 아니라 **정상 체결을 확인한 뒤에만** Controller가 설정한다.
+- 주문 요청과 체결 완료를 분리한다. `position_owner`는 매수 주문 요청 시점이 아니라 **terminal 결과의 실제 체결 수량을 Position에 반영한 뒤에만** Controller가 설정한다.
 - Event-Action Table의 각 ID를 코드의 transition ID와 테스트 이름에 그대로 보존한다.
+- 주문 결과로 Context가 먼저 변경된 경우 `CASE_*_POSITION_OPENED`, `CASE_*_SELL_FILLED`, `FORCE_SELL_FINISHED` 내부 EVENT를 다음 market EVENT보다 먼저 처리해 STM 상태와 Context를 즉시 다시 일치시킨다.
 
 상태 전이는 STM의 고유 책임이며, Event-Action Table의 `Action` 열에 적힌 Context 변경, 이벤트 발생, 주문, 저장, 인계, 재평가 예약은 모두 Controller 실행 책임이다.
 
@@ -42,6 +44,8 @@
 | 상태 이름, 이벤트, Guard, 전이, 판정 우선순위 | Trading Logic Event-Action Table | transition 정의와 테스트 추적성의 원본으로 사용한다. |
 | 클래스 책임과 기존 public operation | Communication Diagram 8.4, 8.5 | Controller는 조정·실행, STM은 상태·Action 결정이라는 경계로 해석한다. |
 | Python 이름과 형식 | `CODING_CONVENTIONS.md` | 클래스는 `PascalCase`, 함수·변수는 `snake_case`를 사용한다. |
+
+Trading Logic Event-Action Table에는 본 계획의 책임 분리 결과가 반영되어 있다. 모든 표의 `TradingController 수행 Action` 열은 STM이 `TradingSTMResult.action_requests`로 결정한 뒤 Controller가 실제 수행하는 효과를 뜻한다. 주문 요청/결과 분리, `STOPPING`, pending 주문 Context, 체결 피드백 transition도 해당 문서를 구현 기준으로 사용한다.
 
 ### 2.3 `Action 결정`과 `Action 수행`의 의미
 
@@ -177,6 +181,7 @@ ROOT
 │       ├── C_POSITION_OPEN_SIGNALLED
 │       └── CASE_C_FINAL_STATE
 ├── UPPER_BB_STATE_MACHINE
+├── STOPPING
 └── LOGIC_TERMINATED
 ```
 
@@ -191,6 +196,8 @@ ROOT
 
 STM 상태와 Context 값을 이중으로 저장하지 않는다. 예를 들어 `CASE_C_HOLDING`은 STM 상태이고 `position_owner == CASE_C`는 체결 후 Context 불변식이다.
 
+`STOPPING`에서는 신규 전략 Action과 일반 조건 검사를 차단한다. Controller가 pending 주문을 먼저 reconciliation하고 잔여 포지션을 전량 매도한 뒤 `FORCE_SELL_FINISHED`를 전달해야 `LOGIC_TERMINATED`로 전이한다.
+
 ## 6. 핵심 계약 타입
 
 ### 6.1 TradingEvent
@@ -203,6 +210,7 @@ class TradingEvent:
     event_type: TradingEventType
     occurred_at: datetime
     sequence_number: int
+    priority: EventPriority
     lower_event_id: str | None
     candle_id: str | None
     order_id: str | None
@@ -212,6 +220,8 @@ class TradingEvent:
 - `occurred_at`은 기록용 UTC 시각이다.
 - 경과 시간 판정용 monotonic timestamp 또는 이미 계산된 duration은 `TradingContextView`에 별도로 넣는다.
 - candle close와 주문 결과 이벤트는 고유 ID로 중복 처리하지 않는다.
+- `attempt_kind`가 필요한 `CASE_B_BUY_FAILED`와 `CASE_C_BUY_FAILED`는 `INITIAL`/`RETRY` typed payload를 사용한다.
+- `CASE_*_POSITION_OPENED`, `CASE_*_SELL_FILLED`, `CASE_*_SELL_FINISHED`, `FORCE_SELL_FINISHED`를 포함한 Controller 생성 후속 event는 현재 transition의 연속 microstep 우선순위를 가진다.
 - mutable dictionary를 payload로 사용하지 않고 event별 dataclass를 사용한다.
 
 ### 6.2 TradingContextView
@@ -237,6 +247,13 @@ class TradingContextView:
 - `cci_30m_realtime`, `touch_candle_bbw`, `pct_b_close`
 - 5초·3분 유지 여부와 holding/signal 경과 시간
 
+`TradingRuntimeSnapshot`에는 최소한 다음 값을 포함한다.
+
+- `position_owner`, `pending_strategy`, `pending_order_side`, `pending_order_id`, `pending_order_attempt_kind`
+- `trading_phase`: `IDLE`, `ENTRY_ORDER_PENDING`, `EXIT_ORDER_PENDING`, `STOPPING`, `RECONCILIATION_REQUIRED`, `TERMINATED`
+- Case B/C 활성화, pause, consumed, recovery flag
+- signal, flush, timer, pending exit reason과 pending return state
+
 STM은 서로 다른 수신 시점의 값을 개별 조회하지 않는다. 그래야 한 transition의 Guard가 원자적인 snapshot을 기준으로 평가된다.
 
 ### 6.3 TradingActionRequest
@@ -249,7 +266,7 @@ STM은 서로 다른 수신 시점의 값을 개별 조회하지 않는다. 그�
 | `OpenLowerEvent` | touch candle snapshot과 새 `lower_event_id`를 기록하고 관련 값을 초기화한다. |
 | `CloseLowerEvent` | 현재 하단 이벤트를 종료하고 event-local 값을 정리한다. |
 | `ResetCaseBContext` / `ResetCaseCContext` | 해당 Case의 signal, timer, pending reason을 범위에 맞게 초기화한다. |
-| `QueueEvent` | STM이 결정한 후속 `TradingEvent`를 Controller queue의 뒤에 넣는다. |
+| `QueueEvent` | STM이 결정한 즉시 후속 `TradingEvent`를 내부 queue에 넣어 다음 외부 market EVENT보다 먼저 처리한다. 시간·시장 변화를 기다리는 경우에는 `ScheduleReevaluation`을 사용한다. |
 | `ScheduleReevaluation` | 특정 조건 변경 또는 deadline에서 재평가하도록 scheduler에 등록한다. |
 | `CancelScheduledEvaluation` | state exit 시 더 이상 유효하지 않은 timer를 취소한다. |
 | `SubmitOrder` | 전략, side, 청산 사유, 수량 정책을 가진 주문 의도를 실행한다. |
@@ -257,6 +274,7 @@ STM은 서로 다른 수신 시점의 값을 개별 조회하지 않는다. 그�
 | `ForceSellAll` | 매매 중지에 따른 전량 매도 흐름을 실행한다. |
 | `HandoffToUpperBandPolicy` | 신규 하단 진입을 차단하고 현재 포지션 관리 책임을 인계한다. |
 | `StopTradingRuntime` | 구독·timer·신규 이벤트 수신을 안전하게 종료한다. |
+| `ReconcileOrder` | 상태 불명·부분 체결·중지 중 pending 주문을 같은 order ID로 조회하고 실제 fill과 잔여 수량을 일치시킨다. |
 
 `PatchRuntimeContext`는 임의 문자열 dictionary가 아니라 허용 필드와 값 타입이 정해진 dataclass 조합으로 만든다. Context 변경 규칙을 Action 문자열 parsing에 의존하지 않는다.
 
@@ -297,10 +315,12 @@ class TradingSTMResult:
 5. STM은 전역 상태와 활성 Region의 후보 transition을 찾는다.
 6. STM은 Guard·우선순위·충돌 규칙을 적용하고 상태 구성을 원자적으로 전이한다.
 7. Controller는 반환된 Action 요청을 순서대로 수행한다.
-8. 외부 작업의 결과를 새로운 event로 queue에 넣는다.
+8. 외부 작업의 결과를 새로운 event로 queue에 넣는다. Context와 STM 상태를 맞추는 내부 주문 결과 event는 대기 중인 market event보다 먼저 처리한다.
 9. decision, transition ID, 전후 상태, Action 결과를 한 trace로 기록한다.
 
 Controller는 Action 실행 중 STM을 재귀 호출하지 않는다. 후속 event는 항상 queue를 한 번 거쳐 현재 microstep이 끝난 뒤 처리한다.
+
+`pending_exit_reason != None`인 포지션 Region은 일반 조건 검사 event를 소비하지 않는다. 해당 주문의 `CASE_*_SELL_FILLED`, `CASE_*_SELL_FAILED`, `CASE_*_SELL_RETRY`와 전역 STOP 처리만 허용한다.
 
 ### 7.2 병렬 Region 처리
 
@@ -325,54 +345,64 @@ Table의 `RETRY_* EVENT 재발생`은 busy loop를 의미하지 않는다.
 - 다음 확정 1분봉·30분봉 조건은 해당 candle close event에서만 재평가한다.
 - 동일 데이터 version에서 같은 retry event를 연속 생성하지 않는다.
 
-## 8. Event-Action Table의 구현 변환 규칙
+## 8. Event-Action Table의 구현 반영 규칙
 
-Event-Action Table의 `Action` 열은 구현 시 아래 세 요소로 분해한다.
+Event-Action Table은 본 계획에 맞춰 수정되었으며 각 행은 이미 아래 세 요소를 분리해 표현한다.
 
-1. `next state`: STM이 수행하는 상태 전이
-2. `action request`: STM이 결과에 담는 실행 명세
-3. `effect`: Controller가 Context·Entity·Gateway에 실제 반영하고 결과 event를 생성하는 작업
+1. `다음 상태`: STM이 수행하는 상태 전이
+2. `TradingSTMResult.action_requests`: STM이 결정해 반환하는 typed 실행 명세
+3. `TradingController 수행 Action`: Controller가 Context·Entity·Gateway에 실제 반영하고 결과 event를 생성하는 작업
+
+구현은 표의 Action 문장을 STM transition 내부에서 실행하지 않는다. 해당 문장을 typed Action request payload로 구성하고 Controller handler가 수행한다.
 
 ### 8.1 ID 범위별 책임 매핑
 
 | Event-Action ID | TradingSTM 결정 | TradingController 수행 |
 |---|---|---|
-| `G-01` | 초기 root transition | Context 초기화, owner 초기값 적용 |
-| `G-02`, `G-03` | 하단 접촉 Guard, 신규 이벤트 전이 | touch snapshot 저장, Case B/C flag 초기화, `ACTIVATE_TRADE_MANAGEMENT` queue 등록 |
+| `G-01` | 초기 root transition | Context 초기화, owner/pending 초기값 적용 |
+| `G-02`, `G-03` | 하단 접촉 Guard, 신규 이벤트 전이 | touch snapshot 저장, Case B/C flag 초기화, `ACTIVATE_TRADE_MANAGEMENT` 등록 |
 | `G-04` | 세 Region 완료 Guard와 `LOWER_TOUCH_WATCH` 전이 | 하단 이벤트 종료와 감시 재개 처리 |
-| `G-05` | 무포지션 중지 전이 | 신규 이벤트 차단, timer/구독 정리, runtime 종료 |
-| `G-06` | 포지션 보유 중지 정책 선택 | 전량 매도, 체결 반영·저장, 완료 후 runtime 종료 |
+| `G-05` | 무포지션·무주문 중지 전이 | timer/구독 정리와 runtime 종료 |
+| `G-06`, `G-06P` | 포지션 보유 또는 pending 주문 존재 시 `STOPPING` 전이 | pending 주문 reconciliation, 잔여 포지션 전량 매도 |
+| `G-06F`, `G-06R` | 강제 매도 완료/실패 피드백 전이 | 완료 시 runtime 종료, 실패 시 idempotent retry/reconciliation |
 | `G-07` | 상단 BB 인계 Guard와 대상 상태 | 신규 진입 차단, 하단 event 정리, 포지션 관리 책임 인계 |
 | `O-01` | ownership 초기 상태 선택 | owner 초기값 적용 |
-| `O-02`~`O-09` | 전략별 매수 의도·결과·retry 전이 | 매수 제출·조회, 체결 저장, 체결 후 owner 설정, 성공/실패 event 생성 |
+| `O-02`, `O-06` | 매수 체결 피드백과 포지션 관리 전이 | 포지션 조건 검사 event 등록 |
+| `O-03`, `O-05`, `O-07`, `O-09` | 최초/재시도 매수 실패 피드백 | retry/backoff에 따른 재매수 event 예약 |
+| `O-04`, `O-08` | Case B/C 재매수 Action 선택 | pending 예약, 주문 제출·조회, 체결 반영, 결과 event 생성 |
 | `PB-01` | Case B 포지션 초기 하위 상태 | 외부 Action 없음 |
-| `PB-02`~`PB-05` | Case B 보유 조건과 청산 우선순위 | 선택 event queue 등록 또는 다음 유효 시점 재평가 예약 |
-| `PB-06`~`PB-13` | 청산 사유와 sell/retry Action 선택 | 매도 제출·조회, pending/확정 사유 반영, 체결·이력 저장, 결과 event 생성 |
+| `PB-02`~`PB-05` | Case B 보유 조건과 청산 우선순위 | 선택 event 등록 또는 다음 유효 시점 재평가 예약 |
+| `PB-06`~`PB-13` | 청산 사유별 최초 매도와 실패 피드백 선택 | pending 사유 저장, 매도 실행 또는 retry 예약 |
 | `PB-14`~`PB-16` | Trend Hold 진입·유지·이탈 판정 | 후속 조건 검사 event 또는 deadline 예약 |
 | `PB-17`~`PB-22` | Trend Hold 매도와 재시도 정책 | 매도 실행, 체결 저장, retry scheduling |
-| `PB-23`, `PB-24` | 청산 뒤 새 하단 이벤트 여부와 다음 상태 | owner 해제, Case B/하단 event 범위 초기화, 후속 event queue 등록 |
+| `PB-23F` | Case B 매도 체결 피드백과 `CASE_B_CLOSED` 전이 | pending 해제와 `CASE_B_SELL_FINISHED` 등록 |
+| `PB-23`, `PB-24` | 청산 뒤 새 하단 이벤트 여부와 다음 상태 | Case B/하단 event 범위 초기화, 후속 event 등록 |
 | `PC-01` | Case C 포지션 초기 하위 상태 | 외부 Action 없음 |
-| `PC-02`~`PC-05` | 익절권·손절·시간 청산 우선순위 | 선택 event queue 등록 또는 다음 유효 시점 재평가 예약 |
-| `PC-06`~`PC-09` | Case C 손절·시간 청산 및 retry 전이 | 매도 실행, pending 사유와 복귀 상태 반영, 체결 저장, 결과 event 생성 |
+| `PC-02`~`PC-05` | 익절권·손절·시간 청산 우선순위 | 선택 event 등록 또는 다음 유효 시점 재평가 예약 |
+| `PC-06`~`PC-09` | Case C 손절·시간 청산 및 retry 전이 | 매도 실행, pending 사유와 복귀 상태 반영, 결과 event 생성 |
 | `PC-10`~`PC-15` | TP trailing 진입과 EMA 비교 전이 | TP 기준값 저장, 1분봉/deadline 재평가 예약 |
-| `PC-16`~`PC-23` | TP fallback/trail 매도와 retry 전이 | 매도 실행, 체결 시점 `%B`·체결 정보 저장, 결과 event 생성 |
-| `PC-24`~`PC-28` | 청산 후 회복 및 Case B 인계 분기 | owner·consumed·pause·recovery flag 반영, 후속 event queue 등록 |
-| `B-01`~`B-05` | Case B 활성화와 최초 signal Guard | Case B 변수 초기화, signal candle/time 저장, close/deadline 재평가 예약 |
-| `B-06`~`B-11` | pullback·3시간 경계와 매수 Action 선택 | 매수 event queue 등록, retry/deadline 예약, 만료 signal 초기화 |
-| `B-12`~`B-19` | Case C 경쟁, pause/resume, 최종 상태 전이 | pause flag, pending 주문 취소, signal 유지·초기화, 후속 처리 |
+| `PC-16`~`PC-23` | TP fallback/trail 매도와 retry 전이 | 매도 실행, 체결 시점 `%B` 저장, 결과 event 생성 |
+| `PC-23F` | Case C 매도 체결 피드백과 `CASE_C_CLOSED` 전이 | pending 해제와 `CASE_C_SELL_FINISHED` 등록 |
+| `PC-24`~`PC-28` | 청산 후 회복 및 Case B 인계 분기 | consumed·pause·recovery flag 반영, 후속 event 등록 |
+| `B-01`~`B-05` | Case B 활성화와 최초 signal Guard | Case B 변수 초기화, signal candle/time 저장, 재평가 예약 |
+| `B-06`, `B-09` | pullback Guard와 Case B 최초 매수 Action 선택 | pending 예약, 최초 주문 실행, 결과 event 생성 |
+| `B-07`, `B-08`, `B-10`, `B-11` | pullback 유지·만료 전이 | retry/deadline 예약, 만료 signal 초기화 |
+| `B-12`~`B-19` | Case C 경쟁, pause/resume, 최종 상태 전이 | pause flag, pending 주문 취소, signal 유지·초기화 |
 | `C-01`~`C-06` | setup 진입과 Case B 경쟁 전이 | setup 식별값 저장, 재평가 예약, 신규 진입 권한 종료 처리 |
-| `C-07`~`C-14` | flush/timer/회복 매수 Guard의 순서 판정 | flush·timer·entry 기준값 저장, 매수 event 또는 재평가 예약 |
+| `C-07`~`C-11`, `C-13`, `C-14` | flush/timer/회복 Guard의 순서 판정 | flush·timer·entry 기준값 저장과 재평가 예약 |
+| `C-12` | Case C 회복 매수 Action 선택 | pending 예약, 최초 주문 실행, 결과 event 생성 |
 | `C-15`~`C-17` | 경쟁 포지션과 final 전이 | pending 주문 취소, setup 기록 정리·보존 |
 
-### 8.2 `None` Action
+### 8.2 `없음` Action
 
-`PB-01`, `PC-01`, `B-01`, `C-01`처럼 Action이 `None`인 행은 STM 상태 전이만 수행한다. Controller에 빈 Action 목록을 반환하며, 빈 목록을 임의 초기화 작업으로 해석하지 않는다.
+`PB-01`, `PC-01`, `B-01`, `C-01`, `B-18`, `C-16`처럼 Action이 `없음`인 행은 STM 상태 전이만 수행한다. Controller에 빈 Action 목록을 반환하며, 빈 목록을 임의 초기화 작업으로 해석하지 않는다.
 
 ### 8.3 Context 변경도 Controller Action이다
 
 다음 항목은 외부 I/O가 아니더라도 STM이 직접 쓰지 않는다.
 
 - `position_owner`
+- `pending_strategy`, `pending_order_side`, `pending_order_id`, `pending_order_attempt_kind`, `trading_phase`
 - `case_b_entry_paused`, `case_b_only_until_next_lower_touch`
 - `allow_new_case_c_setup`, `case_c_consumed_for_event`, `case_c_recovery_confirmed`
 - `signal_created`, `signal_time`, touch/signal candle snapshot
@@ -382,9 +412,9 @@ Event-Action Table의 `Action` 열은 구현 시 아래 세 요소로 분해한�
 
 STM은 필요한 변경을 typed Action 요청으로 반환하고 Controller가 Context 메서드로 적용한다.
 
-## 9. 주문 Action의 2단계 정규화
+## 9. 주문 Action의 2단계 처리
 
-현재 표의 일부 행은 Guard에 “주문 정상/비정상 완료”가 있으면서 같은 행의 Action에 “주문 실행”도 포함한다. 주문 결과를 실행 전에 알 수 없으므로 이를 하나의 동기 transition으로 구현하지 않는다.
+Event-Action Table은 주문 요청과 결과 EVENT가 분리된 형태로 정규화되었다. 전략 Guard를 평가하는 transition은 주문 Action만 요청하고, 체결 성공 상태는 Controller가 Position·이력·Context를 반영한 뒤 보낸 결과 EVENT에서 전이한다.
 
 ### 9.1 매수 흐름
 
@@ -396,43 +426,58 @@ sequenceDiagram
     participant API as APIGateway
     participant ENT as Position / TradeHistory
 
-    TC->>STM: handle(CASE_B_BUY, context_view)
-    STM-->>TC: result(SubmitOrder BUY CASE_B, signalled/pending state)
-    TC->>CTX: pending_strategy=CASE_B, pending_side=BUY
+    TC->>STM: handle(START_CASE_B_WAIT_PULLBACK_CONDITION_CHECK, context_view)
+    STM-->>TC: result(B-06, SubmitOrder BUY CASE_B, B_POSITION_OPEN_SIGNALLED)
+    TC->>CTX: pending_strategy=CASE_B, pending_side=BUY, attempt=INITIAL
     TC->>API: submitOrder(order)
     API-->>TC: OrderResult
     alt 정상 체결
         TC->>ENT: applyExecution + recordOrderExecution
         TC->>CTX: position_owner=CASE_B, pending clear
+        TC->>TC: enqueueInternal(CASE_B_POSITION_OPENED)
         TC->>STM: handle(CASE_B_POSITION_OPENED, new_context_view)
-    else 확정 실패
+        Note over STM: O-02와 B-18이 병렬 Region에서 처리
+    else terminal 미체결
         TC->>CTX: pending clear, position_owner=None 유지
-        TC->>STM: handle(CASE_B_BUY_RETRY, new_context_view)
-    else 상태 불명
+        TC->>TC: enqueue(CASE_B_BUY_FAILED(INITIAL))
+        TC->>STM: handle(CASE_B_BUY_FAILED(INITIAL), new_context_view)
+        Note over STM: O-03이 CASE_B_BUY_RETRY를 예약
+    else 상태 불명 또는 부분 체결
         TC->>API: queryOrderResult(same order id)
     end
 ```
 
-매수 요청 중에는 `position_owner == None`을 유지하되 `pending_strategy`와 `trading_phase == ENTRY_ORDER_PENDING`으로 주문 자리를 예약한다. 모든 신규 매수 Guard에는 `pending_order is None`이라는 실행 안전 조건을 공통으로 적용해 중복 주문을 막는다.
+매수 요청 중에는 `position_owner == None`을 유지하되 `pending_strategy`, `pending_order_side`, `pending_order_id`, `trading_phase == ENTRY_ORDER_PENDING`으로 주문 자리를 예약한다. 모든 신규 매수 Guard에는 `pending_order_id == None`을 적용해 중복 주문을 막는다. 재시도 Action은 Case B의 O-04, Case C의 O-08에서만 실행한다.
 
 ### 9.2 매도 흐름
 
 1. STM이 청산 Guard와 우선순위로 청산 사유를 결정한다.
-2. STM은 `SubmitOrder(SELL, strategy, exit_reason)`과 필요한 pending Context 변경을 반환한다.
+2. STM은 `SubmitOrder(SELL, strategy, pending_exit_reason)`과 필요한 pending Context 변경을 반환한다. STM 포지션 상태는 결과가 올 때까지 현재 상태를 유지한다.
 3. Controller가 동일 client order key로 주문을 제출하고 미확정 상태는 기존 주문을 조회한다.
-4. 체결이 확인되면 Controller가 원가, Position, Trade, Performance, 저장소를 순서대로 반영한다.
-5. Controller가 `position_owner`와 pending 값을 갱신한 뒤 `CASE_B_SELL_FINISHED` 또는 `CASE_C_SELL_FINISHED`를 STM에 전달한다.
-6. 확정 실패는 `CASE_*_SELL_RETRY`로 전달한다. 상태 불명은 새 주문을 만들지 않고 같은 주문을 먼저 조회한다.
+4. 체결이 확인되면 Controller가 원가, Position, Trade, Performance, 저장소를 순서대로 반영하고 `position_owner = None`과 확정 exit reason을 적용한다.
+5. Controller가 `CASE_B_SELL_FILLED` 또는 `CASE_C_SELL_FILLED`를 내부 우선순위 queue에 넣는다.
+6. STM은 `PB-23F` 또는 `PC-23F`에서 `CASE_*_CLOSED`로 전이하고 Controller에 `CASE_*_SELL_FINISHED` 등록을 요청한다.
+7. 확정 실패는 `CASE_*_SELL_FAILED`로 전달하고, STM의 청산 사유별 실패 행이 `CASE_*_SELL_RETRY`를 예약한다. 상태 불명은 새 주문을 만들지 않고 같은 주문을 먼저 조회한다.
 
-### 9.3 주문 불변식
+청산 의도가 시작되면 `pending_strategy`, `pending_exit_reason`, `pending_return_state`, `trading_phase = EXIT_ORDER_PENDING`은 완전 청산 피드백까지 유지한다. terminal 미체결 후에는 주문 ID를 해제해 idempotent retry가 가능하게 하되 일반 포지션 조건 검사를 재개하지 않는다. PB-23F/PC-23F에서 pending 청산 값을 해제하고 `IDLE`로 돌아간다.
 
-- `position_owner`는 정상 매수 체결 전에는 `None`이다.
+### 9.3 중지 흐름
+
+- 무포지션·무주문 중지는 G-05에서 바로 종료한다.
+- 포지션 보유·무주문 중지는 G-06에서 `STOPPING`으로 전이하고 전량 매도를 요청한다.
+- pending 주문이 있는 중지는 G-06P에서 pending 주문을 먼저 취소·조회·reconciliation한 뒤 잔여 포지션을 전량 매도한다.
+- `FORCE_SELL_FINISHED`는 G-06F에서만 `LOGIC_TERMINATED`로 전이한다. G-06R은 terminal 미체결의 retry/reconciliation을 담당한다.
+
+### 9.4 주문 불변식
+
+- `position_owner`는 terminal 결과의 실제 매수 체결 수량을 Position에 반영하기 전에는 `None`이다.
 - pending 주문이 있으면 다른 Case의 신규 주문 Action을 실행하지 않는다.
 - 같은 `decision_id`와 주문 의도는 같은 client order key를 사용한다.
 - `UNKNOWN`, `NEW`, `PARTIALLY_FILLED`을 단순 실패로 간주해 새 주문을 제출하지 않는다.
-- 실제 fill이 하나라도 있으면 잔여 주문 상태를 먼저 조정하고 Position을 실제 체결량과 일치시킨다.
+- 실제 fill이 하나라도 있으면 잔여 주문 상태를 먼저 조정하고 Position을 실제 체결량과 일치시킨다. terminal 상태에서 체결 수량이 0보다 크면 단순 실패 retry로 보내지 않는다. 매도 뒤 잔여 Position이 있으면 owner와 포지션 상태를 유지하고 같은 청산 의도를 reconciliation하며, Position 수량이 0이 된 뒤에만 sell/force-sell 완료 event를 만든다.
 - 저장 실패는 거래소 체결을 되돌리지 않는다. 동일 주문 ID로 이력 저장을 재시도하고 reconciliation 상태를 유지한다.
 - Controller는 주문 완료 처리와 Context 반영을 끝낸 뒤에만 완료 event를 STM에 보낸다.
+- `CASE_*_POSITION_OPENED`, `CASE_*_SELL_FILLED`, `CASE_*_SELL_FINISHED`, `FORCE_SELL_FINISHED`를 포함한 Controller 생성 후속 event는 다음 market event보다 먼저 처리하되 `handle()`을 재귀 호출하지 않는다.
 
 ## 10. 기존 TradingSTM operation의 구현 방침
 
@@ -444,7 +489,7 @@ Communication Diagram 8.5의 operation은 다음과 같이 구체화한다.
 | `run(context)` | 초기 이벤트를 한 번 처리하는 얇은 진입점이다. event loop나 장기 실행 loop를 STM 내부에서 시작하지 않는다. |
 | `handle(event)` | hidden mutable Context를 사용하게 되므로 core API로 사용하지 않는다. 호환 wrapper가 필요하면 Controller가 명시적 Context view를 붙여 canonical method를 호출한다. |
 | `handle(event, context)` | 유일한 canonical decision API로 구현한다. 실제 매개변수는 불변 `TradingContextView`이다. |
-| `orderFinished()` | parameter 없는 호출만으로 성공·실패·전략·side를 안전하게 구분할 수 없으므로 구현 전 계약 보완이 필요하다. canonical 경로는 Controller가 구체적인 `CASE_*_POSITION_OPENED`, `CASE_*_SELL_FINISHED`, `CASE_*_*_RETRY` event를 `handle()`에 전달하는 방식이다. |
+| `orderFinished()` | parameter 없는 호출만으로 성공·실패·전략·side를 안전하게 구분할 수 없으므로 core API로 사용하지 않는다. canonical 경로는 Controller가 `CASE_*_POSITION_OPENED`, `CASE_*_BUY_FAILED`, `CASE_*_SELL_FILLED`, `CASE_*_SELL_FAILED`, `FORCE_SELL_FINISHED`, `FORCE_SELL_FAILED` 중 구체 event를 `handle()`에 전달하는 방식이다. |
 
 Python은 Java식 method overload를 직접 제공하지 않으므로 두 `handle` 시그니처를 이름만 같게 중복 정의하지 않는다.
 
@@ -479,7 +524,7 @@ def can_open_case_b(
 
 ### 11.3 계산 값 이름 정규화
 
-구현 전에 `realtime_ema_slope`와 `ema_slope_30m_realtime`이 같은 값인지 명세에서 확정한다. 확정 전에는 두 이름을 임의 alias로 처리하지 않는다. 확정 후 하나의 canonical 필드명과 필요 시 명시적 변환 property만 둔다.
+Event-Action Table은 현재가를 진행 중인 30분봉의 임시 close로 넣어 계산한 값을 `realtime_ema_slope`로 통일했다. 구현도 이 이름을 canonical 필드로 사용하며 과거 표기의 `ema_slope_30m_realtime` alias를 새 코드에 추가하지 않는다. `current_close_ema_slope`는 확정 1분봉 close를 임시 30분봉 close로 넣는 별도 값이므로 유지한다.
 
 ## 12. 동시성, 우선순위, stale event 방지
 
@@ -498,8 +543,9 @@ def can_open_case_b(
 - Case C 익절권 후: TP fallback → 1분봉 EMA 비교 → 시간 청산
 - Case C setup: `%B >= 0.25` 종료 → flush 갱신 → timer 재시작 → 회복 매수/비매수 → 감시 재시도
 - 동시 진입: Case C → Case B
+- 중지: G-05/G-06/G-06P가 신규 전략 Action보다 우선하며, 주문 결과 내부 event는 Context 반영 직후 다음 microstep에서 우선 처리
 
-STOP event와 이미 진행 중인 주문 결과의 순서는 별도 lifecycle 정책으로 16절에서 확정해야 한다.
+STOP이 pending 주문과 동시에 발생하면 G-06P에 따라 신규 전략 Action을 차단하고 기존 주문을 먼저 취소·조회·reconciliation한다. 실제 fill을 반영한 뒤 잔여 포지션을 전량 매도하며, G-06F 전에는 `LOGIC_TERMINATED`로 전이하지 않는다.
 
 ### 12.3 Context version
 
@@ -642,7 +688,7 @@ Controller는 다음 순서를 보장한다.
 
 ### 15.1 Event-Action 추적성
 
-현재 Event-Action Table에는 `G` 7개, `O` 9개, `PB` 24개, `PC` 28개, `B` 19개, `C` 17개로 총 **104개 transition ID**가 있다.
+현재 Event-Action Table에는 `G` 10개, `O` 9개, `PB` 25개, `PC` 29개, `B` 19개, `C` 17개로 총 **109개 transition ID**가 있다. 기존 104개 정책 행에 `G-06P`, `G-06F`, `G-06R`, `PB-23F`, `PC-23F`가 추가되었다.
 
 - 각 ID마다 최소 한 개의 positive transition test를 둔다.
 - Guard가 있는 ID는 주요 부정 경계 test를 추가한다.
@@ -668,6 +714,9 @@ Then:  transition IDs + next state configuration + ordered Action requests
 - 5초 및 3분 연속 유지의 reset
 - Case C event당 1회 소비와 `%B >= 0.25` 회복
 - 병렬 Region event broadcast와 final 조건
+- `CASE_B_POSITION_OPENED`가 O-02와 B-18에서, `CASE_C_POSITION_OPENED`가 O-06과 C-16에서 같은 microstep에 처리되는지
+- `CASE_*_SELL_FILLED`가 PB-23F/PC-23F를 통해서만 closed 상태로 전이하는지
+- G-06/G-06P 이후 `FORCE_SELL_FINISHED` 전에는 종료 상태로 전이하지 않는지
 - no-op event가 상태나 Context를 바꾸지 않음
 
 ### 15.3 Controller Action 테스트
@@ -679,6 +728,8 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 - Case C pending 중 Case B 주문이 제출되지 않는가
 - 미확정 주문을 새 주문으로 재제출하지 않고 조회하는가
 - 체결 뒤 Position → history → Context → 완료 event 순서가 지켜지는가
+- 내부 주문 결과 event가 대기 중인 market event보다 먼저 처리되는가
+- pending 주문 중 STOP이 G-06P reconciliation을 거치는가
 - 저장 실패 시 주문을 중복 제출하지 않는가
 - retry가 scheduler를 거치며 busy loop가 발생하지 않는가
 - 허가되지 않은 동시 Context 변경이 version 검사에서 탐지되고 외부 Action을 차단하는가
@@ -703,31 +754,42 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 - 포지션 보유/미보유 중지
 - 상단 BB 접촉 시 하단 정책 인계
 
-## 16. 구현 전에 확정할 항목
+## 16. 명세 반영 결과와 남은 확정 항목
 
-아래 항목은 코드로 임의 결정하면 거래 결과가 달라질 수 있으므로 구현 시작 전에 문서에서 확정한다.
+### 16.1 Event-Action Table에 반영 완료된 결정
 
-| 항목 | 현재 문제 | 필요한 결정 |
-|---|---|---|
-| 주문 행의 Guard/Action 순환 | 주문 완료가 Guard와 실행 Action에 동시에 존재한다. | 본 계획의 2단계 주문 이벤트 모델을 Event-Action Table 표기에도 반영한다. |
-| `position_owner` 갱신 시점 | 일부 흐름에서 주문 의도와 실제 소유권이 혼동될 수 있다. | 정상 매수 체결 후에만 owner 설정, 요청 중에는 `pending_strategy` 사용으로 확정한다. |
-| parameter 없는 `orderFinished()` | 주문 결과와 전략·side·성공 여부를 전달할 수 없다. | 구체 event를 가진 `handle(event, context_view)`로 통합하거나 signature를 보완한다. |
-| 주문 retry | Table은 retry 재발생만 있고 간격·한도·취소 조건이 없다. | backoff, rate limit, 최대 시도/운영자 개입, STOP 시 취소 정책을 정한다. |
-| 부분 체결 | 정상/비정상 이분법만으로 실제 보유량을 표현하기 어렵다. | 부분 체결 owner·잔여 주문·재주문 정책을 정한다. |
-| 주문 상태 불명 | 새 retry 주문 시 중복 체결 위험이 있다. | 같은 order ID 조회와 reconciliation을 신규 제출보다 우선하도록 확정한다. |
-| STOP 우선순위 | 전략 청산/주문 결과와 STOP이 동시에 도착할 수 있다. | 신규 진입 차단 시점, pending order 취소, 체결 중인 주문 처리 순서를 정한다. |
-| `G-06` 완료 상태 | 강제 매도와 `LOGIC_TERMINATED`가 한 행에 있다. | 내부 `STOPPING` phase를 두고 전량 매도 결과 반영 뒤 종료할지 확정한다. |
-| 상단 BB 인계 계약 | 책임 인계 대상 operation과 성공 피드백이 정의되지 않았다. | 대상 Controller/STM, Context 전달 범위, 인계 실패 처리 계약을 정한다. |
-| EMA slope 명칭 | `realtime_ema_slope`와 `ema_slope_30m_realtime`이 혼용된다. | 같은 값인지 별도 값인지 확정하고 canonical 이름을 정한다. |
-| Context schema 누락 | `case_b_enabled`, `case_c_enabled`, signal/flush/timer 값이 공통 변수 목록과 여러 행에 분산되어 있다. | 전체 typed `TradingRuntimeSnapshot` 필드 목록과 기본값을 확정한다. |
-| 기술 실패 상태 | 체결은 됐지만 Position/이력 저장이 실패할 수 있다. | `RECONCILIATION_REQUIRED` 같은 runtime phase와 재개 조건을 정한다. |
+| 항목 | 반영 결과 |
+|---|---|
+| Action 수행 주체 | 모든 표의 열을 `TradingController 수행 Action`으로 변경하고 STM은 typed Action 요청만 반환하도록 0절 계약을 추가했다. |
+| 주문 Guard/Action 순환 | 주문 요청 행과 `*_POSITION_OPENED`, `*_BUY_FAILED`, `*_SELL_FILLED`, `*_SELL_FAILED` 결과 EVENT를 분리했다. |
+| `position_owner` 갱신 | terminal 결과의 실제 매수 체결 수량을 Position·이력에 반영한 뒤에만 설정하도록 확정했다. 주문 중에는 pending 필드로 예약한다. |
+| 매도 완료 전이 | `PB-23F`, `PC-23F`를 추가해 실제 매도 체결 피드백 뒤에만 closed 상태로 전이한다. |
+| STOP lifecycle | `STOPPING`, G-06P/G-06F/G-06R을 추가해 pending reconciliation과 전량 매도 완료 뒤에만 종료한다. |
+| 상태 불명·부분 체결 | 같은 주문 ID 조회와 실제 fill reconciliation을 신규 주문보다 우선하고, 실제 체결량이 있으면 단순 실패 retry로 보내지 않는다. |
+| EMA slope 명칭 | 실시간 30분봉 slope를 `realtime_ema_slope`로 통일했다. |
+| runtime Context | pending 주문 필드, `trading_phase`, Case 활성화와 exit 관련 공통 변수를 명세에 추가했다. |
+| transition 추적성 | 기존 104개 행에 주문/중지 피드백 5개를 추가해 총 109개 ID로 확정했다. |
+
+### 16.2 구현 전에 추가로 확정할 항목
+
+아래 항목은 정책 값을 임의로 코드에 넣으면 실제 거래 결과가 달라질 수 있다.
+
+| 항목 | 남은 결정 |
+|---|---|
+| 주문 retry 정책 | backoff 간격, rate limit 대응, 최대 시도, 운영자 개입 기준과 retry 포기 상태를 정한다. |
+| 부분 체결 잔여 수량 | 실제 fill 반영 원칙은 확정했지만 잔여 주문 유지·취소 시점과 목표 수량 재주문 여부를 정한다. |
+| 상단 BB 인계 계약 | 대상 Controller/STM operation, pending 주문이 있을 때의 인계 순서, Context 전달 범위와 인계 실패 처리를 정한다. |
+| `orderFinished()` Communication Diagram | Event-Action Table의 구체 결과 EVENT 계약에 맞춰 parameter 없는 operation을 제거하거나 compatibility adapter로 표시하도록 Architecture 문서를 후속 수정한다. |
+| `RECONCILIATION_REQUIRED` 복구 | Position 또는 이력 저장 실패 시 재시도 간격, 신규 전략 Action 재개 조건과 운영자 알림 기준을 정한다. |
+| typed Context 전체 schema | signal/flush/timer의 정확한 타입, optional 여부, 초기값과 lower-event 종료 시 reset 범위를 dataclass 정의 전에 고정한다. |
 
 ## 17. 구현 순서
 
 ### Phase 0 — 명세 정규화
 
-- 16절의 주문, retry, 부분 체결, 중지, 인계 계약을 확정한다.
-- 104개 transition ID를 machine-readable 목록으로 옮긴다.
+- 완료: Event-Action Table의 Action 책임 분리, 주문 2단계 EVENT, STOPPING과 109개 transition ID를 반영했다.
+- 16.2절의 retry, 부분 체결 잔여 수량, 인계와 복구 정책을 확정한다.
+- 109개 transition ID를 machine-readable 목록으로 옮긴다.
 - Event, Context field, Action request catalog와 enum 이름을 고정한다.
 
 완료 기준: 모든 Action 문장이 STM 결정 값과 Controller effect로 분해되어 owner가 지정되어 있다.
@@ -756,7 +818,7 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 
 ### Phase 4 — Position management Region
 
-- `PB-01`~`PB-24`, `PC-01`~`PC-28`을 구현한다.
+- `PB-01`~`PB-24`와 `PB-23F`, `PC-01`~`PC-28`과 `PC-23F`를 구현한다.
 - 청산 우선순위와 시간 경계를 table-driven test로 검증한다.
 
 ### Phase 5 — TradingController event loop와 Action 수행
@@ -778,14 +840,14 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 
 ### Phase 8 — 전체 추적성과 simulation
 
-- 104개 transition ID coverage test를 통과시킨다.
+- 109개 transition ID coverage test를 통과시킨다.
 - 대표 시나리오 trace replay를 수행한다.
 - testnet 또는 mock exchange에서 fault injection을 통과하기 전에는 실계좌를 연결하지 않는다.
 
 ## 18. 구현 완료 기준
 
 - `TradingSTM` package에는 외부 I/O와 mutable Context 변경 코드가 없다.
-- Event-Action Table의 104개 ID가 transition registry와 테스트에 모두 연결되어 있다.
+- Event-Action Table의 109개 ID가 transition registry와 테스트에 모두 연결되어 있다.
 - `TradingController`가 모든 Action 요청의 유일한 실행 진입점이다.
 - 주문 요청 전후에 `position_owner` 불변식이 지켜진다.
 - 한 평가 주기에 경쟁하는 매수 주문이 하나만 생성된다.
