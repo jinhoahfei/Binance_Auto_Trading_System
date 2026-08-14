@@ -15,6 +15,7 @@ export interface TradingConfirmationDialogProps {
   kind: TradingDialogKind;
   regimeLabel?: string;
   pending?: boolean;
+  error?: string | null | undefined;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -109,6 +110,7 @@ export function TradingConfirmationDialog({
   kind,
   regimeLabel = 'Type 0(횡보)',
   pending = false,
+  error,
   onCancel,
   onConfirm,
 }: TradingConfirmationDialogProps) {
@@ -119,7 +121,7 @@ export function TradingConfirmationDialog({
   return (
     <ModalSurface
       description={copy.description}
-      fixedHeight
+      fixedHeight={!error}
       leadingVisual={<StatusIndicatorIcon tone={icon_tone} />}
       open={open}
       title={copy.title}
@@ -132,6 +134,7 @@ export function TradingConfirmationDialog({
         </strong>
         {is_pending ? <span className={styles.progress} aria-label="연결 진행 중" /> : null}
       </div>
+      {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <div className={styles.actions}>
         <Button disabled={is_pending} onClick={onCancel}>
           {copy.cancelLabel}

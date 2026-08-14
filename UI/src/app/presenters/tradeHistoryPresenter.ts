@@ -20,6 +20,19 @@ const EMPTY_HISTORY_STATE = {
     actionLabel: '자동매매 화면으로 이동',
 };
 
+const HISTORY_PERIOD_LABELS: Readonly<Record<AppViewModel['trade_history']['period'], string>> = {
+    today: '오늘',
+    last7days: '최근 7일',
+    last30days: '최근 30일',
+    all: '전체 기간',
+};
+
+const HISTORY_SIDE_LABELS: Readonly<Record<AppViewModel['trade_history']['side'], string>> = {
+    all: '전체',
+    buy: '매수',
+    sell: '매도',
+};
+
 const WON_FORMATTER = new Intl.NumberFormat('ko-KR', {
     maximumFractionDigits: 0,
 });
@@ -173,15 +186,34 @@ export function present_trade_history_props(
     controller: UiApplicationController,
 ): TradeHistoryPageProps {
     const is_empty = view_model.trade_history.status === 'empty';
+    const is_failed = view_model.trade_history.status === 'failed';
+    const status_label = view_model.trade_history.is_loading
+        ? '조회 중'
+        : is_failed
+            ? '조회 실패'
+            : `체결 ${view_model.trade_history.records.length}건`;
+    const empty_state = is_failed
+        ? {
+            title: '거래 내역을 불러오지 못했습니다',
+            description: view_model.trade_history.error?.message
+                ?? '거래 내역 조회 중 알 수 없는 오류가 발생했습니다.',
+            suggestion: '잠시 후 다시 시도해 주세요.',
+            actionLabel: '다시 시도',
+        }
+        : is_empty
+            ? EMPTY_HISTORY_STATE
+            : undefined;
 
     return {
-        description: '2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건',
+        description: `${HISTORY_PERIOD_LABELS[view_model.trade_history.period]} · ETH/KRW · ${HISTORY_SIDE_LABELS[view_model.trade_history.side]} · ${status_label}`,
         summary: view_model.trade_history.summary,
-        rows: view_model.trade_history.records.map(create_trade_row_view_model),
+        rows: is_failed
+            ? []
+            : view_model.trade_history.records.map(create_trade_row_view_model),
         period: map_history_period_to_view(view_model.trade_history.period),
         side: map_history_side_to_view(view_model.trade_history.side),
-        filtersDisabled: view_model.trade_history.is_loading,
-        ...(is_empty ? { emptyState: EMPTY_HISTORY_STATE } : {}),
+        filtersDisabled: view_model.trade_history.is_loading || is_failed,
+        ...(empty_state === undefined ? {} : { emptyState: empty_state }),
         onBack: () => controller.dispatch({ type: 'BACK_TO_DASHBOARD' }),
         onPeriodChange: (period) => controller.dispatch({
             type: 'HISTORY_PERIOD_SELECTED',
@@ -193,6 +225,11 @@ export function present_trade_history_props(
         }),
         onExportCsv: () => controller.dispatch({ type: 'OPEN_CSV_EXPORT' }),
         onStartTrading: () => {
+            if (is_failed) {
+                controller.dispatch({ type: 'REFRESH_TRADE_HISTORY' });
+                return;
+            }
+
             controller.dispatch({ type: 'BACK_TO_DASHBOARD' });
             if (!view_model.trading.is_trading) {
                 controller.dispatch({ type: 'START_TRADING_CLICKED' });

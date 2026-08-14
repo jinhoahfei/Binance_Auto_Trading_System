@@ -4,6 +4,7 @@
 |---|---|
 | 문서 상태 | As-built — 현재 구현 기준 |
 | 작성일 | 2026-08-12 |
+| 최종 갱신일 | 2026-08-14 |
 | 대상 경로 | `/Users/oscar/Desktop/Binance_Auto/UI` |
 | 대상 구현 | React + TypeScript + XState + Vite + Tauri 2 UI |
 | 제외 범위 | Binance 실거래, 투자 판단 알고리즘, 실제 CSV 파일 시스템 adapter, 실제 backend 연결 |
@@ -37,6 +38,8 @@
 - Tauri는 1440×1024 데스크톱 창과 안전한 종료 lifecycle을 제공하는 최소 shell이다.
 - Storybook의 공통 harness가 Figma 16개 프레임을 상태 fixture로 재현한다.
 - 스타일은 semantic CSS token, CSS Modules, Radix primitive를 중심으로 구성한다.
+- `App.tsx`는 dashboard와 trade-history Route Boundary를 `React.lazy`와 동적 `import()`로 분리하고, 최초 로드 동안 접근 가능한 `Suspense` fallback을 표시한다.
+- 조회·명령 실패는 actor의 공통 오류를 presenter와 modal Boundary에서 사용자에게 표시하고 재시도 흐름으로 연결한다.
 
 초기 데모 상태는 API 연결 표시가 online이고 자동매매는 정지 상태이며, 실제 적용 REGIME은 `null`이다. 따라서 처음에는 어떤 REGIME 버튼도 선택되지 않고, REGIME 미선택 상태에서 자동매매 실행을 누르면 경고 modal과 REGIME 패널 강조 흐름이 시작된다.
 
@@ -63,7 +66,7 @@ flowchart LR
 | 계층 | 대표 위치 | 책임 |
 |---|---|---|
 | Entry/Provider | `src/main.tsx`, `src/app/providers` | React root와 전역 provider를 생성한다. |
-| App composition | `src/app/App.tsx` | 헤더, 현재 route, 전역 modal host를 조합한다. |
+| App composition | `src/app/App.tsx` | 헤더, 지연 로딩되는 현재 route, 전역 modal host와 route loading fallback을 조합한다. |
 | Route Boundary | `src/routes` | 기능 컴포넌트를 화면 레이아웃으로 배치한다. 업무 상태를 직접 판단하지 않는다. |
 | Feature Boundary | `src/features/*/components` | ViewModel을 렌더링하고 typed intent만 상위로 보낸다. |
 | Presenter | `src/app/presenters` | 공통 `AppViewModel`을 route/feature props로 변환한다. |
@@ -86,6 +89,7 @@ flowchart LR
 7. actor snapshot이 바뀌면 facade가 전역 modal slot을 다시 계산하고 전체 snapshot을 발행한다.
 8. store가 새 `AppViewModel`을 캐시하고 React listener에 알린다.
 9. presenter가 새 페이지 props를 만들고 React가 화면을 다시 그린다.
+10. 처음 방문한 route module이 아직 없으면 `Suspense`가 로딩 상태를 표시하고 해당 production chunk를 받은 뒤 Route Boundary로 교체한다.
 
 ## 4. 최상위 디렉터리 트리
 
@@ -242,18 +246,20 @@ src/app/
 
 | 파일 | 역할 |
 |---|---|
-| `App.tsx` | `AppHeader`, 현재 route, `AppModalHost`를 조합하는 최상위 Boundary다. 종료 final 상태에서는 안전 종료 안내만 표시한다. |
-| `App.module.css` | 앱 canvas, 대시보드 여백, 종료 final 화면의 layout을 정의한다. |
-| `App.test.tsx` | REGIME 선택, 자동매매 시작, route 이동, CSV, 중지까지 실제 runtime wiring을 통합 검증한다. |
-| `bootstrap/createDemoUiApplication.ts` | `FakeUiCommandAdapter`와 모든 actor를 포함한 `UiApplicationFacade`를 Figma 기준 초기값으로 생성하고 demo online event를 주입한다. |
-| `bootstrap/demoFixtures.ts` | Figma 거래 행과 지표를 공통 `TradeRecord`, `RegimeMetric` 계약으로 정규화한다. |
+| `App.tsx` | `AppHeader`, 현재 route, `AppModalHost`를 조합하는 최상위 Boundary다. dashboard와 trade-history page를 직접 동적 import해 route 단위 chunk를 만들고 `Suspense` fallback을 제공한다. 종료 final 상태에서는 안전 종료 안내만 표시한다. |
+| `App.module.css` | 앱 canvas, 대시보드 여백, route loading 상태와 종료 final 화면의 layout을 정의한다. |
+| `App.test.tsx` | 지연 로딩된 dashboard를 기다린 뒤 REGIME 선택, 자동매매 시작, route 이동, CSV, 중지까지 실제 runtime wiring을 통합 검증한다. |
+| `bootstrap/createDemoUiApplication.ts` | `FakeUiCommandAdapter`와 모든 actor를 포함한 `UiApplicationFacade`를 Figma 기준 초기값으로 생성하고 demo online event를 주입한다. route barrel을 거치지 않고 `dashboardFixture.ts`를 직접 읽어 초기 chunk 경계를 보존한다. |
+| `bootstrap/demoFixtures.ts` | Figma 거래 행과 지표를 공통 `TradeRecord`, `RegimeMetric` 계약으로 정규화한다. dashboard 표시 fixture는 route component와 분리된 직접 경로로 읽는다. |
 | `bootstrap/index.ts` | bootstrap factory와 fixture의 공개 import 경계를 제공한다. |
+
+`App.tsx`의 Route Boundary 직접 동적 import와 bootstrap/presenter의 `dashboardFixture.ts` 직접 import는 일반 barrel 규칙의 의도적인 예외다. route `index.ts`가 정적으로 page를 다시 참조해 초기 bundle에 포함시키는 것을 막기 위한 code-splitting 경계이며, 화면 상태나 기능 내부 구현을 우회하기 위한 import가 아니다.
 
 ### 6.2 전역 modal 구성
 
 | 파일 | 역할 |
 |---|---|
-| `components/AppModalHost.tsx` | shell의 단일 modal 종류를 거래 확인, REGIME 확인, CSV, 종료, 진행·완료·오류 Dialog로 연결한다. CSV 달력 navigation hook도 여기에서 presenter에 전달한다. |
+| `components/AppModalHost.tsx` | shell의 단일 modal 종류를 거래 확인, REGIME 확인, CSV, 종료, 진행·완료·오류 Dialog로 연결한다. trading/REGIME actor 오류 메시지를 해당 확인창에 전달하고 CSV 달력 navigation hook도 presenter에 전달한다. |
 | `components/index.ts` | app-level modal 컴포넌트의 공개 barrel이다. |
 | `components/modals/ExitConfirmationDialog.tsx` | 포지션이 없을 때의 일반 종료와 포지션이 있을 때의 강제 매도 후 종료 확인 문구를 표시한다. |
 | `components/modals/ExitConfirmationDialog.module.css` | 종료 확인 dialog의 안내 박스와 버튼 행 스타일을 정의한다. |
@@ -278,10 +284,10 @@ src/app/
 | `hooks/useCsvCalendarNavigation.ts` | 시작일·종료일 달력의 표시 연월만 React local state로 관리하고 이전/다음 월과 연·월 선택 함수를 제공한다. |
 | `hooks/useDesktopWindowLifecycle.ts` | Tauri close event의 기본 종료를 막아 `APP_EXIT_CLICKED`를 보내고, actor가 final 상태가 되면 창을 실제 제거한다. |
 | `hooks/index.ts` | app hook의 공개 barrel이다. |
-| `presenters/dashboardPresenter.ts` | `AppViewModel`과 고정 chart fixture를 결합해 Dashboard props를 만들고 chart, trader, REGIME, split-order intent를 facade intent로 변환한다. |
-| `presenters/tradeHistoryPresenter.ts` | actor의 거래 record와 filter enum을 표 행·필터 props로 변환하고 route/CSV action을 연결한다. |
+| `presenters/dashboardPresenter.ts` | `AppViewModel`과 고정 chart fixture를 결합해 Dashboard props를 만들고 chart, trader, REGIME, split-order intent를 facade intent로 변환한다. route page를 초기 bundle로 가져오지 않도록 page type과 fixture를 type/direct import로 분리한다. |
+| `presenters/tradeHistoryPresenter.ts` | actor의 거래 record와 filter enum을 표 행·필터 props로 변환한다. 기간·side·로딩·실패·실제 건수를 description에 반영하고, 실패 시 오래된 행을 비우며 필터 비활성화와 조회 재시도를 연결한다. |
 | `presenters/csvExportPresenter.ts` | CSV actor의 draft, validation, calendar target을 `CSVExportDialogProps`로 변환한다. |
-| `presenters/presenters.test.ts` | account/history 값 투영과 chart 선 hover/context/delete intent 변환을 검증한다. |
+| `presenters/presenters.test.ts` | account/history 값 투영, 거래내역 동적 description·실패/재시도 상태와 chart 선 hover/context/delete intent 변환을 검증한다. |
 | `presenters/index.ts` | 세 presenter 함수의 공개 barrel이다. |
 | `providers/AppProviders.tsx` | 향후 server-owned snapshot 조회를 위한 TanStack Query client를 앱 수명주기에 맞춰 제공한다. 현재 데모 데이터 흐름은 actor/fake adapter가 담당한다. |
 | `runtime/UiApplicationStore.ts` | facade를 React 외부 store로 감싸며 최초 구독에서 actor를 시작하고 마지막 구독에서 정리한다. React StrictMode의 즉시 재구독에도 snapshot을 유지한다. |
@@ -435,8 +441,8 @@ csv-export/
 | `components/CalendarPopover.module.css` | 244px 달력 popover, 요일, 날짜 grid, 선택일과 비활성 날짜를 스타일링한다. |
 | `components/types.ts` | CSV draft, validation error, calendar target과 표시 월 ViewModel을 정의한다. |
 | `components/index.ts` | CSV Boundary 컴포넌트와 표시 type의 공개 barrel이다. |
-| `machines/csvExportMachine.ts` | dialog, directory picker, 기간/달력, 파일명 편집을 병렬 region으로 관리하고 validation 및 export invoke를 수행한다. |
-| `machines/csvExportMachine.test.ts` | 경로 오류, 달력 외부 click, 반대 날짜 field 전환, picker 상태 보존, export 완료를 검증한다. |
+| `machines/csvExportMachine.ts` | dialog, directory picker, 기간/달력, 파일명 편집을 병렬 region으로 관리하고 validation 및 export invoke를 수행한다. directory picker 결과와 최종 draft 검증 모두 `trim()` 후 빈 경로를 거부한다. |
+| `machines/csvExportMachine.test.ts` | null·공백 경로 거부와 export 미실행, 달력 외부 click, 반대 날짜 field 전환, picker 상태 보존, export 완료를 검증한다. |
 | `index.ts` | CSV 컴포넌트와 machine API를 feature 외부에 공개한다. |
 
 ### 8.5 `price-chart`
@@ -464,16 +470,16 @@ price-chart/
 
 | 파일 | 역할 |
 |---|---|
-| `components/PriceChartPanel.tsx` | 차트 제목, timestamp, toolbar, chart surface, 지표 popover를 조합한다. fullscreen 상태를 panel layout에 반영한다. |
+| `components/PriceChartPanel.tsx` | 차트 제목, timestamp, toolbar, chart surface, 지표 popover를 조합한다. fullscreen 상태를 panel layout에 반영하고, popover가 열렸을 때 document 단위 외부 pointer 입력을 감지해 닫기 intent를 보낸다. |
 | `components/PriceChartPanel.module.css` | 472px 기본 panel, header, popover 위치와 fullscreen overlay layout을 정의한다. |
-| `components/PriceChartPanel.test.tsx` | interval, 지표, drawing, fullscreen, 선 hover/context/delete intent와 렌더링을 검증한다. |
-| `components/ChartToolbar.tsx` | 1분·30분·4시간·1일 interval, active trading state와 지표 설정 버튼을 표시한다. |
+| `components/PriceChartPanel.test.tsx` | interval, 지표, drawing, fullscreen, 선 hover/context/delete intent와 지표 popover·선 context menu 외부 click 닫기를 검증한다. |
+| `components/ChartToolbar.tsx` | 1분·30분·4시간·1일 interval, active trading state와 지표 설정 버튼을 표시한다. 설정 버튼은 `aria-expanded`와 `aria-controls`로 popover 상태·대상을 노출한다. |
 | `components/ChartToolbar.module.css` | interval segmented control, active state badge, toolbar 버튼을 스타일링한다. |
-| `components/IndicatorSettingsPopover.tsx` | EMA9, 볼린저밴드, 거래량 표시 여부를 controlled toggle로 노출한다. |
+| `components/IndicatorSettingsPopover.tsx` | EMA9, 볼린저밴드, 거래량 표시 여부를 controlled toggle로 노출한다. Escape 입력을 소비하고 명시적인 닫기 intent를 보낸다. |
 | `components/IndicatorSettingsPopover.module.css` | Figma 지표 설정 popover, 색상 swatch, switch와 행 layout을 정의한다. |
 | `components/LightweightChartSurface.tsx` | Lightweight Charts instance와 candle, EMA, Bollinger, volume series를 생성·갱신하고 resize를 처리한다. |
 | `components/LightweightChartSurface.module.css` | 금융 차트 canvas를 SVG interaction layer 아래에 배치한다. |
-| `components/ChartCanvas.tsx` | chart 축과 Figma fallback SVG, drawing 생성, 저장 선 hit area, hover, context menu, 삭제, 도구 버튼을 담당한다. Lightweight Charts가 준비되면 중복 market SVG layer를 숨긴다. |
+| `components/ChartCanvas.tsx` | chart 축과 Figma fallback SVG, drawing 생성, 저장 선 hit area, hover, context menu, 삭제, 도구 버튼을 담당한다. 열린 선 context menu는 menu/hit area를 제외한 document 외부 click 또는 Escape로 닫는다. Lightweight Charts가 준비되면 중복 market SVG layer를 숨긴다. |
 | `components/ChartCanvas.module.css` | chart/축/도구/drawing overlay/context menu와 fullscreen 크기를 정의한다. |
 | `machines/chartMachine.ts` | interval, 지표 popover와 3개 indicator, active state, viewport, drawing, line selection을 병렬 region으로 관리한다. |
 | `machines/chartMachine.test.ts` | interval별 drawing 보존, fullscreen, indicator 독립 toggle을 검증한다. |
@@ -536,13 +542,13 @@ regime-selection/
 |---|---|
 | `components/RegimePanel.tsx` | 추천 타입, 실제 적용 타입, 5개 수동 선택 버튼, 4개 판단 지표와 강조 상태를 표시한다. 적용값이 `null`이면 아무 버튼도 선택하지 않는다. |
 | `components/RegimePanel.module.css` | Figma 948×116 panel, 내부 3영역, 선택 button과 5회 glow animation/reduced-motion 대체를 정의한다. |
-| `components/RegimePanel.test.tsx` | 초기 미선택과 적용 타입 표시/intent를 검증한다. |
+| `components/RegimePanel.test.tsx` | 초기 미선택과 적용 타입 표시/intent, REGIME 적용 실패 사유의 alert 표시를 검증한다. |
 | `components/RegimeTypeButton.tsx` | 하나의 REGIME type을 상승·하락 tone과 candidate/applied 상태로 표시한다. |
 | `components/RegimeTypeButton.module.css` | type별 color, selected, candidate outline, disabled 상태를 정의한다. |
 | `components/RegimeMetric.tsx` | REGIME 판단 지표 이름과 값을 tone과 함께 표시한다. |
 | `components/RegimeMetric.module.css` | 지표 label/value와 상태 dot를 스타일링한다. |
-| `components/RegimeChangeDialog.tsx` | 후보 REGIME을 실제 적용하기 전 확인 modal을 표시한다. |
-| `components/RegimeChangeDialog.module.css` | 확인 modal의 type 안내 박스와 action 행을 Figma 좌표에 맞춘다. |
+| `components/RegimeChangeDialog.tsx` | 후보 REGIME을 실제 적용하기 전 확인 modal을 표시한다. apply 실패 시 actor 오류를 `role="alert"`로 보여 주고 재확인을 허용한다. |
+| `components/RegimeChangeDialog.module.css` | 확인 modal의 type 안내 박스, 오류 문구와 action 행을 Figma 좌표에 맞춘다. 오류가 있으면 고정 높이를 해제해 내용 잘림을 막는다. |
 | `machines/regimeMachine.ts` | 추천값, 적용값, 확인 전 candidate, 4초/5회 panel 강조, 비동기 apply command를 관리한다. |
 | `machines/regimeMachine.test.ts` | click만으로 적용되지 않는지, 취소 시 기존값 보존, 확인 후 adapter 적용을 검증한다. |
 | `types.ts` | REGIME type, metric, panel props와 `RegimePanelIntent`를 정의한다. |
@@ -606,7 +612,7 @@ trade-history/
 | `components/SummaryCards.module.css` | 4열 요약 card, 수치 tone과 세부 통계를 정의한다. |
 | `components/HistoryFilters.tsx` | 기간 4종과 거래 side 3종을 독립 group으로 제공하고 CSV action을 노출한다. |
 | `components/HistoryFilters.module.css` | 64px toolbar, segmented filter와 CSV 버튼을 스타일링한다. |
-| `components/TradeTable.tsx` | 11개 열의 거래 행, scroll 영역, empty state와 자동매매 이동 action을 표시한다. |
+| `components/TradeTable.tsx` | 11개 열의 거래 행, scroll 영역과 상태별 empty UI를 표시한다. 일반 empty에서는 자동매매 이동, 조회 실패에서는 presenter가 제공한 다시 시도 action을 사용한다. |
 | `components/TradeTable.module.css` | 고정 header, 행/열 폭, side badge, 숫자 tone, empty layout과 scroll을 정의한다. |
 | `components/TradeHistoryComponents.test.tsx` | 요약/행 구조, 두 filter intent, empty action을 검증한다. |
 | `components/types.ts` | history 표시 filter, summary, 표 행, empty state ViewModel을 정의한다. |
@@ -626,6 +632,7 @@ trading-control/
 │   ├── AppHeader.module.css
 │   ├── AppHeader.tsx
 │   ├── TradingConfirmationDialog.module.css
+│   ├── TradingConfirmationDialog.test.tsx
 │   └── TradingConfirmationDialog.tsx
 ├── machines/
 │   ├── tradingCommandMachine.test.ts
@@ -637,8 +644,9 @@ trading-control/
 |---|---|
 | `components/AppHeader.tsx` | 브랜드, LIVE/OFFLINE 상태, 자동매매 실행과 매매 중지 버튼을 표시한다. 실행 상태와 pending 상태에 따라 버튼을 제어한다. |
 | `components/AppHeader.module.css` | 72px header, logo, 연결 badge, 실행·중지 action을 Figma 규격으로 배치한다. |
-| `components/TradingConfirmationDialog.tsx` | 시작, 시작 중, 일반 중지, 강제 매도 중지, REGIME 미선택, API 미연결 variant를 하나의 공통 확인 Boundary로 표시한다. |
-| `components/TradingConfirmationDialog.module.css` | 64px 안내 박스, 진행 bar, tone과 버튼 행을 공통 modal 고정 좌표에 맞춘다. |
+| `components/TradingConfirmationDialog.tsx` | 시작, 시작 중, 일반 중지, 강제 매도 중지, REGIME 미선택, API 미연결 variant를 하나의 공통 확인 Boundary로 표시한다. 명령 실패 시 actor 오류를 `role="alert"`로 표시한다. |
+| `components/TradingConfirmationDialog.module.css` | 64px 안내 박스, 진행 bar, 오류 문구, tone과 버튼 행을 정의한다. 오류가 없을 때는 공통 modal 고정 좌표를 유지하고 오류가 있으면 높이를 확장한다. |
+| `components/TradingConfirmationDialog.test.tsx` | 거래 명령 실패 사유가 재시도 확인창의 alert로 노출되는지 검증한다. |
 | `machines/tradingCommandMachine.ts` | 시작 guard, 시작 확인, 실행, 일반 중지, 강제 매도 중지, API 단절 중지를 adapter invoke와 함께 관리한다. 실제 position snapshot은 성공한 강제 매도에서만 비운다. |
 | `machines/tradingCommandMachine.test.ts` | REGIME 미선택, 중복 없는 시작, 강제 매도 실패·취소 시 position 보존, 성공 시 position clear를 검증한다. |
 | `index.ts` | header, 거래 dialog와 command machine의 공개 API다. |
@@ -694,13 +702,15 @@ src/routes/
 | `dashboard/DashboardPage.module.css` | 좌측 948px와 우측 412px grid, feature 사이 간격과 최소 폭 대응을 정의한다. |
 | `dashboard/DashboardPage.test.tsx` | 모든 feature Boundary가 header 없는 dashboard에 배치되는지 검증한다. |
 | `dashboard/dashboardFixture.ts` | Figma 기본 dashboard의 chart, 지표, 체결, 계좌, split-order 표시 데이터를 제공한다. |
-| `dashboard/index.ts` | dashboard page, props와 fixture의 공개 barrel이다. |
+| `dashboard/index.ts` | Storybook, 테스트 등 일반 소비자를 위한 dashboard page, props와 fixture의 공개 barrel이다. production App과 bootstrap은 code-splitting 경계를 위해 필요한 파일을 직접 import한다. |
 | `trade-history/TradeHistoryPage.tsx` | 돌아가기, 제목, 요약, filter, table과 선택적 CSV dialog를 조합한다. |
 | `trade-history/TradeHistoryPage.module.css` | 상세 route의 1440px 기준 여백, heading, summary, toolbar, table 위치를 정의한다. |
 | `trade-history/TradeHistoryPage.test.tsx` | page composition과 돌아가기 intent를 검증한다. |
-| `trade-history/index.ts` | trade-history page와 props의 공개 barrel이다. |
+| `trade-history/index.ts` | 일반 소비자를 위한 trade-history page와 props의 공개 barrel이다. production App은 page module을 직접 동적 import한다. |
 
 이 프로젝트의 route는 URL 기반 React Router가 아니라 `uiShellMachine`의 state다. 데스크톱 단일 창에서 dashboard state를 보존한 채 상세 화면으로 이동하기 위한 선택이다.
+
+route 상태의 owner와 bundle loading 경계는 별개다. `uiShellMachine`이 현재 route를 결정하고, `App.tsx`가 `DashboardPage.tsx`와 `TradeHistoryPage.tsx`를 각각 `React.lazy`로 불러온다. dashboard는 앱 시작 직후 필요한 chunk로 로드되고, trade-history page의 JS/CSS는 최초 상세 화면 진입 시 로드된다. page가 준비되기 전에는 `aria-busy`와 `aria-live`가 적용된 route loading fallback을 표시한다.
 
 ## 11. `src/shared` 구조
 
@@ -798,7 +808,7 @@ src/stories/
 
 ### 12.3 테스트 파일 요약
 
-현재 테스트는 작성 시점 기준 20개 파일, 53개 test로 구성되며 다음 계층을 확인한다.
+현재 테스트는 2026-08-14 검증 기준 21개 파일, 59개 test로 구성되며 다음 계층을 확인한다.
 
 | 범위 | 테스트 파일 |
 |---|---|
@@ -808,7 +818,7 @@ src/stories/
 | Store 수명주기 | `app/runtime/UiApplicationStore.test.ts` |
 | Route composition | `routes/dashboard/DashboardPage.test.tsx`, `routes/trade-history/TradeHistoryPage.test.tsx` |
 | Account actor | `features/account-summary/machines/accountSummaryMachine.test.ts` |
-| Trading actor | `features/trading-control/machines/tradingCommandMachine.test.ts` |
+| Trading | `features/trading-control/components/TradingConfirmationDialog.test.tsx`, `machines/tradingCommandMachine.test.ts` |
 | REGIME | `features/regime-selection/components/RegimePanel.test.tsx`, `machines/regimeMachine.test.ts` |
 | Chart | `features/price-chart/components/PriceChartPanel.test.tsx`, `machines/chartMachine.test.ts` |
 | Split order | `features/split-order/components/SplitOrderControls.test.tsx`, `machines/splitOrderMachine.test.ts` |
@@ -883,7 +893,8 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 - CSV 달력이 열려 있으면 외부 click, 다른 입력 영역 click, 반대 날짜 field click이 먼저 달력 상태를 정리한다.
 - `AppModalHost`와 `uiShellMachine`은 동시에 전역 modal 하나만 보이게 한다.
 - modal이 닫히면 `use_dialog_focus_return()`이 원래 trigger로 focus를 복원한다.
-- compact 확인 modal은 420×232이며 내부 안내 박스와 버튼 위치가 설명문의 줄 수에 따라 변하지 않도록 고정한다.
+- compact 확인 modal은 오류가 없을 때 420×232이며 내부 안내 박스와 버튼 위치가 설명문의 줄 수에 따라 변하지 않도록 고정한다. trading/REGIME 명령 오류가 있으면 고정 높이를 해제해 alert 내용이 잘리지 않게 한다.
+- trading/REGIME actor의 명령 오류는 활성 확인 modal 안에서 `role="alert"`로 표시하고, modal을 유지해 취소 또는 재시도를 선택할 수 있게 한다.
 - 종료, 자동매매, REGIME, CSV가 동시에 상태 변화를 요청할 때는 안전과 데이터 손실 위험이 큰 흐름을 우선한다.
 
 ## 16. 디자인 시스템과 접근성
@@ -903,6 +914,9 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 - tab, slider, dialog, menu, table에 적절한 ARIA role과 accessible name을 사용한다.
 - 상승/하락, 매수/매도를 색상만으로 표현하지 않고 text와 부호를 함께 표시한다.
 - chart의 가는 선은 별도 HTML hit area로 keyboard focus와 context-menu key를 지원한다.
+- 지표 설정 버튼은 `aria-expanded`와 `aria-controls`로 popover 상태를 알리고, 지표 popover와 선 context menu는 외부 click과 Escape로 닫힌다.
+- route chunk를 기다리는 fallback은 `aria-busy`와 `aria-live="polite"`로 로딩 상태를 알린다.
+- 조회·거래·REGIME 오류 메시지는 `role="alert"`로 즉시 노출한다.
 - 달력은 Escape, 방향키, Home, End를 지원한다.
 - `:focus-visible`을 전역 token으로 표시한다.
 - `prefers-reduced-motion`에서는 animation 시간을 제거하고 REGIME 강조 outline은 유지한다.
@@ -913,11 +927,13 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 
 - Figma 기준 dashboard와 거래 내역 화면 렌더링
 - REGIME 선택 확인과 미선택 경고/강조
-- 자동매매 시작·중지 UI state와 확인 modal
+- 자동매매 시작·중지 UI state, 확인 modal과 명령 실패 사유 표시
 - 분할 매수·매도 slider interaction
-- 차트 interval, indicator, fullscreen, drawing과 선 삭제
+- 차트 interval, indicator, fullscreen, drawing, 선 삭제와 popover/context menu 외부 닫기
 - 최근 체결/실시간 지표 tab
-- history filter, empty state, CSV 입력·달력·validation
+- history filter, empty/failed state, 조회 재시도와 실제 상태 기반 description
+- CSV 입력·달력·validation과 공백 저장 경로 거부
+- dashboard/trade-history route 단위 production code splitting
 - 앱 종료 확인과 Tauri 창 close interception
 - Storybook 16개 Figma 상태 확인
 
@@ -974,6 +990,16 @@ corepack pnpm dev
 | `pnpm desktop:dev` | Rust/Cargo 환경에서 Tauri desktop 개발 앱을 실행한다. |
 | `pnpm desktop:build` | Tauri desktop bundle을 생성한다. |
 
+### 18.4 2026-08-14 검증 결과
+
+- strict TypeScript typecheck가 오류 없이 통과했다.
+- Vitest 전체 suite 21개 파일, 59개 test가 모두 통과했다.
+- Vite production build가 267개 module을 변환해 성공했고 500kB 초과 chunk 경고가 사라졌다.
+- code splitting 전 단일 entry JS 627.82kB에서 변경 후 entry JS 351.19kB로 약 44% 감소했다.
+- build 결과에 `DashboardPage`와 `TradeHistoryPage` JS/CSS가 별도 asset으로 생성됐다.
+- production preview에서 dashboard를 먼저 렌더링한 뒤 거래 내역에 진입할 때 `TradeHistoryPage` JS/CSS가 새로 관찰됐고, dashboard 복귀도 정상 동작했다.
+- 같은 browser smoke test에서 warning/error console log가 발생하지 않았다.
+
 ## 19. 새 기능을 추가할 때의 순서
 
 1. 화면 내부에서만 쓰는 type은 해당 feature의 `types.ts`에 정의한다.
@@ -987,12 +1013,13 @@ corepack pnpm dev
 9. facade에 새 actor 또는 intent routing을 연결한다.
 10. 전역 modal이면 `UiModalKind`, modal derivation 우선순위, `AppModalHost`를 함께 갱신한다.
 11. route는 feature를 배치하고 업무 guard를 직접 작성하지 않는다.
-12. component/machine test와 필요한 Figma Story state를 추가한다.
+12. 새 최상위 route는 `App.tsx`의 직접 동적 import와 `Suspense` 경계를 유지하고, 초기 실행 코드가 route barrel을 정적으로 참조하지 않는지 production build에서 확인한다.
+13. component/machine test와 필요한 Figma Story state를 추가한다.
 
 ## 20. 유지보수 시 주의사항
 
 - `UI_Implementation_Architecture_Plan.md`는 제안서이고 본 문서는 현재 구현 설명서다. 코드 확인 시 두 문서의 상태를 혼동하지 않는다.
-- `index.ts` 공개 경계를 우회해 다른 feature의 내부 파일을 직접 import하지 않는다.
+- 일반 feature 소비자는 `index.ts` 공개 경계를 우회해 다른 feature의 내부 파일을 직접 import하지 않는다. 예외는 `App.tsx`의 route page 동적 import와 app bootstrap/presenter의 route fixture·type import처럼 production code-splitting 경계를 보존하는 경우뿐이며, 새 예외는 build 결과로 필요성을 확인한다.
 - `UiApplicationFacade`에 화면 markup이나 금융 계산을 넣지 않는다.
 - presenter에 상태 전이 규칙을 넣지 않는다. presenter는 변환과 intent 연결만 담당한다.
 - machine action에서 DOM을 직접 조작하지 않는다.
@@ -1000,6 +1027,7 @@ corepack pnpm dev
 - fixture는 실제 backend 원본이 아니다. live 연결 후에는 snapshot으로 대체한다.
 - Figma frame마다 component를 복제하지 말고 기존 component의 state/props variant로 표현한다.
 - `dist`, `storybook-static`, `node_modules`, lockfile 내부를 문제 해결 목적으로 직접 고치지 않는다.
+- route/import 경계를 바꾼 뒤에는 typecheck와 전체 test뿐 아니라 production build asset 분리와 실제 route 진입도 확인한다.
 - 함수와 class를 추가할 때 프로젝트의 구조화된 한국어 설명 주석과 코딩 convention을 유지한다.
 
 ## 21. 관련 문서
@@ -1011,4 +1039,3 @@ corepack pnpm dev
 - `../Design/UI/UI_Event_Action_Table.md` — event, guard, action, 다음 상태 명세
 - `UI_Implementation_Architecture_Plan.md` — 구현 전 목표 아키텍처와 기술 선택 근거
 - `visual-regression/README.md` — Figma 기준 이미지와 Story 대응
-

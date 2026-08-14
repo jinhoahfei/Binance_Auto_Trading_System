@@ -110,7 +110,7 @@ function validate_csv_context(context: CsvExportMachineContext): CsvValidationEr
         && context.start_date <= context.end_date;
 
     return {
-        directory: context.directory === null
+        directory: context.directory === null || context.directory.trim().length === 0
             ? '저장 위치를 선택해주세요.'
             : null,
         file_name: is_valid_file_name(context.file_name_draft)
@@ -173,7 +173,9 @@ export function create_csv_export_machine(
             is_period_monthly: ({ context }) => context.period === 'last30days',
             is_period_custom: ({ context }) => context.period === 'custom',
             has_selected_directory: ({ event }) => {
-                return 'output' in event && typeof event.output === 'string';
+                return 'output' in event
+                    && typeof event.output === 'string'
+                    && event.output.trim().length > 0;
             },
         },
         actions: {

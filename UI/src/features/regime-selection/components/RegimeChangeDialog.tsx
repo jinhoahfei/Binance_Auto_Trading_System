@@ -7,6 +7,7 @@ export interface RegimeChangeDialogProps {
   regimeKey: string;
   regimeLabel: string;
   pending?: boolean;
+  error?: string | null | undefined;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -23,13 +24,14 @@ export function RegimeChangeDialog({
   regimeKey,
   regimeLabel,
   pending = false,
+  error,
   onCancel,
   onConfirm,
 }: RegimeChangeDialogProps) {
   return (
     <ModalSurface
       open={open}
-      fixedHeight
+      fixedHeight={!error}
       title="REGIME type을 실행할까요?"
       description="확인을 누르면 선택한 REGIME type이 즉시 적용되어 실행됩니다."
       leadingVisual={<StatusIndicatorIcon tone="positive" />}
@@ -41,6 +43,7 @@ export function RegimeChangeDialog({
           {regimeKey} · {regimeLabel}으로 실행하시겠습니까?
         </strong>
       </div>
+      {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <div className={styles.actions}>
         <Button disabled={pending} onClick={onCancel}>취소</Button>
         <Button disabled={pending} onClick={onConfirm} tone="positive">

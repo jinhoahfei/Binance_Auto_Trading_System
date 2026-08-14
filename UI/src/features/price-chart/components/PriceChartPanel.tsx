@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 import { ChartCanvas } from './ChartCanvas';
 import { ChartToolbar } from './ChartToolbar';
 import { IndicatorSettingsPopover } from './IndicatorSettingsPopover';
@@ -29,6 +31,26 @@ export function PriceChartPanel({
     selectedLineId = null,
     timestampLabel,
 }: PriceChartPanelProps) {
+    useEffect(() => {
+        if (!indicatorSettingsOpen) {
+            return undefined;
+        }
+
+        const handle_outside_pointer_down = (event: PointerEvent) => {
+            if (!(event.target instanceof Element)
+                || event.target.closest('[data-indicator-settings-popover]') !== null
+                || event.target.closest('[data-indicator-settings-trigger]') !== null) {
+                return;
+            }
+
+            onIntent?.({ type: 'INDICATOR_SETTINGS_CLOSED' });
+        };
+
+        document.addEventListener('pointerdown', handle_outside_pointer_down);
+
+        return () => document.removeEventListener('pointerdown', handle_outside_pointer_down);
+    }, [indicatorSettingsOpen, onIntent]);
+
     return (
         <section
             aria-labelledby="price-chart-title"
@@ -39,7 +61,12 @@ export function PriceChartPanel({
                     <h2 id="price-chart-title">ETH 가격 차트</h2>
                     <p>{timestampLabel}</p>
                 </div>
-                <ChartToolbar activeState={activeState} interval={interval} onIntent={onIntent} />
+                <ChartToolbar
+                    activeState={activeState}
+                    indicatorSettingsOpen={indicatorSettingsOpen}
+                    interval={interval}
+                    onIntent={onIntent}
+                />
             </div>
             <ChartCanvas
                 bollingerLower={bollingerLower}

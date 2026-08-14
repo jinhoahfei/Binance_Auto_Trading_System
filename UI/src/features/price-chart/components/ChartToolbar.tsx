@@ -11,6 +11,7 @@ const INTERVAL_OPTIONS: ReadonlyArray<{ readonly interval: ChartInterval; readon
 export interface ChartToolbarProps {
     readonly activeState: string;
     readonly interval: ChartInterval;
+    readonly indicatorSettingsOpen?: boolean;
     readonly onIntent?: ((intent: PriceChartIntent) => void) | undefined;
 }
 
@@ -21,7 +22,12 @@ export interface ChartToolbarProps {
  * 반환값: 가격 차트 도구 모음 React 요소
  * 작성 날짜: 2026/08/12
  */
-export function ChartToolbar({ activeState, interval, onIntent }: ChartToolbarProps) {
+export function ChartToolbar({
+    activeState,
+    interval,
+    indicatorSettingsOpen = false,
+    onIntent,
+}: ChartToolbarProps) {
     return (
         <div className={styles.toolbar}>
             <div aria-label="차트 주기" className={styles.intervals} role="group">
@@ -46,7 +52,10 @@ export function ChartToolbar({ activeState, interval, onIntent }: ChartToolbarPr
                 <strong>{activeState}</strong>
             </div>
             <button
+                aria-expanded={indicatorSettingsOpen}
+                aria-controls="chart-indicator-settings"
                 className={styles.settings}
+                data-indicator-settings-trigger
                 onClick={() => onIntent?.({ type: 'INDICATOR_SETTINGS_REQUESTED' })}
                 type="button"
             >

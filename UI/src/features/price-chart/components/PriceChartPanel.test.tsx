@@ -51,6 +51,27 @@ describe('PriceChartPanel', () => {
         });
     });
 
+    it('지표 팝오버 바깥을 누르면 닫기 intent를 전달한다', () => {
+        const handle_intent = vi.fn();
+
+        render(
+            <PriceChartPanel
+                {...CHART_DATA}
+                indicatorSettings={{ ema9: true, bollingerBand: true, volume: false }}
+                indicatorSettingsOpen
+                onIntent={handle_intent}
+            />,
+        );
+
+        expect(screen.getByRole('button', { name: '지표 설정' })).toHaveAttribute(
+            'aria-expanded',
+            'true',
+        );
+        fireEvent.pointerDown(document.body);
+
+        expect(handle_intent).toHaveBeenCalledWith({ type: 'INDICATOR_SETTINGS_CLOSED' });
+    });
+
     it('IP1~IP3: controlled 지표 표시 상태를 차트 렌더링에 반영한다', () => {
         const { container } = render(
             <PriceChartPanel
@@ -102,6 +123,26 @@ describe('PriceChartPanel', () => {
         });
         expect(handle_intent).toHaveBeenNthCalledWith(3, {
             type: 'DRAWING_LINE_DELETE_REQUESTED',
+        });
+    });
+
+    it('저장된 선의 context menu 바깥을 누르면 닫기 intent를 전달한다', () => {
+        const handle_intent = vi.fn();
+
+        render(
+            <PriceChartPanel
+                {...CHART_DATA}
+                contextMenuPosition={{ x: 20, y: 20 }}
+                drawings={[CHART_DRAWING_FIXTURE]}
+                lineContextMenuOpen
+                onIntent={handle_intent}
+                selectedLineId={CHART_DRAWING_FIXTURE.id}
+            />,
+        );
+
+        fireEvent.pointerDown(document.body);
+        expect(handle_intent).toHaveBeenCalledWith({
+            type: 'DRAWING_LINE_CONTEXT_MENU_CLOSED',
         });
     });
 

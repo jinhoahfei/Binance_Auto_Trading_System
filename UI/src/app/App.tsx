@@ -1,5 +1,5 @@
-import { DashboardPage } from '../routes/dashboard';
-import { TradeHistoryPage } from '../routes/trade-history';
+import { lazy, Suspense } from 'react';
+
 import { AppHeader } from '../features/trading-control';
 import { AppModalHost } from './components';
 import {
@@ -12,6 +12,18 @@ import {
 } from './presenters';
 
 import styles from './App.module.css';
+
+const DashboardPage = lazy(async () => {
+    const route_module = await import('../routes/dashboard/DashboardPage');
+
+    return { default: route_module.DashboardPage };
+});
+
+const TradeHistoryPage = lazy(async () => {
+    const route_module = await import('../routes/trade-history/TradeHistoryPage');
+
+    return { default: route_module.TradeHistoryPage };
+});
 
 /**
  * 함수 이름: App()
@@ -48,11 +60,23 @@ export function App() {
                 })}
             />
 
-            {view_model.route === 'dashboard' ? (
-                <DashboardPage {...dashboard_props} className={styles.dashboardRoute} />
-            ) : (
-                <TradeHistoryPage {...trade_history_props} />
-            )}
+            <Suspense
+                fallback={(
+                    <main
+                        aria-busy="true"
+                        aria-live="polite"
+                        className={styles.routeLoading}
+                    >
+                        화면을 불러오는 중입니다.
+                    </main>
+                )}
+            >
+                {view_model.route === 'dashboard' ? (
+                    <DashboardPage {...dashboard_props} className={styles.dashboardRoute} />
+                ) : (
+                    <TradeHistoryPage {...trade_history_props} />
+                )}
+            </Suspense>
 
             <AppModalHost controller={controller} viewModel={view_model} />
         </div>

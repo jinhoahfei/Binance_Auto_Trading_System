@@ -57,6 +57,38 @@ describe('application presenters', () => {
             DEFAULT_DASHBOARD_PROPS.account.strategy.profitAmount,
         );
         expect(history_props.summary).toBe(view_model.trade_history.summary);
+        expect(history_props.description).toBe(
+            `오늘 · ETH/KRW · 전체 · 체결 ${view_model.trade_history.records.length}건`,
+        );
+    });
+
+    it('거래 내역 조회 실패를 오래된 행 대신 오류와 재시도 intent로 투영한다', () => {
+        const view_model = create_demo_view_model();
+        const failed_view_model: AppViewModel = {
+            ...view_model,
+            trade_history: {
+                ...view_model.trade_history,
+                status: 'failed',
+                is_loading: false,
+                error: {
+                    code: 'TRADE_HISTORY_LOAD_FAILED',
+                    message: 'history unavailable',
+                },
+            },
+        };
+        const { controller, intents } = create_recording_controller(failed_view_model);
+        const history_props = present_trade_history_props(failed_view_model, controller);
+
+        expect(history_props.description).toBe('오늘 · ETH/KRW · 전체 · 조회 실패');
+        expect(history_props.rows).toEqual([]);
+        expect(history_props.emptyState).toMatchObject({
+            description: 'history unavailable',
+            actionLabel: '다시 시도',
+        });
+        expect(history_props.filtersDisabled).toBe(true);
+
+        history_props.onStartTrading?.();
+        expect(intents).toEqual([{ type: 'REFRESH_TRADE_HISTORY' }]);
     });
 
     it('drawing hover·context-menu·delete intent를 facade 계약으로 모두 변환한다', () => {

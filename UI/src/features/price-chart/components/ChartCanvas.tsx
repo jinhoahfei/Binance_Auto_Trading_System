@@ -294,19 +294,36 @@ export function ChartCanvas({
         }
     }, [drawingActive]);
 
+    useEffect(() => {
+        if (!lineContextMenuOpen) {
+            return undefined;
+        }
+
+        const handle_outside_pointer_down = (event: PointerEvent) => {
+            if (event.target instanceof Element
+                && (event.target.closest('[data-chart-line-menu]') !== null
+                    || event.target.closest('[data-drawing-hit-area]') !== null)) {
+                return;
+            }
+
+            onIntent?.({ type: 'DRAWING_LINE_CONTEXT_MENU_CLOSED' });
+        };
+
+        document.addEventListener('pointerdown', handle_outside_pointer_down);
+
+        return () => document.removeEventListener('pointerdown', handle_outside_pointer_down);
+    }, [lineContextMenuOpen, onIntent]);
+
     return (
         <div
             className={`${styles.canvas} ${isFullscreen ? styles.fullscreenCanvas : ''}`}
-            onPointerDown={(event) => {
-                const event_target = event.target;
-
-                if (lineContextMenuOpen
-                    && event_target instanceof Element
-                    && event_target.closest('[data-chart-line-menu]') === null) {
-                    onIntent?.({ type: 'DRAWING_LINE_CONTEXT_MENU_CLOSED' });
-                }
-            }}
             onKeyDown={(event) => {
+                if (event.key === 'Escape' && lineContextMenuOpen) {
+                    event.preventDefault();
+                    onIntent?.({ type: 'DRAWING_LINE_CONTEXT_MENU_CLOSED' });
+                    return;
+                }
+
                 if (event.key === 'Escape' && draft_start !== null) {
                     set_draft_start(null);
                     set_draft_current(null);

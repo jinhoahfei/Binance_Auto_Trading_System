@@ -35,8 +35,12 @@ export function IndicatorSettingsPopover({
         <section
             aria-label="지표 설정"
             className={styles.popover}
+            data-indicator-settings-popover
+            id="chart-indicator-settings"
             onKeyDown={(event) => {
                 if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
                     onIntent?.({ type: 'INDICATOR_SETTINGS_CLOSED' });
                 }
             }}

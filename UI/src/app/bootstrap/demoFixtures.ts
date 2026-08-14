@@ -1,5 +1,5 @@
 import { TRADE_HISTORY_ROWS_FIXTURE } from '../../features/trade-history';
-import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard';
+import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard/dashboardFixture';
 import type { RegimeMetric, TradeRecord } from '../../shared/contracts';
 
 const REALTIME_METRIC_IDS: ReadonlyArray<RegimeMetric['id']> = [

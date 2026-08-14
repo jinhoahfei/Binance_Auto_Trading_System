@@ -17,7 +17,7 @@ describe('App runtime wiring', () => {
         expect(await screen.findByText('LIVE')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: '자동매매 실행' })).toBeEnabled();
         expect(screen.getByRole('button', { name: '매매 중지' })).toBeDisabled();
-        expect(screen.getByRole('button', { name: 'type0 횡보 적용 요청' })).toHaveAttribute(
+        expect(await screen.findByRole('button', { name: 'type0 횡보 적용 요청' })).toHaveAttribute(
             'aria-pressed',
             'false',
         );

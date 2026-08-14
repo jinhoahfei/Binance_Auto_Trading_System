@@ -39,6 +39,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
         case 'start_confirmation':
             return (
                 <TradingConfirmationDialog
+                    error={viewModel.trading.error?.message}
                     kind={viewModel.trading.is_pending ? 'starting' : 'start'}
                     onCancel={() => controller.dispatch({ type: 'START_TRADING_CANCELED' })}
                     onConfirm={() => controller.dispatch({ type: 'START_TRADING_CONFIRMED' })}
@@ -50,6 +51,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
         case 'select_regime_notice':
             return (
                 <TradingConfirmationDialog
+                    error={viewModel.trading.error?.message}
                     kind="regimeRequired"
                     onCancel={() => controller.dispatch({ type: 'SELECT_REGIME_NOTICE_CLOSED' })}
                     onConfirm={() => controller.dispatch({ type: 'SELECT_REGIME_NOTICE_CONFIRMED' })}
@@ -59,6 +61,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
         case 'api_connection_required':
             return (
                 <TradingConfirmationDialog
+                    error={viewModel.trading.error?.message}
                     kind="connectionRequired"
                     onCancel={() => controller.dispatch({ type: 'API_CONNECTION_NOTICE_CONFIRMED' })}
                     onConfirm={() => controller.dispatch({ type: 'API_CONNECTION_NOTICE_CONFIRMED' })}
@@ -69,6 +72,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
         case 'stop_confirmation':
             return (
                 <TradingConfirmationDialog
+                    error={viewModel.trading.error?.message}
                     kind="stop"
                     onCancel={() => controller.dispatch({ type: 'STOP_TRADING_CANCELED' })}
                     onConfirm={() => controller.dispatch({ type: 'STOP_TRADING_CONFIRMED' })}
@@ -79,6 +83,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
         case 'force_sell_stop_confirmation':
             return (
                 <TradingConfirmationDialog
+                    error={viewModel.trading.error?.message}
                     kind="forceStop"
                     onCancel={() => controller.dispatch({ type: 'FORCE_SELL_AND_STOP_CANCELED' })}
                     onConfirm={() => controller.dispatch({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' })}
@@ -89,6 +94,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
         case 'regime_change_confirmation':
             return (
                 <RegimeChangeDialog
+                    error={viewModel.regime.error?.message}
                     onCancel={() => controller.dispatch({ type: 'REGIME_CHANGE_CANCELED' })}
                     onConfirm={() => controller.dispatch({ type: 'REGIME_CHANGE_CONFIRMED' })}
                     open

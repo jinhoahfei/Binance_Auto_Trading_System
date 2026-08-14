@@ -2,10 +2,8 @@ import type { PriceChartIntent } from '../../features/price-chart';
 import type { RecentOrderViewModel, TraderPanelIntent } from '../../features/recent-orders';
 import type { RegimePanelIntent } from '../../features/regime-selection';
 import type { SplitOrderIntent } from '../../features/split-order';
-import {
-    DEFAULT_DASHBOARD_PROPS,
-    type DashboardPageProps,
-} from '../../routes/dashboard';
+import type { DashboardPageProps } from '../../routes/dashboard/DashboardPage';
+import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard/dashboardFixture';
 import type { TradeRecord } from '../../shared/contracts';
 import type { AppViewModel } from '../control';
 import type { UiApplicationController } from '../runtime';

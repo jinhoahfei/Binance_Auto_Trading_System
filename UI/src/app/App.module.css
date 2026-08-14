@@ -9,6 +9,14 @@
     padding-bottom: 32px;
 }
 
+.routeLoading {
+    display: grid;
+    min-height: 320px;
+    place-items: center;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+}
+
 .finalState {
     display: grid;
     min-height: 100vh;

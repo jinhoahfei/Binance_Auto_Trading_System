@@ -1,6 +1,6 @@
 import { UiApplicationFacade } from '../control';
 import { TRADE_HISTORY_SUMMARY_FIXTURE } from '../../features/trade-history';
-import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard';
+import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard/dashboardFixture';
 import { FakeUiCommandAdapter } from '../../shared/testing';
 import {
     DEMO_HISTORY_TRADE_RECORDS,

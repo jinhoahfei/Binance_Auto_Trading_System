@@ -33,6 +33,25 @@ describe('csvExportMachine', () => {
         actor.stop();
     });
 
+    it('빈 문자열 경로는 폴더 선택 결과로 수락하지 않는다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.selected_directory = '   ';
+        const actor = createActor(create_csv_export_machine(command_adapter, {
+            today: '2026-08-12',
+        }));
+
+        actor.start();
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+        actor.send({ type: 'SAVE_LOCATION_SELECT_CLICKED' });
+        await wait_for_actor_settlement();
+        actor.send({ type: 'EXPORT_CSV' });
+
+        expect(actor.getSnapshot().context.directory).toBeNull();
+        expect(actor.getSnapshot().context.validation_errors.directory).not.toBeNull();
+        expect(command_adapter.command_records.filter((record) => record.name === 'export_csv')).toHaveLength(0);
+        actor.stop();
+    });
+
     it('ER-16: 달력 외부 클릭은 CSV dialog를 유지하고 calendar만 닫는다', () => {
         const command_adapter = new FakeUiCommandAdapter();
         const actor = createActor(create_csv_export_machine(command_adapter, {

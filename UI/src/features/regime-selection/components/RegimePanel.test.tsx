@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { vi } from 'vitest';
+import { RegimeChangeDialog } from './RegimeChangeDialog';
 import { RegimePanel } from './RegimePanel';
 
 describe('RegimePanel', () => {
@@ -40,5 +41,20 @@ describe('RegimePanel', () => {
             type: 'REGIME_TYPE_REQUESTED',
             regime: 'type3',
         });
+    });
+
+    it('REGIME 적용 실패 사유를 재시도 확인창에 표시한다', () => {
+        render(
+            <RegimeChangeDialog
+                error="regime unavailable"
+                onCancel={vi.fn()}
+                onConfirm={vi.fn()}
+                open
+                regimeKey="type2"
+                regimeLabel="강상승"
+            />,
+        );
+
+        expect(screen.getByRole('alert')).toHaveTextContent('regime unavailable');
     });
 });

@@ -32,6 +32,13 @@
   background: var(--color-status-positive);
 }
 
+.error {
+  margin: -10px 0 12px;
+  color: var(--color-status-negative);
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
