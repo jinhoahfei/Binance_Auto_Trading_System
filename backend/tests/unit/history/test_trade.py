@@ -1,0 +1,256 @@
+"""Trade의 불변성과 ADR-004 JSONL v1 strict validation을 검증한다."""
+
+import unittest
+from dataclasses import FrozenInstanceError, replace
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+from binance_auto_trader.domain.history import (
+    FeeAssetConversionRequiredError,
+    trade_from_json_object,
+)
+from binance_auto_trader.domain.trading.states import OrderSide
+
+from tests.unit.history.factories import make_trade, make_trade_record
+
+
+class TradeTests(unittest.TestCase):
+    """
+    클래스 이름: TradeTests
+    기능: Trade가 canonical enum, Decimal, UTC와 BUY/SELL 불변식을 지키는지 테스트한다.
+    작성 날짜: 2026/08/21
+    """
+
+    def test_trade_is_frozen_and_uses_slots(self) -> None:
+        """
+        함수 이름: test_trade_is_frozen_and_uses_slots()
+        기능: Trade field를 생성 후 변경할 수 없고 instance dictionary가 없는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        trade = make_trade()
+
+        with self.assertRaises(FrozenInstanceError):
+            trade.executed_amount = Decimal("201")
+
+        self.assertFalse(hasattr(trade, "__dict__"))
+
+    def test_parses_exact_schema_and_preserves_decimal_precision(self) -> None:
+        """
+        함수 이름: test_parses_exact_schema_and_preserves_decimal_precision()
+        기능: exact JSON object가 float 변환 없이 canonical Trade가 되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        record = make_trade_record()
+        record["market_price_at_decision"] = "100.12345678901234567890"
+
+        trade = trade_from_json_object(record)
+
+        self.assertEqual(
+            trade.market_price_at_decision,
+            Decimal("100.12345678901234567890"),
+        )
+        self.assertEqual(trade.executed_at.tzinfo, timezone.utc)
+
+    def test_rejects_missing_and_extra_schema_fields(self) -> None:
+        """
+        함수 이름: test_rejects_missing_and_extra_schema_fields()
+        기능: JSONL v1 필수 key 누락과 알 수 없는 key를 모두 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        missing_record = make_trade_record()
+        del missing_record["trade_id"]
+        extra_record = make_trade_record()
+        extra_record["unexpected"] = "value"
+
+        for invalid_record in (missing_record, extra_record):
+            with self.subTest(keys=tuple(invalid_record)):
+                with self.assertRaises(ValueError):
+                    trade_from_json_object(invalid_record)
+
+    def test_rejects_non_integer_schema_version_and_record_type(self) -> None:
+        """
+        함수 이름: test_rejects_non_integer_schema_version_and_record_type()
+        기능: bool을 포함한 잘못된 schema version과 record type을 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        invalid_values = (
+            ("schema_version", True),
+            ("schema_version", 2),
+            ("record_type", "position"),
+        )
+
+        for field_name, field_value in invalid_values:
+            with self.subTest(field_name=field_name, field_value=field_value):
+                record = make_trade_record()
+                record[field_name] = field_value
+                with self.assertRaises(ValueError):
+                    trade_from_json_object(record)
+
+    def test_rejects_non_plain_decimal_representations(self) -> None:
+        """
+        함수 이름: test_rejects_non_plain_decimal_representations()
+        기능: JSON number, exponent, 특수값, leading zero와 locale decimal을 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        invalid_decimal_values = (
+            100,
+            100.0,
+            "1e2",
+            "NaN",
+            "Infinity",
+            "01.0",
+            "+1",
+            "1,000.0",
+        )
+
+        for invalid_value in invalid_decimal_values:
+            with self.subTest(invalid_value=invalid_value):
+                record = make_trade_record()
+                record["executed_amount"] = invalid_value
+                with self.assertRaises(ValueError):
+                    trade_from_json_object(record)
+
+    def test_rejects_non_z_json_timestamp_and_non_utc_trade_time(self) -> None:
+        """
+        함수 이름: test_rejects_non_z_json_timestamp_and_non_utc_trade_time()
+        기능: JSON offset timestamp와 직접 생성한 naive/non-UTC datetime을 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        record = make_trade_record()
+        record["executed_at"] = "2026-08-21T00:00:00+09:00"
+
+        with self.assertRaises(ValueError):
+            trade_from_json_object(record)
+        with self.assertRaises(ValueError):
+            make_trade(executed_at=datetime(2026, 8, 21, 0, 0))
+        with self.assertRaises(ValueError):
+            make_trade(
+                executed_at=datetime(
+                    2026,
+                    8,
+                    21,
+                    0,
+                    0,
+                    tzinfo=timezone(timedelta(hours=9)),
+                )
+            )
+
+    def test_enforces_buy_null_and_sell_realized_result_consistency(self) -> None:
+        """
+        함수 이름: test_enforces_buy_null_and_sell_realized_result_consistency()
+        기능: BUY nullable 필드와 SELL fee 포함 PnL·8자리 수익률 일관성을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        buy_trade = make_trade()
+        sell_trade = make_trade(side=OrderSide.SELL)
+
+        with self.assertRaises(ValueError):
+            replace(buy_trade, realized_pnl=Decimal("1"))
+        with self.assertRaises(ValueError):
+            replace(sell_trade, realized_pnl=Decimal("9.80"))
+        with self.assertRaises(ValueError):
+            replace(sell_trade, realized_return_rate=Decimal("9.78021979"))
+        with self.assertRaises(ValueError):
+            replace(sell_trade, realized_return_rate=Decimal("9.780219780"))
+
+    def test_validates_quote_and_base_fee_conversion_without_fallback(self) -> None:
+        """
+        함수 이름: test_validates_quote_and_base_fee_conversion_without_fallback()
+        기능: USDT 동일값, ETH per-fill aggregate와 제3 asset reconciliation을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        quote_fee_trade = make_trade(
+            fee_amount=Decimal("0.20"),
+            fee_asset="USDT",
+            fee_quote_amount=Decimal("0.20"),
+        )
+        base_fee_trade = make_trade()
+
+        self.assertEqual(
+            quote_fee_trade.fee_quote_amount,
+            quote_fee_trade.fee_amount,
+        )
+        self.assertEqual(
+            base_fee_trade.fee_quote_amount,
+            base_fee_trade.fee_amount * base_fee_trade.average_fill_price,
+        )
+
+        with self.assertRaisesRegex(ValueError, "USDT fee amount"):
+            replace(quote_fee_trade, fee_quote_amount=Decimal("999"))
+
+        multi_fill_fee_trade = make_trade(
+            average_fill_price=Decimal("150"),
+            fee_amount=Decimal("0.0015"),
+            fee_quote_amount=Decimal("0.20"),
+        )
+        self.assertNotEqual(
+            multi_fill_fee_trade.fee_quote_amount,
+            multi_fill_fee_trade.fee_amount
+            * multi_fill_fee_trade.average_fill_price,
+        )
+        for fee_amount, fee_quote_amount in (
+            (Decimal("0"), Decimal("0.01")),
+            (Decimal("0.001"), Decimal("0")),
+        ):
+            with self.subTest(
+                fee_amount=fee_amount,
+                fee_quote_amount=fee_quote_amount,
+            ):
+                with self.assertRaisesRegex(ValueError, "zero together"):
+                    make_trade(
+                        fee_amount=fee_amount,
+                        fee_quote_amount=fee_quote_amount,
+                    )
+
+        with self.assertRaises(FeeAssetConversionRequiredError) as context:
+            replace(
+                quote_fee_trade,
+                fee_asset="BNB",
+                fee_quote_amount=Decimal("0.01"),
+            )
+
+        self.assertEqual(
+            context.exception.code,
+            "FEE_ASSET_CONVERSION_REQUIRED",
+        )
+        self.assertEqual(context.exception.fee_asset, "BNB")
+
+    def test_json_parser_rejects_inconsistent_fee_quote_amount(self) -> None:
+        """
+        함수 이름: test_json_parser_rejects_inconsistent_fee_quote_amount()
+        기능: durable JSONL의 임의 fee quote 값이 Performance로 유입되지 않게 한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        record = make_trade_record(
+            make_trade(
+                fee_amount=Decimal("0.20"),
+                fee_asset="USDT",
+                fee_quote_amount=Decimal("0.20"),
+            )
+        )
+        record["fee_quote_amount"] = "999"
+
+        with self.assertRaisesRegex(ValueError, "USDT fee amount"):
+            trade_from_json_object(record)
+
+
+if __name__ == "__main__":
+    unittest.main()

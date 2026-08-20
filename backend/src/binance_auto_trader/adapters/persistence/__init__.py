@@ -1,0 +1,9 @@
+"""Local 거래 이력 persistence adapter의 공개 계약을 제공한다."""
+
+from .trade_history_repository import (
+    HistoryCorruptedError,
+    TradeHistoryRepository,
+)
+
+
+__all__ = ["HistoryCorruptedError", "TradeHistoryRepository"]

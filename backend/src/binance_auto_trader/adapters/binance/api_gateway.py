@@ -1,10 +1,15 @@
-"""공식 Binance Spot REST Kline payload를 정규화하는 Gateway를 정의한다."""
+"""공식 Binance Spot REST Kline과 account payload를 정규화한다."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
 
+from binance_auto_trader.domain.trading.account import (
+    AccountSnapshot,
+    AssetBalance,
+    SUPPORTED_VALUATION_ASSET,
+)
 from binance_auto_trader.domain.market import (
     Interval,
     Kline,
@@ -27,7 +32,7 @@ _INTERVAL_MILLISECONDS_BY_INTERVAL = {
 class BinanceRESTClient(Protocol):
     """
     클래스 이름: BinanceRESTClient
-    기능: Binance Spot Kline REST 호출을 주입하기 위한 최소 client 계약을 정의한다.
+    기능: Binance Spot Kline과 account REST 호출을 주입할 client 계약을 정의한다.
     작성 날짜: 2026/08/20
     """
 
@@ -46,6 +51,16 @@ class BinanceRESTClient(Protocol):
             limit -> 반환할 최대 Kline 개수
         반환값: JSON으로 해석된 Binance REST payload
         작성 날짜: 2026/08/20
+        """
+        ...
+
+    def get_account(self) -> object:
+        """
+        함수 이름: get_account()
+        기능: 공식 GET /api/v3/account payload를 반환한다.
+        인자: 없음
+        반환값: JSON으로 해석된 Binance REST account payload
+        작성 날짜: 2026/08/21
         """
         ...
 
@@ -273,10 +288,96 @@ def _parse_rest_kline_row(
     )
 
 
+def _normalize_account_asset(asset: object) -> str:
+    """
+    함수 이름: _normalize_account_asset()
+    기능: Phase 4에서 평가를 지원하는 ETH asset 입력을 정규화하고 검증한다.
+    인자: asset -> 호출자가 전달한 기준 asset
+    반환값: 정규화된 ETH asset 이름
+    작성 날짜: 2026/08/21
+    """
+    if not isinstance(asset, str):
+        raise TypeError("asset must be a string")
+
+    normalized_asset = asset.strip().upper()
+    if normalized_asset != SUPPORTED_VALUATION_ASSET:
+        raise ValueError("account valuation supports only ETH")
+
+    return normalized_asset
+
+
+def _parse_account_balance(payload: object) -> AssetBalance:
+    """
+    함수 이름: _parse_account_balance()
+    기능: 공식 account balances 항목을 내부 AssetBalance로 정규화한다.
+    인자: payload -> balances 배열의 단일 asset object
+    반환값: 정규화된 불변 AssetBalance
+    작성 날짜: 2026/08/21
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError("account balance must be an object")
+
+    asset = payload.get("asset")
+    if not isinstance(asset, str):
+        raise TypeError("account balance asset must be a string")
+
+    free = _read_decimal_string(payload.get("free"), "balance.free")
+    locked = _read_decimal_string(payload.get("locked"), "balance.locked")
+    if free < Decimal("0") or locked < Decimal("0"):
+        raise ValueError("account balances must not be negative")
+
+    return AssetBalance(
+        asset=asset,
+        free=free,
+        locked=locked,
+    )
+
+
+def _parse_account_snapshot(
+    payload: object,
+    valuation_asset: str,
+) -> AccountSnapshot:
+    """
+    함수 이름: _parse_account_snapshot()
+    기능: 공식 Spot account 응답을 가격 정보 없는 전체 AccountSnapshot으로 변환한다.
+    인자: payload -> JSON으로 해석한 GET /api/v3/account 응답
+        valuation_asset -> 응답에 반드시 포함되어야 할 ETH asset
+    반환값: 정규화된 전체 AccountSnapshot
+    작성 날짜: 2026/08/21
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError("Binance account payload must be an object")
+    if payload.get("accountType") != "SPOT":
+        raise ValueError("Binance accountType must be SPOT")
+
+    raw_balances = payload.get("balances")
+    if not isinstance(raw_balances, (list, tuple)):
+        raise TypeError("Binance account balances must be an array")
+
+    balances = tuple(
+        _parse_account_balance(raw_balance)
+        for raw_balance in raw_balances
+    )
+    if valuation_asset not in {
+        balance.asset
+        for balance in balances
+    }:
+        raise ValueError("Binance account payload is missing ETH balance")
+
+    return AccountSnapshot(
+        balances=balances,
+        updated_at=_milliseconds_to_utc(
+            payload.get("updateTime"),
+            "updateTime",
+        ),
+        is_full_snapshot=True,
+    )
+
+
 class APIGateway:
     """
     클래스 이름: APIGateway
-    기능: 네 Binance Spot REST Kline 응답을 canonical Kline으로 정규화한다.
+    기능: Binance Spot REST Kline과 account 응답을 canonical domain 타입으로 정규화한다.
     작성 날짜: 2026/08/20
     """
 
@@ -288,15 +389,23 @@ class APIGateway:
         """
         함수 이름: __init__()
         기능: 실제 I/O를 수행할 REST client와 UTC clock을 주입받는다.
-        인자: rest_client -> 공식 Kline payload를 반환할 REST client
+        인자: rest_client -> 공식 Kline 또는 account payload를 반환할 REST client
             clock -> REST row 확정 여부를 계산할 UTC clock
         반환값: 없음
         작성 날짜: 2026/08/20
         """
-        if rest_client is None or not callable(
+        provides_kline_operation = callable(
             getattr(rest_client, "get_klines", None)
+        )
+        provides_account_operation = callable(
+            getattr(rest_client, "get_account", None)
+        )
+        if rest_client is None or not (
+            provides_kline_operation or provides_account_operation
         ):
-            raise TypeError("rest_client must provide get_klines")
+            raise TypeError(
+                "rest_client must provide get_klines or get_account"
+            )
 
         selected_clock = _utc_now if clock is None else clock
         if not callable(selected_clock):
@@ -318,6 +427,10 @@ class APIGateway:
         반환값: canonical interval별 Kline tuple mapping
         작성 날짜: 2026/08/20
         """
+        get_klines = getattr(self._rest_client, "get_klines", None)
+        if not callable(get_klines):
+            raise TypeError("rest_client must provide get_klines")
+
         normalized_symbol = _normalize_symbol(symbol)
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("limit must be an integer")
@@ -331,7 +444,7 @@ class APIGateway:
         ] = {}
 
         for interval in SUPPORTED_INTERVALS:
-            payload = self._rest_client.get_klines(
+            payload = get_klines(
                 symbol=normalized_symbol,
                 interval=interval.value,
                 limit=limit,
@@ -357,3 +470,24 @@ class APIGateway:
             )
 
         return normalized_klines
+
+    def fetch_account_snapshot(
+        self,
+        asset: str = SUPPORTED_VALUATION_ASSET,
+    ) -> AccountSnapshot:
+        """
+        함수 이름: fetch_account_snapshot()
+        기능: 공식 Spot account 응답의 전체 잔액과 갱신 시각을 정규화한다.
+        인자: asset -> MarketSnapshot 가격으로 평가할 기준 asset
+        반환값: 가격을 포함하지 않는 전체 AccountSnapshot
+        작성 날짜: 2026/08/21
+        """
+        normalized_asset = _normalize_account_asset(asset)
+        get_account = getattr(self._rest_client, "get_account", None)
+        if not callable(get_account):
+            raise TypeError("rest_client must provide get_account")
+
+        return _parse_account_snapshot(
+            get_account(),
+            normalized_asset,
+        )

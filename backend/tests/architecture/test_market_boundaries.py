@@ -38,6 +38,9 @@ FUNCTION_NAME_PATTERN = re.compile(
 VARIABLE_NAME_PATTERN = re.compile(
     r"^(?:_*[a-z][a-z0-9_]*|_*[A-Z][A-Z0-9_]*)$"
 )
+DOCSTRING_DATE_PATTERN = re.compile(
+    r"작성 날짜: [0-9]{4}/[0-9]{2}/[0-9]{2}"
+)
 
 
 class MarketBoundaryArchitectureTests(unittest.TestCase):
@@ -317,7 +320,7 @@ class MarketCodingConventionTests(unittest.TestCase):
     def test_market_definitions_have_korean_dated_docstrings(self) -> None:
         """
         함수 이름: test_market_definitions_have_korean_dated_docstrings()
-        기능: Phase 2의 모든 class와 함수가 한국어 필수 항목과 기준 작성일을 갖는지 검증한다.
+        기능: market/account Gateway의 모든 class와 함수가 한국어 필수 항목과 작성일을 갖는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/20
@@ -325,14 +328,12 @@ class MarketCodingConventionTests(unittest.TestCase):
         class_sections = (
             "클래스 이름:",
             "기능:",
-            "작성 날짜: 2026/08/20",
         )
         function_sections = (
             "함수 이름:",
             "기능:",
             "인자:",
             "반환값:",
-            "작성 날짜: 2026/08/20",
         )
 
         for source_path in MARKET_SOURCE_PATHS:
@@ -355,6 +356,10 @@ class MarketCodingConventionTests(unittest.TestCase):
                                 for section in class_sections
                             )
                         )
+                        self.assertRegex(
+                            docstring,
+                            DOCSTRING_DATE_PATTERN,
+                        )
                 elif isinstance(
                     definition,
                     (ast.FunctionDef, ast.AsyncFunctionDef),
@@ -373,6 +378,10 @@ class MarketCodingConventionTests(unittest.TestCase):
                                 section in docstring
                                 for section in function_sections
                             )
+                        )
+                        self.assertRegex(
+                            docstring,
+                            DOCSTRING_DATE_PATTERN,
                         )
 
 

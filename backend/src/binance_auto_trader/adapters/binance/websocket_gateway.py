@@ -1,4 +1,4 @@
-"""공식 Binance Spot WebSocket Kline stream을 buffer로 정규화한다."""
+"""공식 Binance Spot Kline과 account WebSocket stream을 정규화한다."""
 
 from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta, timezone
@@ -11,6 +11,10 @@ from binance_auto_trader.domain.market import (
     Interval,
     Kline,
     SUPPORTED_INTERVALS,
+)
+from binance_auto_trader.domain.trading.account import (
+    AccountSnapshot,
+    AssetBalance,
 )
 
 
@@ -44,7 +48,7 @@ class Subscription(Protocol):
 class BinanceWebSocketClient(Protocol):
     """
     클래스 이름: BinanceWebSocketClient
-    기능: 여러 공식 Binance Kline stream을 구독하기 위한 client 계약을 정의한다.
+    기능: 공식 Binance Kline과 account stream 구독 client 계약을 정의한다.
     작성 날짜: 2026/08/20
     """
 
@@ -68,12 +72,36 @@ class BinanceWebSocketClient(Protocol):
         """
         ...
 
+    def subscribe_account_info(
+        self,
+        *,
+        on_message: Callable[[object], None],
+        on_disconnect: Callable[[], None],
+    ) -> Subscription:
+        """
+        함수 이름: subscribe_account_info()
+        기능: 공식 Spot User Data Stream callback을 등록한다.
+        인자: on_message -> 공식 WebSocket API event envelope callback
+            on_disconnect -> 연결 종료 callback
+        반환값: 생성된 account stream 구독 handle
+        작성 날짜: 2026/08/21
+        """
+        ...
+
 
 class KlineBufferStateError(RuntimeError):
     """
     클래스 이름: KlineBufferStateError
     기능: stale 또는 끊긴 Kline buffer를 배출하려는 상태 오류를 나타낸다.
     작성 날짜: 2026/08/20
+    """
+
+
+class AccountStreamStateError(RuntimeError):
+    """
+    클래스 이름: AccountStreamStateError
+    기능: account stream이 stale·disconnect·callback 실패 상태임을 나타낸다.
+    작성 날짜: 2026/08/21
     """
 
 
@@ -393,33 +421,166 @@ def _parse_websocket_kline(payload: object) -> Kline:
     )
 
 
+def _read_account_event(payload: object) -> Mapping[str, object]:
+    """
+    함수 이름: _read_account_event()
+    기능: 공식 WebSocket API envelope에서 User Data Stream event object를 꺼낸다.
+    인자: payload -> JSON text 또는 해석된 공식 account stream envelope
+    반환값: envelope의 event mapping
+    작성 날짜: 2026/08/21
+    """
+    parsed_payload = _parse_json_payload(payload)
+    if not isinstance(parsed_payload, Mapping):
+        raise TypeError("Binance account stream payload must be an object")
+
+    if "subscriptionId" in parsed_payload:
+        _read_non_negative_integer(
+            parsed_payload.get("subscriptionId"),
+            "subscriptionId",
+        )
+
+    event_payload = parsed_payload.get("event")
+    if not isinstance(event_payload, Mapping):
+        raise TypeError("account stream envelope must contain object event")
+
+    return event_payload
+
+
+def _parse_account_stream_balance(payload: object) -> AssetBalance:
+    """
+    함수 이름: _parse_account_stream_balance()
+    기능: outboundAccountPosition의 단일 B 항목을 AssetBalance로 정규화한다.
+    인자: payload -> 공식 account balance patch object
+    반환값: 정규화된 불변 AssetBalance
+    작성 날짜: 2026/08/21
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError("account stream balance must be an object")
+
+    asset = payload.get("a")
+    if not isinstance(asset, str):
+        raise TypeError("account stream asset must be a string")
+
+    free = _read_decimal_string(payload.get("f"), "B.f")
+    locked = _read_decimal_string(payload.get("l"), "B.l")
+    if free < Decimal("0") or locked < Decimal("0"):
+        raise ValueError("account stream balances must not be negative")
+
+    return AssetBalance(
+        asset=asset,
+        free=free,
+        locked=locked,
+    )
+
+
+def _parse_account_info_snapshot(
+    payload: object,
+) -> tuple[
+    AccountSnapshot,
+    int,
+    tuple[tuple[str, Decimal, Decimal], ...],
+] | None:
+    """
+    함수 이름: _parse_account_info_snapshot()
+    기능: 공식 outboundAccountPosition event를 부분 AccountSnapshot과 dedup key로 변환한다.
+    인자: payload -> JSON text 또는 해석된 공식 WebSocket API envelope
+    반환값: account snapshot, update time, canonical balance fingerprint 또는 다른 event면 None
+    작성 날짜: 2026/08/21
+    """
+    event_payload = _read_account_event(payload)
+    event_type = event_payload.get("e")
+    if not isinstance(event_type, str):
+        raise TypeError("account event type must be a string")
+    if not event_type or event_type != event_type.strip():
+        raise ValueError("account event type must be non-empty and trimmed")
+    if event_type == "eventStreamTerminated":
+        _read_non_negative_integer(event_payload.get("E"), "event.E")
+        raise AccountStreamStateError(
+            "Binance account user data stream terminated"
+        )
+    if event_type != "outboundAccountPosition":
+        return None
+
+    _read_non_negative_integer(event_payload.get("E"), "event.E")
+    update_time_milliseconds = _read_non_negative_integer(
+        event_payload.get("u"),
+        "event.u",
+    )
+    raw_balances = event_payload.get("B")
+    if not isinstance(raw_balances, (list, tuple)):
+        raise TypeError("outboundAccountPosition B must be an array")
+
+    balances = tuple(
+        _parse_account_stream_balance(raw_balance)
+        for raw_balance in raw_balances
+    )
+    snapshot = AccountSnapshot(
+        balances=balances,
+        updated_at=_milliseconds_to_utc(
+            update_time_milliseconds,
+            "event.u",
+        ),
+        is_full_snapshot=False,
+    )
+    fingerprint = tuple(
+        sorted(
+            (
+                balance.asset,
+                balance.free,
+                balance.locked,
+            )
+            for balance in balances
+        )
+    )
+
+    return snapshot, update_time_milliseconds, fingerprint
+
+
 class WebSocketGateway:
     """
     클래스 이름: WebSocketGateway
-    기능: 초기 REST 조회 동안 수신한 Kline을 세대별 thread-safe buffer로 보존한다.
+    기능: Kline buffer와 account stream을 독립 세대·callback 계약으로 정규화한다.
     작성 날짜: 2026/08/20
     """
 
-    def __init__(self, web_socket_client: BinanceWebSocketClient) -> None:
+    def __init__(
+        self,
+        web_socket_client: BinanceWebSocketClient,
+        account_snapshot_callback: Callable[[AccountSnapshot], object]
+        | None = None,
+    ) -> None:
         """
         함수 이름: __init__()
-        기능: 실제 구독을 만드는 WebSocket client와 빈 buffer 상태를 초기화한다.
-        인자: web_socket_client -> Kline stream을 구독할 client
+        기능: 실제 구독 client와 Kline/account stream의 독립 초기 상태를 준비한다.
+        인자: web_socket_client -> Kline 또는 account stream을 구독할 client
+            account_snapshot_callback -> 정규화 account patch를 적용할 callback
         반환값: 없음
         작성 날짜: 2026/08/20
         """
-        if web_socket_client is None or not callable(
+        provides_kline_operation = callable(
             getattr(
                 web_socket_client,
                 "subscribe_all_kline_streams",
                 None,
             )
+        )
+        provides_account_operation = callable(
+            getattr(web_socket_client, "subscribe_account_info", None)
+        )
+        if web_socket_client is None or not (
+            provides_kline_operation or provides_account_operation
         ):
             raise TypeError(
-                "web_socket_client must provide subscribe_all_kline_streams"
+                "web_socket_client must provide a supported subscription"
             )
+        if (
+            account_snapshot_callback is not None
+            and not callable(account_snapshot_callback)
+        ):
+            raise TypeError("account_snapshot_callback must be callable")
 
         self._web_socket_client = web_socket_client
+        self._account_snapshot_callback = account_snapshot_callback
         self._lock = RLock()
         self._generation = 0
         self._active_subscription: Subscription | None = None
@@ -431,6 +592,14 @@ class WebSocketGateway:
             Interval,
             dict[datetime, Kline],
         ] = {}
+        self._account_generation = 0
+        self._account_subscription: Subscription | None = None
+        self._account_connected = False
+        self._account_error: Exception | None = None
+        self._account_update_time_milliseconds: int | None = None
+        self._account_fingerprints: set[
+            tuple[tuple[str, Decimal, Decimal], ...]
+        ] = set()
 
     def start_all_kline_buffering(
         self,
@@ -445,6 +614,16 @@ class WebSocketGateway:
         반환값: 새 WebSocket 구독 handle
         작성 날짜: 2026/08/20
         """
+        subscribe_all_kline_streams = getattr(
+            self._web_socket_client,
+            "subscribe_all_kline_streams",
+            None,
+        )
+        if not callable(subscribe_all_kline_streams):
+            raise TypeError(
+                "web_socket_client must provide subscribe_all_kline_streams"
+            )
+
         normalized_symbol = _normalize_symbol(symbol)
         if not isinstance(intervals, (set, frozenset, tuple)):
             raise TypeError("intervals must be a set, frozenset, or tuple")
@@ -511,7 +690,7 @@ class WebSocketGateway:
 
         try:
             transport_subscription = (
-                self._web_socket_client.subscribe_all_kline_streams(
+                subscribe_all_kline_streams(
                     symbol=normalized_symbol,
                     intervals=tuple(
                         interval.value
@@ -544,6 +723,99 @@ class WebSocketGateway:
             subscription.close()
             raise KlineBufferStateError(
                 "Kline subscription became stale or disconnected during startup"
+            )
+
+        return subscription
+
+    def start_account_info_stream(self) -> Subscription:
+        """
+        함수 이름: start_account_info_stream()
+        기능: 새 account 구독 세대를 시작하고 정규화된 balance patch callback을 전달한다.
+        인자: 없음
+        반환값: 새 account stream 구독 handle
+        작성 날짜: 2026/08/21
+        """
+        if self._account_snapshot_callback is None:
+            raise AccountStreamStateError(
+                "account_snapshot_callback is not configured"
+            )
+        subscribe_account_info = getattr(
+            self._web_socket_client,
+            "subscribe_account_info",
+            None,
+        )
+        if not callable(subscribe_account_info):
+            raise TypeError(
+                "web_socket_client must provide subscribe_account_info"
+            )
+
+        with self._lock:
+            self._account_generation += 1
+            generation = self._account_generation
+            previous_subscription = self._account_subscription
+            self._account_subscription = None
+            self._account_connected = True
+            self._account_error = None
+            self._account_update_time_milliseconds = None
+            self._account_fingerprints = set()
+
+        if previous_subscription is not None:
+            try:
+                previous_subscription.close()
+            except Exception:
+                self._mark_account_disconnected(generation)
+                raise
+
+        def on_message(payload: object) -> None:
+            """
+            함수 이름: on_message()
+            기능: 현재 account 구독 세대 payload를 검증·dedup한 뒤 callback에 전달한다.
+            인자: payload -> WebSocket client가 전달한 User Data Stream envelope
+            반환값: 없음
+            작성 날짜: 2026/08/21
+            """
+            self._handle_account_info_message(payload, generation)
+
+        def on_disconnect() -> None:
+            """
+            함수 이름: on_disconnect()
+            기능: 현재 account 구독 세대가 끊겼음을 기록한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/08/21
+            """
+            self._mark_account_disconnected(generation)
+
+        try:
+            transport_subscription = subscribe_account_info(
+                on_message=on_message,
+                on_disconnect=on_disconnect,
+            )
+        except Exception:
+            self._mark_account_disconnected(generation)
+            raise
+
+        if transport_subscription is None:
+            self._mark_account_disconnected(generation)
+            raise TypeError("WebSocket client returned no subscription")
+
+        subscription = _ManagedSubscription(
+            transport_subscription,
+            on_disconnect,
+        )
+        with self._lock:
+            subscription_start_failed = (
+                generation != self._account_generation
+                or not self._account_connected
+                or self._account_error is not None
+            )
+            if not subscription_start_failed:
+                self._account_subscription = subscription
+
+        if subscription_start_failed:
+            subscription.close()
+            raise AccountStreamStateError(
+                "account subscription became stale or failed during startup"
             )
 
         return subscription
@@ -642,3 +914,97 @@ class WebSocketGateway:
             if generation == self._generation:
                 self._connected = False
                 self._active_subscription = None
+
+    def _handle_account_info_message(
+        self,
+        payload: object,
+        generation: int,
+    ) -> None:
+        """
+        함수 이름: _handle_account_info_message()
+        기능: 현재 세대 account event만 source time과 fingerprint로 순서화해 전달한다.
+        인자: payload -> 공식 User Data Stream envelope
+            generation -> callback이 속한 account 구독 세대
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        subscription_to_close: Subscription | None = None
+        try:
+            with self._lock:
+                if (
+                    generation != self._account_generation
+                    or not self._account_connected
+                ):
+                    return
+
+                parsed_snapshot = _parse_account_info_snapshot(payload)
+                if parsed_snapshot is None:
+                    return
+
+                snapshot, update_time_milliseconds, fingerprint = (
+                    parsed_snapshot
+                )
+                current_update_time = (
+                    self._account_update_time_milliseconds
+                )
+                if (
+                    current_update_time is not None
+                    and update_time_milliseconds < current_update_time
+                ):
+                    return
+                if (
+                    update_time_milliseconds == current_update_time
+                    and fingerprint in self._account_fingerprints
+                ):
+                    return
+
+                if (
+                    current_update_time is None
+                    or update_time_milliseconds > current_update_time
+                ):
+                    self._account_update_time_milliseconds = (
+                        update_time_milliseconds
+                    )
+                    self._account_fingerprints = set()
+
+                self._account_fingerprints.add(fingerprint)
+                callback = self._account_snapshot_callback
+                if callback is None:
+                    raise AccountStreamStateError(
+                        "account callback disappeared during subscription"
+                    )
+
+                callback(snapshot)
+        except Exception as error:
+            with self._lock:
+                if (
+                    generation == self._account_generation
+                    and self._account_connected
+                ):
+                    self._account_error = error
+                    self._account_connected = False
+                    subscription_to_close = self._account_subscription
+                    self._account_subscription = None
+
+            if subscription_to_close is not None:
+                try:
+                    subscription_to_close.close()
+                except Exception as close_error:
+                    error.add_note(
+                        "account subscription cleanup failed: "
+                        f"{type(close_error).__name__}"
+                    )
+            raise
+
+    def _mark_account_disconnected(self, generation: int) -> None:
+        """
+        함수 이름: _mark_account_disconnected()
+        기능: callback 세대가 현재 account 구독일 때만 연결 상태를 종료한다.
+        인자: generation -> 종료 callback이 속한 account 구독 세대
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        with self._lock:
+            if generation == self._account_generation:
+                self._account_connected = False
+                self._account_subscription = None

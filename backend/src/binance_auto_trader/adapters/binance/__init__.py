@@ -2,6 +2,7 @@
 
 from .api_gateway import APIGateway, BinanceRESTClient
 from .websocket_gateway import (
+    AccountStreamStateError,
     BinanceWebSocketClient,
     KlineBufferStateError,
     Subscription,
@@ -10,6 +11,7 @@ from .websocket_gateway import (
 
 
 __all__ = [
+    "AccountStreamStateError",
     "APIGateway",
     "BinanceRESTClient",
     "BinanceWebSocketClient",

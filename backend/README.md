@@ -1,9 +1,9 @@
 # Binance Auto Backend
 
-`binance-auto-trader-backend`는 RegimeSTM과 TradingSTM, authoritative 시장
-데이터 초기화 vertical slice를 하나의 `binance_auto_trader` distribution으로
-통합한 Python package입니다. 두 STM은 상태와 guard만 판정하고,
-외부 효과는 typed action request로 반환합니다.
+`binance-auto-trader-backend`는 RegimeSTM과 TradingSTM, authoritative 시장·계좌
+데이터 및 거래 이력 초기 로드 vertical slice를 하나의
+`binance_auto_trader` distribution으로 통합한 Python package입니다. 두 STM은
+상태와 guard만 판정하고, 외부 효과는 typed action request로 반환합니다.
 
 ## 구성
 
@@ -11,12 +11,20 @@
   `Interval`
 - `domain/market/`: Decimal OHLCV `Kline`과 versioned `MarketSnapshot`
 - `domain/regime/`: 13개 `EA-*` transition의 4시간봉 REGIME 추천 STM
-- `domain/trading/`: 109개 transition의 run-to-completion TradingSTM
-- `adapters/binance/`: 주입된 client의 Binance Spot Kline REST/WebSocket
-  payload 정규화와 초기 buffer
+- `domain/trading/`: 109개 transition의 run-to-completion TradingSTM과
+  free/locked balance를 보존하는 `Account`
+- `domain/history/`: ADR-004 JSONL v1 `Trade`, KST query `TradeHistory`,
+  fee 포함 startup `Performance`
+- `adapters/binance/`: 주입된 client의 Binance Spot Kline/account
+  REST/WebSocket payload 정규화와 dedup
+- `adapters/persistence/`: local JSONL streaming 복원과 partial tail 복구
 - `application/market_data_controller.py`: WS 먼저 구독, REST 조회,
   buffer 병합, snapshot 교체 순서 조정
-- `tests/`: 기존 STM 회귀와 market unit/integration/architecture 검증
+- `application/trading_controller.py`: REST 계좌 적용 뒤 account stream을
+  시작하는 `load_account()` slice
+- `application/trade_history_controller.py`: Repository → TradeHistory →
+  Performance 초기 복원
+- `tests/`: STM 회귀와 market/account/history unit·integration 검증
 - `tests/architecture/`: package, enum, import 경계와 coding convention 검증
 
 ## 시장 데이터 초기화 계약
@@ -38,6 +46,32 @@ snapshot을 commit합니다. 지속 live market stream consumer는 후속 Phase 
 Gateway는 네트워크 SDK를 직접 선택하지 않고 주입된 client
 Protocol을 사용합니다. 현재 Phase의 자동 검증은 fake REST/WebSocket client만
 사용하며, 실제 계좌·주문 API를 호출하지 않습니다.
+
+## 계좌와 거래 이력 초기 로드 계약
+
+`TradingController.load_account()`는 Spot account REST 전체 snapshot을 먼저
+`Account`에 적용하고, 이미 준비된 `MarketSnapshot`의 ETHUSDT 가격으로
+free+locked ETH 평가금액을 계산한 뒤 User Data Stream을 시작합니다. Binance
+`outboundAccountPosition`의 `B`는 변경 가능성이 있는 자산만 담는 absolute
+partial patch이므로, 생략된 잔액은 유지합니다. source update time보다 오래된
+event와 동일 payload 중복은 무시하되 같은 millisecond의 다른 patch는 수신 순서대로
+적용합니다. malformed event, domain callback 실패 또는 공식
+`eventStreamTerminated`를 받으면 해당 transport 구독을 닫고 fail closed 처리합니다.
+
+`TradeHistoryRepository.get_trade_history()`는 UTF-8/LF JSONL을 한 줄씩 읽고
+Decimal string과 UTC timestamp를 canonical `Trade`로 복원합니다. 파일 없음과
+0-byte 파일만 빈 이력으로 취급하며, permission·완결 record 손상은 그대로
+실패합니다. JSON parsing에 실패한 non-LF 마지막 tail만 별도 corrupt 파일에
+보존하고 backup file과 parent directory를 fsync한 뒤 마지막 정상 LF까지
+truncate합니다. directory fsync 실패 시 원본을 유지합니다. 이 startup 복구 구간은
+bootstrap process 하나가 history 경로를 독점하고 다른 writer가 없다는 계약입니다.
+`TradeHistoryController`는 같은
+거래 tuple로 `TradeHistory`와 ADR-004 `Performance`를 모두 만든 뒤 원자적으로
+공개합니다. durable `Trade`의 `fee_quote_amount`는 USDT fee면 원래 금액과,
+ETH fee면 execution 시 fill별 가격으로 환산해 합친 authoritative 값으로
+보존합니다. 여러 fill의 maker/taker 요율이 다를 수 있으므로 ETH 총 fee에 평균
+체결가를 다시 곱하지 않으며, 두 fee 금액의 0 여부만 일치시킵니다. 제3 fee asset은
+임의 시세를 사용하지 않고 `FEE_ASSET_CONVERSION_REQUIRED`로 복구 절차를 요구합니다.
 
 ## 실행 계약
 
@@ -76,6 +110,5 @@ cd backend
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-실제 Binance client 조립, 인증 계좌/주문 Gateway, Repository와 transport는
-후속 Phase의 범위입니다. domain package에는 network/file 의존성이
-없습니다.
+실제 Binance client 조립, 주문 Gateway, history append/export와 transport는 후속
+Phase의 범위입니다. domain package에는 network/file 의존성이 없습니다.

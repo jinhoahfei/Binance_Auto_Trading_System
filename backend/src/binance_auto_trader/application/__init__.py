@@ -7,6 +7,8 @@ from .regime_controller import (
     RegimeEvaluationFailureCode,
     RegimeEvaluationTrace,
 )
+from .trade_history_controller import TradeHistoryController
+from .trading_controller import TradingController
 
 
 __all__ = [
@@ -15,4 +17,6 @@ __all__ = [
     "RegimeEvaluationError",
     "RegimeEvaluationFailureCode",
     "RegimeEvaluationTrace",
+    "TradeHistoryController",
+    "TradingController",
 ]

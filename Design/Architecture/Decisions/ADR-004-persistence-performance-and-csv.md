@@ -158,8 +158,10 @@ schema version 1의 필수 key와 순서는 의미에 영향을 주지 않지만
 - SELL은 `allocated_cost_basis`, `realized_pnl`, `realized_return_rate`를 Decimal string으로
   저장하고 `exit_reason`을 기록한다.
 - `fee_quote_amount`는 체결 시점에 quote asset으로 정규화한 수수료다. 원래 수수료
-  금액과 asset도 함께 보존한다. fee asset이 `USDT`이면 원래 금액, `ETH`이면 해당
-  fill price를 곱한 값이다. 제3 asset이면 임의 시세를 사용하지 않고
+  금액과 asset도 함께 보존한다. fee asset이 `USDT`이면 원래 금액과 같다. `ETH`이면
+  각 fill의 `commission * fill price`를 먼저 계산한 뒤 그 결과를 합산한다. 여러 fill의
+  maker/taker rate가 다를 수 있으므로 `총 fee_amount * average_fill_price`로 다시
+  계산하지 않는다. 제3 asset이면 임의 시세를 사용하지 않고
   `FEE_ASSET_CONVERSION_REQUIRED`로 reconciliation을 요구한다.
 - Decimal string은 `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`를 만족해야 하며 `NaN`,
   `Infinity`, exponent와 locale separator를 허용하지 않는다.
@@ -173,10 +175,15 @@ schema version 1의 필수 key와 순서는 의미에 영향을 주지 않지만
 - append는 한 JSON line과 LF를 한 번에 쓰고 flush/fsync한 뒤 성공을 반환한다.
 - 마지막 줄만 LF 없이 끝났고 JSON parsing이 실패하면 그 bytes를
   `<history>.corrupt-<UTC timestamp>`에 보존한 뒤 마지막 정상 LF까지 truncate한다.
+- backup file과 그 parent directory를 모두 fsync한 뒤에만 원본을 truncate한다.
+  directory fsync가 실패하면 원본은 변경하지 않고 startup을 중단한다.
 - 중간 줄이 malformed이거나 LF로 끝난 마지막 줄이 malformed이면 자동 복구하지 않고
   `HISTORY_CORRUPTED`로 startup을 중단한다.
 - 파일 없음은 빈 history다. permission, decoding과 fsync 오류는 빈 history로 숨기지
   않는다.
+- Phase 4 startup load/recovery 동안에는 bootstrap process 하나가 history 경로를
+  독점하며 다른 Repository instance/process가 append하지 않는다. Phase 8 writer는
+  같은 소유권을 유지하거나 concurrent writer를 허용하기 전에 OS file lock을 추가한다.
 
 ## 3. Position cost basis와 Performance 공식
 
@@ -309,5 +316,5 @@ realized_return_rate,exit_reason
 - [x] summary와 filtered row 범위가 분리되었다.
 - [x] CSV column, encoding, empty, overwrite와 atomic write가 확정되었다.
 - [ ] Phase 3에서 indicator golden vector를 자동 테스트로 옮긴다.
-- [ ] Phase 4에서 JSONL/Performance golden test를 구현한다.
+- [x] Phase 4에서 JSONL/Performance golden test를 구현했다.
 - [ ] Phase 11에서 CSV golden file과 filesystem fault matrix를 구현한다.
