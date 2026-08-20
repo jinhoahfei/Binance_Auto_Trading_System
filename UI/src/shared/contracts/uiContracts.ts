@@ -78,6 +78,7 @@ export interface TradeHistoryQuery {
 
 /**
  * 사용자가 차트에 저장한 단일 선의 직렬화 가능한 표현이다.
+ * 시각과 가격이 정규 좌표이며 x_ratio는 이전 fixture와의 호환에만 사용한다.
  */
 export interface ChartDrawing {
     readonly id: string;

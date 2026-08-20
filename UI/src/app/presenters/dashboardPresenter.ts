@@ -1,4 +1,9 @@
-import type { PriceChartIntent } from '../../features/price-chart';
+import {
+    create_realtime_chart_view_model,
+    type PriceChartIntent,
+    type RealtimeChartDataRuntime,
+    type RealtimeChartDataSnapshot,
+} from '../../features/price-chart';
 import type { RecentOrderViewModel, TraderPanelIntent } from '../../features/recent-orders';
 import type { RegimePanelIntent } from '../../features/regime-selection';
 import type { SplitOrderIntent } from '../../features/split-order';
@@ -207,13 +212,16 @@ function handle_split_order_intent(
 /**
  * 함수 이름: present_dashboard_props()
  * 기능: 단일 AppViewModel을 정적 Figma fixture와 결합해 제어형 DashboardPage props로 투영한다.
- * 인자: view_model -> facade의 최신 화면 모델, controller -> 사용자 intent 전달 controller
+ * 인자: view_model -> facade의 최신 화면 모델
+ *      controller -> 사용자 intent 전달 controller
+ *      market_snapshot -> 실시간 Binance 시장 snapshot
  * 반환값: 모든 대시보드 feature Boundary에 전달할 props
- * 작성 날짜: 2026/08/12
+ * 작성 날짜: 2026/08/20
  */
 export function present_dashboard_props(
     view_model: AppViewModel,
     controller: UiApplicationController,
+    market_snapshot?: RealtimeChartDataSnapshot | RealtimeChartDataRuntime,
 ): DashboardPageProps {
     const applied_strategy = view_model.regime.applied === null
         ? '선택 필요'
@@ -242,6 +250,16 @@ export function present_dashboard_props(
             },
             ...fixture_indicator_groups.slice(1),
         ];
+    const realtime_chart_view_model = market_snapshot === undefined
+        || market_snapshot.data_status === 'idle'
+        ? null
+        : create_realtime_chart_view_model(market_snapshot, view_model.chart.interval);
+    const realtime_chart_runtime = market_snapshot !== undefined
+        && 'history_load_state_by_interval' in market_snapshot
+        ? market_snapshot
+        : null;
+    const history_load_state = realtime_chart_runtime
+        ?.history_load_state_by_interval[view_model.chart.interval];
 
     return {
         regime: {
@@ -255,6 +273,17 @@ export function present_dashboard_props(
         },
         chart: {
             ...DEFAULT_DASHBOARD_PROPS.chart,
+            ...(realtime_chart_view_model ?? {}),
+            ...(history_load_state === undefined || realtime_chart_runtime === null
+                ? {}
+                : {
+                    historyErrorMessage: history_load_state.error_message,
+                    historyExhausted: history_load_state.is_exhausted,
+                    historyLoading: history_load_state.is_loading,
+                    onLoadEarlier: () => {
+                        realtime_chart_runtime.load_earlier_klines(view_model.chart.interval);
+                    },
+                }),
             activeState: applied_strategy,
             interval: view_model.chart.interval,
             isFullscreen: view_model.chart.is_fullscreen,

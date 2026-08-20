@@ -1,3 +1,8 @@
+import type {
+    RealtimeChartDataRuntime,
+    RealtimeChartDataSnapshot,
+} from '../../features/price-chart';
+import type { NormalizedKline } from '../../features/price-chart/data';
 import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard';
 import type { AppViewModel, UiApplicationIntent } from '../control';
 import { create_demo_ui_application, initialize_demo_ui_application } from '../bootstrap';
@@ -43,6 +48,35 @@ function create_demo_view_model(): AppViewModel {
     initialize_demo_ui_application(application.facade);
 
     return application.facade.get_view_model();
+}
+
+/**
+ * 함수 이름: create_market_kline()
+ * 기능: 실시간 차트 presenter 테스트에 사용할 주기별 정규화 봉을 만든다.
+ * 인자: interval -> 봉 주기, index -> 봉 순번, base_price -> 주기별 기준 가격
+ * 반환값: 시간순 정규화 kline
+ * 작성 날짜: 2026/08/20
+ */
+function create_market_kline(
+    interval: NormalizedKline['interval'],
+    index: number,
+    base_price: number,
+): NormalizedKline {
+    const open_time = 1_700_000_000_000 + (index * 60_000);
+    const close = base_price + index;
+
+    return {
+        symbol: 'ETHUSDT',
+        interval,
+        open_time,
+        close_time: open_time + 59_999,
+        open: close - 1,
+        high: close + 2,
+        low: close - 2,
+        close,
+        volume: 100 + index,
+        is_closed: index < 19,
+    };
 }
 
 describe('application presenters', () => {
@@ -113,5 +147,67 @@ describe('application presenters', () => {
             { type: 'CHART_LINE_DELETE_REQUESTED' },
             { type: 'CHART_LINE_CONTEXT_MENU_OUTSIDE_CLICKED' },
         ]);
+    });
+
+    it('실시간 MarketSnapshot에서 현재 봉과 EMA9·볼린저밴드·거래량을 투영한다', () => {
+        const view_model = create_demo_view_model();
+        const { controller } = create_recording_controller(view_model);
+        const market_snapshot: RealtimeChartDataSnapshot = {
+            data_status: 'live',
+            klines_by_interval: {
+                '1m': Array.from({ length: 20 }, (_, index) => create_market_kline('1m', index, 1_000)),
+                '30m': Array.from({ length: 20 }, (_, index) => create_market_kline('30m', index, 2_000)),
+                '4h': Array.from({ length: 20 }, (_, index) => create_market_kline('4h', index, 3_000)),
+                '1d': Array.from({ length: 20 }, (_, index) => create_market_kline('1d', index, 4_000)),
+            },
+            status_message: null,
+            symbol: 'ETHUSDT',
+            updated_at: Date.parse('2026-08-20T03:34:56Z'),
+        };
+        const chart_props = present_dashboard_props(view_model, controller, market_snapshot).chart;
+
+        expect(view_model.chart.interval).toBe('30m');
+        expect(chart_props.dataStatus).toBe('live');
+        expect(chart_props.symbol).toBe('ETHUSDT');
+        expect(chart_props.timestampLabel).toBe('2026.08.20 · 12:34:56 KST');
+        expect(chart_props.candles).toHaveLength(20);
+        expect(chart_props.candles[0]).toMatchObject({ close: 2_000, volume: 100 });
+        expect(chart_props.ema).toHaveLength(12);
+        expect(chart_props.bollingerUpper).toHaveLength(1);
+        expect(chart_props.bollingerLower).toHaveLength(1);
+    });
+
+    it('현재 주기의 과거 봉 상태와 요청 callback을 차트 Boundary에 연결한다', () => {
+        const view_model = create_demo_view_model();
+        const { controller } = create_recording_controller(view_model);
+        const load_earlier_klines = vi.fn();
+        const market_runtime: RealtimeChartDataRuntime = {
+            data_status: 'live',
+            history_load_state_by_interval: {
+                '1m': { error_message: null, is_exhausted: false, is_loading: false },
+                '30m': { error_message: null, is_exhausted: false, is_loading: true },
+                '4h': { error_message: null, is_exhausted: false, is_loading: false },
+                '1d': { error_message: null, is_exhausted: false, is_loading: false },
+            },
+            klines_by_interval: {
+                '1m': [],
+                '30m': [create_market_kline('30m', 0, 2_000)],
+                '4h': [],
+                '1d': [],
+            },
+            load_earlier_klines,
+            status_message: null,
+            symbol: 'ETHUSDT',
+            updated_at: Date.parse('2026-08-20T03:34:56Z'),
+        };
+        const chart_props = present_dashboard_props(view_model, controller, market_runtime).chart;
+
+        expect(chart_props.historyLoading).toBe(true);
+        expect(chart_props.historyExhausted).toBe(false);
+
+        chart_props.onLoadEarlier?.();
+
+        expect(load_earlier_klines).toHaveBeenCalledOnce();
+        expect(load_earlier_klines).toHaveBeenCalledWith('30m');
     });
 });

@@ -24,6 +24,8 @@ export type PriceChartIntent =
 
 export type ChartIndicator = 'ema9' | 'bollingerBand' | 'volume';
 
+export type PriceChartDataStatus = 'idle' | 'loading' | 'live' | 'reconnecting' | 'error';
+
 export interface IndicatorSettingsViewModel {
     readonly bollingerBand: boolean;
     readonly ema9: boolean;
@@ -33,11 +35,15 @@ export interface IndicatorSettingsViewModel {
 export interface CandleViewModel {
     readonly close: number;
     readonly high: number;
+    readonly is_closed?: boolean;
     readonly low: number;
     readonly open: number;
+    readonly open_time?: number;
+    readonly volume?: number;
 }
 
 export interface LinePointViewModel {
+    readonly open_time?: number;
     readonly value: number;
 }
 
@@ -46,8 +52,11 @@ export interface PriceChartViewModel {
     readonly bollingerLower: ReadonlyArray<LinePointViewModel>;
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;
     readonly candles: ReadonlyArray<CandleViewModel>;
+    readonly dataStatus?: PriceChartDataStatus;
     readonly ema: ReadonlyArray<LinePointViewModel>;
     readonly interval: ChartInterval;
+    readonly statusMessage?: string | null;
+    readonly symbol?: string;
     readonly timestampLabel: string;
 }
 
@@ -60,5 +69,9 @@ export interface PriceChartPanelProps extends PriceChartViewModel {
     readonly contextMenuPosition?: { readonly x: number; readonly y: number } | null;
     readonly indicatorSettings?: IndicatorSettingsViewModel | undefined;
     readonly indicatorSettingsOpen?: boolean;
+    readonly historyErrorMessage?: string | null;
+    readonly historyExhausted?: boolean;
+    readonly historyLoading?: boolean;
+    readonly onLoadEarlier?: (() => void) | undefined;
     readonly onIntent?: ((intent: PriceChartIntent) => void) | undefined;
 }

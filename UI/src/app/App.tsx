@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 
 import { AppHeader } from '../features/trading-control';
+import { use_realtime_chart_data } from '../features/price-chart';
 import { AppModalHost } from './components';
 import {
     use_desktop_window_lifecycle,
@@ -30,12 +31,17 @@ const TradeHistoryPage = lazy(async () => {
  * 기능: Binance Auto Trader의 facade runtime, 상단 상태, 현재 route와 전역 modal host를 연결한다.
  * 인자: 없음
  * 반환값: 애플리케이션 최상위 React 요소
- * 작성 날짜: 2026/08/12
+ * 작성 날짜: 2026/08/20
  */
 export function App() {
     const { controller, view_model } = use_ui_application();
+    const market_snapshot = use_realtime_chart_data({
+        enabled: import.meta.env.MODE !== 'test' && !view_model.app_exit.is_final,
+        limit: 1000,
+        symbol: 'ETHUSDT',
+    });
     use_desktop_window_lifecycle(controller, view_model.app_exit.is_final);
-    const dashboard_props = present_dashboard_props(view_model, controller);
+    const dashboard_props = present_dashboard_props(view_model, controller, market_snapshot);
     const trade_history_props = present_trade_history_props(view_model, controller);
 
     if (view_model.app_exit.is_final) {

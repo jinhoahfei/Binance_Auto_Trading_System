@@ -32,6 +32,12 @@
     min-width: 0;
 }
 
+.titleRow {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
 .heading h2,
 .heading p {
     margin: 0;
@@ -43,6 +49,7 @@
     font-weight: 600;
     line-height: 24px;
     letter-spacing: -0.18px;
+    white-space: nowrap;
 }
 
 .heading p {
@@ -53,6 +60,35 @@
     font-weight: 500;
     line-height: 16px;
     white-space: nowrap;
+}
+
+.dataStatus {
+    display: inline-flex;
+    align-items: center;
+    min-height: 18px;
+    padding: 1px 6px;
+    font-family: var(--font-numeric);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 12px;
+    letter-spacing: 0.06em;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+}
+
+.liveStatus {
+    color: var(--color-status-positive);
+    background: color-mix(in srgb, var(--color-status-positive) 11%, transparent);
+}
+
+.pendingStatus {
+    color: var(--color-status-info);
+    background: color-mix(in srgb, var(--color-status-info) 10%, transparent);
+}
+
+.errorStatus {
+    color: var(--color-status-negative);
+    background: color-mix(in srgb, var(--color-status-negative) 10%, transparent);
 }
 
 @media (max-width: 1280px) {

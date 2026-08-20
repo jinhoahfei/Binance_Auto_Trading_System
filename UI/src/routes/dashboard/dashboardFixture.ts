@@ -15,7 +15,7 @@ export const DEFAULT_DASHBOARD_PROPS: DashboardPageProps = {
     chart: {
         activeState: 'Basic Iterative',
         timestampLabel: '2026.06.22 · 10:59 KST',
-        interval: '1m',
+        interval: '30m',
         indicatorSettingsOpen: false,
         indicatorSettings: {
             ema9: true,

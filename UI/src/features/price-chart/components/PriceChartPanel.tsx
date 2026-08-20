@@ -6,12 +6,35 @@ import { IndicatorSettingsPopover } from './IndicatorSettingsPopover';
 import type { PriceChartPanelProps } from '../types';
 import styles from './PriceChartPanel.module.css';
 
+const status_label_by_data_status = {
+    idle: '대기',
+    loading: '동기화',
+    live: 'LIVE',
+    reconnecting: '재연결',
+    error: '오프라인',
+} as const;
+
+/**
+ * 함수 이름: format_chart_symbol()
+ * 기능: Binance symbol을 차트 부제에 사용할 거래쌍 표기로 변환한다.
+ * 인자: symbol -> Binance 거래 symbol
+ * 반환값: 구분 기호가 포함된 거래쌍 문자열
+ * 작성 날짜: 2026/08/20
+ */
+function format_chart_symbol(symbol: string): string {
+    if (symbol.endsWith('USDT')) {
+        return `${symbol.slice(0, -4)}/USDT`;
+    }
+
+    return symbol;
+}
+
 /**
  * 함수 이름: PriceChartPanel()
  * 기능: ETH 차트 제목, 주기 도구 모음과 Lightweight Charts 기반 캔들 차트를 표시한다.
  * 인자: props -> 가격 차트 ViewModel과 사용자 intent 처리 함수
  * 반환값: ETH 가격 차트 패널 React 요소
- * 작성 날짜: 2026/08/12
+ * 작성 날짜: 2026/08/20
  */
 export function PriceChartPanel({
     activeState,
@@ -19,18 +42,31 @@ export function PriceChartPanel({
     bollingerUpper,
     candles,
     contextMenuPosition = null,
+    dataStatus = 'idle',
     drawingActive = false,
     drawings = [],
     ema,
+    historyErrorMessage = null,
+    historyExhausted = false,
+    historyLoading = false,
     indicatorSettings,
     indicatorSettingsOpen = false,
     interval,
     isFullscreen = false,
     lineContextMenuOpen = false,
+    onLoadEarlier,
     onIntent,
     selectedLineId = null,
+    statusMessage = null,
+    symbol = 'ETHUSDT',
     timestampLabel,
 }: PriceChartPanelProps) {
+    const status_tone_class = dataStatus === 'live'
+        ? styles.liveStatus
+        : dataStatus === 'error'
+            ? styles.errorStatus
+            : styles.pendingStatus;
+
     useEffect(() => {
         if (!indicatorSettingsOpen) {
             return undefined;
@@ -58,8 +94,16 @@ export function PriceChartPanel({
         >
             <div className={styles.header}>
                 <div className={styles.heading}>
-                    <h2 id="price-chart-title">ETH 가격 차트</h2>
-                    <p>{timestampLabel}</p>
+                    <div className={styles.titleRow}>
+                        <h2 id="price-chart-title">ETH 가격 차트</h2>
+                        <span
+                            aria-live="polite"
+                            className={`${styles.dataStatus} ${status_tone_class}`}
+                        >
+                            {status_label_by_data_status[dataStatus]}
+                        </span>
+                    </div>
+                    <p>{format_chart_symbol(symbol)} · {timestampLabel}</p>
                 </div>
                 <ChartToolbar
                     activeState={activeState}
@@ -73,14 +117,22 @@ export function PriceChartPanel({
                 bollingerUpper={bollingerUpper}
                 candles={candles}
                 contextMenuPosition={contextMenuPosition}
+                dataStatus={dataStatus}
                 drawingActive={drawingActive}
                 drawings={drawings}
                 ema={ema}
+                historyErrorMessage={historyErrorMessage}
+                historyExhausted={historyExhausted}
+                historyLoading={historyLoading}
                 indicatorSettings={indicatorSettings}
+                interval={interval}
                 isFullscreen={isFullscreen}
                 lineContextMenuOpen={lineContextMenuOpen}
+                onLoadEarlier={onLoadEarlier}
                 onIntent={onIntent}
                 selectedLineId={selectedLineId}
+                statusMessage={statusMessage}
+                symbol={symbol}
             />
             {indicatorSettingsOpen && indicatorSettings !== undefined ? (
                 <IndicatorSettingsPopover onIntent={onIntent} settings={indicatorSettings} />

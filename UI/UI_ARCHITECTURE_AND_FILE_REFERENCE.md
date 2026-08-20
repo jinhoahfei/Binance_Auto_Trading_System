@@ -4,10 +4,10 @@
 |---|---|
 | 문서 상태 | As-built — 현재 구현 기준 |
 | 작성일 | 2026-08-12 |
-| 최종 갱신일 | 2026-08-14 |
+| 최종 갱신일 | 2026-08-20 |
 | 대상 경로 | `/Users/oscar/Desktop/Binance_Auto/UI` |
 | 대상 구현 | React + TypeScript + XState + Vite + Tauri 2 UI |
-| 제외 범위 | Binance 실거래, 투자 판단 알고리즘, 실제 CSV 파일 시스템 adapter, 실제 backend 연결 |
+| 제외 범위 | Binance 실거래·계좌 인증, 투자 판단 알고리즘, 실제 CSV 파일 시스템 adapter, 주문 backend 연결 |
 
 ## 1. 문서 목적
 
@@ -35,6 +35,8 @@
 - presenter가 actor의 `AppViewModel`을 각 페이지와 기능 컴포넌트의 props로 변환한다.
 - backend 명령은 `UiCommandPort` 뒤로 격리되어 있다.
 - 현재 실행 환경은 `FakeUiCommandAdapter`를 사용하므로 실거래와 실제 파일 쓰기를 수행하지 않는다.
+- 가격 차트는 Binance 공개 market-data REST/WebSocket에서 `ETHUSDT`의 `1m`, `30m`, `4h`, `1d` 봉을 조회·구독한다.
+- 실시간 시장 데이터는 WebSocket을 먼저 시작한 뒤 REST 과거 봉과 병합하고, 동일 `symbol + interval + open_time`에는 WebSocket 값을 우선한다.
 - Tauri는 1440×1024 데스크톱 창과 안전한 종료 lifecycle을 제공하는 최소 shell이다.
 - Storybook의 공통 harness가 Figma 16개 프레임을 상태 fixture로 재현한다.
 - 스타일은 semantic CSS token, CSS Modules, Radix primitive를 중심으로 구성한다.
@@ -59,6 +61,9 @@ flowchart LR
     Actors --> Snapshot["UiApplicationSnapshot"]
     Snapshot --> ViewModel["AppViewModel"]
     ViewModel --> Presenter
+    App["App market-data runtime"] --> PublicMarket["Binance public REST/WebSocket"]
+    PublicMarket --> MarketSnapshot["주기별 MarketSnapshot"]
+    MarketSnapshot --> Presenter
 ```
 
 ### 3.1 계층별 책임
@@ -339,7 +344,7 @@ src/assets/figma/
 
 ## 8. `src/features` 구조
 
-각 feature는 가능한 경우 `components`, `machines`, `types.ts`, `index.ts`로 나눈다. 컴포넌트는 표시와 intent 방출, machine은 상태 전이, `types.ts`는 Boundary 계약, `index.ts`는 외부에 허용할 공개 API를 맡는다.
+각 feature는 가능한 경우 `components`, `machines`, `data`, `hooks`, `presenters`, `types.ts`, `index.ts`로 나눈다. 컴포넌트는 표시와 intent 방출, machine은 상태 전이, data/hook은 외부 snapshot 수명주기, presenter는 표시 투영, `types.ts`는 Boundary 계약, `index.ts`는 외부에 허용할 공개 API를 맡는다.
 
 ```text
 src/features/
@@ -451,38 +456,62 @@ csv-export/
 price-chart/
 ├── components/
 │   ├── ChartCanvas.module.css
+│   ├── ChartCanvasCoordinateDrawing.test.tsx
 │   ├── ChartCanvas.tsx
 │   ├── ChartToolbar.module.css
 │   ├── ChartToolbar.tsx
 │   ├── IndicatorSettingsPopover.module.css
 │   ├── IndicatorSettingsPopover.tsx
 │   ├── LightweightChartSurface.module.css
+│   ├── LightweightChartSurface.test.tsx
 │   ├── LightweightChartSurface.tsx
 │   ├── PriceChartPanel.module.css
 │   ├── PriceChartPanel.test.tsx
 │   └── PriceChartPanel.tsx
+├── data/
+│   ├── binanceKlines.test.ts
+│   ├── binanceKlines.ts
+│   ├── index.ts
+│   ├── klineCalculations.test.ts
+│   ├── klineCalculations.ts
+│   └── types.ts
+├── hooks/
+│   ├── index.ts
+│   ├── useRealtimeChartData.test.tsx
+│   └── useRealtimeChartData.ts
 ├── machines/
 │   ├── chartMachine.test.ts
 │   └── chartMachine.ts
+├── presenters/
+│   ├── createRealtimeChartViewModel.ts
+│   └── index.ts
 ├── index.ts
 └── types.ts
 ```
 
 | 파일 | 역할 |
 |---|---|
-| `components/PriceChartPanel.tsx` | 차트 제목, timestamp, toolbar, chart surface, 지표 popover를 조합한다. fullscreen 상태를 panel layout에 반영하고, popover가 열렸을 때 document 단위 외부 pointer 입력을 감지해 닫기 intent를 보낸다. |
+| `components/PriceChartPanel.tsx` | 차트 제목, `ETH/USDT` symbol, 실시간 연결 상태, timestamp, toolbar, chart surface, 지표 popover를 조합한다. fullscreen 상태를 panel layout에 반영하고, popover가 열렸을 때 document 단위 외부 pointer 입력을 감지해 닫기 intent를 보낸다. |
 | `components/PriceChartPanel.module.css` | 472px 기본 panel, header, popover 위치와 fullscreen overlay layout을 정의한다. |
 | `components/PriceChartPanel.test.tsx` | interval, 지표, drawing, fullscreen, 선 hover/context/delete intent와 지표 popover·선 context menu 외부 click 닫기를 검증한다. |
 | `components/ChartToolbar.tsx` | 1분·30분·4시간·1일 interval, active trading state와 지표 설정 버튼을 표시한다. 설정 버튼은 `aria-expanded`와 `aria-controls`로 popover 상태·대상을 노출한다. |
 | `components/ChartToolbar.module.css` | interval segmented control, active state badge, toolbar 버튼을 스타일링한다. |
 | `components/IndicatorSettingsPopover.tsx` | EMA9, 볼린저밴드, 거래량 표시 여부를 controlled toggle로 노출한다. Escape 입력을 소비하고 명시적인 닫기 intent를 보낸다. |
 | `components/IndicatorSettingsPopover.module.css` | Figma 지표 설정 popover, 색상 swatch, switch와 행 layout을 정의한다. |
-| `components/LightweightChartSurface.tsx` | Lightweight Charts instance와 candle, EMA, Bollinger, volume series를 생성·갱신하고 resize를 처리한다. |
-| `components/LightweightChartSurface.module.css` | 금융 차트 canvas를 SVG interaction layer 아래에 배치한다. |
-| `components/ChartCanvas.tsx` | chart 축과 Figma fallback SVG, drawing 생성, 저장 선 hit area, hover, context menu, 삭제, 도구 버튼을 담당한다. 열린 선 context menu는 menu/hit area를 제외한 document 외부 click 또는 Escape로 닫는다. Lightweight Charts가 준비되면 중복 market SVG layer를 숨긴다. |
-| `components/ChartCanvas.module.css` | chart/축/도구/drawing overlay/context menu와 fullscreen 크기를 정의한다. |
+| `components/LightweightChartSurface.tsx` | 실제 `open_time`과 volume으로 Lightweight Charts의 candle, EMA, Bollinger, volume series를 생성·갱신한다. 최초 1,000개 중 최신 180개를 표시하고, 이전 페이지 prepend 시 기존 visible time range를 복원한다. 적재 봉 수와 현재 time-scale 폭에 따라 `minBarSpacing`을 낮춰 전체 적재 범위보다 넓은 최대 축소 여유를 보장하며, sub-pixel 구간에는 Lightweight Charts conflation을 적용한다. 실시간 틱은 마지막 candle·volume·indicator point만 증분 갱신한다. 휠·핀치 확대/축소, drag, 동적 가격·시간축, crosshair OHLCV를 제공하며 현재 pane의 시각·가격 좌표 변환기는 내부 callback으로 drawing layer에 전달한다. |
+| `components/LightweightChartSurface.module.css` | 일반·전체화면 금융 차트 canvas와 Binance 형식의 선택 봉 정보 overlay를 배치한다. |
+| `components/LightweightChartSurface.test.tsx` | zoom/pan/축/crosshair 옵션, 정확한 OHLCV, 초기 180개 표시, 과거 prepend의 범위 보존, 실시간 마지막 봉 증분 갱신과 chart cleanup을 검증한다. |
+| `components/ChartCanvas.tsx` | engine 미지원용 fallback SVG, 좌측 경계의 과거 페이지 요청, 실제 봉 시각·가격 기반 drawing 생성·재투영, 선 단위 hit stroke, hover, context menu, 삭제와 도구 버튼을 담당한다. 세로 wheel zoom은 과거 조회를 활성화하지 않고 실제 pointer drag·가로 이동만 이전 페이지 조회를 허용한다. 열린 선 context menu는 menu/hit area를 제외한 document 외부 click 또는 Escape로 닫는다. Lightweight Charts가 준비되면 대량 이력에서 중복 DOM 비용이 발생하지 않도록 fallback market SVG와 정적 축을 렌더하지 않는다. |
+| `components/ChartCanvas.module.css` | chart pane과 동일 크기의 drawing overlay, 선 hit stroke, context menu와 fullscreen 크기를 정의한다. |
+| `components/ChartCanvasCoordinateDrawing.test.tsx` | pointer 좌표를 실제 시각·가격으로 저장하고 축소·전체화면 좌표계에서 같은 anchor로 재투영하는지 검증한다. |
 | `machines/chartMachine.ts` | interval, 지표 popover와 3개 indicator, active state, viewport, drawing, line selection을 병렬 region으로 관리한다. |
-| `machines/chartMachine.test.ts` | interval별 drawing 보존, fullscreen, indicator 독립 toggle을 검증한다. |
+| `machines/chartMachine.test.ts` | interval별 drawing 보존, fullscreen, indicator 독립 toggle과 축소·전체화면 양쪽의 선 삭제를 검증한다. |
+| `data/binanceKlines.ts` | Binance 공개 REST 네 주기 조회, 기준 `open_time` 이전의 단일 주기 1,000개 페이지 조회, combined WebSocket URL 생성과 payload runtime 검증·정규화를 담당한다. |
+| `data/klineCalculations.ts` | REST/WS 봉을 WebSocket 우선으로 중복 제거·정렬·제한하고 EMA9과 BB20(2σ)을 계산한다. |
+| `data/*.test.ts` | 네 REST 요청, WebSocket payload, 오류 검증, 병합 우선순위와 지표 warmup을 검증한다. |
+| `hooks/useRealtimeChartData.ts` | WebSocket buffer 선시작 → 네 주기 최초 1,000개 REST 병합 → 선택 주기 과거 1,000개씩 지연 적재 → 증분 갱신 → backoff 재연결 → unmount 정리를 하나의 앱 수명주기로 관리한다. 주기별 요청·소진·오류 상태를 분리하고 적재한 과거 봉은 실시간 틱과 재연결 뒤에도 보존한다. |
+| `hooks/useRealtimeChartData.test.tsx` | 초기화 순서, REST 중 buffer, 실시간 교체, 주기별 과거 페이지 병합·중복 요청 방지·재시도, 재연결 보존과 cleanup을 결정적으로 검증한다. |
+| `presenters/createRealtimeChartViewModel.ts` | 현재 chart interval의 MarketSnapshot을 candle·EMA9·BB20·KST 갱신 라벨로 변환한다. |
 | `types.ts` | chart ViewModel, candle/line 자료형과 모든 `PriceChartIntent`를 정의한다. |
 | `index.ts` | chart Boundary, actor와 type의 공개 API다. `LightweightChartSurface`는 feature 내부 구현으로 유지한다. |
 
@@ -929,7 +958,10 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 - REGIME 선택 확인과 미선택 경고/강조
 - 자동매매 시작·중지 UI state, 확인 modal과 명령 실패 사유 표시
 - 분할 매수·매도 slider interaction
-- 차트 interval, indicator, fullscreen, drawing, 선 삭제와 popover/context menu 외부 닫기
+- 차트 interval, indicator, 휠·핀치 확대/축소, drag, 동적 축, crosshair OHLCV, fullscreen, 시각·가격 기반 drawing, 양 화면 선 삭제와 popover/context menu 외부 닫기
+- Binance 공개 `ETHUSDT` 1분·30분·4시간·1일 과거 봉 및 실시간 진행 봉 표시
+- 최초 주기별 1,000개와 좌측 이동 시 1,000개 단위 지연 적재를 통한 Binance 첫 거래 봉까지의 과거 탐색
+- 주기별 실제 시각·거래량, EMA9·BB20, 연결/재연결/오류 상태 표시
 - 최근 체결/실시간 지표 tab
 - history filter, empty/failed state, 조회 재시도와 실제 상태 기반 description
 - CSV 입력·달력·validation과 공백 저장 경로 거부
@@ -941,7 +973,8 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 
 | 항목 | 현재 상태 | 실제 구현 시 교체/확장 위치 |
 |---|---|---|
-| Binance 연결 | demo에서 `API_CONNECTED` event를 주입 | connection service와 facade backend event bridge |
+| Binance 주문·계좌 연결 | demo에서 `API_CONNECTED` event를 주입 | 인증 connection service와 facade backend event bridge |
+| Binance 공개 차트 | REST/WebSocket 실시간 연결 완료 | 향후 Python market-data backend 도입 시 hook 내부 adapter 교체 |
 | 자동매매 | fake command를 기록하고 성공 처리 | `UiCommandPort.start_trading/stop_trading/force_sell_and_stop` adapter |
 | REGIME 계산 | 추천값과 지표 fixture | backend snapshot event → facade intent |
 | 계좌/포지션 | Figma fixture와 actor read-only update | backend WebSocket/account query adapter |
@@ -952,7 +985,7 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 | TanStack Query | provider만 준비 | 실제 query/cache/snapshot 동기화 도입 |
 | E2E | component/machine 테스트만 존재 | Playwright/Tauri E2E suite 추가 |
 
-실제 adapter를 추가할 때 React component가 Binance SDK, Tauri file API 또는 거래 계산을 직접 import하면 안 된다. 기존 `UiCommandPort`를 구현하거나 필요한 port를 별도 모듈로 추가한다.
+실제 주문 adapter를 추가할 때 React 표시 component가 Binance SDK, Tauri file API 또는 거래 계산을 직접 import하면 안 된다. 현재 공개 차트 연동처럼 외부 접근은 data/hook 모듈에 격리하고, 인증 명령은 기존 `UiCommandPort`를 구현하거나 필요한 port를 별도 모듈로 추가한다.
 
 ## 18. 실행과 검증
 

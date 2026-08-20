@@ -1,16 +1,63 @@
 .surface {
     position: absolute;
     z-index: 0;
-    top: -22px;
-    right: 46px;
-    left: 0;
-    height: 350px;
+    inset: 0;
+    min-width: 0;
+    min-height: 0;
     overflow: hidden;
-    pointer-events: none;
 }
 
-.surface > div,
-.surface table {
+.chartHost {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.chartHost > div,
+.chartHost table {
     width: 100% !important;
     height: 100% !important;
+}
+
+.candleInformation {
+    position: absolute;
+    z-index: 3;
+    top: 8px;
+    right: 66px;
+    left: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px 12px;
+    align-items: center;
+    width: fit-content;
+    max-width: calc(100% - 78px);
+    padding: 5px 8px;
+    color: var(--color-text-secondary);
+    font-family: var(--font-numeric);
+    font-size: 10.5px;
+    line-height: 14px;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--color-bg-surface) 86%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-border-default) 72%, transparent);
+    border-radius: var(--radius-xs);
+    backdrop-filter: blur(4px);
+}
+
+.candleInformation time {
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.candleInformation strong {
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.candleInformation .positiveValue {
+    color: var(--color-status-positive);
+}
+
+.candleInformation .negativeValue {
+    color: var(--color-status-negative);
 }

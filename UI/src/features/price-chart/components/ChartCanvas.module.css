@@ -3,8 +3,7 @@
     width: 100%;
     min-width: 0;
     height: 378px;
-    padding-right: 46px;
-    padding-bottom: 50px;
+    overflow: hidden;
 }
 
 .canvas:focus-visible {
@@ -12,21 +11,87 @@
     outline-offset: 2px;
 }
 
-.canvas:has(.activeTool) .chart {
+.canvas[data-drawing-active='true'] .chart {
     cursor: crosshair;
+    pointer-events: auto;
 }
 
 .chart {
-    position: relative;
-    z-index: 1;
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    left: 0;
     display: block;
-    width: 100%;
+    width: calc(100% - 46px);
     height: 328px;
     overflow: visible;
+    pointer-events: none;
 }
 
 .canvas:has([data-chart-engine-ready='true']) .marketLayer {
     opacity: 0;
+}
+
+.dataStatus {
+    position: absolute;
+    z-index: 3;
+    top: 0;
+    right: 0;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    justify-content: center;
+    height: 328px;
+    color: var(--color-text-secondary);
+    text-align: center;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--color-bg-surface) 82%, transparent);
+    backdrop-filter: blur(2px);
+}
+
+.dataStatus strong {
+    color: var(--color-text-primary);
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.dataStatus span {
+    max-width: 420px;
+    font-size: 12.5px;
+    line-height: 18px;
+}
+
+.historyDataStatus {
+    position: absolute;
+    z-index: 3;
+    bottom: 35px;
+    left: 10px;
+    padding: 5px 8px;
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    line-height: 16px;
+    background: color-mix(in srgb, var(--color-bg-surface) 88%, transparent);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-xs);
+    backdrop-filter: blur(4px);
+}
+
+.historyDataStatus button {
+    padding: 0;
+    color: var(--color-status-info);
+    font: inherit;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+
+.historyDataStatus button:hover,
+.historyDataStatus button:focus-visible {
+    color: var(--color-focus);
+    text-decoration: underline;
+    outline: none;
 }
 
 .fullscreenCanvas {
@@ -94,30 +159,16 @@
     vector-effect: non-scaling-stroke;
 }
 
-.drawingInteractionLayer {
-    position: absolute;
-    z-index: 2;
-    top: 0;
-    right: 46px;
-    left: 0;
-    height: 328px;
-    pointer-events: none;
-}
-
-.drawingInteraction {
-    position: absolute;
-    min-width: 16px;
-    min-height: 16px;
-    padding: 0;
+.drawingHitArea {
     cursor: context-menu;
-    pointer-events: auto;
-    background: transparent;
-    border: 0;
+    pointer-events: stroke;
+    stroke: transparent;
+    stroke-linecap: round;
+    stroke-width: 18;
 }
 
-.drawingInteraction:focus-visible {
-    outline: 1px dashed var(--color-focus);
-    outline-offset: -2px;
+.drawingHitArea:focus-visible {
+    stroke: color-mix(in srgb, var(--color-focus) 20%, transparent);
 }
 
 .draftDrawing {
@@ -194,8 +245,9 @@
 
 .tools {
     position: absolute;
-    right: -3px;
-    bottom: -2px;
+    z-index: 3;
+    right: 64px;
+    bottom: 34px;
     display: flex;
     gap: 7px;
 }

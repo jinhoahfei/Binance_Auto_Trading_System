@@ -146,6 +146,22 @@ describe('PriceChartPanel', () => {
         });
     });
 
+    it('실시간 symbol·연결 상태와 시장 데이터 오류를 차트에 표시한다', () => {
+        render(
+            <PriceChartPanel
+                {...CHART_DATA}
+                candles={[]}
+                dataStatus="error"
+                statusMessage="Binance 연결을 확인해주세요."
+                symbol="ETHUSDT"
+            />,
+        );
+
+        expect(screen.getByText('ETH/USDT · 2026.06.22 · 10:59 KST')).toBeInTheDocument();
+        expect(screen.getByText('오프라인')).toBeInTheDocument();
+        expect(screen.getByRole('alert')).toHaveTextContent('Binance 연결을 확인해주세요.');
+    });
+
     it('DC5-03~05: 두 포인터 입력을 drawing 시작과 완료 intent로 전달한다', () => {
         const handle_intent = vi.fn();
         const { container } = render(
