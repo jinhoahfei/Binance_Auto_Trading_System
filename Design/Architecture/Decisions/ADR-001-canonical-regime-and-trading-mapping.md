@@ -148,7 +148,7 @@ event를 전달한다. 인자 없는 호출이나 pending Context로 성공·실
 - [x] lower-BB registry의 소속과 근거가 기록되었다.
 - [x] 두 STM의 canonical signature가 실제 구현과 일치한다.
 - [x] active session의 REGIME 변경 거부가 확정되었다.
-- [ ] Phase 1에서 중복 Python `RegimeType`을 한 enum으로 통합한다.
+- [x] Phase 1에서 중복 Python `RegimeType`을 `domain/common/enums.py` 한 enum으로 통합했다.
 - [ ] Phase 6에서 TYPE_0 상단 BB 인계 gap을 닫고 mapping/fallback gate를 코드·테스트로 고정한다.
 - [ ] UI 연결 Phase에서 미지원 표시와 `TRADING_ACTIVE` 오류를 반영한다.
 

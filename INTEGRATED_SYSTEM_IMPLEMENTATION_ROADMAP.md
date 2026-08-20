@@ -2,12 +2,12 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | 실행 기준 문서 / Phase 0 완료 |
+| 문서 상태 | 실행 기준 문서 / Phase 1 완료 |
 | 기준일 | 2026-08-20 (Asia/Seoul) |
-| 기준 커밋 | `2a70b45` (`main`) |
+| 기준 커밋 | `38f0e9e` (`main`, Phase 1 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 0의 명세·정책과 baseline이 고정되었다. UI와 두 STM의 순수 결정부는 구현되어 있으나 종단 간 완료 Case는 없으며, 다음 작업은 Phase 1 하나다. |
+| 현재 결론 | Phase 1에서 RegimeSTM과 TradingSTM을 하나의 backend distribution과 canonical `RegimeType`으로 통합했다. 기존 55개 회귀 테스트와 9개 통합 계약 테스트가 통과했으며, 다음 작업은 Phase 2 하나다. |
 
 ---
 
@@ -53,8 +53,8 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 ### 2.1 반드시 먼저 보는 자료
 
 1. `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md`
-2. `RegimeSTM/`의 실제 소스, 테스트, `Regime_STM_Implementation_Plan.md`
-3. `TradingSTM/`의 실제 소스, 테스트, `Trading_STM_Implementation_Plan.md`
+2. `backend/src/binance_auto_trader/domain/regime/`, `backend/tests/unit/regime/`, `backend/docs/Regime_STM_Implementation_Plan.md`
+3. `backend/src/binance_auto_trader/domain/trading/`, `backend/tests/unit/trading/`, `backend/docs/Trading_STM_Implementation_Plan.md`
 4. `UI/`의 실제 소스, 테스트, `UI_ARCHITECTURE_AND_FILE_REFERENCE.md`
 
 충돌 시 적용 순서는 다음과 같다.
@@ -82,17 +82,25 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 
 | 영역 | 실행 결과 | 판단 |
 |---|---|---|
-| RegimeSTM | 표준 `unittest` 31개 전부 통과 | 순수 RegimeSTM 계약과 13개 `EA-*` 전이 구현은 정상 |
-| TradingSTM | 표준 `unittest` 24개 전부 통과 | 순수 TradingSTM, 109개 ID 존재, 핵심 우선순위와 event queue 구현은 정상 |
-| UI | Vitest 26개 파일, 88개 테스트 전부 통과 | 현재 React/XState/fake adapter UI 동작은 정상 |
-| UI typecheck | `tsc -b --pretty false` 통과 | 현재 TypeScript strict 계약 정상 |
-| UI build | Vite production build 성공, 274 modules 변환 | 현재 web bundle 생성 정상 |
-| Git 상태 | baseline 실행 직후 production tracked source 변경 없음 | roadmap은 이미 untracked 문서였고 테스트가 source를 변경하지 않음 |
+| 통합 backend | 표준 `unittest` 64개 전부 통과 | 기존 55개 회귀와 9개 package/contract/architecture 테스트 정상 |
+| RegimeSTM 회귀 | 기존 `unittest` 31개 전부 통과 | 순수 RegimeSTM 계약과 13개 `EA-*` 전이 동작 보존 |
+| TradingSTM 회귀 | 기존 `unittest` 24개 전부 통과 | 109개 ID, 핵심 우선순위와 event queue 동작 보존 |
+| package | offline wheel build 및 clean venv 설치 성공 | 하나의 distribution에서 두 STM과 동일 canonical enum import 정상 |
+| UI (Phase 0 baseline) | Vitest 26개 파일, 88개 테스트 전부 통과 | Phase 1은 UI production source를 변경하지 않음 |
+| UI typecheck/build (Phase 0 baseline) | `tsc -b --pretty false`, Vite 274 modules build 성공 | 현재 TypeScript strict 계약과 web bundle baseline 정상 |
+| Git 상태 | Phase 1 의도 범위의 move/source/test/document 변경만 존재 | UI와 무관한 production source 변경 없음 |
 
-현재 환경에는 `pytest`가 설치되어 있지 않아 Python 검증은 프로젝트가 실제 사용하는 표준 `unittest`로 수행했다. 또한 `pnpm` wrapper는 제한된 네트워크 환경에서 release signature 확인을 완료하지 못했지만, 설치된 `node_modules/.bin`의 Vitest·TypeScript·Vite를 직접 실행한 검증은 모두 통과했다. 이는 코드 테스트 실패와 구분한다.
+현재 환경에는 `pytest`가 설치되어 있지 않아 Python 검증은 프로젝트가
+실제 사용하는 표준 `unittest`로 수행했다. clean venv에 build backend가
+없어 source metadata 설치는 실패했으나, 로컬 cache로 offline wheel을 빌드한
+뒤 새 venv에 `--no-deps --no-index`로 설치한 검증은 통과했다. 이는
+package 코드 실패와 build tool 부재를 구분한다. UI 결과는 Phase 0에서
+설치된 `node_modules/.bin`으로 검증한 baseline이다.
 
 ### 3.2 현재 완료된 핵심
 
+- [x] 두 STM이 `backend/src/binance_auto_trader/domain/` 하나의 설치 가능한 package로 통합되어 있다.
+- [x] `domain/common/enums.py`의 `RegimeType.TYPE_0`~`TYPE_4`가 두 STM의 유일한 Python REGIME enum이다.
 - [x] `RegimeSTM`의 상태, 이벤트, 불변 평가 Context, Action request, 결과, guard, 13개 transition registry가 구현되어 있다.
 - [x] `RegimeSTM`은 Controller·Gateway·UI를 import하지 않는 순수 결정 엔진이다.
 - [x] `TradingSTM`의 계층/병렬 상태 구성, 이벤트, 불변 Context view, Action request, 109개 transition ID가 구현되어 있다.
@@ -111,25 +119,29 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 - [ ] 미구현 — Python backend process, loopback API, backend event stream, Tauri sidecar lifecycle이 없다.
 - [ ] 부분 완료 — UI는 실제 화면이지만 주문·계좌·이력·CSV는 `FakeUiCommandAdapter`를 사용한다.
 - [ ] 부분 완료 — UI의 공개 시장 데이터는 차트 표시용이며 Trading/Regime의 authoritative backend snapshot이 아니다.
-- [ ] 부분 완료 — `TradingSTM`은 `LOWER_BB` 한 로직만 허용하지만 RegimeSTM/UI는 `TYPE_0`~`TYPE_4`를 사용한다.
+- [ ] 부분 완료 — backend는 canonical `TYPE_0`~`TYPE_4`를 공유하고 `TYPE_0`만 기존 lower-BB registry에 매핑한다. 상단 BB 인계가 미완료이며 `TYPE_1`~`TYPE_4`는 지원하지 않아 다섯 타입 모두 production start는 비활성이다.
 - [ ] 미구현 — 실제 주문을 제출하고 fill을 Position/History/Performance에 반영하는 Case 2 pipeline이 없다.
 - [ ] 미구현 — 어떤 Communication Case도 User에서 Binance/File System까지 종단 간 자동 테스트되지 않았다.
 
-### 3.4 현재 가장 큰 통합 위험
+### 3.4 Phase 1에서 해소한 package 위험과 남은 계약 공백
 
-`RegimeSTM`과 `TradingSTM`은 모두 `src/binance_auto_trader/__init__.py`를 가진 독립 package다. 두 배포물을 동시에 설치하면 같은 top-level package를 서로 다른 distribution이 소유하게 되어 import와 packaging이 모호해진다. 통합 전에 하나의 backend source tree로 이동해야 한다.
+Phase 1에서 두 독립 distribution을 `backend/` 하나로 통합했다. root의
+`RegimeSTM/`·`TradingSTM/` source tree를 제거했고, clean environment에 설치한
+하나의 wheel에서 두 STM을 동시에 import했다.
 
-또한 다음 세 표현은 현재 동일 개념으로 연결되지 않는다.
+남은 표현과 지원 상태는 다음과 같다.
 
 | 위치 | 현재 값 |
 |---|---|
-| RegimeSTM | `RegimeType.TYPE_0` ~ `TYPE_4` |
+| backend domain | 유일한 `RegimeType.TYPE_0` ~ `TYPE_4` |
 | UI wire 값 | `'type0'` ~ `'type4'` |
-| TradingSTM | `RegimeType.LOWER_BB` 하나 |
+| TradingSTM registry | `TYPE_0 -> lower-BB` 매핑, `TYPE_1`~`TYPE_4` 미지원 |
 
-이 불일치는 단순 naming 문제가 아니라 어떤 사용자 선택이 어떤 trading transition registry를 실행하는지 결정하지 못하는 기능 공백이다.
+Domain에는 UI wire 변환을 넣지 않았다. strict `TYPE_0` ↔ `type0` 변환은
+Phase 5의 transport 계층에서 구현한다. REGIME별 실제 거래 logic 공백과
+`TYPE_0`의 상단 BB 인계는 Phase 6의 명시적 start gate로 계속 남겨 둔다.
 
-- [x] 현재 상태와 가장 큰 통합 위험을 확인했다.
+- [x] 중복 package 위험을 해소했고 남은 registry/transport 공백을 후속 Phase로 격리했다.
 
 ---
 
@@ -143,7 +155,7 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 | [ ] | `UIStateController` | `UiApplicationFacade`가 UI intent와 actor를 조정하므로 부분 완료 | 메시지 1~5 startup orchestration과 backend event bridge 연결 |
 | [x] | `UISTM` | root/feature XState actor로 구현 | backend ack/snapshot 재동기화 E2E 추가 |
 | [ ] | `TradingController` | production 클래스 없음 | 계좌·Context·STM·주문·중지·Action 실행의 유일한 조정자로 구현 |
-| [ ] | `TradingSTM` | 109개 lower-BB transition과 queue는 구현되어 부분 완료 | 단일 canonical `RegimeType`, 선택값별 registry 지원, Controller 통합 |
+| [ ] | `TradingSTM` | 단일 backend package에 109개 lower-BB transition·queue와 canonical `RegimeType` 매핑을 구현 | Phase 6의 상단 BB 인계·선택값별 registry coverage와 Controller 통합 |
 | [ ] | `TradingContext` | 읽기 전용 `TradingContextView`/runtime snapshot만 구현 | mutable owner, `initialize`, result/action 적용, version 증가, split ratio 구현 |
 | [ ] | `MarketDataController` | UI hook이 표시용 유사 흐름을 구현 | backend authoritative 초기화와 4H/30m event 발행 구현 |
 | [ ] | `APIGateway` | 없음 | Kline/account/order submit/query/force-sell 정규화 구현 |
@@ -281,7 +293,7 @@ flowchart LR
 - [ ] React Boundary는 Binance SDK, filesystem, Python domain 규칙을 import하지 않는다.
 - [ ] `BackendUiAdapter`는 업무 guard를 판단하지 않는다.
 - [ ] Controller는 STM의 guard를 중복 구현하지 않는다.
-- [ ] STM은 Controller, Gateway, Repository, clock, file, network를 import하지 않는다.
+- [x] STM은 Controller, Gateway, Repository, clock, file, network를 import하지 않는다.
 - [ ] Entity는 UI/transport DTO를 import하지 않는다.
 - [ ] Gateway는 Binance 원본 응답을 domain 밖으로 노출하지 않는다.
 - [ ] 모든 금융 수치는 Python `Decimal`, wire에서는 decimal string을 사용한다.
@@ -293,7 +305,7 @@ flowchart LR
 
 ## 9. 최종 예상 디렉터리와 파일 트리
 
-아래는 모든 Phase가 끝난 뒤의 human-maintained source 기준 트리다. `node_modules`, `dist`, `target`, `storybook-static`, cache, runtime data와 build 산출물은 제외한다. `RegimeSTM/`과 `TradingSTM/`은 Phase 1에서 `git mv`로 `backend/`에 통합하고, 회귀 검증 후 중복 source tree를 남기지 않는다.
+아래는 모든 Phase가 끝난 뒤의 human-maintained source 기준 트리다. `node_modules`, `dist`, `target`, `storybook-static`, cache, runtime data와 build 산출물은 제외한다. `RegimeSTM/`과 `TradingSTM/`은 Phase 1에서 `git mv`로 `backend/`에 통합했고, 회귀 검증 후 중복 source tree를 제거했다.
 
 ```text
 Binance_Auto/
@@ -577,8 +589,8 @@ UI `<<boundary>>` classifier는 ES class 하나가 아니라 component/module �
 
 - `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md`
 - `Design/Architecture/Decisions/ADR-001...ADR-005.md`
-- `RegimeSTM/Regime_STM_Implementation_Plan.md`
-- `TradingSTM/Trading_STM_Implementation_Plan.md`
+- `backend/docs/Regime_STM_Implementation_Plan.md`
+- `backend/docs/Trading_STM_Implementation_Plan.md`
 - 본 문서의 D-01~D-15와 Phase 0 체크박스
 
 **작업 체크리스트:**
@@ -644,17 +656,17 @@ UI `<<boundary>>` classifier는 ES class 하나가 아니라 component/module �
 
 **작업 체크리스트:**
 
-- [ ] `backend/` package skeleton과 단일 `binance_auto_trader` package를 만든다.
-- [ ] `RegimeSTM/src/.../regime`를 `backend/.../domain/regime`로 `git mv`한다.
-- [ ] `TradingSTM/src/.../trading`를 `backend/.../domain/trading`으로 `git mv`한다.
-- [ ] 기존 테스트도 unit/architecture 영역으로 `git mv`하고 history를 보존한다.
-- [ ] canonical `RegimeType`을 `domain/common/enums.py` 한 곳에 정의한다.
-- [ ] UI wire 값 변환은 backend domain이 아니라 transport 단계에서만 수행하도록 테스트한다.
-- [ ] TradingSTM의 `LOWER_BB` enum 오용을 Phase 0 mapping에 따라 제거하거나 private registry key로 내린다.
-- [ ] RegimeSTM과 TradingSTM public import surface를 새 package에서 재노출한다.
-- [ ] `RegimeSTM/`과 `TradingSTM/` 중복 source는 통합 테스트 통과 뒤 제거하고, 필요한 문서는 `backend/docs` 또는 `Design`으로 이동한다.
-- [ ] architecture test로 domain → application/adapters/transport import를 금지한다.
-- [ ] 두 transition ID 집합이 각각 정확히 13개/109개인지 검사한다.
+- [x] `backend/` package skeleton과 단일 `binance_auto_trader` package를 만든다.
+- [x] `RegimeSTM/src/.../regime`를 `backend/.../domain/regime`로 `git mv`한다.
+- [x] `TradingSTM/src/.../trading`를 `backend/.../domain/trading`으로 `git mv`한다.
+- [x] 기존 테스트도 unit/architecture 영역으로 `git mv`하고 history를 보존한다.
+- [x] canonical `RegimeType`을 `domain/common/enums.py` 한 곳에 정의한다.
+- [x] UI wire 값 변환은 backend domain이 아니라 transport 단계에서만 수행하도록 테스트한다.
+- [x] TradingSTM의 `LOWER_BB` enum 오용을 Phase 0 mapping에 따라 제거하거나 private registry key로 내린다.
+- [x] RegimeSTM과 TradingSTM public import surface를 새 package에서 재노출한다.
+- [x] `RegimeSTM/`과 `TradingSTM/` 중복 source는 통합 테스트 통과 뒤 제거하고, 필요한 문서는 `backend/docs` 또는 `Design`으로 이동한다.
+- [x] architecture test로 domain → application/adapters/transport import를 금지한다.
+- [x] 두 transition ID 집합이 각각 정확히 13개/109개인지 검사한다.
 
 **검증:**
 
@@ -663,18 +675,32 @@ cd backend
 python3 -m unittest discover -s tests -v
 ```
 
-- [ ] 기존 Regime 31개와 Trading 24개 테스트가 모두 통과한다.
-- [ ] test 수가 줄었다면 삭제된 이유와 대체 test를 기록한다.
-- [ ] package를 clean environment에 설치하고 두 STM을 같은 interpreter에서 import한다.
-- [ ] `rg`로 중복 `class RegimeType` production 정의가 한 개뿐인지 확인한다.
+- [x] 기존 Regime 31개와 Trading 24개 테스트가 모두 통과한다.
+- [x] test 수가 줄었다면 삭제된 이유와 대체 test를 기록한다.
+- [x] package를 clean environment에 설치하고 두 STM을 같은 interpreter에서 import한다.
+- [x] `rg`로 중복 `class RegimeType` production 정의가 한 개뿐인지 확인한다.
 
 **완료 조건:**
 
-- [ ] 하나의 backend distribution에서 두 STM을 동시에 import할 수 있다.
-- [ ] 동작 회귀가 없고 새로운 network/file dependency가 domain에 없다.
-- [ ] root에 중복 Python source tree가 없다.
+- [x] 하나의 backend distribution에서 두 STM을 동시에 import할 수 있다.
+- [x] 동작 회귀가 없고 새로운 network/file dependency가 domain에 없다.
+- [x] root에 중복 Python source tree가 없다.
 
-**완료 증거:** 미기록
+**완료 증거:**
+
+| 항목 | 기록 |
+|---|---|
+| 실행 시각 | 2026-08-20 21:35 KST |
+| Phase 1 시작 commit | `38f0e9e14923a90d2adb66b33b0b5a2254123061` (`main`) |
+| 통합 backend | `cd backend && PYTHONPATH=src python3 -m unittest discover -s tests -v` → 64/64 통과 |
+| 기존 Regime 회귀 | Regime architecture/unit module 지정 실행 → 31/31 통과 |
+| 기존 Trading 회귀 | Trading architecture/unit module 지정 실행 → 24/24 통과 |
+| 테스트 수 | 기존 55개 삭제 없음, 통합 package/contract/architecture 테스트 9개 추가 |
+| package build | `uv build --wheel --offline` → `binance_auto_trader_backend-0.1.0-py3-none-any.whl` 성공 |
+| clean install | 새 `python3 -m venv`에 wheel을 `--no-deps --no-index`로 설치, 두 STM과 동일 enum identity import 통과 |
+| 중복 enum/source | production `class RegimeType` 1개, root `RegimeSTM/`·`TradingSTM/` 0개 |
+| 주요 산출물 | `backend/pyproject.toml`, `domain/common/enums.py`, 통합 `domain/regime`, `domain/trading`, `tests/architecture/test_integrated_package.py` |
+| 작업 commit | 생성하지 않음 — 사용자 요청 범위에 commit은 포함되지 않음 |
 
 ---
 
@@ -1294,7 +1320,7 @@ Communication message/operation:
 다음에 수행 가능한 Phase:
 ```
 
-- [ ] 공통 품질 규칙과 완료 보고 형식을 사용했다.
+- [x] 공통 품질 규칙과 완료 보고 형식을 사용했다.
 
 ---
 
@@ -1326,7 +1352,7 @@ Communication message/operation:
 - [x] 네 Case의 종단 간 gap 분류 완료
 - [x] 최종 예상 source tree 작성 완료
 - [x] Phase 0 — 명세·정책 잠금
-- [ ] Phase 1 — Python package 통합
+- [x] Phase 1 — Python package 통합
 - [ ] Phase 2 — 시장 데이터 초기화
 - [ ] Phase 3 — REGIME 추천 vertical slice
 - [ ] Phase 4 — Account/History/Performance 초기 로드
@@ -1346,13 +1372,15 @@ Communication message/operation:
 
 ## 16. 다음 작업
 
-Phase 0은 완료되었다. 다음 구현 작업은 **Phase 1 — Python package 통합과 계약 단일화만**
-수행한다. Phase 1에서는 이번 ADR의 정책을 구현하지 않고, 동작 회귀 없이 두
-`binance_auto_trader` source tree와 canonical enum/import surface만 통합한다.
+Phase 1은 완료되었다. 다음 구현 작업은 **Phase 2 — MarketSnapshot과
+시장 데이터 초기화만** 수행한다. Phase 2에서는 Communication 메시지
+`1.1`~`1.3`과 `MarketDataController`, `WebSocketGateway`, `APIGateway`,
+`MarketSnapshot` Operation을 먼저 다시 읽는다.
 
-Phase 1을 시작할 때 Communication 8.5, 8.6, 8.13과 ADR-001을 다시 읽고 기존 Regime
-31개, Trading 24개 테스트를 먼저 보존한다. `TYPE_0` production start enable이나 상단 BB
-전략 구현은 Phase 6 범위이므로 Phase 1에서 미리 구현하지 않는다.
+Phase 1은 `TYPE_0` production start를 enable하거나 상단 BB 전략을 추측해
+구현하지 않았다. 해당 coverage gate는 계속 Phase 6 범위다.
 
 - [x] Phase 0 완료 조건과 증거를 기록했다.
-- [ ] Phase 1을 시작하기 전 Communication/ADR-001과 현재 git 상태를 다시 확인한다.
+- [x] Phase 1을 시작하기 전 Communication/ADR-001과 현재 git 상태를 다시 확인했다.
+- [x] Phase 1 완료 조건과 증거를 기록했다.
+- [ ] Phase 2를 시작하기 전 Communication 1.1~1.3과 market Operation을 다시 확인한다.
