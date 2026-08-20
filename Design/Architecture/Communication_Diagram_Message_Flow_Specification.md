@@ -12,6 +12,10 @@
 
 추론한 타입은 새로운 기능이나 새로운 collaboration을 제안하는 것이 아니라, 다이어그램의 기존 메시지를 코드 operation으로 표현하기 위한 계약이다.
 
+> **Phase 0 정책 잠금:** 2026-08-20에 `Design/Architecture/Decisions/ADR-001`~`ADR-005`를
+> Accepted로 확정했다. 본 문서와 ADR이 함께 Communication 구현 계약을 이룬다.
+> Phase 0은 production 동작 코드를 변경하지 않는다.
+
 ## 2. UML 표기법
 
 ### 2.1 Attribute
@@ -90,12 +94,16 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 | `Interval` | `1m`, `30m`, `4h`, `1d` Kline 주기 |
 | `Kline` | `symbol`, `interval`, `openTime`, OHLCV를 가진 봉 데이터 |
 | `RegimeType` | 사용자가 선택하거나 RegimeSTM이 추천하는 REGIME 타입 |
+| `RegimeEvent` | 최초 평가, 확정 4H 봉 마감 또는 `EVALUATION_READY`를 나타내는 불변 event |
+| `RegimeEvaluationContext` | 같은 MarketSnapshot version에서 파생한 slope, swing, current price와 live EMA9의 불변 묶음 |
+| `RegimeActionRequest` | RegimeSTM이 결정하고 RegimeController가 수행하는 `StartRegimeEvaluation` 또는 `ApplyRecommendedRegime` 값 |
+| `RegimeSTMResult` | Regime 전이 ID, 전후 상태와 ordered Action 요청을 담은 결정 결과 |
 | `HistoryPeriod` | 거래 상세 조회 기간: `TODAY`, `LAST_7_DAYS`, `LAST_30_DAYS`, `ALL` |
 | `TradeSide` | 거래 방향 필터: `ALL`, `BUY`, `SELL` |
 | `CSVPeriod` | CSV 범위 preset: `TODAY`, `WEEKLY`, `MONTHLY`, `CUSTOM` |
 | `CSVExportStatus` | CSV 내보내기 상태: `IDLE`, `VALIDATING`, `EXPORTING`, `SUCCEEDED`, `FAILED` |
 | `UIEvent`, `UITransitionResult` | UI STM에 전달되는 이벤트와 전이 결과 |
-| `TradingEvent`, `TradingSTMResult` | Trading STM에 전달되는 이벤트와 전이/action 결과 |
+| `TradingEvent`, `TradingContextView`, `TradingSTMResult` | Trading STM에 전달되는 구체 event, 불변 Context snapshot과 전이/action 결과 |
 | `AccountSnapshot` | REST 또는 user-data stream에서 정규화한 계좌 잔액 snapshot |
 | `OrderResult` | 주문 상태와 fill을 정규화한 Gateway 결과 |
 | `ExecutionSummary` | 한 주문의 여러 fill을 합친 체결 수량·금액·평균가·수수료 요약 |
@@ -123,6 +131,10 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 
 `TradingController`와 초안의 `TradingCoordinator`, `UISTM`과 초안의 `UIStateMachine`, `APIGateway`와 초안의 `BinanceAPIGateway`처럼 이름이 충돌하는 경우에는 다이어그램의 `TradingController`, `UISTM`, `APIGateway`를 사용한다. WebSocket Gateway는 Start/Stop의 `WebSocketGateway`를 통합 클래스명으로 사용하되, Buy and Sell 메시지 설명에서는 그 그림의 `WebsocketGateway` 표기를 그대로 남긴다.
 
+Operation 표는 UML 표기이므로 기존 다이어그램의 camelCase를 보존한다. Python 구현은
+`CODING_CONVENTIONS.md`에 따라 `calculate_4h_indicators`, `order_finished`처럼 snake_case를
+사용하며, 같은 동작을 camelCase alias로 중복 구현하지 않는다.
+
 ## 4. Case 1 - Start Trading and Stop Trading
 
 이 다이어그램의 최상위 순서는 다음과 같다.
@@ -147,8 +159,8 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 | `1.3` | `MarketDataController -> MarketSnapshot` | `update(klines : Map<Interval, List<Kline>>) : void` | REST 봉과 초기 WebSocket buffer를 병합한 결과 | `void` | 최신 시장 snapshot을 갱신한다. | 같은 `symbol`, `interval`, `openTime` 봉은 중복 제거하고 WebSocket 값을 우선한다. 이후 시간순 정렬과 봉 연속성을 검사한다. |
 | `1.4` | `MarketDataController -> RegimeController` | `calculate4HIndicators(snapshot : MarketSnapshot) : IndicatorSnapshot` | 최신 시장 snapshot | 계산된 지표 snapshot | REGIME 판정용 4H 지표를 계산한다. | 확정 4H 봉과 진행 중인 4H 봉을 분리한다. 확정봉으로 EMA9 시계열, 최근 6개 EMA9의 LR slope와 HH/HL/LH/LL 구조를 계산하고 진행 중인 봉으로 실시간 EMA9를 계산한다. |
 | `1.4.1` | `RegimeController -> IndicatorSnapshot` | `update(ema9Series : List<Decimal>, ema9Slope : Decimal, swingStructure : SwingStructure, liveEma9 : Decimal) : void` | 계산한 4H 지표 | `void` | 계산 결과를 동일 평가 시점의 IndicatorSnapshot에 반영한다. | 원본에는 `update`만 있고 괄호가 없다. 이 snapshot이 `1.5.1`의 STM 입력이 된다. |
-| `1.5` | `MarketDataController -> RegimeController` | `recommendRegime(indicators : IndicatorSnapshot) : RegimeType` | 4H IndicatorSnapshot | 추천 REGIME | 현재 4H 데이터에 대한 추천 REGIME을 요청한다. | RegimeController는 `1.5.1`에 판정을 위임하고 그 함수 반환값을 추천값으로 사용한다. 별도 reply 화살표는 필요 없다. |
-| `1.5.1` | `RegimeController -> RegimeSTM` | `run(indicators : IndicatorSnapshot) : RegimeType` | 4H 지표 snapshot | 추천 REGIME | Regime STM의 판정 전이를 실행한다. | guard와 다음 상태는 RegimeSTM이 결정한다. 추천값은 사용자 선택값을 자동으로 덮어쓰지 않는다. |
+| `1.5` | `MarketDataController -> RegimeController` | `recommendRegime(indicators : IndicatorSnapshot) : RegimeType` | 4H IndicatorSnapshot | 추천 REGIME | 현재 4H 데이터에 대한 추천 REGIME을 요청한다. | RegimeController가 같은 MarketSnapshot version의 `RegimeEvaluationContext`를 준비하고 `1.5.1`의 두 microstep 결과 Action을 수행한다. `ApplyRecommendedRegime`이 성공한 뒤 façade가 타입을 반환하며 추천값은 사용자 선택값을 덮어쓰지 않는다. |
+| `1.5.1` | `RegimeController -> RegimeSTM` | `handle(event : RegimeEvent, context : RegimeEvaluationContext?) : RegimeSTMResult` | 최초/4H 마감 event와 optional Context, 이어지는 `EVALUATION_READY`와 필수 Context | 전이와 ordered Action 요청 | Regime STM의 한 판정 microstep을 실행한다. | 첫 호출은 `EA-001` 또는 `EA-101`~`EA-105`와 `StartRegimeEvaluation`을 반환한다. Controller가 그 Action을 수행한 뒤 같은 `evaluation_id`의 `EVALUATION_READY`와 Context로 동일 Operation을 다시 호출하고, `EA-002`~`EA-008`과 `ApplyRecommendedRegime`을 수행한다. STM은 외부 상태를 직접 변경하지 않는다. |
 
 ### 4.2 계좌 초기 snapshot 및 account stream
 
@@ -183,9 +195,9 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 |---|---|---|---|---|---|---|
 | `6` | `User -> AppShellUI` | `selectRegime(regimeType : RegimeType) : void` | 사용자가 선택한 REGIME | `void` | 사용자가 실제 거래에 적용할 REGIME을 선택한다. | 추천 REGIME과 별개의 사용자 선택값이며 Boundary가 `6.1`로 전달한다. |
 | `6.1` | `AppShellUI -> UIStateController` | `selectRegime(regimeType : RegimeType) : void` | 선택 REGIME | `void` | UI 입력을 제어 계층에 전달한다. | UIStateController는 `6.1.1`을 통해 RegimeController에 선택을 적용한다. |
-| `6.1.1` | `UIStateController -> RegimeController` | `setRegimeType(regimeType : RegimeType) : void` | 선택 REGIME | `void` | 추천값이 아닌 사용자의 적용 REGIME을 설정한다. | 원본 라벨에는 괄호가 없다. RegimeController는 `6.1.1.1`로 선택값에 대응하는 거래 STM을 조회한다. |
-| `6.1.1.1` | `RegimeController -> TradingController` | `fetchSelectedTradingLogic(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 선택된 TradingSTM | 선택 REGIME에 맞는 trading logic을 요청한다. | 원본 철자는 `fetchSelectedTardingLogic()`이다. `6.1.1.1.1`의 반환 인스턴스를 사용하며 별도 reply 메시지는 없다. |
-| `6.1.1.1.1` | `TradingController -> TradingSTM` | `getSTMInstance(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 해당 TradingSTM 인스턴스 | 선택된 logic을 실행할 STM 인스턴스를 가져온다. | TradingController는 이 인스턴스를 이후 시작과 주문 처리에 사용한다. |
+| `6.1.1` | `UIStateController -> RegimeController` | `setRegimeType(regimeType : RegimeType) : void` | 선택 REGIME | `void` | 추천값이 아닌 사용자의 적용 REGIME을 설정한다. | 원본 라벨에는 괄호가 없다. active trading session에서는 `TRADING_ACTIVE`로 거부하고 기존 선택을 유지한다. 정지 상태에서는 선택값과 지원 상태를 보존한 뒤 `6.1.1.1`로 거래 logic을 조회한다. |
+| `6.1.1.1` | `RegimeController -> TradingController` | `fetchSelectedTradingLogic(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 선택된 TradingSTM 또는 typed failure | 선택 REGIME에 맞는 trading logic을 요청한다. | 원본 철자는 `fetchSelectedTardingLogic()`이다. `TYPE_0`은 lower-BB registry에 매핑되지만 상단 BB 인계 gap을 닫기 전에는 `TRADING_LOGIC_INCOMPLETE`, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED_TRADING_LOGIC`이다. fallback은 없다. |
+| `6.1.1.1.1` | `TradingController -> TradingSTM` | `getSTMInstance(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 해당 TradingSTM 인스턴스 또는 typed failure | 선택된 logic을 실행할 session 전용 STM 인스턴스를 가져온다. | ADR-001의 mapping을 엄격하게 적용한다. `TYPE_0 -> LOWER_BB` mapping은 확정되었지만 production start enable 여부는 Phase 6 coverage gate가 결정한다. 미지원 타입에는 인스턴스를 만들지 않는다. |
 
 ### 4.6 자동매매 시작
 
@@ -195,22 +207,29 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 |---|---|---|---|---|---|---|
 | `7` | `User -> AppShellUI` | `startConfirmed() : void` | 없음 | `void` | 사용자가 시작 확인 팝업에서 거래 시작을 확정한다. | Boundary가 `7.1`로 확인 event를 전달한다. |
 | `7.1` | `AppShellUI -> UIStateController` | `startTrading() : void` | 없음 | `void` | 자동매매 시작 UI event를 전달한다. | UI 상태 전이 후 실제 trading 시작을 `7.1.1`에 위임한다. |
-| `7.1.1` | `UIStateController -> TradingController` | `startTrading() : void` | 없음 | `void` | TradingController에 자동매매 시작을 요청한다. | Controller는 먼저 `7.1.1.1`에서 runtime context를 초기화하고, 그 context로 `7.1.1.2`의 STM을 실행한다. |
-| `7.1.1.1` | `TradingController -> TradingContext` | `init(account : Account, selectedRegime : RegimeType, position : Position, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void` | 계좌, 선택 REGIME, 현재 포지션, 분할 비율 | `void` | **이 부분은 diagram에서 추가되어야함.** TradingSTM이 사용할 시작 context를 초기화한다. | Start/Stop 그림에 기존 클래스인 `:TradingContext` lifeline도 함께 추가한다. `positionOwner`, pending 주문 값, `tradingPhase`, `lowerEventId` 등 runtime 값을 일관된 시작값으로 만들고 계좌·포지션·설정 참조를 연결한다. |
-| `7.1.1.2` | `TradingController -> TradingSTM` | `run(context : TradingContext) : TradingSTMResult` | 초기화가 끝난 TradingContext | 초기 trading action | TradingSTM을 실행한다. | 원본 그림의 번호는 `7.1.1.1`이다. STM은 시작 가능 조건과 초기 상태를 결정하고, 반환 action은 TradingController가 함수 반환값으로 소비한다. |
+| `7.1.1` | `UIStateController -> TradingController` | `startTrading() : void` | 없음 | `void` | TradingController에 자동매매 시작을 요청한다. | Controller는 selected REGIME, 지원 mapping, connection, Account/Position과 실행 mode gate를 먼저 검증한다. 미지원/불완전이면 Context를 초기화하지 않고 `UNSUPPORTED_TRADING_LOGIC` 또는 `TRADING_LOGIC_INCOMPLETE`로 거부한다. 성공 시 `7.1.1.1` 뒤 `7.1.1.2`를 실행한다. |
+| `7.1.1.1` | `TradingController -> TradingContext` | `initialize(account : Account, selectedRegime : RegimeType, position : Position, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void` | 계좌, 선택 REGIME, 현재 포지션, 분할 비율 | `void` | **이 부분은 diagram에서 추가되어야함.** TradingSTM이 사용할 시작 context를 초기화한다. | Start/Stop 그림에 기존 클래스인 `:TradingContext` lifeline도 함께 추가한다. `positionOwner`, pending 주문 값, `tradingPhase`, `lowerEventId` 등 runtime 값을 일관된 시작값으로 만들고 계좌·포지션·설정 참조를 연결한다. |
+| `7.1.1.2` | `TradingController -> TradingSTM` | `run(context : TradingContextView) : TradingSTMResult` | 초기화된 TradingContext에서 만든 불변 view | 초기 trading action | TradingSTM을 실행한다. | 원본 그림의 번호는 `7.1.1.1`이다. Controller가 mutable Context를 snapshot으로 만든 뒤 넘긴다. STM은 시작 가능 조건과 초기 상태를 결정하고 반환 Action은 Controller가 소비한다. |
 
 ### 4.7 자동매매 중지와 전량 매도
 
-아래 표는 필수 누락 메시지를 삽입한 최종 numbering이다. 기존 그림의 `8.1.1.1`과 `8.1.1.1.1`은 각각 `8.1.1.2`와 `8.1.1.2.1`로 이동해야 한다.
+아래 표는 필수 누락 메시지와 안전 branch를 삽입한 최종 numbering이다. 기존 그림의
+무조건 전량 매도 흐름은 `Position.quantity`와 pending 주문을 확인하는 `alt` fragment로
+교체해야 한다. `a`는 무포지션, `p`는 pending reconciliation, `b`는 보유 포지션
+force-sell branch를 뜻한다.
 
 | 번호 | 호출자 -> 수신자 | Operation | Parameter | Return | 설명 | 동작 과정 |
 |---|---|---|---|---|---|---|
 | `8` | `User -> AppShellUI` | `stopConfirmed() : void` | 없음 | `void` | 사용자가 자동매매 중지를 확정한다. | Boundary가 중지 확인 event를 `8.1`로 전달한다. |
 | `8.1` | `AppShellUI -> UIStateController` | `stopTrading() : void` | 없음 | `void` | 중지 확인 event를 제어 계층에 전달한다. | UIStateController는 실제 trading 중지를 `8.1.1`에 위임한다. |
-| `8.1.1` | `UIStateController -> TradingController` | `stopTrading() : void` | 없음 | `void` | 신규 진입 차단과 전량 매도를 포함한 중지 절차를 시작한다. | `8.1.1.1`에서 STM에 중지 event를 전달하고, 이어서 원본 흐름의 `8.1.1.2`를 실행한다. 포지션 유무에 따른 별도 guard는 다이어그램에 없으므로 추가하지 않는다. |
-| `8.1.1.1` | `TradingController -> TradingSTM` | `handle(event : TradingEvent, context : TradingContext) : TradingSTMResult` | `event = STOP_CONFIRMED`, 현재 context | 중지 action/전이 결과 | **이 부분은 diagram에서 추가되어야함.** TradingSTM에 중지를 전달해 신규 진입을 차단하고 중지 절차를 시작한다. | 현재 그림은 매도 API만 호출해 TradingSTM에 중지 의도가 전달되지 않는다. 기존 `handle(...)` 계약을 재사용하며 최종 완료 시점을 새 메시지로 확장하거나 API 응답 메시지를 추가하지 않는다. |
-| `8.1.1.2` | `TradingController -> APIGateway` | `sellAllPosition(symbol : String, quantity : Decimal) : OrderResult` | 현재 포지션의 symbol과 전량 수량 | 강제 매도 주문 결과 | 현재 포지션의 전량 매도를 요청한다. | 원본 번호는 `8.1.1.1`이다. 다이어그램에 표시된 순서대로 실행하며 포지션 유무에 따른 별도 조건 분기는 문서에서 추가하지 않는다. |
-| `8.1.1.2.1` | `APIGateway -> Binance REST API` | `sellAllPosition(symbol : String, quantity : Decimal) : BinanceOrderResponse` | 보유 symbol과 전량 수량 | Binance 주문 응답 | Binance에 실제 전량 매도 주문을 제출한다. | 원본 번호는 `8.1.1.1.1`이다. 응답은 `8.1.1.2`의 반환값으로 정규화되며 답변 화살표를 별도로 표시하지 않는다. |
+| `8.1.1` | `UIStateController -> TradingController` | `stopTrading() : void` | 없음 | `void` | 신규 진입 차단과 필요한 포지션 정리를 포함한 중지 절차를 시작한다. | command ID로 중복 요청을 억제하고 모든 branch에서 `8.1.1.1`을 먼저 실행한다. 이후 backend의 authoritative Position과 pending 주문으로 branch를 선택한다. |
+| `8.1.1.1` | `TradingController -> TradingSTM` | `handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult` | `event = STOP_CONFIRMED`, 현재 불변 Context view | 중지 action/전이 결과 | TradingSTM에 중지를 전달해 신규 진입을 차단하고 중지 절차를 시작한다. | `quantity == 0`이고 pending이 없으면 `G-05`로 바로 종료한다. 포지션 보유는 `G-06`, pending 주문 존재는 우선순위가 더 높은 `G-06P`로 `STOPPING`에 진입한다. |
+| `8.1.1.2a` | `TradingController` 내부 branch | `no sell operation` | `[Position.quantity == 0 && pendingOrder == null]` | `LOGIC_TERMINATED` | 무포지션 중지를 완료한다. | `8.1.1.1`의 `G-05` 결과로 timer/구독/runtime을 정리한다. APIGateway와 Binance에는 SELL 호출을 한 번도 보내지 않는다. |
+| `8.1.1.2p` | `TradingController -> APIGateway` | `queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult` | `[pendingOrder != null]`, 기존 주문 식별자 | 정규화 주문 결과 | pending 주문 사실을 먼저 확인한다. | active이면 `8.1.1.2p.1`로 취소한 뒤 같은 ID를 재조회하고 실제 fill을 Position/History에 반영한다. 상태 불명에서는 새 force-sell을 동시에 제출하지 않는다. |
+| `8.1.1.2p.1` | `TradingController -> APIGateway` | `cancelOrder(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult` | 취소 가능한 기존 주문 식별자 | 취소 요청 결과 | pending 주문의 잔여 체결을 중지한다. | cancel 응답만으로 terminal을 단정하지 않고 `8.1.1.2p`를 다시 수행한다. cancel/requery 뒤 잔여 Position이 0이면 `8.1.1.3`, 0보다 크면 `8.1.1.2b`로 간다. |
+| `8.1.1.2b` | `TradingController -> APIGateway` | `sellAllPosition(symbol : String, quantity : Decimal) : OrderResult` | `[Position.quantity > 0 && pendingOrder == null]`, 현재 잔여 수량 | 강제 매도 주문 결과 | 실제 잔여 포지션만 전량 매도한다. | 수량은 0보다 커야 하며 Spot free ETH와 Position 수량을 넘지 않는다. timeout/partial/unknown은 ADR-002대로 같은 주문을 reconciliation하고, terminal zero-fill force-sell은 3초 간격 최대 4회 retry한다. |
+| `8.1.1.2b.1` | `APIGateway -> Binance REST API` | `sellAllPosition(symbol : String, quantity : Decimal) : BinanceOrderResponse` | 보유 symbol과 0보다 큰 잔여 수량 | Binance 주문 응답 | Binance Spot에 실제 강제 매도 주문을 제출한다. | 응답은 `8.1.1.2b`의 반환값으로 정규화한다. Position 수량이 0이면 이 메시지는 금지된다. |
+| `8.1.1.3` | `TradingController -> TradingSTM` | `orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult` | `FORCE_SELL_FINISHED` 또는 `FORCE_SELL_FAILED`, 결과 반영 뒤 Context | 중지 완료/재조정 전이 | 보유 또는 pending branch의 구체 완료 결과를 STM에 전달한다. | Position 반영과 history durable 저장 뒤 수량이 0일 때만 `FORCE_SELL_FINISHED`를 보낸다. 실패·상태 불명·저장 실패는 종료 완료로 표시하지 않고 `G-06R` 또는 `RECONCILIATION_REQUIRED`를 유지한다. |
 
 ## 5. Case 2 - Buy and Sell
 
@@ -226,7 +245,7 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 
 | 번호 | 호출자 -> 수신자 | Operation | Parameter | Return | 설명 | 동작 과정 |
 |---|---|---|---|---|---|---|
-| `1` | `TradingController -> TradingSTM` | `handle(event : TradingEvent) : TradingSTMResult` | 전략/시장 조건 event | STM action 결과 | 전략 event를 STM에 전달한다. | STM이 매수 또는 매도 action을 결정한다. 원본 라벨은 `hadle(event)`이며 반환 action은 별도 응답 화살표 없이 `2`의 입력으로 사용한다. |
+| `1` | `TradingController -> TradingSTM` | `handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult` | 전략/시장 조건 event와 같은 평가 시점의 불변 Context view | STM action 결과 | 전략 event를 STM에 전달한다. | 원본 라벨은 `hadle(event)`이다. Controller가 현재 Context version의 view를 함께 전달하고 STM이 매수 또는 매도 Action을 결정한다. 반환 Action은 별도 응답 화살표 없이 `2`의 입력으로 사용한다. |
 | `2` | `TradingController -> TradingContext` | `applyTradingSTMResult(result : TradingSTMResult) : void` | 메시지 `1`의 결과 | `void` | STM action을 runtime context에 반영한다. | 그림의 매수 예시는 `positionOwner = CASE_B`, `pendingOrderSide = BUY`, `pendingStrategy = CASE_B`, `tradingPhase = ENTRY_ORDER_PENDING`이다. 실제 보유 수량은 체결 뒤 `12`에서 반영한다. |
 | `3` | `TradingController -> TradingContext` | `getSplitRatio() : Decimal` | 없음 | 현재 주문 방향의 분할 비율 | 이번 주문에 적용할 분할 비율을 조회한다. | pending side가 BUY면 scale-in 비율, SELL이면 scale-out 비율을 사용한다. |
 | `4` | `TradingController -> MarketSnapshot` | `getCurrentETHPrice() : Decimal` | 없음 | 주문 결정 시점 ETH 가격 | 주문 결정을 내린 순간의 시장가격을 얻는다. | `marketPriceAtDecision`으로 Order에 저장하며 실제 `fillPrice`와 구분한다. |
@@ -234,7 +253,7 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 | `6` | `TradingController -> APIGateway` | `submitOrder(order : Order) : OrderResult` | 로컬 Order | 정규화된 최초 주문 결과 | 주문 의도를 Gateway에 제출한다. | `6.1`의 Binance 응답을 내부 OrderResult로 정규화한다. |
 | `6.1` | `APIGateway -> Binance REST API` | `placeOrder(symbol : String, side : OrderSide, quantity : Decimal) : BinanceOrderResponse` | symbol, side, 수량 | Binance 최초 주문 응답 | Binance에 실제 주문을 생성한다. | 반환 응답은 `6`의 return으로 처리하고 별도 reply 메시지를 표시하지 않는다. |
 | `7` | `TradingController -> Order` | `applyOrderResult(result : OrderResult) : void` | 최초 주문 결과 | `void` | 최초 REST 응답을 로컬 Order에 반영한다. | 거래소 주문 ID, 상태, 체결 수량·금액, 처리 시각과 fill 정보를 갱신한다. `FILLED`면 `10`으로, 미완료/불명이면 `8`로 간다. |
-| `8` | `TradingController -> APIGateway` | `queryOrderResult(symbol : String, orderId : Long) : OrderResult` | symbol, 거래소 주문 ID | 재조회한 주문 결과 | `[status == NEW or PARTIALLY_FILLED or UNKNOWN]`일 때 최신 주문 결과를 조회한다. | `8.1`의 상태와 `8.2`의 실제 fill 목록을 결합하고, 그 결과를 `9`에서 Order에 다시 적용한다. |
+| `8` | `TradingController -> APIGateway` | `queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult` | symbol과 거래소 또는 client 주문 ID | 재조회한 주문 결과 | `[status == NEW or PARTIALLY_FILLED or UNKNOWN]` 또는 submit timeout일 때 최신 주문 결과를 조회한다. | 두 ID 중 하나 이상을 요구한다. 거래소 ID를 받지 못했으면 기존 client order ID를 사용한다. `8.1`의 상태와 `8.2`의 실제 fill 목록을 결합하고, ADR-002의 `1, 2, 4, 8초` 조회 예산 안에서 같은 주문만 재조회한다. |
 | `8.1` | `APIGateway -> Binance REST API` | `getOrderStatus(symbol : String, orderId : Long) : BinanceOrderStatusResponse` | symbol, 주문 ID | 최신 주문 상태 | 최신 상태, 누적 체결 수량·금액, 갱신 시각을 조회한다. | `8`의 하위 호출이다. |
 | `8.2` | `APIGateway -> Binance REST API` | `getAccountTrades(symbol : String, orderId : Long) : List<Fill>` | symbol, 주문 ID | 실제 fill 목록 | 해당 주문에서 발생한 실제 fill과 수수료를 조회한다. | 여러 fill은 `8`의 OrderResult에 포함되고 이후 `10`에서 합산된다. |
 | `9` | `TradingController -> Order` | `reapplyOrderResult(result : OrderResult) : void` | 메시지 `8`의 재조회 결과 | `void` | 재조회한 결과를 로컬 Order에 다시 적용한다. | 원본의 `[8 실행 시]` guard에 따라 `8`이 수행된 경우에만 호출한다. |
@@ -248,7 +267,7 @@ HTML과 CSS만으로는 이 문서의 Operation을 실행할 수 없다. 사용�
 | `13.4` | `TradeHistoryController -> Performance` | `applyNewTrade(trade : Trade) : void` | 새 Trade | `void` | 새 거래의 손익과 수수료를 누적 성과에 반영한다. | 노트의 `apply()`보다 메시지 라벨 `applyNewTrade()`를 우선한다. |
 | `13.5` | `TradeHistoryController -> TradeHistoryRepository` | `saveThisTradeByOrderID(orderId : Long, trade : Trade) : void` | 주문 ID, 새 Trade | `void` | 주문 ID를 기준으로 거래를 영속화한다. | 저장할 Trade를 직렬화하고 `13.5.1`로 파일에 기록한다. |
 | `13.5.1` | `TradeHistoryRepository -> Local File System` | `write(path : Path, data : String) : void` | 저장 경로, 직렬화된 Trade | `void` | 거래 이력 파일에 데이터를 쓴다. | 파일 I/O 결과는 operation 내부에서 처리하며 반환 응답 메시지를 추가하지 않는다. |
-| `14` | `TradingController -> TradingSTM` | `orderFinished() : void` | 없음 | `void` | 주문 처리가 끝났음을 STM에 알린다. | TradingContext에 반영된 주문 처리 상태를 사용해 pending 주문 상태를 종료하고 다음 trading 상태로 전이한다. 원본의 빈 parameter list를 유지한다. |
+| `14` | `TradingController -> TradingSTM` | `orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult` | 전략·side·성공/실패가 명시된 concrete normalized outcome과 결과 반영 뒤 Context | 주문 결과 전이 | 주문 처리 결과를 모호함 없이 STM에 알린다. | Position 적용과 history durable 저장이 성공한 뒤에만 성공 event를 전달한다. 허용 event는 `CASE_B/CASE_C`의 position-opened, buy-failed, sell-filled, sell-failed와 force-sell finished/failed다. 이 Operation은 canonical `handle(event, context)`의 검증 adapter이며 pending 값으로 결과를 추론하지 않는다. |
 
 TradingContext 생성/초기화는 주문 실행 이전인 Case 1의 자동매매 시작 흐름에 추가해야 하며, 이 case에 중복 추가하지 않는다.
 
@@ -353,11 +372,14 @@ CSV PNG의 진입 Boundary 이름은 `TradingHistoryUI`이지만 History PNG의 
 
 ## 8. 전체 클래스 Attribute 및 Operation
 
-이 절은 네 다이어그램에 등장한 모든 시스템 클래스를 한 번씩 정리한다. `User`, `Binance REST API`, `Binance WebSocket`, `Local File System`/`File System`은 외부 Actor이므로 클래스 목록과 분리해 10절에 정리한다.
+이 절은 네 다이어그램에 등장한 모든 시스템 클래스를 한 번씩 정리한다. `User`, `Binance REST API`, `Binance WebSocket`, `Local File System`/`File System`은 외부 Actor이므로 클래스 목록과 분리해 9절에 정리한다.
 
 `AppShellUI`, `RecentOrderUI`, `TradeHistoryUI`, `PopupUI`는 2.3절에서 설명한 웹 UI용 `<<boundary>>` classifier이다. 아래 Attribute와 Operation은 논리적인 UI 상태와 호출 계약이며, CSS class나 ES class 사용을 요구하는 목록이 아니다.
 
-Operation 목록은 다이어그램에서 실제로 수신하는 메시지와 8절에서 필수로 확정한 두 메시지를 기준으로 한다. 다이어그램에 없는 새로운 public operation은 추가하지 않는다.
+Operation 목록은 다이어그램에서 실제로 수신하는 메시지와 Phase 0에서 안전상 필수로
+구체화한 기존 책임을 기준으로 한다. 새 Operation이 필요한 경우에도 먼저 기존 27개
+클래스의 책임을 확인한다. 이번에 추가한 주문 조회·취소·복구 Operation은 거래소 REST
+정규화를 이미 소유한 `APIGateway`에 배치했으며 새 업무 클래스를 만들지 않았다.
 
 ### 8.1 AppShellUI
 
@@ -443,6 +465,11 @@ Operation
 - `startTrading() : void`
 - `stopTrading() : void`
 
+`fetchSelectedTradingLogic`은 `TYPE_0`을 lower-BB에만 매핑한다. 다만 상단 BB 인계가
+미완료인 Phase 0 baseline에서는 `TRADING_LOGIC_INCOMPLETE`로 start를 차단한다. 다른
+타입은 `UNSUPPORTED_TRADING_LOGIC`, active session의 변경은 `TRADING_ACTIVE`로 거부하며
+기존 STM과 Context를 유지한다.
+
 ### 8.5 TradingSTM
 
 기능: trading event와 TradingContext를 사용해 자동매매 상태 및 수행 action을 결정한다.
@@ -455,10 +482,12 @@ Attribute
 Operation
 
 - `getSTMInstance(regimeType : RegimeType) : TradingSTM`
-- `run(context : TradingContext) : TradingSTMResult`
-- `handle(event : TradingEvent) : TradingSTMResult`
-- `handle(event : TradingEvent, context : TradingContext) : TradingSTMResult`
-- `orderFinished() : void`
+- `run(context : TradingContextView) : TradingSTMResult`
+- `handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult`
+- `orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult`
+
+`handle(event, context)`가 유일한 canonical decision API다. Python은 overload를 만들지
+않는다. `orderFinished`는 허용된 concrete outcome만 검사한 뒤 `handle`로 위임한다.
 
 ### 8.6 TradingContext
 
@@ -515,7 +544,12 @@ Operation
 - `fetchAccountSnapshot(asset : String = "ETH") : AccountSnapshot`
 - `sellAllPosition(symbol : String, quantity : Decimal) : OrderResult`
 - `submitOrder(order : Order) : OrderResult`
-- `queryOrderResult(symbol : String, orderId : Long) : OrderResult`
+- `queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult`
+- `cancelOrder(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult`
+- `listOpenOrderResults(symbol : String) : List<OrderResult>`
+
+조회와 취소는 `orderId` 또는 `clientOrderId` 중 하나 이상을 요구한다. retry 횟수나
+전략 판단은 이 Gateway가 아니라 `TradingController`가 ADR-002에 따라 수행한다.
 
 ### 8.9 WebSocketGateway
 
@@ -552,7 +586,8 @@ Operation
 
 ### 8.11 RegimeController
 
-기능: MarketSnapshot에서 4H 판정 입력을 만들고 RegimeSTM을 실행하며 사용자 선택 REGIME을 거래 logic에 연결한다.
+기능: MarketSnapshot에서 같은 version의 4H 판정 입력을 만들고 RegimeSTM의 두
+microstep 결과 Action을 수행하며, 추천 REGIME과 사용자 선택 REGIME을 분리해 보존한다.
 
 Attribute
 
@@ -568,6 +603,10 @@ Operation
 - `calculate4HIndicators(snapshot : MarketSnapshot) : IndicatorSnapshot`
 - `recommendRegime(indicators : IndicatorSnapshot) : RegimeType`
 - `setRegimeType(regimeType : RegimeType) : void`
+
+`recommendRegime`은 호환 façade이며 내부에서 `RegimeSTM.handle(...)`과 Action dispatcher를
+사용한다. `setRegimeType`만 `selectedRegime`을 바꿀 수 있고 추천 Action에서는 호출하지
+않는다.
 
 ### 8.12 IndicatorSnapshot
 
@@ -588,7 +627,8 @@ Operation
 
 ### 8.13 RegimeSTM
 
-기능: 4H 지표와 REGIME Event-Action 규칙으로 추천 REGIME을 결정한다.
+기능: 4H 평가 event와 불변 Context로 guard, 다음 상태와 typed Action 요청을 결정한다.
+지표 계산, Controller 상태 변경과 외부 I/O는 수행하지 않는다.
 
 Attribute
 
@@ -596,7 +636,7 @@ Attribute
 
 Operation
 
-- `run(indicators : IndicatorSnapshot) : RegimeType`
+- `handle(event : RegimeEvent, context : RegimeEvaluationContext? = null) : RegimeSTMResult`
 
 ### 8.14 Order
 
@@ -604,6 +644,9 @@ Operation
 
 Attribute
 
+- `intentId : String {not null}`
+- `clientOrderId : String {not null}`
+- `submissionAttempt : int = 0 {not null}`
 - `symbol : String {not null}`
 - `side : OrderSide {not null}`
 - `strategy : StrategyType {not null}`
@@ -651,15 +694,22 @@ Operation
 
 Attribute
 
+- `tradeId : String {not null}`
 - `orderId : Long {not null}`
+- `clientOrderId : String {not null}`
 - `executedAt : Instant {not null}`
 - `side : OrderSide {not null}`
+- `regimeType : RegimeType {not null}`
 - `fillPrice : Decimal {not null}`
+- `requestedQuantity : Decimal {not null}`
 - `quantity : Decimal {not null}`
 - `amount : Decimal {not null}`
-- `fee : Decimal {not null}`
+- `feeAmount : Decimal {not null}`
+- `feeAsset : String {not null}`
+- `feeQuoteAmount : Decimal {not null}`
 - `strategy : StrategyType {not null}`
 - `marketPriceAtDecision : Decimal {not null}`
+- `allocatedCostBasis : Decimal? = null`
 - `realizedPnl : Decimal? = null`
 - `realizedReturnRate : Decimal? = null`
 - `exitReason : ExitReason? = null`
@@ -684,7 +734,8 @@ Operation
 
 ### 8.18 Performance
 
-기능: 거래 이력으로부터 당일/누적 수익률, 실현손익, 수수료 및 매도 성과를 계산하고 보존한다.
+기능: 거래 이력으로부터 KST 당일/누적 realized 수익률, fee 포함 실현손익,
+수수료 및 매도 성과를 ADR-004 공식으로 계산하고 보존한다.
 
 Attribute
 
@@ -876,6 +927,9 @@ Operation
 - `placeOrder(symbol : String, side : OrderSide, quantity : Decimal) : BinanceOrderResponse`
 - `getOrderStatus(symbol : String, orderId : Long) : BinanceOrderStatusResponse`
 - `getAccountTrades(symbol : String, orderId : Long) : List<Fill>`
+- `getOrderByClientOrderId(symbol : String, clientOrderId : String) : BinanceOrderStatusResponse`
+- `cancelOrder(symbol : String, orderId : Long?, clientOrderId : String?) : BinanceOrderResponse`
+- `getOpenOrders(symbol : String) : List<BinanceOrderResponse>`
 - `sellAllPosition(symbol : String, quantity : Decimal) : BinanceOrderResponse`
 
 ### 9.2 Binance WebSocket
@@ -890,3 +944,80 @@ Operation
 - `openDirectoryPicker() : Path?`
 - `openReadStream(path : Path) : InputStream`
 - `createCustomizedCSV(path : Path, fileName : String, rows : Stream<String>) : CSVExportResult`
+
+## 10. Phase 0 확정 정책과 Operation 추적성
+
+### 10.1 적용 ADR
+
+| ADR | 잠근 정책 |
+|---|---|
+| `ADR-001-canonical-regime-and-trading-mapping.md` | canonical REGIME/wire 값, `TYPE_0 -> LOWER_BB`, 미지원 거부, 두 STM signature, active 변경 금지 |
+| `ADR-002-order-retry-and-reconciliation.md` | timeout/partial/unknown/cancel/restart, retry 횟수와 순서 |
+| `ADR-003-stop-and-product-mode.md` | Spot `ETHUSDT` long-only, stop guard, 실행 mode와 live gate |
+| `ADR-004-persistence-performance-and-csv.md` | 4H 지표 golden vector, JSONL, Performance/KST, summary, CSV |
+| `ADR-005-loopback-transport-and-sidecar-security.md` | endpoint, 응답/event envelope, token, sequence와 reconnect |
+
+ADR의 세부 numeric/schema 표는 이 문서의 Operation이 구현할 정책이다. 서로 충돌하면
+더 구체적인 ADR을 먼저 적용하고 본 문서와 roadmap을 같은 변경 묶음에서 동기화한다.
+
+### 10.2 REGIME 지원과 상품 범위
+
+| Domain | Wire | Phase 0 baseline trading registry | Start 결과 |
+|---|---|---|---|
+| `TYPE_0` | `type0` | `LOWER_BB` 109개 transition, 상단 BB 인계 미완료 | `TRADING_LOGIC_INCOMPLETE` |
+| `TYPE_1` | `type1` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
+| `TYPE_2` | `type2` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
+| `TYPE_3` | `type3` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
+| `TYPE_4` | `type4` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
+
+상품은 Binance Spot `ETHUSDT` long-only다. Margin/Futures/short와 naked sell은 금지한다.
+현재 다섯 타입 모두 production start disabled이며, TYPE_0은 Phase 6에서 상단 BB 인계
+gap과 coverage gate를 통과한 뒤에만 enable할 수 있다. 미지원 타입을 `TYPE_0`이나
+lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`로 거부하고 stop
+완료 뒤 새 session을 요구한다.
+
+### 10.3 실행 모드
+
+`ExecutionMode`는 `disabled`, `fake`, `testnet`, `live` 네 값만 허용하며 default는
+`disabled`다. `live`는 ADR-003의 release 승인, 매 실행 확인, 세 가지 non-null Decimal
+한도와 reconciliation을 모두 통과해야 한다. 이 Phase에서는 credential이나 실제 주문을
+추가하지 않는다.
+
+### 10.4 변경 Operation 추적성
+
+| 결정/메시지 | Caller -> Owner | 확정 Operation | 구현 책임과 금지 |
+|---|---|---|---|
+| D-03 / `1.5.1` | `RegimeController -> RegimeSTM` | `handle(event, context?) : RegimeSTMResult` | STM은 전이/Action 요청만 결정, Controller가 두 microstep Action 수행 |
+| D-02 / `6.1.1.1` | `RegimeController -> TradingController` | `fetchSelectedTradingLogic(regimeType) : TradingSTM` | mapping 적용, 미지원 typed failure, fallback 금지 |
+| D-02 / `6.1.1.1.1` | `TradingController -> TradingSTM` | `getSTMInstance(regimeType) : TradingSTM` | session 전용 registry 생성, TYPE_0 mapping은 확정되었으나 Phase 6 전 start disabled |
+| D-05 / `8.1.1.1` | `TradingController -> TradingSTM` | `handle(STOP_CONFIRMED, context) : TradingSTMResult` | Position/pending guard는 기존 STM G-05/G-06/G-06P가 결정 |
+| D-05 / `8.1.1.2b` | `TradingController -> APIGateway` | `sellAllPosition(symbol, quantity) : OrderResult` | `quantity > 0`에서만 호출, Spot 보유량 초과 금지 |
+| D-08 / `8.1.1.2p`·Case 2 `8` | `TradingController -> APIGateway` | `queryOrderResult(symbol, orderId?, clientOrderId?) : OrderResult` | 같은 주문의 사실 정규화, retry schedule은 Controller 책임 |
+| D-08 / `8.1.1.2p.1` | `TradingController -> APIGateway` | `cancelOrder(symbol, orderId?, clientOrderId?) : OrderResult` | 취소 요청만 수행, 결과 재조회 필수 |
+| D-08 / startup 복구 | `TradingController -> APIGateway` | `listOpenOrderResults(symbol) : List<OrderResult>` | 앱 주문의 open 상태 정규화, 전략 판단 금지 |
+| D-04 / Case 2 `14`, `8.1.1.3` | `TradingController -> TradingSTM` | `orderFinished(event, context) : TradingSTMResult` | concrete normalized outcome만 허용, `handle`로 위임 |
+| D-07 / `1.4` | `MarketDataController -> RegimeController` | `calculate4HIndicators(snapshot) : IndicatorSnapshot` | ADR-004의 확정봉·Decimal·golden formula 사용 |
+| D-10~D-13 / Case 2 `13`, Case 3·4 | `TradingController/UIStateController -> TradeHistoryController` | 기존 `recordOrderExecution`, `getTradeDetails`, `exportCSV` | JSONL/Performance/KST/CSV 정책을 조정, 새 업무 클래스 불필요 |
+| D-14 / process boundary | `BackendUiAdapter -> transport route -> 기존 Controller` | ADR-005의 `/v1/*` HTTP/WS 계약 | adapter/route는 wire 변환만 수행하고 업무 Guard 복제 금지 |
+
+### 10.5 기존 클래스 우선 검토 결과
+
+- 주문 취소와 open order 조회는 `APIGateway`의 Binance REST 캡슐화 책임에 응집되므로
+  이 클래스에 추가했다.
+- Regime evaluation Action dispatcher는 `RegimeController`, Trading event loop와 retry
+  scheduler는 `TradingController`의 private 구현이다.
+- JSONL은 `TradeHistoryRepository`, CSV write는 `CSVFileGateway`, transport DTO 변환은
+  `BackendUiAdapter`와 함수 기반 route가 소유한다.
+- 새 trading strategy class는 만들지 않는다. 새 REGIME logic은 Event-Action Table과
+  기존 `TradingSTM` registry 선택 구조를 먼저 확장한다.
+- process boundary adapter인 `BackendUiAdapter` 외에 새 Communication 업무 클래스는
+  Phase 0에서 승인하지 않았다.
+
+### 10.6 Phase 0 명세 확인
+
+- [x] canonical REGIME과 다섯 mapping 상태가 명시되었다.
+- [x] 메시지 `1.5.1`과 클래스 8.13의 RegimeSTM signature가 일치한다.
+- [x] Case 2 `14`와 클래스 8.5의 concrete order outcome signature가 일치한다.
+- [x] stop의 무포지션·보유·pending branch와 완료 조건이 명시되었다.
+- [x] 기존 27개 클래스에 Operation을 우선 배치하고 새 strategy class를 만들지 않았다.
+- [x] 실제 주문, credential과 live 활성화는 포함하지 않았다.

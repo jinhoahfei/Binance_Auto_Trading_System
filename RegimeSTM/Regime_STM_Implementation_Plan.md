@@ -2,9 +2,9 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | Accepted design — Event-Action Table 책임 분리 및 `EA-007` 정규화 반영 |
+| 문서 상태 | Accepted design — Phase 0 Communication/지표 정책 동기화 완료 |
 | 작성일 | 2026-08-14 |
-| 최종 명세 반영일 | 2026-08-14 |
+| 최종 명세 반영일 | 2026-08-20 |
 | 대상 | `RegimeController`, `RegimeSTM`, 4H REGIME 추천 평가 경계 |
 | 핵심 목표 | Event-Action Table의 상태·가드·다음 상태·Action 종류는 `RegimeSTM`이 결정하고, `Action` 열의 실제 작업은 `RegimeController`가 수행하도록 책임을 분리한다. |
 
@@ -194,15 +194,20 @@ Controller는 첫 transition을 보내기 전에 평가 Context를 완전히 계
 
 ## 6. 불변 평가 입력 계약
 
-### 6.1 현재 계약의 입력 공백
+### 6.1 Phase 0 이전 계약의 입력 공백
 
-Communication Diagram 8.13의 현재 operation은 다음과 같다.
+Phase 0 이전 Communication Diagram 8.13의 operation은 다음과 같았다.
 
 ```text
 run(indicators : IndicatorSnapshot) : RegimeType
 ```
 
-그러나 Event-Action 가드는 `current_price`와 `realtime_4h_ema9`의 비교를 요구한다. 8.12의 `IndicatorSnapshot`에는 `liveEma9`는 있지만 `current_price`가 없다. STM이 `MarketSnapshot`이나 Controller에서 가격을 추가 조회하게 만들면 한 가드 안에서 시점이 다른 값이 섞일 수 있다.
+이 signature는 Phase 0에서 canonical `handle(event, context) : RegimeSTMResult`로
+교체되었다. 변경 이유는 Event-Action 가드가 `current_price`와
+`realtime_4h_ema9`의 비교를 요구하지만 8.12의 `IndicatorSnapshot`만으로는 같은 시점의
+가격과 snapshot version을 보장할 수 없었기 때문이다. STM이 `MarketSnapshot`이나
+Controller에서 가격을 추가 조회하게 만들면 한 가드 안에서 시점이 다른 값이 섞일 수
+있다.
 
 따라서 STM에는 모든 가드 입력을 하나로 묶은 불변 `RegimeEvaluationContext`를 전달한다.
 
@@ -461,7 +466,7 @@ Communication Diagram 8.11과 8.13의 operation은 다음처럼 구체화한다.
 | `RegimeController.calculate4HIndicators(snapshot) : IndicatorSnapshot` | Controller의 순수 계산 보조 operation으로 유지한다. 확정봉과 진행봉을 분리하고 결과에 원본 snapshot version을 연결한다. |
 | `RegimeController.recommendRegime(indicators) : RegimeType` | 기존 호출 호환용 façade로만 둔다. canonical 경로는 trigger와 MarketSnapshot을 함께 받는 `evaluate_regime()`이며, façade도 내부에서 동일 Action 실행 경로를 사용해야 한다. |
 | `RegimeController.setRegimeType(regimeType) : void` | 사용자 선택값만 갱신하고 선택된 TradingSTM 연결을 수행한다. 추천 Action에서 호출하지 않는다. |
-| `RegimeSTM.run(indicators) : RegimeType` | 책임을 혼합하므로 canonical API로 사용하지 않는다. 초기화 wrapper가 필요하면 `handle()`을 호출해 `RegimeSTMResult`를 반환해야 한다. |
+| `RegimeSTM.run(indicators) : RegimeType` (폐기된 초안) | 책임을 혼합하므로 canonical API로 사용하지 않는다. 초기화 wrapper가 필요하면 `handle()`을 호출해 `RegimeSTMResult`를 반환해야 한다. |
 
 `RegimeSTM`의 canonical API는 다음과 같다.
 
@@ -735,17 +740,23 @@ fake market snapshot과 spy observer를 사용해 다음을 검증한다.
 
 동일 이벤트와 Context trace를 재생하면 동일 transition ID, 상태, Action 요청이 나와야 한다.
 
-## 18. 구현 전에 추가로 확정할 항목
+## 18. Phase 0 확정 항목
 
-| 우선순위 | 항목 | 필요한 결정 |
-|---|---|---|
-| 필수 | 지표 최소 데이터 | EMA9, 최근 6개 LR slope, swing structure에 필요한 최소 확정봉 수를 확정한다. |
-| 필수 | snapshot 가격 시점 | 진행 중 4H 봉의 어느 tick/current price를 live EMA9와 함께 고정할지 확정한다. |
-| 필수 | swing threshold | HH/HL/LH/LL의 유의 변화율을 `0.3%`~`0.5%` 중 어떤 값으로 사용할지 확정한다. boolean 논리곱 표현은 확정되었다. |
-| 권장 | 계산 실패 retry | 다음 market tick, 다음 4H close, 고정 backoff 중 retry 정책을 확정한다. |
-| 권장 | process restart | 마지막 처리 candle ID와 추천값을 복원할지, 시작 시 새로 평가할지 확정한다. |
+세부 공식과 golden vector는
+`Design/Architecture/Decisions/ADR-004-persistence-performance-and-csv.md`를 기준으로 한다.
 
-필수 항목이 확정되지 않은 경우 해당 값을 코드 상수나 암묵적 기본값으로 넣지 않는다.
+| 항목 | 확정 결정 |
+|---|---|
+| 지표 최소 데이터 | EMA9/LR slope는 최소 14개 확정 4H 봉, swing은 추가로 확정 high 2개와 low 2개가 모두 있어야 한다. |
+| EMA9/LR slope | 9개 SMA seed, alpha `0.2`, 최근 6개 EMA9의 OLS slope를 같은 snapshot의 current price로 나누고 `* 100`한다. |
+| snapshot 가격 시점 | 같은 MarketSnapshot version의 진행 중 4H 봉 최신 close를 current price와 live EMA9 입력으로 한 번만 사용한다. |
+| swing | `left=2`, `right=2`, strict pivot, 유의 변화율 `0.30%`로 고정한다. |
+| Decimal | precision 34, `ROUND_HALF_EVEN`; guard용 slope는 소수점 8자리로 고정한다. float는 금지한다. |
+| 계산 실패 retry | 같은 snapshot version에서 즉시 반복하지 않는다. 다음 새 MarketSnapshot version 또는 다음 확정 4H close에서 다시 준비한다. 마지막 정상 추천은 유지한다. |
+| process restart | 이전 STM 중간 상태를 복원하지 않고 최신 MarketSnapshot으로 새 `INITIAL_EVALUATION_REQUESTED` cycle을 실행한다. 입력 부족이면 추천은 `None`이며 기본 타입을 넣지 않는다. |
+
+값을 변경하려면 ADR-004와 Communication 명세를 먼저 대체하고 golden fixture를 함께
+갱신한다.
 
 ## 19. 구현 순서
 
@@ -755,7 +766,8 @@ fake market snapshot과 spy observer를 사용해 다음을 검증한다.
 - 완료: “STM은 Action 요청만 결정하고 Controller가 수행한다”는 계약을 추가했다.
 - 완료: `EA-007`을 강하락 복합조건 전체 실패로 정규화했다.
 - 완료: `ema9_slope`, `live_ema9`, `HH && HL`, `LH && LL`, 최초/재평가 이벤트와 입력 실패 원칙을 확정했다.
-- 남음: Communication Diagram 8.11/8.13의 반환형과 역할 설명을 이 계획의 계약에 맞춘다.
+- 완료: Communication 메시지 `1.5.1`, 8.11과 8.13을 `handle(event, context) : RegimeSTMResult` 계약에 맞췄다.
+- 완료: ADR-004에서 최소 데이터, snapshot tick, slope 단위, swing `0.30%`와 golden vector를 잠갔다.
 
 완료 기준: 13개 행 모두에 전이 책임과 실제 Action 수행자가 분명히 지정되어 있다.
 
@@ -801,12 +813,13 @@ fake market snapshot과 spy observer를 사용해 다음을 검증한다.
 ### Phase 6 — 설계 문서 동기화
 
 - 완료: 4H REGIME Event-Action Table의 Action 수행 주체와 `EA-007`을 수정했다.
-- Communication Diagram의 공통 타입, 메시지 `1.5/1.5.1`, 8.11, 8.12, 8.13을 실제 계약과 일치시킨다.
-- 클래스/상태 다이어그램에서 Controller와 STM의 의존성 방향을 확인한다.
+- 완료: Communication Diagram의 공통 타입, 메시지 `1.5/1.5.1`, 8.11, 8.12, 8.13을 실제 계약과 일치시켰다.
+- 남음: production 통합 Phase에서 클래스/상태 다이어그램과 실제 import 의존성 방향을 architecture test로 확인한다.
 
 ## 20. 참조 문서에 필요한 후속 변경
 
-4H REGIME Event-Action Table 변경은 완료되었다. Communication Diagram과 나머지 설계 산출물은 구현 착수 전에 다음과 같이 동기화한다.
+4H REGIME Event-Action Table과 Communication 명세의 public 계약 변경은 완료되었다.
+나머지 production 구조 검증은 해당 구현 Phase에서 수행한다.
 
 ### 20.1 4H REGIME Event-Action Table — 반영 완료
 
@@ -818,12 +831,11 @@ fake market snapshot과 spy observer를 사용해 다음을 검증한다.
 
 ### 20.2 Communication Diagram Message Flow Specification
 
-- 공통 타입에 `RegimeEvent`, `RegimeActionRequest`, `RegimeSTMResult`, 필요 시 `RegimeResult`를 추가한다.
-- 메시지 `1.5.1`의 반환형을 `RegimeType`에서 `RegimeSTMResult`로 바꾸고, 결과 Action은 Controller가 수행한다고 설명한다.
-- 8.11의 기능을 “입력 준비, STM 실행, Action 수행, 추천값 보존”으로 명확히 한다.
-- 8.13의 기능을 “가드·다음 상태·Action 요청 결정”으로 바꾸고 외부 상태 변경을 금지한다.
-- 8.13의 canonical operation을 `handle(event, context) : RegimeSTMResult`로 바꾼다.
-- 8.12 또는 별도 평가 Context에 `current_price`, snapshot version, candle ID를 추가한다.
+- 완료: 공통 타입에 `RegimeEvent`, `RegimeEvaluationContext`, `RegimeActionRequest`, `RegimeSTMResult`를 추가했다.
+- 완료: 메시지 `1.5.1`의 반환형을 `RegimeSTMResult`로 바꾸고 Controller의 두 microstep Action 수행을 명시했다.
+- 완료: 8.11의 기능을 입력 준비, STM 실행, Action 수행과 추천/선택 분리로 명확히 했다.
+- 완료: 8.13을 가드·다음 상태·Action 요청 결정 책임으로 바꾸고 canonical `handle`을 반영했다.
+- 완료: 같은 snapshot의 `current_price`, version과 candle ID를 `RegimeEvaluationContext` 계약에 고정했다.
 
 ## 21. 구현 완료 기준
 

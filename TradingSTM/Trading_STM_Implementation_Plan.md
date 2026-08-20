@@ -2,9 +2,9 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | Proposed — Event-Action Table 책임 분리 반영 완료, 구현 전 설계 검토용 |
+| 문서 상태 | Accepted design — Phase 0 주문/중지/Communication 정책 동기화 완료 |
 | 작성일 | 2026-08-14 |
-| 최종 명세 반영일 | 2026-08-14 |
+| 최종 명세 반영일 | 2026-08-20 |
 | 대상 | `TradingSTM`, `TradingController`, `TradingContext` 및 주문 결과 피드백 경계 |
 | 핵심 목표 | Event-Action Table의 상태·Guard·우선순위는 `TradingSTM`이 판정하고, 모든 Action과 외부 효과는 `TradingController`가 수행하도록 책임을 분리한다. |
 
@@ -770,27 +770,33 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 | runtime Context | pending 주문 필드, `trading_phase`, Case 활성화와 exit 관련 공통 변수를 명세에 추가했다. |
 | transition 추적성 | 기존 104개 행에 주문/중지 피드백 5개를 추가해 총 109개 ID로 확정했다. |
 
-### 16.2 구현 전에 추가로 확정할 항목
+### 16.2 Phase 0 확정 결과와 명시적 gate
 
-아래 항목은 정책 값을 임의로 코드에 넣으면 실제 거래 결과가 달라질 수 있다.
+정책 값은 ADR-001~ADR-003과 Communication 명세를 기준으로 한다.
 
-| 항목 | 남은 결정 |
+| 항목 | 확정 결과 |
 |---|---|
-| 주문 retry 정책 | backoff 간격, rate limit 대응, 최대 시도, 운영자 개입 기준과 retry 포기 상태를 정한다. |
-| 부분 체결 잔여 수량 | 실제 fill 반영 원칙은 확정했지만 잔여 주문 유지·취소 시점과 목표 수량 재주문 여부를 정한다. |
-| 상단 BB 인계 계약 | 대상 Controller/STM operation, pending 주문이 있을 때의 인계 순서, Context 전달 범위와 인계 실패 처리를 정한다. |
-| `orderFinished()` Communication Diagram | Event-Action Table의 구체 결과 EVENT 계약에 맞춰 parameter 없는 operation을 제거하거나 compatibility adapter로 표시하도록 Architecture 문서를 후속 수정한다. |
-| `RECONCILIATION_REQUIRED` 복구 | Position 또는 이력 저장 실패 시 재시도 간격, 신규 전략 Action 재개 조건과 운영자 알림 기준을 정한다. |
-| typed Context 전체 schema | signal/flush/timer의 정확한 타입, optional 여부, 초기값과 lower-event 종료 시 reset 범위를 dataclass 정의 전에 고정한다. |
+| 주문 retry 정책 | ADR-002에서 같은 주문 조회 4회 `1/2/4/8초 ±20%`, 일반 terminal zero-fill 신규 제출 최대 4회, force-sell 고정 3초 최대 4회로 확정했다. |
+| 부분 체결 잔여 수량 | fill delta를 먼저 반영한다. terminal partial BUY는 자동 top-up하지 않고 실제 수량으로 진입을 확정하며, SELL/force-sell은 이전 주문 terminal 확인 뒤 잔여 Position만 같은 exit intent로 정리한다. |
+| 상단 BB 인계 계약 | 대상 Operation/Event-Action Table이 아직 없음을 숨기지 않는다. `TYPE_0 -> LOWER_BB` mapping은 확정하지만 Phase 6에서 인계 계약과 coverage를 완료하기 전에는 `TRADING_LOGIC_INCOMPLETE`로 production start를 거부한다. |
+| `orderFinished()` Communication | `orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult` 검증 adapter로 동기화했다. 구체 outcome만 허용하고 canonical `handle`로 위임한다. |
+| `RECONCILIATION_REQUIRED` 복구 | 상태 불명은 같은 ID 조회, 저장 실패는 같은 order ID 저장만 재시도한다. startup open-order/recent-fill reconciliation이 끝나기 전 신규 Action을 차단하고 불일치는 운영자에게 표시한다. |
+| typed Context 전체 schema | 현재 `context.py`의 frozen dataclass, enum, optional 불변식과 lower-event typed Action reset 범위를 source/test 기준으로 사용한다. 임의 dictionary patch를 금지한다. |
+
+상단 BB 인계는 미확정 정책을 기본 no-op이나 즉시 종료로 채운 것이 아니라 start gate로
+격리한 것이다. Phase 6에서 먼저 Communication의 기존 `TradingController`와
+`TradingSTM` Operation을 검토한 뒤 Event-Action Table을 확정해야 한다.
 
 ## 17. 구현 순서
 
 ### Phase 0 — 명세 정규화
 
 - 완료: Event-Action Table의 Action 책임 분리, 주문 2단계 EVENT, STOPPING과 109개 transition ID를 반영했다.
-- 16.2절의 retry, 부분 체결 잔여 수량, 인계와 복구 정책을 확정한다.
-- 109개 transition ID를 machine-readable 목록으로 옮긴다.
-- Event, Context field, Action request catalog와 enum 이름을 고정한다.
+- 완료: ADR-002에서 retry, 부분 체결 잔여 수량, cancel과 restart 복구 정책을 확정했다.
+- 완료: 상단 BB 인계 공백은 `TRADING_LOGIC_INCOMPLETE` start gate로 명시하고 Phase 6 이전 실행을 금지했다.
+- 완료: 109개 transition ID를 `transitions/catalog.py`의 machine-readable source 목록으로 고정했다.
+- 완료: Event, Context field, Action request catalog와 enum 이름을 현재 source와 test로 고정했다.
+- 완료: Communication Case 2 메시지 `14`와 클래스 8.5의 concrete outcome signature를 동기화했다.
 
 완료 기준: 모든 Action 문장이 STM 결정 값과 Controller effect로 분해되어 owner가 지정되어 있다.
 
