@@ -96,6 +96,7 @@ export interface UiApplicationSnapshot {
  */
 export interface UiApplicationFacadeOptions {
     readonly today: LocalDateString;
+    readonly trading_symbol?: string;
     readonly csv_default_file_name?: string;
     readonly chart_interval?: ChartInterval;
     readonly chart_indicators?: {
@@ -113,12 +114,39 @@ export interface UiApplicationFacadeOptions {
     readonly account_strategy?: StrategySummaryViewModel;
     readonly account_asset?: AssetSummaryViewModel;
     readonly trade_history_summary?: TradeHistorySummaryViewModel;
+    readonly is_trading?: boolean;
+    readonly has_open_position?: boolean;
+}
+
+/**
+ * backend의 한 coherent snapshot에서 UI actor가 소유할 server state만 추출한 계약이다.
+ */
+export interface UiServerOwnedSnapshot {
+    readonly last_sequence: number;
+    readonly trading_symbol: string;
+    readonly recommended_regime: RegimeType | null;
+    readonly applied_regime: RegimeType | null;
+    readonly regime_metrics: ReadonlyArray<RegimeMetric>;
+    readonly recent_trades: ReadonlyArray<TradeRecord>;
+    readonly history_records: ReadonlyArray<TradeRecord>;
+    readonly scale_in_percentage?: number;
+    readonly scale_out_percentage?: number;
+    readonly account_strategy: StrategySummaryViewModel;
+    readonly account_asset: AssetSummaryViewModel;
+    readonly trade_history_summary: TradeHistorySummaryViewModel;
+    readonly is_trading: boolean;
+    readonly has_open_position?: boolean;
+    readonly trading_state_label: string;
 }
 
 /**
  * React Boundary가 facade에 전달할 수 있는 사용자 의도와 backend event의 통합 계약이다.
  */
 export type UiApplicationIntent =
+    | {
+        readonly type: 'BACKEND_SNAPSHOT_SYNCHRONIZED';
+        readonly snapshot: UiServerOwnedSnapshot;
+    }
     | { readonly type: 'CONNECT_REQUESTED' }
     | { readonly type: 'RECONNECT_REQUESTED' }
     | { readonly type: 'API_CONNECTED'; readonly sequence?: number }
@@ -150,6 +178,7 @@ export type UiApplicationIntent =
     | { readonly type: 'REGIME_CHANGE_CONFIRMED' }
     | { readonly type: 'REGIME_CHANGE_CANCELED' }
     | { readonly type: 'REGIME_RECOMMENDED'; readonly regime: RegimeType }
+    | { readonly type: 'REGIME_APPLIED'; readonly regime: RegimeType }
     | { readonly type: 'REGIME_INDICATORS_UPDATED'; readonly metrics: ReadonlyArray<RegimeMetric> }
     | { readonly type: 'REGIME_HIGHLIGHT_COMPLETED' }
     | { readonly type: 'CHART_INTERVAL_SELECTED'; readonly interval: ChartInterval }
@@ -202,6 +231,12 @@ export type UiApplicationIntent =
     }
     | {
         readonly type: 'TRADE_HISTORY_DAILY_FEE_UPDATED';
+        readonly fees: TradeHistorySummaryViewModel['fees'];
+    }
+    | {
+        readonly type: 'TRADE_HISTORY_PERFORMANCE_UPDATED';
+        readonly daily_return: TradeHistorySummaryViewModel['dailyReturn'];
+        readonly sell_performance: TradeHistorySummaryViewModel['sellPerformance'];
         readonly fees: TradeHistorySummaryViewModel['fees'];
     }
     | { readonly type: 'OPEN_CSV_EXPORT' }
@@ -286,6 +321,7 @@ export interface AppViewModel {
         readonly asset: AssetSummaryViewModel;
     };
     readonly trade_history: {
+        readonly symbol: string;
         readonly period: HistoryPeriod;
         readonly side: TradeSideFilter;
         readonly status: 'idle' | 'loading' | 'ready' | 'empty' | 'failed';
@@ -402,6 +438,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
             asset: snapshot.account_summary.context.asset,
         },
         trade_history: {
+            symbol: snapshot.trade_history.context.symbol,
             period: snapshot.trade_history.context.period,
             side: snapshot.trade_history.context.side,
             status: history_status,
@@ -449,6 +486,8 @@ export class UiApplicationFacade {
     private readonly listeners = new Set<(snapshot: UiApplicationSnapshot) => void>();
     private readonly actor_subscriptions: Array<ActorSubscription> = [];
     private is_started = false;
+    private notification_batch_depth = 0;
+    private notification_is_pending = false;
 
     /**
      * 함수 이름: UiApplicationFacade.constructor()
@@ -512,6 +551,9 @@ export class UiApplicationFacade {
                     : { scale_out_percentage: options.scale_out_percentage }),
             })),
             trade_history: createActor(create_trade_history_machine(command_port, {
+                ...(options.trading_symbol === undefined
+                    ? {}
+                    : { symbol: options.trading_symbol }),
                 ...(options.history_records === undefined
                     ? {}
                     : { records: options.history_records }),
@@ -521,7 +563,14 @@ export class UiApplicationFacade {
                     ? {}
                     : { summary: options.trade_history_summary }),
             })),
-            trading: createActor(create_trading_command_machine(command_port)),
+            trading: createActor(create_trading_command_machine(command_port, {
+                ...(options.is_trading === undefined
+                    ? {}
+                    : { is_trading: options.is_trading }),
+                ...(options.has_open_position === undefined
+                    ? {}
+                    : { has_open_position: options.has_open_position }),
+            })),
         };
 
         Object.values(this.actors).forEach((actor) => {
@@ -576,6 +625,10 @@ export class UiApplicationFacade {
      */
     dispatch(intent: UiApplicationIntent): boolean {
         switch (intent.type) {
+            case 'BACKEND_SNAPSHOT_SYNCHRONIZED': {
+                this.synchronize_server_owned_snapshot(intent.snapshot);
+                break;
+            }
             case 'CONNECT_REQUESTED':
                 this.actors.connection.send({ type: 'CONNECT_REQUESTED' });
                 break;
@@ -693,6 +746,9 @@ export class UiApplicationFacade {
                 break;
             case 'REGIME_RECOMMENDED':
                 this.actors.regime.send({ type: 'TYPE_RECOMMENDED', regime: intent.regime });
+                break;
+            case 'REGIME_APPLIED':
+                this.actors.regime.send({ type: 'REGIME_APPLIED', regime: intent.regime });
                 break;
             case 'REGIME_INDICATORS_UPDATED':
                 this.actors.regime.send({
@@ -826,6 +882,14 @@ export class UiApplicationFacade {
             case 'TRADE_HISTORY_DAILY_FEE_UPDATED':
                 this.actors.trade_history_summary.send({
                     type: 'DAILY_TRADING_FEE_CHANGED',
+                    fees: intent.fees,
+                });
+                break;
+            case 'TRADE_HISTORY_PERFORMANCE_UPDATED':
+                this.actors.trade_history_summary.send({
+                    type: 'PERFORMANCE_SNAPSHOT_UPDATED',
+                    daily_return: intent.daily_return,
+                    sell_performance: intent.sell_performance,
                     fees: intent.fees,
                 });
                 break;
@@ -975,6 +1039,11 @@ export class UiApplicationFacade {
             return;
         }
 
+        if (this.notification_batch_depth > 0) {
+            this.notification_is_pending = true;
+            return;
+        }
+
         if (!this.reconcile_modal_slot()) {
             this.notify_listeners();
         }
@@ -991,6 +1060,95 @@ export class UiApplicationFacade {
         const snapshot = this.get_snapshot();
 
         this.listeners.forEach((listener) => listener(snapshot));
+    }
+
+    /**
+     * 함수 이름: synchronize_server_owned_snapshot()
+     * 기능: 한 coherent backend snapshot의 actor별 값을 중간 publish 없이 원자적으로 교체한다.
+     * 인자: synchronized_snapshot -> mapper가 검증하고 UI 표시 계약으로 변환한 전체 snapshot
+     * 반환값: 없음
+     * 작성 날짜: 2026/08/21
+     */
+    private synchronize_server_owned_snapshot(
+        synchronized_snapshot: UiServerOwnedSnapshot,
+    ): void {
+        // 열린 사용자 확인 modal은 유지하되 그 안에서 표시할 authoritative context는 갱신한다.
+        const active_modal = this.actors.shell.getSnapshot().context.active_modal;
+        const preserve_regime_interaction = active_modal === 'regime_change_confirmation';
+        const preserve_trading_interaction = active_modal === 'select_regime_notice'
+            || active_modal === 'api_connection_required'
+            || active_modal === 'start_confirmation'
+            || active_modal === 'stop_confirmation'
+            || active_modal === 'force_sell_stop_confirmation';
+
+        this.notification_batch_depth += 1;
+
+        try {
+            // UI-local route와 chart 설정은 건드리지 않고 server-owned context만 교체한다.
+            this.actors.account_summary.send({
+                type: 'ACCOUNT_SUMMARY_SYNCHRONIZED',
+                strategy: synchronized_snapshot.account_strategy,
+                asset: synchronized_snapshot.account_asset,
+            });
+            this.actors.regime.send({
+                type: preserve_regime_interaction
+                    ? 'REGIME_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                    : 'REGIME_SNAPSHOT_SYNCHRONIZED',
+                recommended_regime: synchronized_snapshot.recommended_regime,
+                applied_regime: synchronized_snapshot.applied_regime,
+                metrics: synchronized_snapshot.regime_metrics,
+            });
+            this.actors.recent_orders.send({
+                type: 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED',
+                trades: synchronized_snapshot.recent_trades,
+                indicators: synchronized_snapshot.regime_metrics,
+            });
+            this.actors.trade_history.send({
+                type: 'TRADE_HISTORY_SNAPSHOT_SYNCHRONIZED',
+                symbol: synchronized_snapshot.trading_symbol,
+                records: synchronized_snapshot.history_records,
+            });
+            this.actors.trade_history_summary.send({
+                type: 'TRADE_HISTORY_SUMMARY_SYNCHRONIZED',
+                summary: synchronized_snapshot.trade_history_summary,
+            });
+            // Phase 5 snapshot에 없는 split ratio는 UI-local 현재값을 임의 기본값으로 덮지 않는다.
+            if (synchronized_snapshot.scale_in_percentage !== undefined
+                && synchronized_snapshot.scale_out_percentage !== undefined) {
+                this.actors.split_order.send({
+                    type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED',
+                    scale_in_percentage: synchronized_snapshot.scale_in_percentage,
+                    scale_out_percentage: synchronized_snapshot.scale_out_percentage,
+                });
+            }
+
+            // Position 소유 backend field가 없는 동안 trading status만 authoritative하게 교체한다.
+            this.actors.trading.send({
+                type: preserve_trading_interaction
+                    ? 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                    : 'TRADING_SNAPSHOT_SYNCHRONIZED',
+                is_trading: synchronized_snapshot.is_trading,
+                has_open_position: synchronized_snapshot.has_open_position
+                    ?? this.actors.trading.getSnapshot().context.has_open_position,
+            });
+            this.actors.chart.send({
+                type: 'TRADING_LOGIC_STATE_CHANGED',
+                state_label: synchronized_snapshot.trading_state_label,
+            });
+            this.actors.connection.send({
+                type: 'API_CONNECTED',
+                sequence: synchronized_snapshot.last_sequence,
+            });
+            this.reconcile_modal_slot();
+            this.notification_is_pending = true;
+        } finally {
+            this.notification_batch_depth -= 1;
+        }
+
+        if (this.notification_batch_depth === 0 && this.notification_is_pending) {
+            this.notification_is_pending = false;
+            this.notify_listeners();
+        }
     }
 
     /**

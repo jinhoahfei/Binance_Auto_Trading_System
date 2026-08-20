@@ -1,7 +1,7 @@
 # Binance Auto Backend
 
 `binance-auto-trader-backend`는 RegimeSTM과 TradingSTM, authoritative 시장·계좌
-데이터 및 거래 이력 초기 로드 vertical slice를 하나의
+데이터, 거래 이력 초기 로드 및 versioned loopback read transport를 하나의
 `binance_auto_trader` distribution으로 통합한 Python package입니다. 두 STM은
 상태와 guard만 판정하고, 외부 효과는 typed action request로 반환합니다.
 
@@ -24,6 +24,10 @@
   시작하는 `load_account()` slice
 - `application/trade_history_controller.py`: Repository → TradeHistory →
   Performance 초기 복원
+- `bootstrap/`: 기존 Entity/Gateway/Controller 조립, 실행 mode와
+  market → account → history/performance startup lifecycle
+- `transport/`: `127.0.0.1` random-port HTTP/WebSocket, version 1 DTO,
+  인증·replay·full-resync 및 TypeScript contract 생성
 - `tests/`: STM 회귀와 market/account/history unit·integration 검증
 - `tests/architecture/`: package, enum, import 경계와 coding convention 검증
 
@@ -101,6 +105,29 @@ trading_stm = TradingSTM.get_stm_instance(RegimeType.TYPE_0)
 
 실제 주문 adapter는 `SubmitOrder`의 `idempotency_key`를 client order key로 사용하고, `NEW`, `PARTIALLY_FILLED`, `UNKNOWN` 결과에서는 새 주문을 제출하지 말고 `ReconcileOrder` 계약에 따라 같은 주문 ID를 조회해야 합니다.
 
+## Application startup과 loopback read 계약
+
+`create_application_runtime()`은 하나의 `RLock` 아래 기존 MarketSnapshot,
+Account, RegimeSTM과 Controller/Gateway identity를 조립합니다.
+`start_application()`은 market 초기화와 REGIME 추천 준비를 검증한 뒤 account REST
+commit·stream 시작, history/performance 복원을 순서대로 실행합니다. 어느 단계든
+실패하면 ready를 공개하지 않고 stage/code가 있는 `ApplicationStartupError`로 닫으며,
+이미 열린 account subscription을 정리합니다. 실행 mode는
+`disabled | fake | testnet | live`이고 누락·unknown 값의 기본은 `disabled`입니다.
+
+`run_transport_process()`는 session token을 argv, URL, environment 또는 log가 아닌
+inherited anonymous FD에서 한 번 읽습니다. 같은 factory 호출에서 event stream observer,
+runtime startup, ready 사후조건, `127.0.0.1` random-port server와 cleanup을 조립합니다.
+HTTP는 Bearer token, canonical request ID, exact Host/Origin과 command idempotency를
+검증하고, WebSocket은 2초 이내 첫 `AUTHENTICATE` frame 뒤 bounded replay를 제공합니다.
+snapshot과 `last_sequence`는 application lock 아래 원자적으로 읽습니다.
+
+현재 live read snapshot은 ETHUSDT/USDT 값을 그대로 제공하고 REGIME 추천과 사용자
+선택을 분리합니다. Phase 5에는 Trading session, Position, 주문, 상세 history query,
+CSV와 안전 종료 owner가 없으므로 관련 command route는 `FEATURE_NOT_AVAILABLE`로
+fail closed하며 TradingSTM을 호출하지 않습니다. 실제 Binance client와 credential은
+Phase 9, packaged Tauri sidecar lifecycle은 Phase 12 범위입니다.
+
 ## 테스트
 
 외부 패키지 없이 표준 라이브러리 `unittest`로 실행할 수 있습니다.
@@ -110,5 +137,5 @@ cd backend
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-실제 Binance client 조립, 주문 Gateway, history append/export와 transport는 후속
-Phase의 범위입니다. domain package에는 network/file 의존성이 없습니다.
+실제 Binance client 조립, 주문 Gateway와 history append/export는 후속 Phase의
+범위입니다. domain package에는 transport/network/file 의존성이 없습니다.

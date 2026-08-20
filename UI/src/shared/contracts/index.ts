@@ -15,4 +15,34 @@ export type {
     TradeSideFilter,
     UiCommandFailure,
 } from './uiContracts';
-
+export {
+    BACKEND_SCHEMA_VERSION,
+} from './backendContracts.generated';
+export type {
+    BackendAccountSnapshot,
+    BackendAccountUpdatedPayload,
+    BackendAuthenticateMessage,
+    BackendBalanceSnapshot,
+    BackendConnectionSnapshot,
+    BackendDecimalString,
+    BackendEventEnvelope,
+    BackendExecutionMode,
+    BackendFailureEnvelope,
+    BackendHealth,
+    BackendHttpEnvelope,
+    BackendIndicatorSnapshot,
+    BackendMarketSnapshot,
+    BackendPerformanceSnapshot,
+    BackendRegimeSnapshot,
+    BackendRegimeType,
+    BackendResyncRequired,
+    BackendResyncReason,
+    BackendSnapshot,
+    BackendSuccessEnvelope,
+    BackendStrategyType,
+    BackendSwingSnapshot,
+    BackendTradeSide,
+    BackendTradeSnapshot,
+    BackendTradingStatus,
+    BackendTradingSnapshot,
+} from './backendContracts.generated';

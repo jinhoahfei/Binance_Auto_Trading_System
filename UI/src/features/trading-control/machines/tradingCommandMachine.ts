@@ -1,5 +1,6 @@
 import { assign, fromPromise, setup } from 'xstate';
 import type { RegimeType, UiCommandFailure } from '../../../shared/contracts';
+import { to_ui_command_failure } from '../../../shared/errors';
 import type { UiCommandPort } from '../../../shared/ports';
 
 export interface TradingCommandContext {
@@ -11,7 +12,25 @@ export interface TradingCommandContext {
     readonly error: UiCommandFailure | null;
 }
 
+/**
+ * backend startup snapshot으로 trading actor의 authoritative 상태를 초기화하는 옵션이다.
+ */
+export interface TradingCommandMachineOptions {
+    readonly is_trading?: boolean;
+    readonly has_open_position?: boolean;
+}
+
 export type TradingCommandEvent =
+    | {
+        readonly type: 'TRADING_SNAPSHOT_SYNCHRONIZED';
+        readonly is_trading: boolean;
+        readonly has_open_position: boolean;
+    }
+    | {
+        readonly type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED';
+        readonly is_trading: boolean;
+        readonly has_open_position: boolean;
+    }
     | {
         readonly type: 'START_BUTTON_CLICKED';
         readonly regime: RegimeType | null;
@@ -40,17 +59,11 @@ export type TradingCommandEvent =
  * 작성 날짜: 2026/08/12
  */
 function to_command_failure(error: unknown): UiCommandFailure {
-    if (error instanceof Error) {
-        return {
-            code: 'UI_COMMAND_FAILED',
-            message: error.message,
-        };
-    }
-
-    return {
-        code: 'UI_COMMAND_FAILED',
-        message: '요청을 완료하지 못했습니다.',
-    };
+    return to_ui_command_failure(
+        error,
+        'UI_COMMAND_FAILED',
+        '요청을 완료하지 못했습니다.',
+    );
 }
 
 /**
@@ -60,7 +73,10 @@ function to_command_failure(error: unknown): UiCommandFailure {
  * 반환값: trading-control feature의 XState machine
  * 작성 날짜: 2026/08/12
  */
-export function create_trading_command_machine(command_port: UiCommandPort) {
+export function create_trading_command_machine(
+    command_port: UiCommandPort,
+    options: TradingCommandMachineOptions = {},
+) {
     return setup({
         types: {
             context: {} as TradingCommandContext,
@@ -78,6 +94,10 @@ export function create_trading_command_machine(command_port: UiCommandPort) {
             }),
         },
         guards: {
+            snapshot_is_running: ({ event }) => {
+                return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                    && event.is_trading;
+            },
             is_regime_missing: ({ event }) => {
                 return event.type === 'START_BUTTON_CLICKED' && event.regime === null;
             },
@@ -92,6 +112,30 @@ export function create_trading_command_machine(command_port: UiCommandPort) {
             },
         },
         actions: {
+            synchronize_trading_snapshot: assign({
+                is_trading: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.is_trading
+                        : context.is_trading;
+                },
+                has_open_position: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.has_open_position
+                        : context.has_open_position;
+                },
+                notice: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        ? null
+                        : context.notice;
+                },
+                error: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        ? null
+                        : context.error;
+                },
+            }),
             remember_start_request: assign({
                 selected_regime: ({ event }) => {
                     return event.type === 'START_BUTTON_CLICKED' ? event.regime : null;
@@ -146,16 +190,30 @@ export function create_trading_command_machine(command_port: UiCommandPort) {
         },
     }).createMachine({
         id: 'tradingCommandMachine',
-        initial: 'stopped',
+        initial: options.is_trading === true ? 'running' : 'stopped',
         context: {
             selected_regime: null,
-            is_trading: false,
-            has_open_position: false,
+            is_trading: options.is_trading ?? false,
+            has_open_position: options.has_open_position ?? false,
             regime_highlight_requested: false,
             notice: null,
             error: null,
         },
         on: {
+            TRADING_SNAPSHOT_SYNCHRONIZED: [
+                {
+                    guard: 'snapshot_is_running',
+                    target: '.running',
+                    actions: 'synchronize_trading_snapshot',
+                },
+                {
+                    target: '.stopped',
+                    actions: 'synchronize_trading_snapshot',
+                },
+            ],
+            TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED: {
+                actions: 'synchronize_trading_snapshot',
+            },
             POSITION_UPDATED: {
                 actions: 'synchronize_position',
             },

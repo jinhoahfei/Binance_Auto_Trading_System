@@ -4,10 +4,10 @@
 |---|---|
 | 문서 상태 | As-built — 현재 구현 기준 |
 | 작성일 | 2026-08-12 |
-| 최종 갱신일 | 2026-08-20 |
+| 최종 갱신일 | 2026-08-21 |
 | 대상 경로 | `/Users/oscar/Desktop/Binance_Auto/UI` |
 | 대상 구현 | React + TypeScript + XState + Vite + Tauri 2 UI |
-| 제외 범위 | Binance 실거래·계좌 인증, 투자 판단 알고리즘, 실제 CSV 파일 시스템 adapter, 주문 backend 연결 |
+| 제외 범위 | 실제 Binance client·credential·주문 실행, 실제 CSV writer, packaged sidecar 실행·종료 lifecycle |
 
 ## 1. 문서 목적
 
@@ -20,7 +20,7 @@
 - UI Event-Action Table이 코드에 분산 구현된 위치
 - Figma 16개 프레임과 Storybook/기준 이미지의 대응 관계
 - 테스트, 실행, 확장 시 지켜야 할 규칙
-- 현재 데모 구현과 앞으로 연결해야 할 실제 backend의 경계
+- production live read와 demo/Storybook, 후속 command owner의 경계
 
 `node_modules`, `dist`, `storybook-static`처럼 명령 실행으로 다시 생성할 수 있는 디렉터리는 파일을 하나씩 나열하지 않고 생성물로 따로 설명한다.
 
@@ -34,16 +34,20 @@
 - `UiApplicationStore`가 facade를 React의 `useSyncExternalStore` 계약으로 감싼다.
 - presenter가 actor의 `AppViewModel`을 각 페이지와 기능 컴포넌트의 props로 변환한다.
 - backend 명령은 `UiCommandPort` 뒤로 격리되어 있다.
-- 현재 실행 환경은 `FakeUiCommandAdapter`를 사용하므로 실거래와 실제 파일 쓰기를 수행하지 않는다.
+- production entry는 `BackendUiAdapter`의 ready snapshot을 먼저 적용하며, Storybook과 화면 tests만 `FakeUiCommandAdapter`를 명시적으로 사용한다.
+- backend 계좌·REGIME·성과 read model은 ETHUSDT/USDT 단위를 유지하고 없는 position·entry price·slippage를 추측하지 않는다.
 - 가격 차트는 Binance 공개 market-data REST/WebSocket에서 `ETHUSDT`의 `1m`, `30m`, `4h`, `1d` 봉을 조회·구독한다.
 - 실시간 시장 데이터는 WebSocket을 먼저 시작한 뒤 REST 과거 봉과 병합하고, 동일 `symbol + interval + open_time`에는 WebSocket 값을 우선한다.
-- Tauri는 1440×1024 데스크톱 창과 안전한 종료 lifecycle을 제공하는 최소 shell이다.
+- Tauri는 1440×1024 데스크톱 창과 memory-only one-shot backend descriptor command를 제공한다. sidecar 실행·패키징·종료는 Phase 12에 남아 있다.
 - Storybook의 공통 harness가 Figma 16개 프레임을 상태 fixture로 재현한다.
 - 스타일은 semantic CSS token, CSS Modules, Radix primitive를 중심으로 구성한다.
 - `App.tsx`는 dashboard와 trade-history Route Boundary를 `React.lazy`와 동적 `import()`로 분리하고, 최초 로드 동안 접근 가능한 `Suspense` fallback을 표시한다.
 - 조회·명령 실패는 actor의 공통 오류를 presenter와 modal Boundary에서 사용자에게 표시하고 재시도 흐름으로 연결한다.
 
-초기 데모 상태는 API 연결 표시가 online이고 자동매매는 정지 상태이며, 실제 적용 REGIME은 `null`이다. 따라서 처음에는 어떤 REGIME 버튼도 선택되지 않고, REGIME 미선택 상태에서 자동매매 실행을 누르면 경고 modal과 REGIME 패널 강조 흐름이 시작된다.
+demo bootstrap의 초기 상태는 API 연결 표시가 online이고 자동매매는 정지 상태이며,
+실제 적용 REGIME은 `null`이다. production bootstrap은 이 fixture를 읽지 않고 backend의
+추천/선택/account/history/performance snapshot을 사용한다. 추천값은 표시만 하며 사용자
+선택값으로 자동 적용하지 않는다.
 
 ## 3. 전체 아키텍처
 
@@ -56,8 +60,10 @@ flowchart LR
     Store --> Facade["UiApplicationFacade\nactor 조정과 modal 단일화"]
     Facade --> Actors["기능별 XState actor"]
     Actors --> Port["UiCommandPort"]
-    Port --> Fake["현재: FakeUiCommandAdapter"]
-    Port -. "향후 교체" .-> Backend["실제 backend와 desktop adapter"]
+    Port --> Live["production: BackendUiAdapter"]
+    Port --> Fake["Storybook/tests: FakeUiCommandAdapter"]
+    Live --> Loopback["127.0.0.1 HTTP/WebSocket\nsnapshot-first + sequence"]
+    Loopback --> Backend["Python application runtime"]
     Actors --> Snapshot["UiApplicationSnapshot"]
     Snapshot --> ViewModel["AppViewModel"]
     ViewModel --> Presenter
@@ -70,7 +76,7 @@ flowchart LR
 
 | 계층 | 대표 위치 | 책임 |
 |---|---|---|
-| Entry/Provider | `src/main.tsx`, `src/app/providers` | React root와 전역 provider를 생성한다. |
+| Entry/Provider | `src/main.tsx`, `src/app/providers` | native descriptor와 ready snapshot 뒤 React root와 전역 provider를 생성하며 실패 시 demo 대신 typed startup 화면을 표시한다. |
 | App composition | `src/app/App.tsx` | 헤더, 지연 로딩되는 현재 route, 전역 modal host와 route loading fallback을 조합한다. |
 | Route Boundary | `src/routes` | 기능 컴포넌트를 화면 레이아웃으로 배치한다. 업무 상태를 직접 판단하지 않는다. |
 | Feature Boundary | `src/features/*/components` | ViewModel을 렌더링하고 typed intent만 상위로 보낸다. |
@@ -78,8 +84,8 @@ flowchart LR
 | Control facade | `src/app/control` | UI intent를 actor event로 라우팅하고 actor snapshot을 단일화한다. |
 | State actor | `src/app/machines`, `src/features/*/machines` | Event-Action 상태, guard, action, 비동기 command lifecycle을 관리한다. |
 | Runtime store | `src/app/runtime`, `src/app/hooks` | facade와 React 구독 수명주기, Tauri 창 종료를 연결한다. |
-| Contract/Port | `src/shared/contracts`, `src/shared/ports` | 기능 간 데이터 형식과 backend 명령 경계를 정의한다. |
-| Adapter/Fixture | `src/shared/testing`, `src/app/bootstrap` | backend 없이 결정적인 데모와 테스트 결과를 제공한다. |
+| Contract/Port | `src/shared/contracts`, `src/shared/ports` | Python에서 생성한 wire schema, 기능 간 데이터 형식과 backend 명령 경계를 정의한다. |
+| Adapter/Fixture | `src/shared/api`, `src/shared/testing`, `src/app/bootstrap` | production loopback serialization/reconnect와 별도의 결정적 demo/test 경계를 제공한다. |
 | Design system | `src/shared/styles`, `src/shared/ui` | 공통 token, 전역 규칙, 재사용 가능한 primitive를 제공한다. |
 | Desktop shell | `apps/desktop/src-tauri` | Tauri 창, 권한, CSP, 최종 창 제거를 담당한다. |
 
@@ -90,7 +96,7 @@ flowchart LR
 3. presenter가 화면 intent를 `UiApplicationIntent`로 변환해 `UiApplicationController.dispatch()`에 전달한다.
 4. `UiApplicationStore`가 intent를 `UiApplicationFacade`에 전달한다.
 5. facade가 해당 기능의 XState actor event로 변환한다.
-6. 필요하면 actor가 `UiCommandPort`의 비동기 명령을 invoke한다.
+6. 필요하면 actor가 `UiCommandPort`의 비동기 명령을 invoke한다. Phase 5의 미구현 command는 backend typed failure로 닫힌다.
 7. actor snapshot이 바뀌면 facade가 전역 modal slot을 다시 계산하고 전체 snapshot을 발행한다.
 8. store가 새 `AppViewModel`을 캐시하고 React listener에 알린다.
 9. presenter가 새 페이지 props를 만들고 React가 화면을 다시 그린다.
@@ -195,19 +201,26 @@ apps/desktop/src-tauri/
 | `Cargo.toml` | Tauri shell crate, Rust edition, `serde`, `tauri` 의존성을 정의한다. |
 | `build.rs` | Tauri build-time code generation을 실행한다. |
 | `src/main.rs` | native executable entry이며 library의 `run()`을 호출한다. |
-| `src/lib.rs` | 최소 권한 `tauri::Builder`를 만들고 애플리케이션을 실행한다. |
+| `src/lib.rs` | 최소 권한 `tauri::Builder`, strict descriptor 검증과 memory-only one-shot `take_backend_connection_descriptor` command를 등록한다. 초기 slot은 비어 있어 Phase 12 launcher가 stage하기 전에는 fail closed한다. |
 | `tauri.conf.json` | 1440×1024 기본 창, 1180×760 최소 크기, Vite dev URL, frontend build 경로, CSP와 bundle 설정을 정의한다. |
 | `capabilities/main-window.json` | 메인 창의 기본 API와 상태머신 종료 완료 후 `destroy` 권한만 허용한다. |
 
-현재 Tauri Rust 코드는 거래 기능을 구현하지 않는다. 창과 보안 경계를 제공하며, OS close event의 처리 순서는 TypeScript의 `DesktopWindowLifecycle`과 `appExitMachine`이 담당한다.
+현재 Tauri Rust 코드는 거래나 sidecar spawn을 구현하지 않는다. 창, descriptor 전달과
+보안 경계만 제공하며, OS close event의 UI 순서는 TypeScript의
+`DesktopWindowLifecycle`과 `appExitMachine`이 담당한다. Python executable 조립과
+descriptor stage, 실제 안전 종료는 Phase 12 책임이다.
 
 ## 6. `src/app` 구조
 
 ```text
 src/app/
 ├── bootstrap/
+│   ├── createLiveUiApplication.ts
 │   ├── createDemoUiApplication.ts
+│   ├── createLiveUiApplication.process.test.mjs
+│   ├── createLiveUiApplication.test.tsx
 │   ├── demoFixtures.ts
+│   ├── types.ts
 │   └── index.ts
 ├── components/
 │   ├── modals/
@@ -255,7 +268,11 @@ src/app/
 | `App.module.css` | 앱 canvas, 대시보드 여백, route loading 상태와 종료 final 화면의 layout을 정의한다. |
 | `App.test.tsx` | 지연 로딩된 dashboard를 기다린 뒤 REGIME 선택, 자동매매 시작, route 이동, CSV, 중지까지 실제 runtime wiring을 통합 검증한다. |
 | `bootstrap/createDemoUiApplication.ts` | `FakeUiCommandAdapter`와 모든 actor를 포함한 `UiApplicationFacade`를 Figma 기준 초기값으로 생성하고 demo online event를 주입한다. route barrel을 거치지 않고 `dashboardFixture.ts`를 직접 읽어 초기 chunk 경계를 보존한다. |
+| `bootstrap/createLiveUiApplication.ts` | descriptor를 검증하고 전체 snapshot을 먼저 받은 뒤에만 facade를 생성한다. activation 시 actor startup, 단일 server-state sync와 WebSocket 연결을 수행하며 StrictMode와 one-shot token 수명주기를 보존한다. |
+| `bootstrap/createLiveUiApplication.test.tsx` | snapshot-first 순서, StrictMode App render, USDT/음수 손익과 not-ready 무표시를 검증한다. |
+| `bootstrap/createLiveUiApplication.process.test.mjs` | 실제 Python child process의 loopback snapshot을 React App에 표시하고 Communication 메시지 1~5 통합 trace를 검증한다. |
 | `bootstrap/demoFixtures.ts` | Figma 거래 행과 지표를 공통 `TradeRecord`, `RegimeMetric` 계약으로 정규화한다. dashboard 표시 fixture는 route component와 분리된 직접 경로로 읽는다. |
+| `bootstrap/types.ts` | demo와 live가 store에 주입하는 공통 runtime/factory lifecycle을 정의한다. |
 | `bootstrap/index.ts` | bootstrap factory와 fixture의 공개 import 경계를 제공한다. |
 
 `App.tsx`의 Route Boundary 직접 동적 import와 bootstrap/presenter의 `dashboardFixture.ts` 직접 import는 일반 barrel 규칙의 의도적인 예외다. route `index.ts`가 정적으로 page를 다시 참조해 초기 bundle에 포함시키는 것을 막기 위한 code-splitting 경계이며, 화면 상태나 기능 내부 구현을 우회하기 위한 import가 아니다.
@@ -275,8 +292,8 @@ src/app/
 
 | 파일 | 역할 |
 |---|---|
-| `control/UiApplicationFacade.ts` | 모든 feature actor를 생성·시작·종료하고, `UiApplicationIntent`를 actor event로 변환하며, 전체 snapshot과 `AppViewModel`을 만든다. exit → trading → REGIME → CSV 안전 우선순위로 modal 하나만 활성화한다. |
-| `control/UiApplicationFacade.test.ts` | route 상태 보존, REGIME 미선택 경고, chart 선 interaction, account/history summary 투영을 검증한다. |
+| `control/UiApplicationFacade.ts` | 모든 feature actor를 생성·시작·종료하고 intent를 actor event로 변환한다. coherent backend snapshot은 route/modal/chart 같은 UI-local 상태를 유지하면서 server-owned context만 한 notification으로 원자 교체한다. |
+| `control/UiApplicationFacade.test.ts` | route 상태 보존, REGIME 미선택 경고, chart 선 interaction, account/history summary와 authoritative full resync를 검증한다. |
 | `control/index.ts` | facade class, selector, intent/snapshot/ViewModel type을 공개한다. |
 
 `UiApplicationFacade.ts`가 크지만 기능별 상태 자체를 소유하는 거대 상태머신은 아니다. 이 파일은 actor registry와 event router 역할을 하며, 실제 전이는 `features/*/machines`에 분리되어 있다.
@@ -294,8 +311,8 @@ src/app/
 | `presenters/csvExportPresenter.ts` | CSV actor의 draft, validation, calendar target을 `CSVExportDialogProps`로 변환한다. |
 | `presenters/presenters.test.ts` | account/history 값 투영, 거래내역 동적 description·실패/재시도 상태와 chart 선 hover/context/delete intent 변환을 검증한다. |
 | `presenters/index.ts` | 세 presenter 함수의 공개 barrel이다. |
-| `providers/AppProviders.tsx` | 향후 server-owned snapshot 조회를 위한 TanStack Query client를 앱 수명주기에 맞춰 제공한다. 현재 데모 데이터 흐름은 actor/fake adapter가 담당한다. |
-| `runtime/UiApplicationStore.ts` | facade를 React 외부 store로 감싸며 최초 구독에서 actor를 시작하고 마지막 구독에서 정리한다. React StrictMode의 즉시 재구독에도 snapshot을 유지한다. |
+| `providers/AppProviders.tsx` | Query client를 앱 수명주기에 맞춰 제공한다. Phase 5 server snapshot lifecycle은 `BackendUiAdapter`와 facade가 소유한다. |
+| `runtime/UiApplicationStore.ts` | 명시적으로 주입된 demo/live runtime을 React 외부 store로 감싸며 최초 구독에서 시작하고 마지막 구독에서 정리한다. React StrictMode의 즉시 재구독에는 같은 runtime을 유지한다. |
 | `runtime/UiApplicationStore.test.ts` | 최초 구독, dispatch 알림, StrictMode식 구독 교체 수명주기를 검증한다. |
 | `runtime/DesktopWindowLifecycle.ts` | Tauri window API를 `on_close_requested()`와 `destroy()`만 가진 좁은 port로 감싸고 브라우저 실행에서는 `null`을 반환한다. |
 | `runtime/index.ts` | runtime store와 desktop lifecycle 계약의 공개 barrel이다. |
@@ -384,7 +401,7 @@ account-summary/
 | `components/AccountSection.module.css` | 계좌 영역 제목, 3열 카드 layout과 구분선을 정의한다. |
 | `components/StrategyCard.tsx` | 자동매매 작동 상태, 적용 전략, 수익률과 수익 금액을 표시한다. |
 | `components/StrategyCard.module.css` | 전략 상태 dot, tone, 설명 목록을 스타일링한다. |
-| `components/AssetCard.tsx` | 총자산, KRW, ETH, 평가 손익을 표시한다. |
+| `components/AssetCard.tsx` | demo의 KRW 또는 live의 USDT quote label을 보존해 총자산, quote/base asset과 평가 손익을 표시한다. backend가 제공하지 않은 값은 `-`로 표시한다. |
 | `components/AssetCard.module.css` | 자산 값의 숫자 글꼴, 행 layout, 손익 tone을 정의한다. |
 | `machines/accountSummaryMachine.ts` | 투자 로직 상태와 자산 snapshot을 `trading_logic_status`, `asset_summary` 독립 region으로 투영한다. |
 | `machines/accountSummaryMachine.test.ts` | DI1/DI2 갱신이 서로 영향을 주지 않는지 검증한다. |
@@ -745,9 +762,23 @@ route 상태의 owner와 bundle loading 경계는 별개다. `uiShellMachine`이
 
 ```text
 src/shared/
+├── api/
+│   ├── BackendUiAdapter.test.ts
+│   ├── BackendUiAdapter.ts
+│   ├── backendEventMapper.test.ts
+│   ├── backendEventMapper.ts
+│   ├── backendTestFixtures.ts
+│   └── index.ts
 ├── contracts/
+│   ├── backendContracts.generated.ts
 │   ├── index.ts
 │   └── uiContracts.ts
+├── errors/
+│   ├── commandFailure.ts
+│   └── index.ts
+├── formatting/
+│   ├── decimalText.ts
+│   └── index.ts
 ├── hooks/
 │   ├── index.ts
 │   └── useDialogFocusReturn.ts
@@ -777,15 +808,22 @@ src/shared/
     └── index.ts
 ```
 
-### 11.1 Contract, port, testing
+### 11.1 Live API, contract, port와 testing
 
 | 파일 | 역할 |
 |---|---|
-| `contracts/uiContracts.ts` | `RegimeType`, 기간, 거래 방향, `TradeRecord`, chart drawing, CSV option/receipt와 공통 오류 형식을 정의한다. cross-feature 계약만 둔다. |
+| `api/BackendUiAdapter.ts` | Bearer/request/idempotency header, timeout과 HTTP envelope를 처리하고 query 없는 WebSocket 첫-frame 인증, sequence dedup/gap, snapshot-first full resync를 구현한다. 업무 guard는 소유하지 않는다. |
+| `api/backendEventMapper.ts` | generated wire 값을 strict runtime 검증하고 backend snapshot/event를 계산 없는 UI record와 facade intent로 변환한다. ETHUSDT/ETH/USDT와 market-indicator version/price coherence를 검증하며 KRW 환산, entry price, position, slippage나 상태별 성과를 추측하지 않는다. |
+| `api/*.test.ts` | malformed/unknown schema, request/session mismatch, product/cross-field 불일치, duplicate·out-of-order·gap sequence, reconnect snapshot 우선, USDT 단위와 unavailable 값을 검증한다. |
+| `api/backendTestFixtures.ts` | production token과 분리된 transport contract unit fixture를 제공한다. |
+| `contracts/backendContracts.generated.ts` | Python transport schema renderer의 deterministic 출력이다. 직접 수정하지 않으며 backend drift test가 byte-for-byte 일치를 확인한다. |
+| `contracts/uiContracts.ts` | generated `RegimeType`을 재사용하고 기간, 거래 방향, `TradeRecord`, chart drawing, CSV option/receipt와 공통 오류 형식을 정의한다. |
 | `contracts/index.ts` | 공통 contract type의 공개 barrel이다. |
+| `formatting/decimalText.ts` | 금융 문자열을 JS number 연산 없이 부호·소수점·quote asset 표시로 변환한다. |
+| `errors/commandFailure.ts` | adapter typed failure의 code/message를 actor별 fallback과 한 형식으로 정규화한다. |
 | `ports/UiCommandPort.ts` | 자동매매 시작/중지, REGIME 적용, split ratio, history 조회, 폴더 선택, CSV export, shutdown 명령 경계를 정의한다. |
 | `ports/index.ts` | `UiCommandPort`를 공개한다. |
-| `testing/FakeUiCommandAdapter.ts` | 모든 port 명령을 기록하고 결정적 성공/실패를 반환한다. 테스트와 현재 데모 runtime이 함께 사용한다. |
+| `testing/FakeUiCommandAdapter.ts` | 모든 port 명령을 기록하고 결정적 성공/실패를 반환한다. Storybook, demo와 화면 단위 test만 사용한다. |
 | `testing/fixtures.ts` | 공통 기준일, REGIME 지표, 거래 record와 chart drawing fixture를 제공한다. |
 | `testing/index.ts` | fake adapter와 fixture의 공개 barrel이다. |
 
@@ -813,7 +851,7 @@ src/shared/
 
 | 파일 | 역할 |
 |---|---|
-| `src/main.tsx` | `#root`를 검사하고 React StrictMode, `AppProviders`, `App`을 mount하며 global CSS를 불러온다. |
+| `src/main.tsx` | loading boundary를 먼저 표시하고 Tauri one-shot descriptor와 ready snapshot을 받은 경우에만 React StrictMode, `AppProviders`, live `App`을 mount한다. browser/IPC/snapshot 실패는 demo 없이 safe failure code를 표시한다. |
 | `src/vite-env.d.ts` | Vite의 `import.meta`와 asset module type을 TypeScript에 제공한다. |
 | `src/test/setup.ts` | 모든 Vitest 파일에 `@testing-library/jest-dom` matcher를 등록한다. |
 
@@ -837,11 +875,13 @@ src/stories/
 
 ### 12.3 테스트 파일 요약
 
-현재 테스트는 2026-08-14 검증 기준 21개 파일, 59개 test로 구성되며 다음 계층을 확인한다.
+2026-08-21 Phase 5 검증 기준 전체 suite는 31개 파일, 122개 test이며 다음 계층을 확인한다.
 
 | 범위 | 테스트 파일 |
 |---|---|
 | App runtime 통합 | `app/App.test.tsx` |
+| live bootstrap/actual process | `app/bootstrap/createLiveUiApplication.test.tsx`, `createLiveUiApplication.process.test.mjs` |
+| backend adapter/mapper | `shared/api/BackendUiAdapter.test.ts`, `backendEventMapper.test.ts` |
 | Facade 조정 | `app/control/UiApplicationFacade.test.ts` |
 | Presenter 변환 | `app/presenters/presenters.test.ts` |
 | Store 수명주기 | `app/runtime/UiApplicationStore.test.ts` |
@@ -907,13 +947,15 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 |---|---|---|
 | 전역 route/modal | `uiShellMachine` | dashboard/history, 활성 modal 하나 |
 | 기능 UI 상태 | 기능별 XState actor | tab, interval, filter, candidate, pending |
-| backend 표시 snapshot | read-only actor context | account, 거래 summary, position 여부 |
+| backend 표시 snapshot | Python runtime → `BackendUiAdapter` → read-only actor context | REGIME 추천/선택, USDT account, recent/history/performance |
 | UI 순간 상태 | React component/hook | 달력 표시 월, drawing 중 pointer, chart instance, focus return |
 | 화면용 파생값 | `AppViewModel`과 presenter | status label, table row, component props |
 | 외부 명령 결과 | `UiCommandPort` 구현체 | 시작/중지, 조회, CSV, shutdown |
-| 현재 데모 원본 | fixture와 `FakeUiCommandAdapter` | 고정 거래, 지표, 경로, 성공 결과 |
+| demo/Storybook 원본 | fixture와 `FakeUiCommandAdapter` | 고정 KRW 거래, 지표, 경로, 성공 결과 |
 
-같은 값을 React state, actor context와 fixture에 동시에 authoritative하게 두지 않는다. React local state는 사용 중인 임시 표현만 소유하며 확정 상태는 actor 또는 향후 backend가 소유한다.
+같은 값을 React state, actor context와 fixture에 동시에 authoritative하게 두지 않는다.
+React local state는 사용 중인 임시 표현만 소유하며 server-owned 확정 상태는 backend
+snapshot/event가 소유한다.
 
 ## 15. Modal 정책
 
@@ -967,25 +1009,29 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 - CSV 입력·달력·validation과 공백 저장 경로 거부
 - dashboard/trade-history route 단위 production code splitting
 - 앱 종료 확인과 Tauri 창 close interception
+- ready backend snapshot-first hydration, sequence 기반 account event와 full resync
+- actual Python child process의 read-only snapshot을 표시하는 Communication 1~5 통합 test
 - Storybook 16개 Figma 상태 확인
 
 ### 17.2 아직 demo 또는 경계만 있는 것
 
 | 항목 | 현재 상태 | 실제 구현 시 교체/확장 위치 |
 |---|---|---|
-| Binance 주문·계좌 연결 | demo에서 `API_CONNECTED` event를 주입 | 인증 connection service와 facade backend event bridge |
+| backend 계좌·REGIME read | production `BackendUiAdapter` snapshot/event 연결 완료 | 실제 Binance client와 credential은 Phase 9 |
 | Binance 공개 차트 | REST/WebSocket 실시간 연결 완료 | 향후 Python market-data backend 도입 시 hook 내부 adapter 교체 |
-| 자동매매 | fake command를 기록하고 성공 처리 | `UiCommandPort.start_trading/stop_trading/force_sell_and_stop` adapter |
-| REGIME 계산 | 추천값과 지표 fixture | backend snapshot event → facade intent |
-| 계좌/포지션 | Figma fixture와 actor read-only update | backend WebSocket/account query adapter |
-| 거래 내역 | fake adapter의 메모리 배열 filter | `UiCommandPort.load_trade_history` 실제 repository adapter |
+| 자동매매 | live route는 typed unavailable, demo는 fake 성공 | Phase 6~8의 지원 gate와 TradingController session/주문 owner |
+| REGIME 계산 | backend 추천/지표 read 완료, 적용 command는 unavailable | Phase 7 `set_regime_type` owner |
+| 계좌/포지션 | live Account read 완료, Position은 unavailable | Phase 7~8 authoritative Position owner |
+| 거래 내역 | startup recent/performance read 완료, 상세 query unavailable | Phase 10 detail/query owner |
 | CSV 폴더 선택 | 결정적 fake 경로 반환 | Tauri dialog 또는 backend filesystem adapter |
 | CSV 파일 쓰기 | fake receipt 반환 | `UiCommandPort.export_csv` 실제 writer/atomic save |
-| shutdown | fake command 완료 | 거래 engine flush, stream close, sidecar 종료 adapter |
-| TanStack Query | provider만 준비 | 실제 query/cache/snapshot 동기화 도입 |
-| E2E | component/machine 테스트만 존재 | Playwright/Tauri E2E suite 추가 |
+| shutdown | live route는 typed unavailable, demo는 fake 완료 | Phase 12 거래 engine flush, stream close, sidecar 종료 |
+| native sidecar | one-shot descriptor state/command만 구현 | Phase 12 process spawn, stage, package와 crash lifecycle |
+| E2E | actual Python process→React read test 존재 | packaged Tauri/real testnet E2E는 Phase 12~13 |
 
-실제 주문 adapter를 추가할 때 React 표시 component가 Binance SDK, Tauri file API 또는 거래 계산을 직접 import하면 안 된다. 현재 공개 차트 연동처럼 외부 접근은 data/hook 모듈에 격리하고, 인증 명령은 기존 `UiCommandPort`를 구현하거나 필요한 port를 별도 모듈로 추가한다.
+후속 업무 owner를 추가할 때 React 표시 component가 Binance SDK, Tauri file API 또는
+거래 계산을 직접 import하면 안 된다. 인증 transport는 `BackendUiAdapter`, command의
+지원/거래 판단은 기존 backend Controller/domain에 유지한다.
 
 ## 18. 실행과 검증
 
@@ -1023,15 +1069,16 @@ corepack pnpm dev
 | `pnpm desktop:dev` | Rust/Cargo 환경에서 Tauri desktop 개발 앱을 실행한다. |
 | `pnpm desktop:build` | Tauri desktop bundle을 생성한다. |
 
-### 18.4 2026-08-14 검증 결과
+### 18.4 2026-08-21 Phase 5 검증 결과
 
 - strict TypeScript typecheck가 오류 없이 통과했다.
-- Vitest 전체 suite 21개 파일, 59개 test가 모두 통과했다.
-- Vite production build가 267개 module을 변환해 성공했고 500kB 초과 chunk 경고가 사라졌다.
-- code splitting 전 단일 entry JS 627.82kB에서 변경 후 entry JS 351.19kB로 약 44% 감소했다.
+- Vitest 전체 suite 31개 파일, 122개 test가 모두 통과했다.
+- 실제 Python child process가 제공한 loopback snapshot을 React App에 표시하고 메시지 1~5 순서를 검증했다.
+- Python renderer와 `backendContracts.generated.ts`의 byte-for-byte drift 검사가 통과했다.
+- Vite production build가 성공했고 dashboard/history route별 asset 분리가 유지됐다.
 - build 결과에 `DashboardPage`와 `TradeHistoryPage` JS/CSS가 별도 asset으로 생성됐다.
-- production preview에서 dashboard를 먼저 렌더링한 뒤 거래 내역에 진입할 때 `TradeHistoryPage` JS/CSS가 새로 관찰됐고, dashboard 복귀도 정상 동작했다.
-- 같은 browser smoke test에서 warning/error console log가 발생하지 않았다.
+- Storybook static build가 성공해 demo/Figma fixture bootstrap 회귀를 보존했다.
+- 현재 환경에는 Rust toolchain이 없어 `src/lib.rs`의 native unit test 3개는 실행하지 못했으며, 해당 실행은 Phase 12 toolchain 검증에도 남긴다.
 
 ## 19. 새 기능을 추가할 때의 순서
 

@@ -33,7 +33,7 @@ export function StrategyCard({
                     <dt>해당 상태 수익률</dt>
                     <dd className={styles.profit}>
                         <strong>{profitRate}</strong>
-                        <small>(+ {profitAmount})</small>
+                        <small>({profitAmount})</small>
                     </dd>
                 </div>
             </dl>

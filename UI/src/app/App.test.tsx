@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { App } from './App';
+import { create_demo_ui_application } from './bootstrap';
 
 describe('App runtime wiring', () => {
     it('초기 REGIME 선택부터 자동매매 시작, route, CSV와 중지 흐름을 연결한다', async () => {
@@ -10,7 +11,7 @@ describe('App runtime wiring', () => {
 
         render(
             <StrictMode>
-                <App />
+                <App applicationFactory={create_demo_ui_application} />
             </StrictMode>,
         );
 

@@ -1,4 +1,6 @@
-export type RegimeType = 'type0' | 'type1' | 'type2' | 'type3' | 'type4';
+import type { RegimeType } from '../../shared/contracts';
+
+export type { RegimeType } from '../../shared/contracts';
 
 export type RegimeMetricTone = 'positive' | 'negative' | 'neutral';
 

@@ -16,6 +16,11 @@ export interface AccountSummaryMachineOptions {
 
 export type AccountSummaryMachineEvent =
     | {
+        readonly type: 'ACCOUNT_SUMMARY_SYNCHRONIZED';
+        readonly strategy: StrategySummaryViewModel;
+        readonly asset: AssetSummaryViewModel;
+    }
+    | {
         readonly type: 'TRADING_STATUS_UPDATED';
         readonly strategy: StrategySummaryViewModel;
     }
@@ -26,7 +31,7 @@ export type AccountSummaryMachineEvent =
 
 const DEFAULT_STRATEGY_SUMMARY: StrategySummaryViewModel = {
     appliedState: 'WAITING',
-    profitAmount: '₩ 0',
+    profitAmount: '+ ₩ 0',
     profitRate: '0.00%',
     status: '대기 중',
     statusTone: 'neutral',
@@ -54,6 +59,18 @@ export function create_account_summary_machine(options: AccountSummaryMachineOpt
             events: {} as AccountSummaryMachineEvent,
         },
         actions: {
+            synchronize_account_summary: assign({
+                strategy: ({ context, event }) => {
+                    return event.type === 'ACCOUNT_SUMMARY_SYNCHRONIZED'
+                        ? event.strategy
+                        : context.strategy;
+                },
+                asset: ({ context, event }) => {
+                    return event.type === 'ACCOUNT_SUMMARY_SYNCHRONIZED'
+                        ? event.asset
+                        : context.asset;
+                },
+            }),
             update_strategy_summary: assign({
                 strategy: ({ context, event }) => {
                     return event.type === 'TRADING_STATUS_UPDATED'
@@ -75,6 +92,11 @@ export function create_account_summary_machine(options: AccountSummaryMachineOpt
         context: {
             strategy: options.strategy ?? DEFAULT_STRATEGY_SUMMARY,
             asset: options.asset ?? DEFAULT_ASSET_SUMMARY,
+        },
+        on: {
+            ACCOUNT_SUMMARY_SYNCHRONIZED: {
+                actions: 'synchronize_account_summary',
+            },
         },
         states: {
             trading_logic_status: {
@@ -106,4 +128,3 @@ export function create_account_summary_machine(options: AccountSummaryMachineOpt
         },
     });
 }
-

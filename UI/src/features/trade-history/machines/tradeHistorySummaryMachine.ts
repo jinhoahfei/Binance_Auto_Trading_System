@@ -15,7 +15,17 @@ export interface TradeHistorySummaryMachineOptions {
 }
 
 export type TradeHistorySummaryMachineEvent =
+    | {
+        readonly type: 'TRADE_HISTORY_SUMMARY_SYNCHRONIZED';
+        readonly summary: TradeHistorySummaryViewModel;
+    }
     | { readonly type: 'PROFIT_RATE_UPDATED'; readonly daily_return: DailyReturnSummary }
+    | {
+        readonly type: 'PERFORMANCE_SNAPSHOT_UPDATED';
+        readonly daily_return: DailyReturnSummary;
+        readonly sell_performance: SellPerformanceSummary;
+        readonly fees: FeeSummary;
+    }
     | {
         readonly type: 'SELL_ORDER_EXECUTED';
         readonly sell_performance: SellPerformanceSummary;
@@ -65,6 +75,13 @@ export function create_trade_history_summary_machine(
             events: {} as TradeHistorySummaryMachineEvent,
         },
         actions: {
+            synchronize_summary: assign({
+                summary: ({ context, event }) => {
+                    return event.type === 'TRADE_HISTORY_SUMMARY_SYNCHRONIZED'
+                        ? event.summary
+                        : context.summary;
+                },
+            }),
             update_profit_rate: assign({
                 summary: ({ context, event }) => ({
                     ...context.summary,
@@ -72,6 +89,21 @@ export function create_trade_history_summary_machine(
                         ? event.daily_return
                         : context.summary.dailyReturn,
                 }),
+            }),
+            update_performance_snapshot: assign({
+                summary: ({ context, event }) => {
+                    if (event.type !== 'PERFORMANCE_SNAPSHOT_UPDATED') {
+                        return context.summary;
+                    }
+
+                    // Performance event에는 Position이 없으므로 기존 position projection을 보존한다.
+                    return {
+                        ...context.summary,
+                        dailyReturn: event.daily_return,
+                        sellPerformance: event.sell_performance,
+                        fees: event.fees,
+                    };
+                },
             }),
             update_sell_performance: assign({
                 summary: ({ context, event }) => ({
@@ -104,6 +136,14 @@ export function create_trade_history_summary_machine(
         type: 'parallel',
         context: {
             summary: options.summary ?? DEFAULT_TRADE_HISTORY_SUMMARY,
+        },
+        on: {
+            TRADE_HISTORY_SUMMARY_SYNCHRONIZED: {
+                actions: 'synchronize_summary',
+            },
+            PERFORMANCE_SNAPSHOT_UPDATED: {
+                actions: 'update_performance_snapshot',
+            },
         },
         states: {
             profit_rate: {

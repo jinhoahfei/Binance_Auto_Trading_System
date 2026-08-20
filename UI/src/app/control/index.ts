@@ -8,5 +8,5 @@ export type {
     UiApplicationFacadeOptions,
     UiApplicationIntent,
     UiApplicationSnapshot,
+    UiServerOwnedSnapshot,
 } from './UiApplicationFacade';
-

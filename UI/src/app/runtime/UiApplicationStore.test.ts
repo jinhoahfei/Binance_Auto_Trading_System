@@ -20,7 +20,15 @@ function create_test_application(): DemoUiApplication {
         today: FIXTURE_TODAY,
     });
 
-    return { command_adapter, facade };
+    return {
+        command_adapter,
+        facade,
+        activate: () => {
+            facade.start();
+            facade.dispatch({ type: 'API_CONNECTED', sequence: 1 });
+        },
+        deactivate: () => facade.stop(),
+    };
 }
 
 describe('UiApplicationStore', () => {

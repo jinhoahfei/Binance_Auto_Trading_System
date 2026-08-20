@@ -7,6 +7,7 @@ import type {
     UiCommandFailure,
 } from '../../../shared/contracts';
 import type { UiCommandPort } from '../../../shared/ports';
+import { to_ui_command_failure } from '../../../shared/errors';
 
 export interface CsvValidationErrors {
     readonly directory: string | null;
@@ -204,12 +205,11 @@ export function create_csv_export_machine(
                 command_error: null,
             }),
             remember_picker_failure: assign({
-                command_error: ({ event }) => ({
-                    code: 'DIRECTORY_PICKER_FAILED',
-                    message: 'error' in event && event.error instanceof Error
-                        ? event.error.message
-                        : '저장 위치 선택 창을 열지 못했습니다.',
-                }),
+                command_error: ({ event }) => to_ui_command_failure(
+                    'error' in event ? event.error : null,
+                    'DIRECTORY_PICKER_FAILED',
+                    '저장 위치 선택 창을 열지 못했습니다.',
+                ),
             }),
             select_today: assign({
                 period: 'today',
@@ -307,12 +307,11 @@ export function create_csv_export_machine(
                 command_error: null,
             }),
             remember_export_failure: assign({
-                command_error: ({ event }) => ({
-                    code: 'CSV_EXPORT_FAILED',
-                    message: 'error' in event && event.error instanceof Error
-                        ? event.error.message
-                        : 'CSV 파일을 생성하지 못했습니다.',
-                }),
+                command_error: ({ event }) => to_ui_command_failure(
+                    'error' in event ? event.error : null,
+                    'CSV_EXPORT_FAILED',
+                    'CSV 파일을 생성하지 못했습니다.',
+                ),
             }),
             clear_command_error: assign({ command_error: null }),
         },

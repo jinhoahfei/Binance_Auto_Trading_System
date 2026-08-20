@@ -14,6 +14,8 @@ export interface AssetSummaryViewModel {
     readonly ethAmount: string;
     readonly ethValue: string;
     readonly krwValue: string;
+    readonly quoteAsset?: string;
+    readonly quoteValue?: string;
     readonly profitLoss: string;
     readonly totalValue: string;
 }

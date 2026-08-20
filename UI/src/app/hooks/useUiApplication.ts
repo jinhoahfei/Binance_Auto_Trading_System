@@ -5,6 +5,7 @@ import {
     UiApplicationStore,
     type UiApplicationController,
 } from '../runtime';
+import type { UiApplicationFactory } from '../bootstrap';
 
 /**
  * React App Boundary가 facade snapshot과 intent controller를 사용하는 결과이다.
@@ -21,8 +22,10 @@ export interface UseUiApplicationResult {
  * 반환값: 초기화 전 UiApplicationStore
  * 작성 날짜: 2026/08/12
  */
-function create_ui_application_store(): UiApplicationStore {
-    return new UiApplicationStore();
+function create_ui_application_store(
+    application_factory: UiApplicationFactory,
+): UiApplicationStore {
+    return new UiApplicationStore(application_factory);
 }
 
 /**
@@ -32,8 +35,12 @@ function create_ui_application_store(): UiApplicationStore {
  * 반환값: 애플리케이션 controller와 렌더링용 ViewModel
  * 작성 날짜: 2026/08/12
  */
-export function use_ui_application(): UseUiApplicationResult {
-    const [application_store] = useState(create_ui_application_store);
+export function use_ui_application(
+    application_factory: UiApplicationFactory,
+): UseUiApplicationResult {
+    const [application_store] = useState(() => {
+        return create_ui_application_store(application_factory);
+    });
     const subscribe = useCallback(
         (listener: () => void) => application_store.subscribe(listener),
         [application_store],

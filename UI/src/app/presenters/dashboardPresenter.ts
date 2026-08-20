@@ -10,6 +10,10 @@ import type { SplitOrderIntent } from '../../features/split-order';
 import type { DashboardPageProps } from '../../routes/dashboard/DashboardPage';
 import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard/dashboardFixture';
 import type { TradeRecord } from '../../shared/contracts';
+import {
+    format_decimal_text,
+    format_quote_amount,
+} from '../../shared/formatting';
 import type { AppViewModel } from '../control';
 import type { UiApplicationController } from '../runtime';
 
@@ -24,10 +28,6 @@ const STRATEGY_LABEL_BY_REGIME: Readonly<Record<NonNullable<AppViewModel['regime
     type3: 'Risk Off',
     type4: 'Defensive',
 };
-
-const WON_FORMATTER = new Intl.NumberFormat('ko-KR', {
-    maximumFractionDigits: 0,
-});
 
 /**
  * 함수 이름: format_recent_trade_time()
@@ -54,21 +54,28 @@ function format_recent_trade_time(occurred_at: string): string {
  * 작성 날짜: 2026/08/12
  */
 function create_recent_order_view_model(trade_record: TradeRecord): RecentOrderViewModel {
-    const fixture_order = DASHBOARD_ORDER_BY_ID.get(trade_record.id);
+    const fixture_order = trade_record.quote_asset === undefined
+        ? DASHBOARD_ORDER_BY_ID.get(trade_record.id)
+        : undefined;
 
     if (fixture_order !== undefined) {
         return fixture_order;
     }
 
+    // Demo fixture의 기존 KRW 간격은 보존하고 live record는 authoritative quote asset을 표시한다.
     return {
         id: trade_record.id,
         side: trade_record.side,
         strategy: trade_record.strategy,
         time: format_recent_trade_time(trade_record.occurred_at),
-        price: `₩ ${WON_FORMATTER.format(Number(trade_record.price))}`,
+        price: trade_record.quote_asset === undefined
+            ? `₩ ${format_decimal_text(trade_record.price)}`
+            : format_quote_amount(trade_record.price, trade_record.quote_asset),
         secondaryValue: trade_record.side === 'buy'
             ? `${trade_record.quantity} ETH`
-            : `${trade_record.profit_rate ?? '0'}%`,
+            : trade_record.profit_rate === null
+                ? '-'
+                : `${trade_record.profit_rate}%`,
     };
 }
 

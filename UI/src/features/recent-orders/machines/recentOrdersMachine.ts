@@ -12,6 +12,11 @@ export interface RecentOrdersMachineOptions {
 }
 
 export type RecentOrdersMachineEvent =
+    | {
+        readonly type: 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED';
+        readonly trades: ReadonlyArray<TradeRecord>;
+        readonly indicators: ReadonlyArray<RegimeMetric>;
+    }
     | { readonly type: 'BUY_ORDER_EXECUTED'; readonly trade: TradeRecord }
     | { readonly type: 'SELL_ORDER_EXECUTED'; readonly trade: TradeRecord }
     | { readonly type: 'REALTIME_INDICATOR_CLICKED' }
@@ -39,6 +44,18 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
             events: {} as RecentOrdersMachineEvent,
         },
         actions: {
+            synchronize_recent_orders: assign({
+                trades: ({ context, event }) => {
+                    return event.type === 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED'
+                        ? event.trades
+                        : context.trades;
+                },
+                realtime_indicators: ({ context, event }) => {
+                    return event.type === 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED'
+                        ? event.indicators
+                        : context.realtime_indicators;
+                },
+            }),
             prepend_trade: assign({
                 trades: ({ context, event }) => {
                     return event.type === 'BUY_ORDER_EXECUTED'
@@ -62,6 +79,17 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
         context: {
             trades: options.trades ?? [],
             realtime_indicators: options.realtime_indicators ?? [],
+        },
+        on: {
+            RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED: {
+                actions: 'synchronize_recent_orders',
+            },
+            REALTIME_INDICATOR_UPDATED: {
+                actions: 'update_realtime_indicators',
+            },
+            TRADING_STATUS_UPDATED: {
+                actions: 'update_realtime_indicators',
+            },
         },
         states: {
             trade_history_displayed: {
@@ -105,4 +133,3 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
         },
     });
 }
-

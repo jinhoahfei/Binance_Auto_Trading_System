@@ -2,14 +2,12 @@ import type {
     AppViewModel,
     UiApplicationIntent,
 } from '../control';
-import {
-    create_demo_ui_application,
-    initialize_demo_ui_application,
-    type DemoUiApplication,
+import type {
+    UiApplicationFactory,
+    UiApplicationRuntime,
 } from '../bootstrap';
 
 type StoreListener = () => void;
-type ApplicationFactory = () => DemoUiApplication;
 
 /**
  * presenter가 UI actor에 intent를 보내고 즉시 최신 ViewModel을 확인하는 좁은 계약이다.
@@ -25,9 +23,9 @@ export interface UiApplicationController {
  * 작성 날짜: 2026/08/12
  */
 export class UiApplicationStore implements UiApplicationController {
-    private readonly application_factory: ApplicationFactory;
+    private readonly application_factory: UiApplicationFactory;
     private readonly listeners = new Set<StoreListener>();
-    private application: DemoUiApplication | null;
+    private application: UiApplicationRuntime | null;
     private facade_unsubscribe: (() => void) | null = null;
     private current_view_model: AppViewModel;
     private is_active = false;
@@ -40,7 +38,7 @@ export class UiApplicationStore implements UiApplicationController {
      * 반환값: React 외부 store 인스턴스
      * 작성 날짜: 2026/08/12
      */
-    constructor(application_factory: ApplicationFactory = create_demo_ui_application) {
+    constructor(application_factory: UiApplicationFactory) {
         this.application_factory = application_factory;
         this.application = this.application_factory();
         this.current_view_model = this.application.facade.get_view_model();
@@ -48,7 +46,7 @@ export class UiApplicationStore implements UiApplicationController {
 
     /**
      * 함수 이름: subscribe()
-     * 기능: React listener를 등록하고 첫 구독에서 facade actor와 데모 snapshot을 시작한다.
+     * 기능: React listener를 등록하고 첫 구독에서 주입된 runtime lifecycle을 시작한다.
      * 인자: listener -> snapshot 변경을 React에 알릴 callback
      * 반환값: 해당 listener를 제거하는 구독 해제 함수
      * 작성 날짜: 2026/08/12
@@ -104,7 +102,7 @@ export class UiApplicationStore implements UiApplicationController {
 
     /**
      * 함수 이름: activate_application()
-     * 기능: 필요하면 facade를 재생성하고 snapshot 구독, actor 시작, 데모 초기화를 순서대로 수행한다.
+     * 기능: 필요하면 runtime을 재생성하고 snapshot 구독과 주입된 lifecycle 시작을 순서대로 수행한다.
      * 인자: 없음
      * 반환값: 없음
      * 작성 날짜: 2026/08/12
@@ -121,8 +119,7 @@ export class UiApplicationStore implements UiApplicationController {
             this.current_view_model = application.facade.get_view_model();
             this.notify_listeners();
         });
-        application.facade.start();
-        initialize_demo_ui_application(application.facade);
+        application.activate();
     }
 
     /**
@@ -154,7 +151,7 @@ export class UiApplicationStore implements UiApplicationController {
     private deactivate_application(): void {
         this.facade_unsubscribe?.();
         this.facade_unsubscribe = null;
-        this.application?.facade.stop();
+        this.application?.deactivate();
         this.application = null;
         this.is_active = false;
     }

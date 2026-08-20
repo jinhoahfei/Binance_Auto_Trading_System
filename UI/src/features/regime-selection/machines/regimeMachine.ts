@@ -4,6 +4,7 @@ import type {
     RegimeType,
     UiCommandFailure,
 } from '../../../shared/contracts';
+import { to_ui_command_failure } from '../../../shared/errors';
 import type { UiCommandPort } from '../../../shared/ports';
 
 export interface RegimeMachineContext {
@@ -22,6 +23,18 @@ export interface RegimeMachineOptions {
 }
 
 export type RegimeMachineEvent =
+    | {
+        readonly type: 'REGIME_SNAPSHOT_SYNCHRONIZED';
+        readonly recommended_regime: RegimeType | null;
+        readonly applied_regime: RegimeType | null;
+        readonly metrics: ReadonlyArray<RegimeMetric>;
+    }
+    | {
+        readonly type: 'REGIME_SNAPSHOT_CONTEXT_SYNCHRONIZED';
+        readonly recommended_regime: RegimeType | null;
+        readonly applied_regime: RegimeType | null;
+        readonly metrics: ReadonlyArray<RegimeMetric>;
+    }
     | { readonly type: 'TYPE_RECOMMENDED'; readonly regime: RegimeType }
     | { readonly type: 'TYPE_CLICKED'; readonly regime: RegimeType }
     | { readonly type: 'CONFIRM_TYPE_CHANGE' }
@@ -39,10 +52,11 @@ export type RegimeMachineEvent =
  * 작성 날짜: 2026/08/12
  */
 function to_regime_failure(error: unknown): UiCommandFailure {
-    return {
-        code: 'REGIME_APPLY_FAILED',
-        message: error instanceof Error ? error.message : 'REGIME을 적용하지 못했습니다.',
-    };
+    return to_ui_command_failure(
+        error,
+        'REGIME_APPLY_FAILED',
+        'REGIME을 적용하지 못했습니다.',
+    );
 }
 
 /**
@@ -67,6 +81,41 @@ export function create_regime_machine(
             }),
         },
         actions: {
+            synchronize_regime_snapshot: assign({
+                recommended_regime: ({ context, event }) => {
+                    return event.type === 'REGIME_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'REGIME_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.recommended_regime
+                        : context.recommended_regime;
+                },
+                applied_regime: ({ context, event }) => {
+                    return event.type === 'REGIME_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'REGIME_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.applied_regime
+                        : context.applied_regime;
+                },
+                metrics: ({ context, event }) => {
+                    return event.type === 'REGIME_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'REGIME_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.metrics
+                        : context.metrics;
+                },
+                candidate_regime: ({ context, event }) => {
+                    return event.type === 'REGIME_SNAPSHOT_SYNCHRONIZED'
+                        ? null
+                        : context.candidate_regime;
+                },
+                is_highlighted: ({ context, event }) => {
+                    return event.type === 'REGIME_SNAPSHOT_SYNCHRONIZED'
+                        ? false
+                        : context.is_highlighted;
+                },
+                error: ({ context, event }) => {
+                    return event.type === 'REGIME_SNAPSHOT_SYNCHRONIZED'
+                        ? null
+                        : context.error;
+                },
+            }),
             remember_recommendation: assign({
                 recommended_regime: ({ event, context }) => {
                     return event.type === 'TYPE_RECOMMENDED'
@@ -134,6 +183,13 @@ export function create_regime_machine(
             error: null,
         },
         on: {
+            REGIME_SNAPSHOT_SYNCHRONIZED: {
+                target: '.type_selection',
+                actions: 'synchronize_regime_snapshot',
+            },
+            REGIME_SNAPSHOT_CONTEXT_SYNCHRONIZED: {
+                actions: 'synchronize_regime_snapshot',
+            },
             TYPE_RECOMMENDED: {
                 actions: 'remember_recommendation',
             },

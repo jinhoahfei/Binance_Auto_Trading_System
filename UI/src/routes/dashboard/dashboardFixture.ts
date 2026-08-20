@@ -118,7 +118,7 @@ export const DEFAULT_DASHBOARD_PROPS: DashboardPageProps = {
             statusTone: 'positive',
             appliedState: 'Basic Iterative',
             profitRate: '+0.72%',
-            profitAmount: '₩ 345,030',
+            profitAmount: '+ ₩ 345,030',
         },
         asset: {
             totalValue: '₩ 6,184,200',

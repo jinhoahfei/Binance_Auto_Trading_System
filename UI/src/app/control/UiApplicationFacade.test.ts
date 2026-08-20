@@ -89,4 +89,89 @@ describe('UiApplicationFacade', () => {
         expect(facade.get_view_model().trade_history.summary.dailyReturn.value).toBe('+0.82%');
         facade.stop();
     });
+
+    it('메시지 4~5: coherent backend snapshot을 한 번만 발행하고 UI-local 상태를 보존한다', () => {
+        const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
+            today: '2026-08-21',
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'CHART_INTERVAL_SELECTED', interval: '4h' });
+        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+        facade.dispatch({ type: 'REGIME_TYPE_CLICKED', regime: 'type4' });
+        expect(facade.get_view_model().active_modal).toBe('regime_change_confirmation');
+
+        let notification_count = 0;
+        const unsubscribe = facade.subscribe(() => {
+            notification_count += 1;
+        });
+        notification_count = 0;
+
+        facade.dispatch({
+            type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
+            snapshot: {
+                last_sequence: 12,
+                trading_symbol: 'ETH/USDT',
+                recommended_regime: 'type1',
+                applied_regime: 'type0',
+                regime_metrics: [],
+                recent_trades: [],
+                history_records: [],
+                scale_in_percentage: 40,
+                scale_out_percentage: 60,
+                account_strategy: {
+                    appliedState: 'WAITING',
+                    profitAmount: '10 USDT',
+                    profitRate: '1.00%',
+                    status: '매매 중지',
+                    statusTone: 'neutral',
+                },
+                account_asset: {
+                    ethAmount: '1',
+                    ethValue: '3,000 USDT',
+                    krwValue: '-',
+                    quoteAsset: 'USDT',
+                    quoteValue: '100 USDT',
+                    profitLoss: '10 USDT',
+                    totalValue: '-',
+                },
+                trade_history_summary: {
+                    dailyReturn: { value: '1.00%', tone: 'positive' },
+                    sellPerformance: {
+                        winRate: '50.00%',
+                        completedCount: '1 / 2',
+                        averageRealizedReturn: '0.50%',
+                        totalRealizedPnl: '10 USDT',
+                        tone: 'positive',
+                    },
+                    position: { quantity: '1 ETH' },
+                    fees: {
+                        amount: '1 USDT',
+                        totalExecutedAmount: '-',
+                        averageSlippage: '-',
+                    },
+                },
+                is_trading: false,
+                has_open_position: true,
+                trading_state_label: 'WAITING',
+            },
+        });
+
+        const view_model = facade.get_view_model();
+
+        expect(notification_count).toBe(1);
+        expect(view_model.route).toBe('trade_history');
+        expect(view_model.chart.interval).toBe('4h');
+        expect(view_model.active_modal).toBe('regime_change_confirmation');
+        expect(view_model.regime.candidate).toBe('type4');
+        expect(view_model.regime.recommended).toBe('type1');
+        expect(view_model.regime.applied).toBe('type0');
+        expect(view_model.account_summary.asset.quoteAsset).toBe('USDT');
+        expect(view_model.trade_history.symbol).toBe('ETH/USDT');
+        expect(view_model.split_order.scale_in_percentage).toBe(40);
+        expect(view_model.trading.has_open_position).toBe(true);
+
+        unsubscribe();
+        facade.stop();
+    });
 });

@@ -203,5 +203,5 @@ backend는 최근 10,000개 또는 15분 중 먼저 도달하는 범위의 event
 - [x] loopback bind, per-launch token 전달과 HTTP/WS 인증이 확정되었다.
 - [x] sequence, replay, gap과 full resync 규칙이 확정되었다.
 - [x] schema version, Origin/Host, log와 resource 제한이 확정되었다.
-- [ ] Phase 5에서 contract generation/drift와 reconnect integration test를 구현한다.
+- [x] Phase 5에서 contract generation/drift와 reconnect integration test를 구현했다.
 - [ ] Phase 12에서 packaged sidecar lifecycle과 CSP/capability를 검증한다.

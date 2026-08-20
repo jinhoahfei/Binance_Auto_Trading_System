@@ -53,5 +53,25 @@ describe('regimeMachine', () => {
         ]);
         actor.stop();
     });
-});
 
+    it('Phase 5 unavailable adapter의 typed code를 generic code로 숨기지 않는다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const unavailable_error = Object.assign(
+            new Error('This feature is not available in the current application phase.'),
+            { code: 'FEATURE_NOT_AVAILABLE' },
+        );
+        command_adapter.queue_failure('apply_regime', unavailable_error);
+        const actor = createActor(create_regime_machine(command_adapter));
+
+        actor.start();
+        actor.send({ type: 'TYPE_CLICKED', regime: 'type2' });
+        actor.send({ type: 'CONFIRM_TYPE_CHANGE' });
+        await wait_for_actor_settlement();
+
+        expect(actor.getSnapshot().context.error).toEqual({
+            code: 'FEATURE_NOT_AVAILABLE',
+            message: 'This feature is not available in the current application phase.',
+        });
+        actor.stop();
+    });
+});

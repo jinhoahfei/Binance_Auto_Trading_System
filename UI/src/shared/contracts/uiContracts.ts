@@ -1,3 +1,5 @@
+import type { BackendRegimeType } from './backendContracts.generated';
+
 /**
  * UI와 제어 actor 사이에서 사용하는 소수 문자열이다.
  */
@@ -6,7 +8,7 @@ export type DecimalString = string;
 /**
  * UI가 선택하거나 표시할 수 있는 REGIME 유형이다.
  */
-export type RegimeType = 'type0' | 'type1' | 'type2' | 'type3' | 'type4';
+export type RegimeType = BackendRegimeType;
 
 /**
  * 가격 차트가 지원하는 봉 주기이다.
@@ -53,12 +55,14 @@ export interface RegimeMetric {
  */
 export interface TradeRecord {
     readonly id: string;
+    readonly symbol?: string;
+    readonly quote_asset?: string;
     readonly occurred_at: string;
     readonly side: TradeSide;
     readonly regime: RegimeType;
     readonly strategy: string;
     readonly price: DecimalString;
-    readonly entry_price: DecimalString;
+    readonly entry_price: DecimalString | null;
     readonly market_price_at_decision: DecimalString;
     readonly quantity: DecimalString;
     readonly total: DecimalString;

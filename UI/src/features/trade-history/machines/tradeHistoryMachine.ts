@@ -7,8 +7,10 @@ import type {
     UiCommandFailure,
 } from '../../../shared/contracts';
 import type { UiCommandPort } from '../../../shared/ports';
+import { to_ui_command_failure } from '../../../shared/errors';
 
 export interface TradeHistoryMachineContext {
+    readonly symbol: string;
     readonly period: HistoryPeriod;
     readonly side: TradeSideFilter;
     readonly records: ReadonlyArray<TradeRecord>;
@@ -17,12 +19,18 @@ export interface TradeHistoryMachineContext {
 }
 
 export interface TradeHistoryMachineOptions {
+    readonly symbol?: string;
     readonly period?: HistoryPeriod;
     readonly side?: TradeSideFilter;
     readonly records?: ReadonlyArray<TradeRecord>;
 }
 
 export type TradeHistoryMachineEvent =
+    | {
+        readonly type: 'TRADE_HISTORY_SNAPSHOT_SYNCHRONIZED';
+        readonly symbol: string;
+        readonly records: ReadonlyArray<TradeRecord>;
+    }
     | { readonly type: 'ENTER_TRADE_HISTORY' }
     | { readonly type: 'REFRESH_TRADE_HISTORY' }
     | { readonly type: 'SELECT_DISPLAY_TODAY_HISTORY' }
@@ -56,6 +64,10 @@ export function create_trade_history_machine(
             ),
         },
         guards: {
+            snapshot_has_records: ({ event }) => {
+                return event.type === 'TRADE_HISTORY_SNAPSHOT_SYNCHRONIZED'
+                    && event.records.length > 0;
+            },
             has_records: ({ event }) => {
                 return 'output' in event
                     && Array.isArray(event.output)
@@ -63,6 +75,20 @@ export function create_trade_history_machine(
             },
         },
         actions: {
+            synchronize_records: assign({
+                symbol: ({ context, event }) => {
+                    return event.type === 'TRADE_HISTORY_SNAPSHOT_SYNCHRONIZED'
+                        ? event.symbol
+                        : context.symbol;
+                },
+                records: ({ context, event }) => {
+                    return event.type === 'TRADE_HISTORY_SNAPSHOT_SYNCHRONIZED'
+                        ? event.records
+                        : context.records;
+                },
+                error: null,
+                request_version: ({ context }) => context.request_version + 1,
+            }),
             select_today: assign({
                 period: 'today',
                 request_version: ({ context }) => context.request_version + 1,
@@ -104,12 +130,11 @@ export function create_trade_history_machine(
                 error: null,
             }),
             remember_failure: assign({
-                error: ({ event }) => ({
-                    code: 'TRADE_HISTORY_LOAD_FAILED',
-                    message: 'error' in event && event.error instanceof Error
-                        ? event.error.message
-                        : '거래 내역을 불러오지 못했습니다.',
-                }),
+                error: ({ event }) => to_ui_command_failure(
+                    'error' in event ? event.error : null,
+                    'TRADE_HISTORY_LOAD_FAILED',
+                    '거래 내역을 불러오지 못했습니다.',
+                ),
             }),
             clear_error: assign({ error: null }),
         },
@@ -121,11 +146,25 @@ export function create_trade_history_machine(
                 ? 'ready'
                 : 'empty',
         context: {
+            symbol: options.symbol ?? 'ETH/KRW',
             period: options.period ?? 'today',
             side: options.side ?? 'all',
             records: options.records ?? [],
             error: null,
             request_version: 0,
+        },
+        on: {
+            TRADE_HISTORY_SNAPSHOT_SYNCHRONIZED: [
+                {
+                    guard: 'snapshot_has_records',
+                    target: '.ready',
+                    actions: 'synchronize_records',
+                },
+                {
+                    target: '.empty',
+                    actions: 'synchronize_records',
+                },
+            ],
         },
         states: {
             idle: {
@@ -258,4 +297,3 @@ export function create_trade_history_machine(
         },
     });
 }
-

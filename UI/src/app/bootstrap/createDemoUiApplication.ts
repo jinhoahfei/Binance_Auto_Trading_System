@@ -7,6 +7,7 @@ import {
     DEMO_REALTIME_INDICATORS,
     DEMO_RECENT_TRADE_RECORDS,
 } from './demoFixtures';
+import type { UiApplicationRuntime } from './types';
 
 const DEMO_TODAY = '2026-06-29';
 const DEMO_CSV_FILE_NAME = 'ETH_trade_history_260629.csv';
@@ -14,9 +15,8 @@ const DEMO_CSV_FILE_NAME = 'ETH_trade_history_260629.csv';
 /**
  * fake command adapter와 facade를 함께 보관하는 데모 애플리케이션 구성 결과이다.
  */
-export interface DemoUiApplication {
+export interface DemoUiApplication extends UiApplicationRuntime {
     readonly command_adapter: FakeUiCommandAdapter;
-    readonly facade: UiApplicationFacade;
 }
 
 /**
@@ -55,7 +55,16 @@ export function create_demo_ui_application(): DemoUiApplication {
         trade_history_summary: TRADE_HISTORY_SUMMARY_FIXTURE,
     });
 
-    return { command_adapter, facade };
+    return {
+        command_adapter,
+        facade,
+        activate: () => {
+            // Demo runtime은 actor 시작 뒤에만 결정적인 online fixture를 적용한다.
+            facade.start();
+            initialize_demo_ui_application(facade);
+        },
+        deactivate: () => facade.stop(),
+    };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { assign, fromPromise, setup } from 'xstate';
 import type { UiCommandFailure } from '../../../shared/contracts';
+import { to_ui_command_failure } from '../../../shared/errors';
 import type { UiCommandPort } from '../../../shared/ports';
 
 export interface SplitOrderMachineContext {
@@ -16,6 +17,11 @@ export interface SplitOrderMachineOptions {
 }
 
 export type SplitOrderMachineEvent =
+    | {
+        readonly type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED';
+        readonly scale_in_percentage: number;
+        readonly scale_out_percentage: number;
+    }
     | { readonly type: 'SCALE_IN_LEVEL_CHANGED'; readonly percentage: number }
     | { readonly type: 'SCALE_OUT_LEVEL_CHANGED'; readonly percentage: number }
     | { readonly type: 'RETRY_SPLIT_ORDER_CHANGE' }
@@ -59,6 +65,21 @@ export function create_split_order_machine(
             }),
         },
         actions: {
+            synchronize_split_order: assign({
+                scale_in_percentage: ({ context, event }) => {
+                    return event.type === 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED'
+                        ? clamp_percentage(event.scale_in_percentage)
+                        : context.scale_in_percentage;
+                },
+                scale_out_percentage: ({ context, event }) => {
+                    return event.type === 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED'
+                        ? clamp_percentage(event.scale_out_percentage)
+                        : context.scale_out_percentage;
+                },
+                pending_side: null,
+                pending_percentage: null,
+                error: null,
+            }),
             prepare_scale_in: assign({
                 scale_in_percentage: ({ event, context }) => {
                     return event.type === 'SCALE_IN_LEVEL_CHANGED'
@@ -103,12 +124,11 @@ export function create_split_order_machine(
                 error: null,
             }),
             remember_failure: assign({
-                error: ({ event }) => ({
-                    code: 'SPLIT_ORDER_UPDATE_FAILED',
-                    message: 'error' in event && event.error instanceof Error
-                        ? event.error.message
-                        : '분할 주문 비율을 변경하지 못했습니다.',
-                }),
+                error: ({ event }) => to_ui_command_failure(
+                    'error' in event ? event.error : null,
+                    'SPLIT_ORDER_UPDATE_FAILED',
+                    '분할 주문 비율을 변경하지 못했습니다.',
+                ),
             }),
             clear_error: assign({ error: null }),
         },
@@ -121,6 +141,12 @@ export function create_split_order_machine(
             pending_side: null,
             pending_percentage: null,
             error: null,
+        },
+        on: {
+            SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED: {
+                target: '.ready',
+                actions: 'synchronize_split_order',
+            },
         },
         states: {
             ready: {

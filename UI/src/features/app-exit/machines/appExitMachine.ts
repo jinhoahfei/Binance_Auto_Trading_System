@@ -1,5 +1,6 @@
 import { assign, fromPromise, setup } from 'xstate';
 import type { UiCommandFailure } from '../../../shared/contracts';
+import { to_ui_command_failure } from '../../../shared/errors';
 import type { UiCommandPort } from '../../../shared/ports';
 
 export interface AppExitMachineContext {
@@ -50,20 +51,18 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
                 error: null,
             }),
             remember_force_sell_failure: assign({
-                error: ({ event }) => ({
-                    code: 'EXIT_FORCE_SELL_FAILED',
-                    message: 'error' in event && event.error instanceof Error
-                        ? event.error.message
-                        : '포지션 강제 매도에 실패해 프로그램 종료를 취소했습니다.',
-                }),
+                error: ({ event }) => to_ui_command_failure(
+                    'error' in event ? event.error : null,
+                    'EXIT_FORCE_SELL_FAILED',
+                    '포지션 강제 매도에 실패해 프로그램 종료를 취소했습니다.',
+                ),
             }),
             remember_shutdown_failure: assign({
-                error: ({ event }) => ({
-                    code: 'APPLICATION_SHUTDOWN_FAILED',
-                    message: 'error' in event && event.error instanceof Error
-                        ? event.error.message
-                        : '프로그램 종료 준비를 완료하지 못했습니다.',
-                }),
+                error: ({ event }) => to_ui_command_failure(
+                    'error' in event ? event.error : null,
+                    'APPLICATION_SHUTDOWN_FAILED',
+                    '프로그램 종료 준비를 완료하지 못했습니다.',
+                ),
             }),
         },
     }).createMachine({
@@ -153,4 +152,3 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
         },
     });
 }
-

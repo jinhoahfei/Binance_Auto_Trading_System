@@ -6,6 +6,7 @@ import {
 } from '../../features/trade-history';
 import type { TradeHistoryPageProps } from '../../routes/trade-history';
 import type { TradeRecord } from '../../shared/contracts';
+import { format_quote_amount } from '../../shared/formatting';
 import type { AppViewModel } from '../control';
 import type { UiApplicationController } from '../runtime';
 
@@ -32,10 +33,6 @@ const HISTORY_SIDE_LABELS: Readonly<Record<AppViewModel['trade_history']['side']
     buy: '매수',
     sell: '매도',
 };
-
-const WON_FORMATTER = new Intl.NumberFormat('ko-KR', {
-    maximumFractionDigits: 0,
-});
 
 /**
  * 함수 이름: map_history_period_to_view()
@@ -148,7 +145,9 @@ function format_history_time(occurred_at: string): string {
  * 작성 날짜: 2026/08/12
  */
 function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewModel {
-    const fixture_row = HISTORY_ROW_BY_ID.get(trade_record.id);
+    const fixture_row = trade_record.quote_asset === undefined
+        ? HISTORY_ROW_BY_ID.get(trade_record.id)
+        : undefined;
 
     if (fixture_row !== undefined) {
         return fixture_row;
@@ -160,17 +159,19 @@ function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewMod
         side: trade_record.side.toUpperCase() as TradeRowViewModel['side'],
         regime: trade_record.regime,
         strategy: trade_record.strategy,
-        entryPrice: `₩${WON_FORMATTER.format(Number(trade_record.entry_price))}`,
-        executionPrice: `₩${WON_FORMATTER.format(Number(trade_record.price))}`,
+        entryPrice: trade_record.entry_price === null
+            ? '-'
+            : format_quote_amount(trade_record.entry_price, trade_record.quote_asset),
+        executionPrice: format_quote_amount(trade_record.price, trade_record.quote_asset),
         quantity: trade_record.quantity,
-        orderAmount: `₩${WON_FORMATTER.format(Number(trade_record.total))}`,
-        fee: `₩${WON_FORMATTER.format(Number(trade_record.fee))}`,
+        orderAmount: format_quote_amount(trade_record.total, trade_record.quote_asset),
+        fee: format_quote_amount(trade_record.fee, trade_record.quote_asset),
         previousBuyReturn: trade_record.profit_rate === null
             ? '-'
             : `${trade_record.profit_rate}%`,
         realizedPnl: trade_record.realized_pnl === null
             ? '-'
-            : `₩${WON_FORMATTER.format(Number(trade_record.realized_pnl))}`,
+            : format_quote_amount(trade_record.realized_pnl, trade_record.quote_asset),
     };
 }
 
@@ -205,7 +206,7 @@ export function present_trade_history_props(
             : undefined;
 
     return {
-        description: `${HISTORY_PERIOD_LABELS[view_model.trade_history.period]} · ETH/KRW · ${HISTORY_SIDE_LABELS[view_model.trade_history.side]} · ${status_label}`,
+        description: `${HISTORY_PERIOD_LABELS[view_model.trade_history.period]} · ${view_model.trade_history.symbol} · ${HISTORY_SIDE_LABELS[view_model.trade_history.side]} · ${status_label}`,
         summary: view_model.trade_history.summary,
         rows: is_failed
             ? []

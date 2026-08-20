@@ -1,6 +1,6 @@
 # Binance Auto Trader UI
 
-Figma의 1440×1024 데스크톱 화면을 TypeScript, React, Vite와 XState 기반으로 구현한 UI 패키지입니다. 가격 차트는 Binance 공개 REST/WebSocket에서 `ETHUSDT`의 1분·30분·4시간·1일 봉을 실시간으로 표시합니다. 주문·계좌·거래 내역 명령은 아직 typed port와 deterministic fake adapter를 사용합니다.
+Figma의 1440×1024 데스크톱 화면을 TypeScript, React, Vite와 XState 기반으로 구현한 UI 패키지입니다. production entry는 Tauri가 한 번 주입한 loopback descriptor로 backend 전체 snapshot을 먼저 읽은 뒤에만 화면 actor를 시작합니다. 계좌와 REGIME 추천은 backend의 ETHUSDT/USDT 값을 표시하며, snapshot 준비·schema·session 검증이 실패하면 demo로 fallback하지 않습니다.
 
 ## 실행
 
@@ -10,6 +10,12 @@ pnpm dev
 ```
 
 브라우저에서 `http://127.0.0.1:5173`을 엽니다.
+
+일반 browser dev entry에는 native descriptor가 없으므로 live bootstrap failure 화면이
+정상입니다. 화면 개발과 Storybook/test fixture는
+`create_demo_ui_application()`을 명시적으로 주입합니다. Tauri의 one-shot descriptor
+state는 구현되어 있지만 Python sidecar를 직접 실행·패키징하고 state에 넣는 lifecycle은
+로드맵 Phase 12 범위입니다.
 
 ## 검증
 
@@ -25,11 +31,19 @@ pnpm storybook
 - `src/app`: 앱 셸, provider, root 상태 조정
 - `src/routes`: 대시보드와 거래 내역 화면 composition
 - `src/features`: 기능별 Boundary 컴포넌트와 독립 상태 머신
-- `src/shared`: typed contract, port, formatting, 범용 UI와 디자인 토큰
+- `src/shared/api`: `BackendUiAdapter`, strict runtime mapper와 reconnect lifecycle
+- `src/shared/contracts`: Python schema에서 생성한 wire 계약과 공통 UI 계약
+- `src/shared`: typed port, 금융 문자열 표시, 범용 UI와 디자인 토큰
 - `src/stories`: Figma 16개 프레임에 대응하는 공통 harness와 state fixture
-- `apps/desktop/src-tauri`: 데스크톱 셸 설정
+- `apps/desktop/src-tauri`: 데스크톱 셸과 memory-only one-shot descriptor command
 
-화면 Boundary는 API, 파일 시스템과 주문 계산을 직접 호출하지 않습니다. 공개 시장 데이터의 조회·정규화·병합·재연결은 `features/price-chart/data`와 `hooks`에 격리되어 있으며 API key를 사용하지 않습니다. 실제 주문 backend를 연결할 때는 `UiCommandPort`의 adapter를 교체합니다.
+화면 Boundary는 API, 파일 시스템과 주문 계산을 직접 호출하지 않습니다.
+`BackendUiAdapter`는 HTTP/WebSocket wire 변환, token, timeout, sequence와
+snapshot-first full resync만 담당하고 업무 guard를 만들지 않습니다. Phase 5에서
+주문·REGIME 적용·상세 이력·CSV·shutdown command는 backend의 typed unavailable 결과로
+닫혀 있습니다. demo와 Storybook은 계속 deterministic `FakeUiCommandAdapter`를 사용합니다.
+
+공개 시장 데이터의 조회·정규화·병합·재연결은 `features/price-chart/data`와 `hooks`에 격리되어 있으며 API key를 사용하지 않습니다. backend market event와 결과 parity가 확보되기 전까지 이 표시용 차트를 유지하며 trading 판단에는 사용하지 않습니다.
 
 금융 차트는 [TradingView Lightweight Charts](https://www.tradingview.com/lightweight-charts/)를 사용합니다. 휠·핀치 확대/축소, 드래그 이동, 동적 가격·시간축과 crosshair OHLCV를 지원하며, drawing은 봉의 실제 시각·가격을 기준으로 별도 SVG layer에 투영되어 일반/전체화면에서 같은 지점을 유지합니다. 앱 시작 시 WebSocket buffer를 먼저 열고 네 주기의 REST 과거 봉과 병합하며, 연결이 끊기면 제한된 backoff로 전체 snapshot을 다시 동기화합니다.
 

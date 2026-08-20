@@ -8,3 +8,14 @@ export {
     DEMO_REALTIME_INDICATORS,
     DEMO_RECENT_TRADE_RECORDS,
 } from './demoFixtures';
+export {
+    create_live_ui_application,
+    create_live_ui_application_factory,
+    type LiveBackendConnectionDescriptor,
+    type LiveUiApplication,
+    type LiveUiApplicationOptions,
+} from './createLiveUiApplication';
+export type {
+    UiApplicationFactory,
+    UiApplicationRuntime,
+} from './types';
