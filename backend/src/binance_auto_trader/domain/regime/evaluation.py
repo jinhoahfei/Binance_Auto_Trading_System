@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
 
+from ..common import Interval
 from ._validation import (
     validate_aware_datetime,
     validate_finite_decimal,
@@ -12,19 +12,6 @@ from ._validation import (
     validate_non_negative_integer,
     validate_optional_non_empty_text,
 )
-
-
-class Interval(Enum):
-    """
-    클래스 이름: Interval
-    기능: 시스템에서 사용하는 Kline 시간 주기를 정의한다.
-    작성 날짜: 2026/08/14
-    """
-
-    ONE_MINUTE = "1m"
-    THIRTY_MINUTES = "30m"
-    FOUR_HOURS = "4h"
-    ONE_DAY = "1d"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,4 +82,3 @@ class RegimeEvaluationContext:
             "source_candle_id",
         )
         validate_aware_datetime(self.calculated_at, "calculated_at")
-

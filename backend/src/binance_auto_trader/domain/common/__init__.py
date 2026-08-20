@@ -1,6 +1,6 @@
-"""RegimeSTM과 TradingSTM이 공유하는 도메인 계약을 제공한다."""
+"""Backend 구성 요소가 공유하는 canonical 도메인 계약을 제공한다."""
 
-from .enums import RegimeType
+from .enums import Interval, RegimeType, SUPPORTED_INTERVALS
 
 
-__all__ = ["RegimeType"]
+__all__ = ["Interval", "RegimeType", "SUPPORTED_INTERVALS"]

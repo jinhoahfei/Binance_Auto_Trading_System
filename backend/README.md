@@ -1,16 +1,43 @@
 # Binance Auto Backend
 
-`binance-auto-trader-backend`는 RegimeSTM과 TradingSTM을 하나의
-`binance_auto_trader` distribution으로 통합한 Python package입니다. 두 STM은
-상태와 guard만 판정하고, 외부 효과는 typed action request로 반환합니다.
+`binance-auto-trader-backend`는 RegimeSTM과 TradingSTM, authoritative 시장
+데이터 초기화 vertical slice를 하나의 `binance_auto_trader` distribution으로
+통합한 Python package입니다. 두 STM은 상태와 guard만 판정하고,
+외부 효과는 typed action request로 반환합니다.
 
 ## 구성
 
-- `domain/common/enums.py`: 두 STM이 공유하는 canonical `RegimeType`
+- `domain/common/enums.py`: backend가 공유하는 canonical `RegimeType`/
+  `Interval`
+- `domain/market/`: Decimal OHLCV `Kline`과 versioned `MarketSnapshot`
 - `domain/regime/`: 13개 `EA-*` transition의 4시간봉 REGIME 추천 STM
 - `domain/trading/`: 109개 transition의 run-to-completion TradingSTM
-- `tests/`: 기존 RegimeSTM 31개와 TradingSTM 24개 회귀 테스트
+- `adapters/binance/`: 주입된 client의 Binance Spot Kline REST/WebSocket
+  payload 정규화와 초기 buffer
+- `application/market_data_controller.py`: WS 먼저 구독, REST 조회,
+  buffer 병합, snapshot 교체 순서 조정
+- `tests/`: 기존 STM 회귀와 market unit/integration/architecture 검증
 - `tests/architecture/`: package, enum, import 경계와 coding convention 검증
+
+## 시장 데이터 초기화 계약
+
+`MarketDataController.initialize_market_data()`는 `1m`, `30m`, `4h`, `1d`
+Kline stream buffer를 REST 조회보다 먼저 시작합니다. 네 REST 응답을
+모두 내부 `Kline`으로 정규화한 뒤 buffer를 배출하고, 같은
+`(symbol, interval, open_time)`에서 WebSocket 값이 우선하도록 병합합니다.
+네 주기 전체가 유효할 때만 `MarketSnapshot` state 참조를 한 번에
+교체하며, 실패나 disconnect에서 기존 snapshot과 version을 유지합니다.
+현재 ETH 가격은 snapshot 시각을 포함하는 최신 진행 4시간봉의
+`close` 하나만 사용합니다.
+초기화 중 disconnect나 payload 오류가 발생하면 현재 구독을 종료하고
+해당 시도를 fail closed 처리합니다. 재연결 후 같은 Operation을 다시
+호출하면 네 주기를 전체 재동기화하고 version을 성공 시에만 증가시킵니다.
+초기 buffer는 terminal drain으로 세대를 동결하고 구독을 닫은 뒤
+snapshot을 commit합니다. 지속 live market stream consumer는 후속 Phase 범위입니다.
+
+Gateway는 네트워크 SDK를 직접 선택하지 않고 주입된 client
+Protocol을 사용합니다. 현재 Phase의 자동 검증은 fake REST/WebSocket client만
+사용하며, 실제 계좌·주문 API를 호출하지 않습니다.
 
 ## 실행 계약
 
@@ -49,5 +76,6 @@ cd backend
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-실제 Gateway, Repository, Controller와 transport는 후속 Phase의 범위이며 현재
-domain package에는 network/file 의존성이 없습니다.
+실제 Binance client 조립, 인증 계좌/주문 Gateway, Repository와 transport는
+후속 Phase의 범위입니다. domain package에는 network/file 의존성이
+없습니다.
