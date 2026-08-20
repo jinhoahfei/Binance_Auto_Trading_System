@@ -7,6 +7,7 @@ from ..common import RegimeType
 from ._validation import (
     validate_aware_datetime,
     validate_non_empty_text,
+    validate_non_negative_integer,
     validate_optional_non_empty_text,
 )
 from .action_requests import (
@@ -92,7 +93,7 @@ class RegimeResult:
     """
     클래스 이름: RegimeResult
     기능: Controller가 추천 Action을 적용한 결과 metadata를 불변으로 보존한다.
-    작성 날짜: 2026/08/14
+    작성 날짜: 2026/08/20
     """
 
     evaluation_id: str
@@ -101,6 +102,7 @@ class RegimeResult:
     changed: bool
     transition_id: str
     state: RegimeState
+    source_market_version: int
     source_candle_id: str | None
     calculated_at: datetime
 
@@ -110,7 +112,7 @@ class RegimeResult:
         기능: Controller 적용 결과의 추천값, 상태 및 변경 여부를 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/14
+        작성 날짜: 2026/08/20
         """
         validate_non_empty_text(self.evaluation_id, "evaluation_id")
 
@@ -139,6 +141,14 @@ class RegimeResult:
         if self.state is not recommended_state_for(self.recommended_type):
             raise ValueError("state must match recommended_type")
 
+        validate_non_negative_integer(
+            self.source_market_version,
+            "source_market_version",
+        )
+        if self.source_market_version == 0:
+            raise ValueError(
+                "source_market_version must be greater than zero"
+            )
         validate_optional_non_empty_text(
             self.source_candle_id,
             "source_candle_id",

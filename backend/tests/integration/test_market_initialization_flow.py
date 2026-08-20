@@ -552,6 +552,36 @@ class BlockingMarketSnapshot(TracingMarketSnapshot):
         super().update(klines_by_interval)
 
 
+class NoOpRegimeController:
+    """
+    클래스 이름: NoOpRegimeController
+    기능: Phase 2 시장 초기화 회귀에서 Phase 3 추천 동작을 격리하는 test double이다.
+    작성 날짜: 2026/08/20
+    """
+
+    @property
+    def last_regime_result(self) -> None:
+        """
+        함수 이름: last_regime_result()
+        기능: Phase 2 격리 double에는 적용된 추천 결과가 없음을 반환한다.
+        인자: 없음
+        반환값: 항상 None
+        작성 날짜: 2026/08/20
+        """
+        return None
+
+    def evaluate_regime(self, trigger: object, market_snapshot: object) -> None:
+        """
+        함수 이름: evaluate_regime()
+        기능: 시장 초기화 회귀 trace를 바꾸지 않고 추천 평가 요청을 소비한다.
+        인자: trigger -> production Controller에 전달되는 평가 trigger
+            market_snapshot -> production Controller에 전달되는 시장 snapshot
+        반환값: 없음
+        작성 날짜: 2026/08/20
+        """
+        del trigger, market_snapshot
+
+
 class MarketInitializationFlowTests(unittest.TestCase):
     """
     클래스 이름: MarketInitializationFlowTests
@@ -589,10 +619,12 @@ class MarketInitializationFlowTests(unittest.TestCase):
             operation_trace=self.operation_trace,
             clock=self.snapshot_clock,
         )
+        self.regime_controller = NoOpRegimeController()
         self.controller = MarketDataController(
             api_gateway=self.api_gateway,
             web_socket_gateway=self.web_socket_gateway,
             market_snapshot=self.market_snapshot,
+            regime_controller=self.regime_controller,
         )
 
     def _capture_snapshot_state(self) -> tuple[object, ...]:
@@ -1064,6 +1096,7 @@ class MarketInitializationFlowTests(unittest.TestCase):
             api_gateway=self.api_gateway,
             web_socket_gateway=self.web_socket_gateway,
             market_snapshot=blocking_snapshot,
+            regime_controller=self.regime_controller,
         )
         initialization_errors: list[Exception] = []
 
@@ -1139,6 +1172,7 @@ class MarketInitializationFlowTests(unittest.TestCase):
                         api_gateway=self.api_gateway,
                         web_socket_gateway=self.web_socket_gateway,
                         market_snapshot=self.market_snapshot,
+                        regime_controller=self.regime_controller,
                         kline_limit=invalid_limit,
                     )
 

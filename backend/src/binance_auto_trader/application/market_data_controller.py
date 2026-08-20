@@ -1,4 +1,4 @@
-"""REST와 WebSocket 시장 데이터를 원자적으로 초기화하는 controller를 정의한다."""
+"""시장 snapshot 초기화 후 same-version REGIME 평가를 시작하는 controller를 정의한다."""
 
 from threading import RLock
 
@@ -8,6 +8,9 @@ from binance_auto_trader.adapters.binance.websocket_gateway import (
 )
 from binance_auto_trader.domain.common import SUPPORTED_INTERVALS
 from binance_auto_trader.domain.market import MarketSnapshot
+from binance_auto_trader.domain.regime import RegimeEvaluationTrigger
+
+from .regime_controller import RegimeController
 
 
 MARKET_INTERVALS = SUPPORTED_INTERVALS
@@ -19,7 +22,7 @@ MAXIMUM_KLINE_LIMIT = 1000
 class MarketDataController:
     """
     클래스 이름: MarketDataController
-    기능: REST 조회 중 수신한 WebSocket 봉을 병합해 시장 snapshot을 초기화한다.
+    기능: REST/WS 시장 snapshot을 초기화하고 같은 version의 4H REGIME 평가를 시작한다.
     작성 날짜: 2026/08/20
     """
 
@@ -28,6 +31,7 @@ class MarketDataController:
         api_gateway: APIGateway,
         web_socket_gateway: WebSocketGateway,
         market_snapshot: MarketSnapshot,
+        regime_controller: RegimeController,
         kline_limit: int = DEFAULT_KLINE_LIMIT,
     ) -> None:
         """
@@ -36,6 +40,7 @@ class MarketDataController:
         인자: api_gateway -> 과거 Kline을 조회할 REST Gateway
             web_socket_gateway -> 초기 Kline buffer를 관리할 WebSocket Gateway
             market_snapshot -> 성공한 전체 초기화 결과를 반영할 시장 snapshot
+            regime_controller -> 같은 snapshot으로 4H 지표와 추천을 계산할 controller
             kline_limit -> 각 주기에서 조회할 Kline 개수
         반환값: 없음
         작성 날짜: 2026/08/20
@@ -48,6 +53,7 @@ class MarketDataController:
         self._api_gateway = api_gateway
         self._web_socket_gateway = web_socket_gateway
         self._market_snapshot = market_snapshot
+        self._regime_controller = regime_controller
         self._kline_limit = kline_limit
         self._initialization_lock = RLock()
 
@@ -57,7 +63,7 @@ class MarketDataController:
     ) -> MarketSnapshot:
         """
         함수 이름: initialize_market_data()
-        기능: WebSocket 시작, REST 조회, buffer 배출, snapshot 갱신 순으로 초기화한다.
+        기능: WebSocket, REST, 병합, snapshot 갱신과 최초 REGIME 평가 순으로 초기화한다.
         인자: symbol -> 초기화할 Binance Spot 거래 symbol
         반환값: 주입 시 받은 것과 동일한 최신 MarketSnapshot
         작성 날짜: 2026/08/20
@@ -75,7 +81,7 @@ class MarketDataController:
     ) -> MarketSnapshot:
         """
         함수 이름: _initialize_market_data()
-        기능: 직렬화된 한 초기화 시도의 네 단계를 수행한다.
+        기능: 직렬화된 한 초기화 시도의 시장 commit과 최초 REGIME 평가를 수행한다.
         인자: normalized_symbol -> 검증과 정규화를 마친 Binance symbol
         반환값: 주입 시 받은 것과 동일한 최신 MarketSnapshot
         작성 날짜: 2026/08/20
@@ -105,6 +111,15 @@ class MarketDataController:
 
             # WebSocket 봉을 REST 봉 뒤에 배치해 같은 key에서 실시간 값을 우선한다.
             self._market_snapshot.update(merged_klines)
+            evaluation_trigger = (
+                RegimeEvaluationTrigger.INITIAL
+                if self._regime_controller.last_regime_result is None
+                else RegimeEvaluationTrigger.FOUR_HOUR_CANDLE_CLOSE
+            )
+            self._regime_controller.evaluate_regime(
+                evaluation_trigger,
+                self._market_snapshot,
+            )
         except Exception as initialization_error:
             if not subscription_closed:
                 try:

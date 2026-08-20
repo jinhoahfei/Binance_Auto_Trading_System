@@ -29,6 +29,7 @@ MARKET_SOURCE_PATHS = (
     DOMAIN_ROOT / "common" / "enums.py",
     *tuple((SOURCE_ROOT / "adapters" / "binance").rglob("*.py")),
     SOURCE_ROOT / "application" / "market_data_controller.py",
+    SOURCE_ROOT / "application" / "regime_controller.py",
 )
 CLASS_NAME_PATTERN = re.compile(r"^_?[A-Z][A-Za-z0-9]*$")
 FUNCTION_NAME_PATTERN = re.compile(
@@ -150,10 +151,12 @@ class MarketBoundaryArchitectureTests(unittest.TestCase):
             with self.subTest(source_path=source_path):
                 self.assertFalse(imported_parts & forbidden_parts)
 
-    def test_controller_does_not_import_future_phase_collaborators(self) -> None:
+    def test_market_controller_imports_only_current_regime_collaborator(
+        self,
+    ) -> None:
         """
-        함수 이름: test_controller_does_not_import_future_phase_collaborators()
-        기능: MarketDataController가 Regime, Trading, UI 또는 주문 책임을 참조하지 않는지 검증한다.
+        함수 이름: test_market_controller_imports_only_current_regime_collaborator()
+        기능: MarketDataController가 Phase 3 Regime만 연결하고 후속 업무 책임은 참조하지 않는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/20
@@ -162,7 +165,7 @@ class MarketBoundaryArchitectureTests(unittest.TestCase):
             SOURCE_ROOT / "application" / "market_data_controller.py"
         )
         syntax_tree = ast.parse(controller_path.read_text(encoding="utf-8"))
-        forbidden_parts = {"order", "regime", "trading", "ui"}
+        forbidden_parts = {"order", "trading", "ui"}
         imported_parts = set()
 
         for syntax_node in ast.walk(syntax_tree):
@@ -177,6 +180,7 @@ class MarketBoundaryArchitectureTests(unittest.TestCase):
                     syntax_node.module.lower().split(".")
                 )
 
+        self.assertIn("regime_controller", imported_parts)
         self.assertFalse(imported_parts & forbidden_parts)
 
     def test_financial_market_source_does_not_use_float(self) -> None:

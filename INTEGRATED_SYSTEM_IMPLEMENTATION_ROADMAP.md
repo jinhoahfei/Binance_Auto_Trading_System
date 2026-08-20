@@ -2,12 +2,12 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | 실행 기준 문서 / Phase 2 완료 |
+| 문서 상태 | 실행 기준 문서 / Phase 3 완료 |
 | 기준일 | 2026-08-20 (Asia/Seoul) |
-| 기준 커밋 | `a384fb2` (`main`, Phase 2 시작 기준) |
+| 기준 커밋 | `903e5c8` (`main`, Phase 3 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 2에서 fake client 경계의 Binance Spot Kline REST/WebSocket 정규화, `MarketSnapshot`, `MarketDataController` 초기화를 완성했다. backend 131개와 UI 88개 테스트가 통과했으며, 다음 작업은 Phase 3 하나다. |
+| 현재 결론 | Phase 3에서 ADR-004의 4H `IndicatorSnapshot`, same-version `RegimeController`, RegimeSTM 두 microstep Action 수행과 메시지 `1.4`~`1.5.1` trace를 완성했다. backend 162개와 UI 88개 테스트가 통과했으며, 다음 작업은 Phase 4 하나다. |
 
 ---
 
@@ -82,20 +82,20 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 
 | 영역 | 실행 결과 | 판단 |
 |---|---|---|
-| 통합 backend | 표준 `unittest` 131개 전부 통과 | 기존 64개 회귀 보존, market unit/integration/architecture 계약 정상 |
-| RegimeSTM 회귀 | 기존 `unittest` 31개 전부 통과 | 순수 RegimeSTM 계약과 13개 `EA-*` 전이 동작 보존 |
+| 통합 backend | 표준 `unittest` 162개 전부 통과 | Phase 2의 131개 회귀 보존, Phase 3 test 31개 추가 |
+| Regime/Controller 집중 | `unittest` 37개 전부 통과 | 순수 RegimeSTM 계약, Controller 경유 13개 `EA-*`, duplicate/stale/failure/retry 동작 정상 |
 | TradingSTM 회귀 | 기존 `unittest` 24개 전부 통과 | 109개 ID, 핵심 우선순위와 event queue 동작 보존 |
 | package | offline wheel build 및 clean venv 설치 성공 | 하나의 distribution에서 두 STM과 동일 canonical enum import 정상 |
-| UI (Phase 2 회귀) | Vitest 26개 파일, 88개 테스트 전부 통과 | 기존 공개 chart production source를 변경하지 않음 |
-| UI typecheck/build (Phase 2 회귀) | `tsc -b --pretty false`, Vite 274 modules build 성공 | TypeScript strict 계약과 web bundle 정상 |
-| Git 상태 | Phase 2 의도 범위의 backend source/test/document 변경만 존재 | UI production source 변경 없음 |
+| UI (Phase 3 회귀) | Vitest 26개 파일, 88개 테스트 전부 통과 | UI production source를 변경하지 않음 |
+| UI typecheck/build (Phase 3 회귀) | `tsc -b --pretty false`, Vite 274 modules build 성공 | TypeScript strict 계약과 web bundle 정상 |
+| Git 상태 | Phase 3 의도 범위의 backend source/test/document 변경만 존재 | Trading/UI production source와 실제 Binance client 변경 없음 |
 
 현재 환경에는 `pytest`가 설치되어 있지 않아 Python 검증은 프로젝트가
 실제 사용하는 표준 `unittest`로 수행했다. clean venv에 build backend가
 없어 source metadata 설치는 실패했으나, 로컬 cache로 offline wheel을 빌드한
 뒤 새 venv에 `--no-deps --no-index`로 설치한 검증은 통과했다. 이는
 package 코드 실패와 build tool 부재를 구분한다. UI 결과는 설치된
-`node_modules/.bin`으로 Phase 2 완료 전 다시 검증했다.
+`node_modules/.bin`으로 Phase 3 완료 전 다시 검증했다.
 
 ### 3.2 현재 완료된 핵심
 
@@ -108,6 +108,9 @@ package 코드 실패와 build tool 부재를 구분한다. UI 결과는 설치�
 - [x] canonical `Interval`과 Decimal/UTC 불변 `Kline`, 원자적·versioned `MarketSnapshot`이 구현되어 있다.
 - [x] backend `MarketDataController`가 fake client 경계에서 WS start → REST load → drain/merge → snapshot update를 직렬 실행한다.
 - [x] Binance Spot REST 12-field Kline과 raw/combined WebSocket Kline을 Decimal·UTC 내부 타입으로 엄격히 정규화한다.
+- [x] `IndicatorSnapshot`이 closed 4H EMA9/slope/swing과 진행봉 live EMA9를 같은 MarketSnapshot version provenance로 보존한다.
+- [x] `RegimeController`가 initial/4H close 두 microstep Action을 직렬 실행하고 추천/선택 분리, candle dedup, stale/failure trace를 소유한다.
+- [x] `MarketDataController`에서 메시지 `1.4`~`1.5.1`의 fake vertical slice가 실제 `RegimeSTM` 추천 결과까지 연결된다.
 - [x] UI의 Dashboard, Trade History, modal, REGIME 선택, start/stop 확인, split order, CSV form, 차트, Storybook 기준 화면이 구현되어 있다.
 - [x] UI 가격 차트는 공개 Binance REST/WebSocket에서 `1m`, `30m`, `4h`, `1d`를 조회한다.
 - [x] UI 차트는 WebSocket을 먼저 열고 REST를 조회한 뒤 동일 봉에서는 WebSocket 값을 우선하여 병합한다.
@@ -115,18 +118,18 @@ package 코드 실패와 build tool 부재를 구분한다. UI 결과는 설치�
 
 ### 3.3 현재 완료되지 않은 핵심
 
-- [ ] 미구현 — `RegimeController`, `TradingController`, `TradeHistoryController`가 없다.
+- [ ] 미구현 — `TradingController`, `TradeHistoryController`가 없다. `RegimeController`의 추천 책임은 구현됐고 사용자 선택/session 연결은 Phase 7 범위다.
 - [ ] 미구현 — 인증된 Binance 계좌/주문 REST Gateway와 account WebSocket Gateway가 없다.
 - [ ] 미구현 — `Order`, mutable `Position`, `Trade`, `TradeHistory`, `Performance`, backend `Account` entity가 없다.
 - [ ] 미구현 — 거래 이력 Repository와 실제 CSV writer가 없다.
 - [ ] 미구현 — Python backend process, loopback API, backend event stream, Tauri sidecar lifecycle이 없다.
 - [ ] 부분 완료 — UI는 실제 화면이지만 주문·계좌·이력·CSV는 `FakeUiCommandAdapter`를 사용한다.
-- [ ] 부분 완료 — authoritative backend `MarketSnapshot` 초기화는 구현됐지만 실제 Binance client, UI, Trading/Regime runtime에는 아직 연결되지 않았다. UI 공개 차트는 display fallback으로 유지한다.
+- [ ] 부분 완료 — authoritative backend `MarketSnapshot` 초기화와 Regime 추천은 연결됐지만 실제 Binance client, UI와 Trading runtime에는 아직 연결되지 않았다. UI 공개 차트는 display fallback으로 유지한다.
 - [ ] 부분 완료 — backend는 canonical `TYPE_0`~`TYPE_4`를 공유하고 `TYPE_0`만 기존 lower-BB registry에 매핑한다. 상단 BB 인계가 미완료이며 `TYPE_1`~`TYPE_4`는 지원하지 않아 다섯 타입 모두 production start는 비활성이다.
 - [ ] 미구현 — 실제 주문을 제출하고 fill을 Position/History/Performance에 반영하는 Case 2 pipeline이 없다.
 - [ ] 미구현 — 어떤 Communication Case도 User에서 Binance/File System까지 종단 간 자동 테스트되지 않았다.
 
-### 3.4 Phase 1~2에서 해소한 위험과 남은 계약 공백
+### 3.4 Phase 1~3에서 해소한 위험과 남은 계약 공백
 
 Phase 1에서 두 독립 distribution을 `backend/` 하나로 통합했다. root의
 `RegimeSTM/`·`TradingSTM/` source tree를 제거했고, clean environment에 설치한
@@ -135,6 +138,11 @@ Phase 1에서 두 독립 distribution을 `backend/` 하나로 통합했다. root
 Phase 2에서 중복 `Interval` 정의 없이 common canonical enum을
 market/regime이 공유하고, 실패·disconnect·concurrent reinitialize에서 기존
 snapshot version을 역행시키지 않는 full-resync 계약을 고정했다.
+
+Phase 3에서 Decimal 4H 지표 공식과 golden vector를 production code에 고정하고,
+RegimeSTM의 Action 요청을 Controller만 수행하도록 연결했다. recommendation과
+selection은 분리했고 duplicate/stale/과거 candle 및 입력 실패는 마지막 정상 추천을
+보존하는 typed trace로 닫았다.
 
 남은 표현과 지원 상태는 다음과 같다.
 
@@ -164,13 +172,13 @@ Phase 5의 transport 계층에서 구현한다. REGIME별 실제 거래 logic �
 | [ ] | `TradingController` | production 클래스 없음 | 계좌·Context·STM·주문·중지·Action 실행의 유일한 조정자로 구현 |
 | [ ] | `TradingSTM` | 단일 backend package에 109개 lower-BB transition·queue와 canonical `RegimeType` 매핑을 구현 | Phase 6의 상단 BB 인계·선택값별 registry coverage와 Controller 통합 |
 | [ ] | `TradingContext` | 읽기 전용 `TradingContextView`/runtime snapshot만 구현 | mutable owner, `initialize`, result/action 적용, version 증가, split ratio 구현 |
-| [ ] | `MarketDataController` | backend authoritative WS-first/REST/merge/snapshot 초기화를 구현 | 4H/30m live event 발행과 후속 Controller 연결 |
+| [ ] | `MarketDataController` | backend authoritative WS-first/REST/merge/snapshot 초기화와 RegimeController 최초/full-resync 평가를 구현 | 4H/30m live event 발행과 후속 runtime 연결 |
 | [ ] | `APIGateway` | 주입 client의 공식 Spot Kline 4주기 REST payload 정규화를 구현 | 실제 client 조립, account/order submit/query/force-sell |
 | [ ] | `WebSocketGateway` | Kline raw/combined 정규화, thread-safe buffer, disconnect/stale generation 방어를 구현 | 실제 client 조립, live consumer과 인증 account stream |
-| [x] | `MarketSnapshot` | canonical Decimal/UTC Kline 4주기, current ETH price, monotonic version을 원자적으로 구현 | Phase 3의 same-version 지표 파생 연결 |
-| [ ] | `RegimeController` | 없음 | 지표 계산, RegimeSTM Action 실행, 추천/선택 분리, dedup 구현 |
-| [ ] | `IndicatorSnapshot` | `RegimeEvaluationContext`와 UI fixture만 존재 | EMA9 series/slope/swing/live EMA9 entity와 계산 구현 |
-| [x] | `RegimeSTM` | 순수 engine과 13개 transition 구현 | Communication signature 동기화와 Controller 통합은 별도 Phase |
+| [x] | `MarketSnapshot` | canonical Decimal/UTC Kline 4주기, current ETH price, monotonic version과 same-version 지표 파생을 구현 | 없음 |
+| [ ] | `RegimeController` | Phase 3 지표 계산, RegimeSTM Action 실행, 추천/선택 분리, dedup/stale/error trace를 구현 | Phase 5 UI event bridge와 Phase 7 `set_regime_type`/TradingController 연결 |
+| [x] | `IndicatorSnapshot` | Decimal EMA9 series/slope, strict swing, live EMA9과 source version/candle/time provenance를 구현 | 없음 |
+| [x] | `RegimeSTM` | 순수 engine, 13개 transition과 Controller 두 microstep 통합 구현 | 없음 |
 | [ ] | `Order` | 없음 | 최초/재조회 결과, fills, execution summary 구현 |
 | [ ] | `Position` | 불변 `PositionSnapshot`만 존재 | cost basis와 execution 반영을 가진 entity 구현 |
 | [ ] | `Trade` | UI `TradeRecord` fixture만 존재 | backend 체결 entity 및 wire mapper 구현 |
@@ -194,7 +202,7 @@ Phase 5의 transport 계층에서 구현한다. REGIME별 실제 거래 logic �
 
 | Case | 현재 완료 범위 | 현재 끊기는 지점 | 완료 Phase |
 |---|---|---|---|
-| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM core, TradingSTM core, UI 공개 Kline 표시, backend fake-client 시장 초기화 | 실제 Binance client, 계좌/이력 startup, RegimeController, TradingController, 실제 stop/매도 | Phase 3~7, 9 |
+| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM core, TradingSTM core, UI 공개 Kline 표시, backend fake-client 시장 초기화와 Regime 추천 | 실제 Binance client, 계좌/이력 startup, TradingController, 실제 stop/매도 | Phase 4~7, 9 |
 | Case 2 Buy/Sell | TradingSTM이 주문 Action request를 결정 | `TradingController -> Order -> APIGateway -> Position -> History -> orderFinished` 전체 | Phase 8~9 |
 | Case 3 Trade History | 화면, filter actor, fake query | backend `TradeHistoryController`, Entity, Repository, Account, Performance | Phase 4, 5, 10 |
 | Case 4 CSV Export | popup, date/file validation, fake picker/receipt | backend option 검증, streaming query, native picker, 실제 atomic file write | Phase 11~12 |
@@ -801,36 +809,53 @@ Operation 재호출로 full resync한다.
 
 **작업 체크리스트:**
 
-- [ ] Phase 0의 확정 공식만 사용해 closed 4H candle과 진행 4H candle을 분리한다.
-- [ ] closed candle로 EMA9 series를 계산한다.
-- [ ] 최근 6개 EMA9의 LR slope를 확정 단위와 Decimal precision으로 계산한다.
-- [ ] 확정 swing으로 HH/HL/LH/LL을 계산한다.
-- [ ] 진행 candle의 현재가로 live EMA9를 계산한다.
-- [ ] 동일 MarketSnapshot version에서 `IndicatorSnapshot`과 `RegimeEvaluationContext`를 생성한다.
-- [ ] initial event → `EA-001` → `StartRegimeEvaluation` → `EVALUATION_READY` microstep을 Controller가 직렬 실행한다.
-- [ ] `EA-002`~`EA-008`의 `ApplyRecommendedRegime`을 Controller만 실행한다.
-- [ ] `recommended_regime`과 `selected_regime`을 별도 필드와 별도 event로 유지한다.
-- [ ] 같은 4H candle ID 재수신을 dedup한다.
-- [ ] stale MarketSnapshot version 결과를 적용하지 않는다.
-- [ ] 입력 부족/계산 실패 시 마지막 정상 추천을 유지하고 오류를 기록한다.
-- [ ] 추천 결과에 transition ID, evaluation ID, candle ID, snapshot version을 기록한다.
+- [x] Phase 0의 확정 공식만 사용해 closed 4H candle과 진행 4H candle을 분리한다.
+- [x] closed candle로 EMA9 series를 계산한다.
+- [x] 최근 6개 EMA9의 LR slope를 확정 단위와 Decimal precision으로 계산한다.
+- [x] 확정 swing으로 HH/HL/LH/LL을 계산한다.
+- [x] 진행 candle의 현재가로 live EMA9를 계산한다.
+- [x] 동일 MarketSnapshot version에서 `IndicatorSnapshot`과 `RegimeEvaluationContext`를 생성한다.
+- [x] initial event → `EA-001` → `StartRegimeEvaluation` → `EVALUATION_READY` microstep을 Controller가 직렬 실행한다.
+- [x] `EA-002`~`EA-008`의 `ApplyRecommendedRegime`을 Controller만 실행한다.
+- [x] `recommended_regime`과 `selected_regime`을 별도 필드와 별도 event로 유지한다.
+- [x] 같은 4H candle ID 재수신을 dedup한다.
+- [x] stale MarketSnapshot version 결과를 적용하지 않는다.
+- [x] 입력 부족/계산 실패 시 마지막 정상 추천을 유지하고 오류를 기록한다.
+- [x] 추천 결과에 transition ID, evaluation ID, candle ID, snapshot version을 기록한다.
 
 **검증 시나리오:**
 
-- [ ] 13개 `EA-*` ID positive coverage.
-- [ ] slope `-0.30`, `-0.15`, `0.15`, `0.30` exact boundary.
-- [ ] strong up/down structure 성공·fallback.
-- [ ] 현재가와 live EMA9 equality.
-- [ ] duplicate 4H close와 stale result.
-- [ ] 추천 변경이 selected 값이나 TradingSTM을 바꾸지 않음.
+- [x] 13개 `EA-*` ID positive coverage.
+- [x] slope `-0.30`, `-0.15`, `0.15`, `0.30` exact boundary.
+- [x] strong up/down structure 성공·fallback.
+- [x] 현재가와 live EMA9 equality.
+- [x] duplicate 4H close와 stale result.
+- [x] 추천 변경이 selected 값이나 TradingSTM을 바꾸지 않음.
 
 **완료 조건:**
 
-- [ ] fake MarketSnapshot 하나로 추천 결과까지 end-to-end 완료된다.
-- [ ] RegimeSTM source에는 indicator 계산과 Controller state write가 없다.
-- [ ] Communication 메시지 `1.4`~`1.5.1` trace test가 통과한다.
+- [x] fake MarketSnapshot 하나로 추천 결과까지 end-to-end 완료된다.
+- [x] RegimeSTM source에는 indicator 계산과 Controller state write가 없다.
+- [x] Communication 메시지 `1.4`~`1.5.1` trace test가 통과한다.
 
-**완료 증거:** 미기록
+**완료 증거:**
+
+| 항목 | 기록 |
+|---|---|
+| 실행 시각 | 2026-08-21 00:09 KST |
+| Phase 3 시작 commit | `903e5c8e4cc68adb2d4896af859f71d4b06e9ff2` (`main`) |
+| 통합 backend | `cd backend && PYTHONPATH=src python3 -m unittest discover -s tests -v` → 162/162 통과 |
+| Phase 3 집중 회귀 | market unit 55/55, regime unit 39/39, Regime integration 2/2, 관련 architecture 13/13 통과 |
+| package | `cd backend && uv build --wheel --offline` → `binance_auto_trader_backend-0.1.0-py3-none-any.whl` 성공 |
+| 공식·golden 검증 | ADR-004의 14개 closed candle, EMA9 SMA seed/alpha 0.2, 최근 6개 OLS/current price, strict pivot 2/2·0.30%, same-version live EMA9 fixture가 exact Decimal 결과와 `TYPE_2`를 재현 |
+| Event-Action 검증 | Controller 경유 13개 ID positive coverage, exact slope 4경계, strong up/down success·fallback, price/live EMA equality 통과 |
+| 실패·동시성 검증 | duplicate INITIAL/4H close, stale version 재준비, 과거 candle watermark, same-version 실패 retry 금지, 새 version retry, Action provenance, 실패 trace provenance race, evaluation 직렬화 통과 |
+| Communication trace | fake `MarketDataController → RegimeController → IndicatorSnapshot/RegimeSTM`에서 `1.4`, `1.4.1`, `1.5`, `1.5.1`, caller/receiver, event/evaluation/candle/version, `EA-001/EA-005`와 `EA-103/EA-005` 확인 |
+| UI 회귀 | `vitest run --reporter=dot` → 26 files, 88/88; `tsc -b --pretty false` → 통과; `vite build` → 274 modules 성공 |
+| Binance 공식 문서 | 새 Binance payload/client 동작을 추가하지 않고 Phase 2에서 공식 문서로 고정한 내부 `Kline`/`MarketSnapshot`만 소비하므로 추가 조회 불필요 |
+| 주요 산출물 | `domain/market/indicator_snapshot.py`, `application/regime_controller.py`, MarketDataController 연결, golden fixture, unit/integration/architecture tests |
+| 범위 방어 | selected 값·TradingSTM·UI production·실제 Binance client/credential/order 변경 없음 |
+| 작업 commit | 생성하지 않음 — 사용자 요청 범위에 commit은 포함되지 않음 |
 
 ---
 
@@ -1385,7 +1410,7 @@ Communication message/operation:
 - [x] Phase 0 — 명세·정책 잠금
 - [x] Phase 1 — Python package 통합
 - [x] Phase 2 — 시장 데이터 초기화
-- [ ] Phase 3 — REGIME 추천 vertical slice
+- [x] Phase 3 — REGIME 추천 vertical slice
 - [ ] Phase 4 — Account/History/Performance 초기 로드
 - [ ] Phase 5 — startup/transport/UI live read
 - [ ] Phase 6 — REGIME별 TradingSTM coverage
@@ -1403,11 +1428,10 @@ Communication message/operation:
 
 ## 16. 다음 작업
 
-Phase 2는 완료되었다. 다음 구현 작업은 **Phase 3 —
-IndicatorSnapshot, RegimeController, 추천 vertical slice만** 수행한다.
-Phase 3에서는 Communication 메시지 `1.4`~`1.5.1`과
-`calculate4HIndicators`, `IndicatorSnapshot.update`, `recommendRegime`,
-`RegimeSTM.handle` Operation을 먼저 다시 읽는다.
+Phase 3은 완료되었다. 다음 구현 작업은 **Phase 4 — Account,
+TradeHistory, Performance 초기 로드만** 수행한다. Phase 4에서는
+Communication 메시지 `2`~`3.3`과 `loadAccount`, `getTradeHistory`,
+`TradeHistory.update`, `Performance.calculate` Operation을 먼저 다시 읽는다.
 
 Phase 1은 `TYPE_0` production start를 enable하거나 상단 BB 전략을 추측해
 구현하지 않았다. 해당 coverage gate는 계속 Phase 6 범위다.
@@ -1417,4 +1441,6 @@ Phase 1은 `TYPE_0` production start를 enable하거나 상단 BB 전략을 추�
 - [x] Phase 1 완료 조건과 증거를 기록했다.
 - [x] Phase 2를 시작하기 전 Communication 1.1~1.3과 market Operation을 다시 확인했다.
 - [x] Phase 2 완료 조건과 증거를 기록했다.
-- [ ] Phase 3을 시작하기 전 Communication 1.4~1.5.1과 Regime Operation을 다시 확인한다.
+- [x] Phase 3을 시작하기 전 Communication 1.4~1.5.1과 Regime Operation을 다시 확인했다.
+- [x] Phase 3 완료 조건과 증거를 기록했다.
+- [ ] Phase 4를 시작하기 전 Communication 2~3.3과 Account/History/Performance Operation을 다시 확인한다.

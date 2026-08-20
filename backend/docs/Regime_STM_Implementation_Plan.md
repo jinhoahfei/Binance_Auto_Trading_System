@@ -2,9 +2,9 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | Accepted design — Phase 0 Communication/지표 정책 동기화 완료 |
+| 문서 상태 | Implemented — 통합 roadmap Phase 3 추천 vertical slice 완료 |
 | 작성일 | 2026-08-14 |
-| 최종 명세 반영일 | 2026-08-20 |
+| 최종 명세 반영일 | 2026-08-21 |
 | 대상 | `RegimeController`, `RegimeSTM`, 4H REGIME 추천 평가 경계 |
 | 핵심 목표 | Event-Action Table의 상태·가드·다음 상태·Action 종류는 `RegimeSTM`이 결정하고, `Action` 열의 실제 작업은 `RegimeController`가 수행하도록 책임을 분리한다. |
 
@@ -612,8 +612,12 @@ backend/
 ├── pyproject.toml
 ├── src/
 │   └── binance_auto_trader/
+│       ├── application/
+│       │   ├── market_data_controller.py
+│       │   └── regime_controller.py
 │       └── domain/
 │           ├── common/enums.py
+│           ├── market/indicator_snapshot.py
 │           └── regime/
 │               ├── states.py
 │               ├── events.py
@@ -624,17 +628,21 @@ backend/
 │               ├── transitions.py
 │               └── stm.py
 └── tests/
+    ├── integration/test_regime_evaluation_flow.py
+    ├── unit/market/test_indicator_snapshot.py
     ├── unit/regime/
     │   ├── factories.py
     │   ├── test_contracts.py
     │   ├── test_guards.py
+    │   ├── test_regime_controller.py
     │   └── test_stm.py
     └── architecture/
-        └── test_regime_boundaries.py
+        ├── test_regime_boundaries.py
+        └── test_regime_controller_boundaries.py
 ```
 
-Controller는 후속 Phase에서 `application/regime_controller.py`에 추가한다.
-지표 계산·snapshot 일관성·Action 수행 책임을 domain STM에 넣지 않는다.
+Controller와 `IndicatorSnapshot`은 각각 application과 market domain에 구현했다.
+지표 계산·snapshot 일관성·Action 수행 책임은 domain STM에 들어가지 않는다.
 
 ## 16. 클래스별 구현 항목
 
@@ -771,53 +779,53 @@ fake market snapshot과 spy observer를 사용해 다음을 검증한다.
 
 ### Phase 1 — 불변 타입과 상태 골격
 
-- `RegimeState`, `RegimeEvent`, `RegimeEvaluationContext`를 구현한다.
-- `RegimeActionRequest`, `RegimeSTMResult`, `RegimeResult`를 구현한다.
-- Context validation과 상태/추천 매핑 불변식 테스트를 먼저 작성한다.
+- 완료: `RegimeState`, `RegimeEvent`, `RegimeEvaluationContext`를 구현했다.
+- 완료: `RegimeActionRequest`, `RegimeSTMResult`, `RegimeResult`를 구현했다.
+- 완료: Context validation과 상태/추천 매핑 불변식 테스트를 추가했다.
 
 완료 기준: 외부 I/O 없이 event, context, result를 만들 수 있다.
 
 ### Phase 2 — 순수 RegimeSTM
 
-- `EA-001`, `EA-101`~`EA-105`를 구현한다.
-- `EA-002`~`EA-008` guard와 transition registry를 구현한다.
-- no-op, 결정론, 전체 경계값 테스트를 통과시킨다.
+- 완료: `EA-001`, `EA-101`~`EA-105`를 구현했다.
+- 완료: `EA-002`~`EA-008` guard와 transition registry를 구현했다.
+- 완료: no-op, 결정론, 전체 경계값 테스트를 통과했다.
 
 완료 기준: Controller 없이 13개 ID의 상태 전이와 Action 요청을 모두 검증할 수 있다.
 
 ### Phase 3 — RegimeController 입력 준비
 
-- 4H 봉 분리와 지표 계산을 구현한다.
-- 현재가를 결합한 불변 Context builder를 구현한다.
-- 입력 부족, snapshot version, candle dedup 검증을 구현한다.
+- 완료: 4H 봉 분리와 ADR-004 지표 계산을 구현했다.
+- 완료: 현재가를 결합한 불변 Context builder를 구현했다.
+- 완료: 입력 부족, snapshot version, candle dedup과 오래된 봉 검증을 구현했다.
 
 완료 기준: 같은 MarketSnapshot에서는 항상 같은 평가 Context가 생성된다.
 
 ### Phase 4 — Controller Action 수행
 
-- 직렬 evaluation loop와 Action dispatcher를 구현한다.
-- `StartRegimeEvaluation` → `EVALUATION_READY` microstep을 연결한다.
-- `ApplyRecommendedRegime`과 `RegimeResult` 생성을 구현한다.
-- 추천/선택 분리와 observer 통지를 검증한다.
+- 완료: 직렬 evaluation loop와 Action dispatcher를 구현했다.
+- 완료: `StartRegimeEvaluation` → `EVALUATION_READY` microstep을 연결했다.
+- 완료: `ApplyRecommendedRegime`과 `RegimeResult` 생성을 구현했다.
+- 완료: 추천/선택 분리와 별도 trace를 검증했다. UI observer 연결은 통합 roadmap Phase 5의 범위다.
 
 완료 기준: STM 코드가 Controller 상태를 직접 변경하지 않고도 최초·재평가 cycle이 끝난다.
 
 ### Phase 5 — 통합과 추적성
 
-- MarketDataController의 최초 평가와 4H close 호출을 연결한다.
-- 13개 transition ID coverage test와 전체 시나리오 test를 통과시킨다.
-- evaluation ID, candle ID, 전후 상태, 추천 전후값, Action 결과를 trace에 남긴다.
+- 완료: MarketDataController의 최초 평가와 4H close 호출을 연결했다.
+- 완료: 13개 transition ID coverage test와 전체 시나리오 test를 통과했다.
+- 완료: evaluation ID, candle ID, snapshot version, 전후 상태, 추천 전후값, Action 결과를 trace에 남겼다.
 
 ### Phase 6 — 설계 문서 동기화
 
 - 완료: 4H REGIME Event-Action Table의 Action 수행 주체와 `EA-007`을 수정했다.
 - 완료: Communication Diagram의 공통 타입, 메시지 `1.5/1.5.1`, 8.11, 8.12, 8.13을 실제 계약과 일치시켰다.
-- 남음: production 통합 Phase에서 클래스/상태 다이어그램과 실제 import 의존성 방향을 architecture test로 확인한다.
+- 완료: production import 의존성과 Controller/STM 상태 소유 방향을 architecture test로 확인했다.
 
 ## 20. 참조 문서에 필요한 후속 변경
 
-4H REGIME Event-Action Table과 Communication 명세의 public 계약 변경은 완료되었다.
-나머지 production 구조 검증은 해당 구현 Phase에서 수행한다.
+4H REGIME Event-Action Table과 Communication 명세의 public 계약 변경, production 구현,
+import 경계 검증을 통합 roadmap Phase 3에서 완료했다.
 
 ### 20.1 4H REGIME Event-Action Table — 반영 완료
 
@@ -849,4 +857,6 @@ fake market snapshot과 spy observer를 사용해 다음을 검증한다.
 - 같은 event/context trace를 재생하면 같은 transition, 상태 및 Action 요청이 나온다.
 - trace만으로 evaluation ID, Event-Action ID, 전후 상태, 입력 snapshot, 요청 Action, 적용 추천을 역추적할 수 있다.
 
-이 기준을 만족한 뒤에만 `RegimeController`의 추천 결과를 실제 UI 및 사용자 REGIME 선택 흐름과 연결한다.
+위 기준은 통합 roadmap Phase 3에서 달성했다. `RegimeController`의 추천 결과를
+실제 UI transport와 연결하는 작업은 roadmap Phase 5, 사용자 REGIME 선택과 Trading 연결은
+roadmap Phase 7에서 진행한다.

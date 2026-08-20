@@ -1,7 +1,7 @@
 """RegimeSTM 불변 값 객체의 입력 계약을 검증한다."""
 
 import unittest
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime
 from decimal import Decimal
 
@@ -11,6 +11,7 @@ from binance_auto_trader.domain.regime import (
     RegimeEvaluationContext,
     RegimeEvent,
     RegimeEventType,
+    RegimeResult,
     RegimeState,
     RegimeType,
     recommended_state_for,
@@ -167,6 +168,47 @@ class RegimeEventAndActionTests(unittest.TestCase):
 
         with self.assertRaises(FrozenInstanceError):
             action_request.regime_type = RegimeType.TYPE_1
+
+
+class RegimeResultTests(unittest.TestCase):
+    """
+    클래스 이름: RegimeResultTests
+    기능: Controller 추천 결과의 MarketSnapshot provenance 계약을 테스트한다.
+    작성 날짜: 2026/08/20
+    """
+
+    def test_source_market_version_requires_positive_integer(self) -> None:
+        """
+        함수 이름: test_source_market_version_requires_positive_integer()
+        기능: 성공 RegimeResult가 bool, 0과 음수 source version을 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/20
+        """
+        valid_result = RegimeResult(
+            evaluation_id="evaluation-1",
+            recommended_type=RegimeType.TYPE_0,
+            previous_recommended_type=None,
+            changed=True,
+            transition_id="EA-002",
+            state=RegimeState.TYPE_0_RECOMMENDED,
+            source_market_version=1,
+            source_candle_id="ETHUSDT:4h:candle-1",
+            calculated_at=TEST_INSTANT,
+        )
+        invalid_cases = (
+            (True, TypeError),
+            (0, ValueError),
+            (-1, ValueError),
+        )
+
+        for invalid_version, expected_error in invalid_cases:
+            with self.subTest(invalid_version=invalid_version):
+                with self.assertRaises(expected_error):
+                    replace(
+                        valid_result,
+                        source_market_version=invalid_version,
+                    )
 
 
 class RegimeStateMappingTests(unittest.TestCase):
