@@ -29,6 +29,7 @@ import {
     type TradingUnavailableReason,
 } from '../../features/trading-control';
 import type {
+    BackendTradingStatus,
     ChartDrawing,
     ChartInterval,
     CsvPeriod,
@@ -37,6 +38,7 @@ import type {
     RegimeMetric,
     RegimeType,
     TradingLogicCoverage,
+    TradingLogicSupportStatus,
     TradeRecord,
     TradeSideFilter,
     UiCommandFailure,
@@ -130,6 +132,8 @@ export interface UiApplicationFacadeOptions {
  */
 export interface UiServerOwnedSnapshot {
     readonly last_sequence: number;
+    readonly trading_version: number;
+    readonly trading_session_id: string | null;
     readonly trading_symbol: string;
     readonly recommended_regime: RegimeType | null;
     readonly applied_regime: RegimeType | null;
@@ -138,14 +142,14 @@ export interface UiServerOwnedSnapshot {
     readonly command_enabled: boolean;
     readonly recent_trades: ReadonlyArray<TradeRecord>;
     readonly history_records: ReadonlyArray<TradeRecord>;
-    readonly scale_in_percentage?: number;
-    readonly scale_out_percentage?: number;
+    readonly scale_in_percentage: number;
+    readonly scale_out_percentage: number;
     readonly account_strategy: StrategySummaryViewModel;
     readonly account_asset: AssetSummaryViewModel;
     readonly trade_history_summary: TradeHistorySummaryViewModel;
     readonly is_trading: boolean;
-    readonly has_open_position?: boolean;
-    readonly trading_state_label: string;
+    readonly has_open_position: boolean;
+    readonly trading_state_label: BackendTradingStatus;
 }
 
 /**
@@ -177,6 +181,21 @@ export type UiApplicationIntent =
     | { readonly type: 'BACKEND_TRADING_STOPPED' }
     | { readonly type: 'POSITION_UPDATED'; readonly has_open_position: boolean }
     | {
+        readonly type: 'TRADING_SESSION_SYNCHRONIZED';
+        readonly status: BackendTradingStatus;
+        readonly version: number;
+        readonly session_id: string | null;
+        readonly command_enabled: boolean;
+        readonly scale_in: string;
+        readonly scale_out: string;
+        readonly scale_in_percentage: number;
+        readonly scale_out_percentage: number;
+        readonly has_open_position: boolean;
+        readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
+        readonly strategy_status: string;
+        readonly strategy_status_tone: 'positive' | 'neutral';
+    }
+    | {
         readonly type: 'ACCOUNT_STRATEGY_UPDATED';
         readonly strategy: StrategySummaryViewModel;
     }
@@ -189,6 +208,12 @@ export type UiApplicationIntent =
     | { readonly type: 'REGIME_CHANGE_CANCELED' }
     | { readonly type: 'REGIME_RECOMMENDED'; readonly regime: RegimeType }
     | { readonly type: 'REGIME_APPLIED'; readonly regime: RegimeType }
+    | {
+        readonly type: 'REGIME_SELECTION_SYNCHRONIZED';
+        readonly selected: RegimeType;
+        readonly support_status: TradingLogicSupportStatus;
+        readonly version: number;
+    }
     | { readonly type: 'REGIME_INDICATORS_UPDATED'; readonly metrics: ReadonlyArray<RegimeMetric> }
     | { readonly type: 'REGIME_HIGHLIGHT_COMPLETED' }
     | { readonly type: 'CHART_INTERVAL_SELECTED'; readonly interval: ChartInterval }
@@ -405,7 +430,8 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
             is_pending: snapshot.trading.matches('starting')
                 || snapshot.trading.matches('stopping')
                 || snapshot.trading.matches('force_selling')
-                || snapshot.trading.matches('disconnect_stopping'),
+                || snapshot.trading.matches('disconnect_stopping')
+                || snapshot.trading.matches('awaiting_stop_completion'),
             has_open_position: snapshot.trading.context.has_open_position,
             unavailable_reason: snapshot.trading.context.unavailable_reason,
             error: snapshot.trading.context.error,
@@ -753,6 +779,41 @@ export class UiApplicationFacade {
             case 'POSITION_UPDATED':
                 this.actors.trading.send(intent);
                 break;
+            case 'TRADING_SESSION_SYNCHRONIZED': {
+                const is_trading = intent.status !== 'not_started'
+                    && intent.status !== 'terminated';
+
+                // 한 backend lifecycle event의 ratio, position과 state를 동일한 source 값으로 적용한다.
+                this.actors.split_order.send({
+                    type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED',
+                    scale_in_percentage: intent.scale_in_percentage,
+                    scale_out_percentage: intent.scale_out_percentage,
+                });
+                this.actors.trading.send({
+                    type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
+                    selected_regime: this.actors.regime.getSnapshot().context.applied_regime,
+                    logic_coverage: intent.logic_coverage,
+                    command_enabled: intent.command_enabled,
+                    is_trading,
+                    has_open_position: intent.has_open_position,
+                    lifecycle_status: intent.status,
+                });
+                this.actors.chart.send({
+                    type: 'TRADING_LOGIC_STATE_CHANGED',
+                    state_label: intent.status,
+                });
+                const current_strategy = this.actors.account_summary.getSnapshot().context.strategy;
+                this.actors.account_summary.send({
+                    type: 'TRADING_STATUS_UPDATED',
+                    strategy: {
+                        ...current_strategy,
+                        appliedState: intent.status,
+                        status: intent.strategy_status,
+                        statusTone: intent.strategy_status_tone,
+                    },
+                });
+                break;
+            }
             case 'ACCOUNT_STRATEGY_UPDATED':
                 this.actors.account_summary.send({
                     type: 'TRADING_STATUS_UPDATED',
@@ -782,6 +843,12 @@ export class UiApplicationFacade {
                 break;
             case 'REGIME_APPLIED':
                 this.actors.regime.send({ type: 'REGIME_APPLIED', regime: intent.regime });
+                break;
+            case 'REGIME_SELECTION_SYNCHRONIZED':
+                this.actors.regime.send({
+                    type: 'REGIME_APPLIED',
+                    regime: intent.selected,
+                });
                 break;
             case 'REGIME_INDICATORS_UPDATED':
                 this.actors.regime.send({
@@ -1146,17 +1213,14 @@ export class UiApplicationFacade {
                 type: 'TRADE_HISTORY_SUMMARY_SYNCHRONIZED',
                 summary: synchronized_snapshot.trade_history_summary,
             });
-            // Phase 5 snapshot에 없는 split ratio는 UI-local 현재값을 임의 기본값으로 덮지 않는다.
-            if (synchronized_snapshot.scale_in_percentage !== undefined
-                && synchronized_snapshot.scale_out_percentage !== undefined) {
-                this.actors.split_order.send({
-                    type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED',
-                    scale_in_percentage: synchronized_snapshot.scale_in_percentage,
-                    scale_out_percentage: synchronized_snapshot.scale_out_percentage,
-                });
-            }
+            // Phase 7의 두 authoritative ratio를 같은 snapshot batch에서 함께 교체한다.
+            this.actors.split_order.send({
+                type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED',
+                scale_in_percentage: synchronized_snapshot.scale_in_percentage,
+                scale_out_percentage: synchronized_snapshot.scale_out_percentage,
+            });
 
-            // Position 소유 backend field가 없는 동안 trading status만 authoritative하게 교체한다.
+            // Trading status와 position은 같은 backend snapshot에서 받은 authoritative 값으로 교체한다.
             this.actors.trading.send({
                 type: preserve_trading_interaction
                     ? 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
@@ -1165,8 +1229,8 @@ export class UiApplicationFacade {
                 logic_coverage: synchronized_snapshot.logic_coverage,
                 command_enabled: synchronized_snapshot.command_enabled,
                 is_trading: synchronized_snapshot.is_trading,
-                has_open_position: synchronized_snapshot.has_open_position
-                    ?? this.actors.trading.getSnapshot().context.has_open_position,
+                has_open_position: synchronized_snapshot.has_open_position,
+                lifecycle_status: synchronized_snapshot.trading_state_label,
             });
             this.actors.chart.send({
                 type: 'TRADING_LOGIC_STATE_CHANGED',

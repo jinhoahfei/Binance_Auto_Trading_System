@@ -5,7 +5,12 @@ export const BACKEND_SCHEMA_VERSION = 2 as const;
 export type BackendDecimalString = string;
 export type BackendRegimeType = 'type0' | 'type1' | 'type2' | 'type3' | 'type4';
 export type BackendExecutionMode = 'disabled' | 'fake' | 'testnet' | 'live';
-export type BackendTradingStatus = 'not_started';
+export type BackendTradingStatus =
+    | 'not_started'
+    | 'running'
+    | 'stopping'
+    | 'reconciliation_required'
+    | 'terminated';
 export type BackendTradingLogicSupportStatus = 'supported' | 'unsupported';
 export type BackendTradingLogicStartGuard =
     | 'READY'
@@ -64,7 +69,11 @@ export interface BackendTradingSnapshot {
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
     readonly version: number;
-    readonly command_enabled: false;
+    readonly command_enabled: boolean;
+    readonly scale_in: BackendDecimalString;
+    readonly scale_out: BackendDecimalString;
+    readonly has_open_position: boolean;
+    readonly session_id: string | null;
     readonly logic_coverage: ReadonlyArray<BackendTradingLogicCoverage>;
 }
 

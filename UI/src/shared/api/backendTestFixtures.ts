@@ -91,6 +91,10 @@ export function create_backend_snapshot_fixture(): BackendSnapshot {
             status: 'not_started',
             version: 0,
             command_enabled: false,
+            scale_in: '0.5',
+            scale_out: '0.5',
+            has_open_position: false,
+            session_id: null,
             logic_coverage: [
                 {
                     regime_type: 'type0',

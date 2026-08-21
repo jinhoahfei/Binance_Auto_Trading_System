@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
 
-const BACKEND_SCHEMA_VERSION: u32 = 1;
+const BACKEND_SCHEMA_VERSION: u32 = 2;  // Python transport schema와 native descriptor gate를 맞춘다.
 
 /// renderer에 한 번만 전달되는 loopback 연결 descriptor이다.
 #[derive(Serialize)]
@@ -259,17 +259,18 @@ mod tests {
     }
 
     /// 함수 이름: invalid_descriptor_never_enters_native_state()
-    /// 기능: malformed session/token과 unknown schema가 stage 전에 거부되는지 검증한다.
+    /// 기능: unknown transport schema가 native state stage 전에 거부되는지 검증한다.
     /// 인자: 없음
     /// 반환값: 없음
     /// 작성 날짜: 2026/08/21
     #[test]
     fn invalid_descriptor_never_enters_native_state() {
+        // 다른 descriptor 필드는 유효하게 두고 schema mismatch 하나만 격리한다.
         let invalid_result = BackendConnectionDescriptor::new(
             42_123,
-            "not-a-uuid".to_owned(),
-            2,
-            "token".to_owned(),
+            TEST_SESSION_ID.to_owned(),
+            BACKEND_SCHEMA_VERSION + 1,
+            TEST_TOKEN.to_owned(),
         );
         let failure = match invalid_result {
             Ok(_) => panic!("invalid descriptor must be rejected"),

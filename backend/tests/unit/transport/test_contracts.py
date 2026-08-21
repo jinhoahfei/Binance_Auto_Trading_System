@@ -15,13 +15,18 @@ from binance_auto_trader.domain.trading.states import (
     StrategyType,
 )
 from binance_auto_trader.transport.contracts import (
+    SCHEMA_VERSION,
     TransportContractError,
     build_snapshot_dto,
+    decimal_from_wire,
     datetime_to_wire,
     decimal_to_wire,
     normalize_json_value,
+    ratio_from_wire,
     regime_from_wire,
     regime_to_wire,
+    require_command_fields,
+    require_expected_version,
     render_typescript_contracts,
 )
 
@@ -48,6 +53,7 @@ def _create_ready_runtime() -> SimpleNamespace:
     반환값: 준비된 RuntimeSnapshotSource test double
     작성 날짜: 2026/08/21
     """
+    # 같은 source version과 시각을 공유하는 Market·Indicator·REGIME snapshot을 구성한다.
     market_snapshot = SimpleNamespace(
         symbol="ETHUSDT",
         current_eth_price=Decimal("4321.5000"),
@@ -96,8 +102,31 @@ def _create_ready_runtime() -> SimpleNamespace:
         version=3,
         updated_at=TEST_TIME,
     )
-    trading_controller = SimpleNamespace(account=account)
+    # Phase 7 lifecycle mapper가 읽는 Context와 Controller session snapshot을 구성한다.
+    trading_context = SimpleNamespace(
+        version=0,
+        scale_in_ratio=Decimal("0.5"),
+        scale_out_ratio=Decimal("0.5"),
+        position=SimpleNamespace(is_open=False),
+    )
+    trading_controller = SimpleNamespace(
+        account=account,
+        context=trading_context,
+        status="not_started",
+        command_enabled=False,
+        session_id=None,
+        snapshot_session=lambda: SimpleNamespace(
+            status="not_started",
+            session_id=None,
+            version=0,
+            scale_in=Decimal("0.5"),
+            scale_out=Decimal("0.5"),
+            has_open_position=False,
+            command_enabled=False,
+        ),
+    )
 
+    # 최근 체결과 집계 성과를 한 trade-history controller fixture로 조립한다.
     trade = SimpleNamespace(
         trade_id="trade-1",
         order_id="123",
@@ -139,6 +168,7 @@ def _create_ready_runtime() -> SimpleNamespace:
         performance=performance,
     )
 
+    # 모든 owner를 application lock 아래 조회할 수 있는 READY runtime으로 묶는다.
     return SimpleNamespace(
         application_lock=RLock(),
         ready=True,
@@ -215,6 +245,59 @@ class TransportContractTests(unittest.TestCase):
                 with self.assertRaises(TransportContractError):
                     regime_from_wire(invalid_value)
 
+    def test_command_decimal_and_version_fields_are_strict(self) -> None:
+        """
+        함수 이름: test_command_decimal_and_version_fields_are_strict()
+        기능: command DTO가 exact field, Decimal string와 optimistic version만 허용하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # 유효한 split command fixture로 exact field와 Decimal 정밀도 보존을 검증한다.
+        valid_body = {
+            "schema_version": 2,
+            "scale_in": "0.40",
+            "scale_out": "0.60",
+            "expected_version": 3,
+        }
+
+        # 정상 DTO는 문자열 정밀도와 version을 손실 없이 복원한다.
+        require_command_fields(
+            valid_body,
+            ("scale_in", "scale_out", "expected_version"),
+        )
+        self.assertEqual(
+            ratio_from_wire(valid_body["scale_in"], "scale_in"),
+            Decimal("0.40"),
+        )
+        self.assertEqual(
+            decimal_from_wire("12.300", "amount"),
+            Decimal("12.300"),
+        )
+        self.assertEqual(require_expected_version(valid_body), 3)
+
+        # float, exponent, bool version, ratio 범위와 unknown field를 각각 거부한다.
+        invalid_ratios = (
+            0.5,
+            "1E-1",
+            "-0",
+            "-0.0",
+            "-0.1",
+            "1.1",
+            "NaN",
+        )
+        for invalid_ratio in invalid_ratios:
+            with self.subTest(invalid_ratio=invalid_ratio):
+                with self.assertRaises(TransportContractError):
+                    ratio_from_wire(invalid_ratio, "scale_in")
+        with self.assertRaises(TransportContractError):
+            require_expected_version({"expected_version": True})
+        with self.assertRaises(TransportContractError):
+            require_command_fields(
+                {**valid_body, "unexpected": "value"},
+                ("scale_in", "scale_out", "expected_version"),
+            )
+
     def test_snapshot_contains_only_authoritative_financial_fields(self) -> None:
         """
         함수 이름: test_snapshot_contains_only_authoritative_financial_fields()
@@ -250,6 +333,11 @@ class TransportContractTests(unittest.TestCase):
                 ),
             ],
         )
+        # Session snapshot에서 추가된 ratio·position·session 필드를 함께 확인한다.
+        self.assertEqual(snapshot["trading"]["scale_in"], "0.5")
+        self.assertEqual(snapshot["trading"]["scale_out"], "0.5")
+        self.assertFalse(snapshot["trading"]["has_open_position"])
+        self.assertIsNone(snapshot["trading"]["session_id"])
         self.assertEqual(snapshot["account"]["quote_asset"], "USDT")
         self.assertEqual(snapshot["account"]["balances"][0]["total"], "1.75")
 
@@ -290,6 +378,33 @@ class TransportContractTests(unittest.TestCase):
         )
         self.assertTrue(generated_path.exists(), "generated TypeScript file is missing")
         self.assertEqual(generated_path.read_text(encoding="utf-8"), first_render)
+
+    def test_native_launcher_schema_version_matches_python_contract(self) -> None:
+        """
+        함수 이름: test_native_launcher_schema_version_matches_python_contract()
+        기능: Tauri descriptor의 schema 상수가 Python authoritative version과 같은지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # Repository의 native launcher source에서 exact Rust 상수 선언을 읽는다.
+        repository_root = Path(__file__).resolve().parents[4]
+        native_source_path = (
+            repository_root
+            / "UI"
+            / "apps"
+            / "desktop"
+            / "src-tauri"
+            / "src"
+            / "lib.rs"
+        )
+        native_source = native_source_path.read_text(encoding="utf-8")
+
+        # Python schema가 바뀌고 native descriptor gate가 남는 cross-layer drift를 차단한다.
+        self.assertIn(
+            f"const BACKEND_SCHEMA_VERSION: u32 = {SCHEMA_VERSION};",
+            native_source,
+        )
 
 
 if __name__ == "__main__":

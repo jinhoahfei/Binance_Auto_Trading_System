@@ -24,6 +24,7 @@ from binance_auto_trader.domain.trading.context import (
 )
 from binance_auto_trader.domain.trading.event_queue import (
     ContextVersionError,
+    EventQueueCapacityError,
     ReentrantProcessingError,
     RunToCompletionEventProcessor,
     SerialEventQueue,
@@ -88,7 +89,9 @@ class MutableContextHarness:
         반환값: 없음
         작성 날짜: 2026/08/14
         """
+        # Context mutation, 전체 action 관찰과 주문 결과 생성을 독립 기록으로 초기화한다.
         self.context_view = context_view
+        self.actions: list[object] = []
         self.orders: list[SubmitOrder] = []
         self.emit_order_outcome = False
 
@@ -119,11 +122,13 @@ class MutableContextHarness:
     def execute(self, action: object) -> list[TradingEvent] | None:
         """
         함수 이름: execute()
-        기능: context action을 적용하고 설정에 따라 Case C 매수 체결을 모의한다.
+        기능: 모든 action 순서를 기록하고 Context 적용과 Case C 매수 체결을 모의한다.
         인자: action -> 테스트 Controller가 실행할 action request
         반환값: 생성된 주문 결과 event 목록 또는 결과가 없을 때 None
         작성 날짜: 2026/08/14
         """
+        self.actions.append(action)  # QueueEvent를 포함한 원본 batch 관찰 순서를 보존한다.
+
         # runtime patch는 명시된 필드만 바꾸고 context 버전을 증가시킨다.
         if isinstance(action, PatchRuntimeContext):
             changes = {change.field.value: change.value for change in action.changes}
@@ -185,6 +190,51 @@ class SerialEventQueueTests(unittest.TestCase):
     기능: event queue의 우선순위, FIFO 및 중복 제거를 검증한다.
     작성 날짜: 2026/08/14
     """
+
+    def test_pending_and_seen_identity_capacity_fail_closed(self) -> None:
+        """
+        함수 이름: test_pending_and_seen_identity_capacity_fail_closed()
+        기능: 장기 세션의 pending heap과 dedup ID 저장소가 설정 상한을 넘지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        queue = SerialEventQueue(
+            max_pending_events=1,
+            max_seen_event_ids=2,
+        )
+        queue.enqueue(
+            create_queued_event(
+                TradingEventType.MARKET_DATA_UPDATED,
+                event_id="capacity-1",
+            )
+        )
+
+        # pending 상한은 첫 event를 보존한 채 두 번째 신규 identity를 거부한다.
+        with self.assertRaises(EventQueueCapacityError):
+            queue.enqueue(
+                create_queued_event(
+                    TradingEventType.MARKET_DATA_UPDATED,
+                    event_id="capacity-pending-overflow",
+                )
+            )
+        self.assertEqual("capacity-1", queue.pop().event_id)
+
+        # 처리 완료 뒤 heap 자리가 나도 session dedup identity 상한은 별도로 유지한다.
+        queue.enqueue(
+            create_queued_event(
+                TradingEventType.MARKET_DATA_UPDATED,
+                event_id="capacity-2",
+            )
+        )
+        self.assertEqual("capacity-2", queue.pop().event_id)
+        with self.assertRaises(EventQueueCapacityError):
+            queue.enqueue(
+                create_queued_event(
+                    TradingEventType.MARKET_DATA_UPDATED,
+                    event_id="capacity-seen-overflow",
+                )
+            )
 
     def test_internal_event_precedes_already_waiting_market_event(self) -> None:
         """
@@ -315,7 +365,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
     async def test_g_02_internal_activation_uses_new_lower_event_scope(self) -> None:
         """
         함수 이름: test_g_02_internal_activation_uses_new_lower_event_scope()
-        기능: G-02 후속 활성화 event가 새 lower event 범위를 사용하는지 검증한다.
+        기능: G-02 Action 순서와 후속 event의 새 lower-event 범위를 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/14
@@ -346,7 +396,14 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
             clock=lambda: TEST_EVALUATION_TIME,
         )
 
+        # 첫 G-02 batch의 QueueEvent까지 executor가 원본 Action 순서대로 관찰하는지 확인한다.
         lower_touch_result = await processor.process_next()
+        self.assertEqual(
+            lower_touch_result.action_requests,
+            tuple(harness.actions),
+        )
+
+        # 보류한 internal event를 다음 microstep에서 새 lower-event scope로 처리한다.
         activation_result = await processor.process_next()
 
         self.assertEqual("G-02", lower_touch_result.transition_ids[0])
@@ -486,6 +543,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
+        # 첫 Context 재조회에서만 version race를 만들 processor fixture를 구성한다.
         stm = TradingSTM(RegimeType.TYPE_0)
         context_view = TradingContextView(
             version=1,
@@ -494,6 +552,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
             runtime=TradingRuntimeSnapshot(),
         )
         provider_calls = 0
+        simulate_version_race = True
         executed_actions: list[object] = []
 
         def changing_provider() -> TradingContextView:
@@ -506,7 +565,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
             """
             nonlocal provider_calls
             provider_calls += 1
-            if provider_calls == 1:
+            if not simulate_version_race or provider_calls == 1:
                 return context_view
             return replace(context_view, version=2)
 
@@ -520,9 +579,22 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
             clock=lambda: TEST_EVALUATION_TIME,
         )
 
+        # Race 처리에서는 Action을 실행하지 않고 STM state와 claimed event를 모두 복원한다.
         with self.assertRaises(ContextVersionError):
             await processor.process_next()
         self.assertEqual([], executed_actions)
+        self.assertIs(
+            stm.current_state.root_state,
+            RootState.NOT_STARTED,
+        )  # publish되지 않은 G-01 state도 원상 복구되어 Context와 일치한다.
+        self.assertEqual(1, len(queue))
+
+        # race가 해소되면 같은 stable event를 재전송할 필요 없이 복구된 claim을 처리한다.
+        simulate_version_race = False
+        recovered_result = await processor.process_next()
+
+        self.assertEqual(("G-01",), recovered_result.transition_ids)
+        self.assertEqual(0, len(queue))
 
 
 if __name__ == "__main__":

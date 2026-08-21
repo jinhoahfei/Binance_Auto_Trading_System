@@ -2,12 +2,12 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | 실행 기준 문서 / Phase 6 완료 |
+| 문서 상태 | 실행 기준 문서 / Phase 7 완료 |
 | 기준일 | 2026-08-21 (Asia/Seoul) |
-| 기준 커밋 | `c1fa29f7a2b6` (`main`, Phase 6 시작 기준) |
+| 기준 커밋 | `3e799e126bbb` (`main`, Phase 7 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 6에서 `TYPE_0`을 `SUPPORTED/LOWER_BB` 정확히 109개/`READY`/`SAFE_TERMINATION`으로 고정하고 `TYPE_1`~`TYPE_4`를 registry 없는 `UNSUPPORTED/UNSUPPORTED_TRADING_LOGIC`으로 고정했다. G-07은 pending 주문 우선의 안전 종료로 완결했고 UI와 backend가 schema v2의 같은 5개 coverage를 사용한다. 미지원 추천·표시·선택은 허용하되 start는 0회로 차단하고, Phase 7 session orchestration 전이므로 live `command_enabled=false`다. 다음 작업은 Phase 7 하나다. |
+| 현재 결론 | Phase 7에서 mutable/versioned `TradingContext`, REGIME 선택 owner, session start/stop, 직렬 event processor와 scheduler, command idempotency/expected-version, UI·transport 명령을 fake mode의 Case 1로 연결했다. start는 Context 초기화 뒤 `TradingSTM.run()`을 정확히 한 번 호출하고, `RUNNING` 최초 stop은 `STOP_CONFIRMED`를 먼저 전달한 뒤 authoritative Position/pending 상태로 분기한다. 이미 중지·종료 상태인 후속 stop은 성공 no-op이다. 실제 Order/Fill/Position 반영과 Gateway 주문 실행은 Phase 8로 남겼으며 `disabled`·`testnet`·`live` mode는 계속 fail closed다. 다음 작업은 Phase 8 하나다. |
 
 ---
 
@@ -82,19 +82,19 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 
 | 영역 | 실행 결과 | 판단 |
 |---|---|---|
-| 통합 backend | 표준 `unittest` 290개 전부 통과 | 기존 Regime/Trading/Market/Account/History/bootstrap/transport 회귀와 Phase 6 registry·G-07·snapshot 검증 통과 |
-| Phase 6 집중 | 5개 configuration, exact 109 ID, typed unsupported/no-fallback, G-07 boundary/branch/replay, Controller selection, schema/UI gate 통과 | `TYPE_0` 지원과 `TYPE_1`~`TYPE_4` 미지원, pending 우선 종료, zero-command와 주석 규약 검증 |
-| package/static | offline wheel build, clean venv 재설치/import, `compileall`, `git diff --check` 성공 | Phase 6 registry/Controller/transport public type이 wheel에 포함됨 |
-| UI | Vitest 31개 파일, 136개 테스트 전부 통과 | 5개 coverage strict mapping, 지원 badge, 미지원 선택, start zero-command, resync 후 stale confirmation, 미선택 표시 no-fallback 회귀 포함 |
+| 통합 backend | 표준 `unittest` 325개 전부 통과 | 기존 Regime/Trading/Market/Account/History/bootstrap/transport 회귀와 Phase 7 Context/session/HTTP lifecycle contract 검증 통과 |
+| Phase 7 집중 | Context mutation/version, select/start/stop, queue/reentrancy/race, scheduler cleanup, command replay/conflict와 세 stop branch 통과 | 미선택·offline·unsupported·stale 거부, `run()` 1회, active selection 보존, position 0 sell 0회와 pending 우선 reconciliation 검증 |
+| package/static | offline wheel build, clean venv 설치/import, `compileall`, `git diff --check` 성공 | Phase 7 `TradingContext`/`TradingController`/transport public type이 wheel에 포함됨 |
+| UI | Vitest 31개 파일, 155개 테스트 전부 통과 | Phase 7 command body/version/idempotency, lifecycle receipt/event, stopping/reconciliation 표시, REGIME event version 동기화 회귀 포함 |
 | UI typecheck/build | `tsc -b --pretty false`, Vite build, Storybook static build 성공 | TypeScript strict schema v2 계약, production bundle과 fake Storybook 정상 |
-| actual process trace | `createLiveUiApplication.process.test.mjs` 통과 | inherited-FD token을 받은 실제 Python child snapshot이 React App에 표시되고 `1 → 2 → 3 → 4 → 5` 확인 |
-| generated contract | Python schema v2 renderer와 `backendContracts.generated.ts` byte-for-byte 일치 | `logic_coverage`/`command_enabled`를 추가하고 Python schema를 authoritative source로 유지 |
-| Git 범위 | Phase 6 registry/G-07/Controller selection/transport/UI gate/test/docs 변경만 포함 | Phase 7 session, 실제 주문, credential과 Binance payload/client 변경 없음 |
+| process/HTTP 검증 | 실제 Python child UI startup test와 fake `ApplicationRuntime` loopback HTTP command test를 각각 통과 | UI startup 메시지 `1 → 2 → 3 → 4 → 5`와 HTTP select → split → start → zero-position stop의 version `0 → 1 → 2 → 3 → 4`를 별도 경계에서 확인 |
+| generated contract | Python schema v2 renderer와 `backendContracts.generated.ts` byte-for-byte 일치 | dynamic trading status/version/ratio/position/session과 기존 5개 coverage를 Python authoritative source로 유지 |
+| Git 범위 | Phase 7 Context/Controller/queue/bootstrap/transport/UI command/test/docs 변경만 포함 | 실제 주문·fill·history append, credential과 Binance payload/client 변경 없음 |
 | Tauri/Rust | memory-only one-shot descriptor source와 unit test 3개 추가, Rust toolchain 명령은 미실행 | 현 환경에 `cargo`/`rustc`가 없으며 sidecar spawn/package/shutdown은 Phase 12에서 검증 |
 
 현재 환경에는 `pytest`가 설치되어 있지 않아 Python 검증은 프로젝트가 실제 사용하는
 표준 `unittest`로 수행했다. offline wheel을 clean venv에
-`--force-reinstall --no-deps --no-index`로 설치한 뒤 Phase 6 public type을 import했다.
+`--no-deps`로 설치한 뒤 Phase 7 `TradingController`와 `TradingContext` public type을 import했다.
 UI는 설치된 `node_modules/.bin`으로 실제 loopback child-process test까지 다시 검증했다.
 Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는 실행하지 못했으며,
 이 사실을 Phase 12 인계 조건으로 유지한다.
@@ -133,8 +133,14 @@ Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는
 - [x] loopback transport가 IPv4 `127.0.0.1` random port, launch별 256-bit token, Host/Origin/CORS/Bearer, WebSocket first-frame 인증과 strict envelope를 구현한다.
 - [x] snapshot DTO와 마지막 event `sequence`를 같은 application `RLock` 임계 구역에서 읽고 event replay를 10,000개 또는 15분으로 제한한다.
 - [x] Python transport schema가 generated TypeScript contract의 authoritative source이며 byte drift test가 존재한다.
-- [x] schema v2 trading snapshot이 5개 `logic_coverage(regime_type, support_status, start_guard)`와 live `command_enabled=false`를 UI에 제공한다.
+- [x] schema v2 trading snapshot이 5개 `logic_coverage`, session status/version/ratio/position과 mode별 `command_enabled`를 UI에 제공한다.
 - [x] UI는 5개 REGIME의 지원 상태를 표시하고 미지원 추천·표시·선택을 유지하되, 시작 요청과 stale 확인에서 backend command를 0회로 차단한다.
+- [x] mutable `TradingContext`가 Account/REGIME/분할 비율과 immutable runtime·Position·pending snapshot을 lock 아래 보존하고 typed mutation마다 version을 증가시킨다.
+- [x] `RegimeController.set_regime_type()`만 선택을 변경하며 active session에서는 STM·Context·선택을 그대로 둔 채 `TRADING_ACTIVE`로 거부한다.
+- [x] fake mode의 `TradingController.start_trading()`이 readiness와 version을 검증하고 Context 초기화 뒤 session 전용 `TradingSTM.run()`을 정확히 한 번 실행한다.
+- [x] `SerialEventQueue`와 run-to-completion processor가 Controller에 연결되어 Action 순서, reentrant 차단, Context version race rollback과 deadline 기반 scheduler cleanup을 보장한다.
+- [x] `RUNNING` 최초 stop은 `STOP_CONFIRMED`를 먼저 처리하고 pending → 보유 Position → position 0 우선순위로 typed Action을 만들며 position 0에서는 sell Action을 요청하지 않는다. 이미 중지·종료 상태인 후속 stop은 성공 no-op이다.
+- [x] REGIME/select/start/stop/split HTTP와 UI command가 command ID·expected version·Decimal string 계약으로 연결되고 lifecycle event/snapshot을 단조 version으로 동기화한다.
 - [x] production UI는 coherent ready snapshot을 먼저 적용한 뒤 actor와 event stream을 시작한다.
 - [x] duplicate/out-of-order/event ID 중복을 거르고 gap·session change에서는 snapshot-first full resync한다.
 - [x] 실제 Python child process의 read-only ETHUSDT/USDT snapshot을 React App에 표시하고 메시지 `1`~`5` 통합 trace를 검증했다.
@@ -142,18 +148,18 @@ Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는
 
 ### 3.3 현재 완료되지 않은 핵심
 
-- [ ] 부분 완료 — `TradingController`는 `load_account()`과 `fetch_selected_trading_logic()` slice, `TradeHistoryController`는 `load_trade_history()` slice가 구현됐다. session/context/start/stop은 Phase 7, order Action과 record 반영은 Phase 8, details/export는 Phase 10~11 범위다.
+- [ ] 부분 완료 — `TradingController`의 account/selection/session/context/start/stop과 `TradeHistoryController.load_trade_history()`가 구현됐다. Order Action의 실제 실행과 fill/Position/history 반영은 Phase 8, details/export는 Phase 10~11 범위다.
 - [ ] 부분 완료 — 공식 account REST와 user-data stream payload 정규화는 주입 fake client 경계에서 구현됐지만 실제 Binance client 조립, credential/signature/session 관리와 order REST는 Phase 9 범위다.
 - [ ] 부분 완료 — backend `Account`, `Trade`, `TradeHistory`, `Performance`는 구현됐고 `Order`와 mutable `Position`은 아직 없다. Order/ExecutionSummary 기반 Trade 생성과 신규 거래 성과 반영은 Phase 8 범위다.
 - [ ] 부분 완료 — JSONL `TradeHistoryRepository`의 startup read/recovery/index는 구현됐지만 append/save는 Phase 8, `stream_trades`와 CSV writer는 Phase 11 범위다.
 - [ ] 부분 완료 — Python application bootstrap, loopback HTTP/WebSocket와 backend event stream은 구현됐다. Tauri sidecar spawn, descriptor stage, package와 안전 종료 lifecycle은 Phase 12 범위다.
-- [ ] 부분 완료 — production read path는 `BackendUiAdapter`를 사용하고 demo/Storybook/tests는 `FakeUiCommandAdapter`를 유지한다. Phase 6 live trading command는 `command_enabled=false`/`FEATURE_NOT_AVAILABLE`이며 실제 session/history query/CSV는 후속 Phase 범위다.
-- [ ] 부분 완료 — authoritative backend market/regime/account/history snapshot의 UI read는 연결됐지만 실제 Binance client와 Trading runtime은 아직 연결되지 않았다. UI 공개 차트는 parity 전 display-only로 유지한다.
+- [ ] 부분 완료 — production read/Phase 7 command path는 `BackendUiAdapter`를 사용하고 demo/Storybook/tests는 `FakeUiCommandAdapter`를 유지한다. fake session command는 연결됐지만 실제 order/history query/CSV는 후속 Phase 범위다.
+- [ ] 부분 완료 — authoritative backend market/regime/account/history/trading-session snapshot의 UI read와 fake runtime은 연결됐지만 실제 Binance client와 order runtime은 아직 없다. UI 공개 차트는 parity 전 display-only로 유지한다.
 - [x] 완료 — strict `TYPE_0`~`TYPE_4` ↔ `type0`~`type4` transport 변환, REGIME별 전략 coverage/start guard, G-07 상단 BB 안전 종료와 UI zero-command gate를 Phase 6에서 완료했다.
 - [ ] 미구현 — 실제 주문을 제출하고 fill을 Position/History/Performance에 반영하는 Case 2 pipeline이 없다.
 - [ ] 부분 완료 — 메시지 `1`~`5` actual-process startup trace는 injected fake Binance와 temporary storage 경계에서 UI까지 검증됐다. 실제 Binance/order/filesystem을 포함한 전체 Communication Case는 아직 없다.
 
-### 3.4 Phase 1~6에서 해소한 위험과 남은 계약 공백
+### 3.4 Phase 1~7에서 해소한 위험과 남은 계약 공백
 
 Phase 1에서 두 독립 distribution을 `backend/` 하나로 통합했다. root의
 `RegimeSTM/`·`TradingSTM/` source tree를 제거했고, clean environment에 설치한
@@ -190,6 +196,15 @@ Phase 6에서 Phase 0이 `TRADING_LOGIC_INCOMPLETE`로 격리했던 `TYPE_0`
 schema v2 snapshot/UI gate를 함께 고정했으며 session/start/stop orchestration은
 Phase 7에 남겼다.
 
+Phase 7에서 mutable `TradingContext`와 Controller-owned session lifecycle을 연결했다.
+REGIME 선택, split, start/stop은 command ID와 expected Context version으로 직렬화되며,
+start는 readiness 검증과 Context 초기화 뒤 선택된 STM을 한 번만 실행한다. `RUNNING`
+세션의 최초 stop은 `STOP_CONFIRMED`를 먼저 처리하고 pending/보유/무포지션 branch를
+authoritative backend snapshot으로 결정한다. 이미 `STOPPING`,
+`RECONCILIATION_REQUIRED` 또는 `TERMINATED`인 세션의 후속 stop은 새 STM Action 없는
+성공 no-op으로 현재 상태를 반환한다. Phase 8 전에는 `SubmitOrder`, `ForceSellAll`, cancel/reconcile을
+typed Action으로만 보존하고 Gateway 주문이나 fill 반영을 실행하지 않는다.
+
 남은 표현과 지원 상태는 다음과 같다.
 
 | 위치 | 현재 값 |
@@ -198,14 +213,14 @@ Phase 7에 남겼다.
 | UI wire 값 | `'type0'` ~ `'type4'` |
 | `TYPE_0` TradingSTM registry | `SUPPORTED`, `LOWER_BB` 정확히 109개, `READY`, `SAFE_TERMINATION` |
 | `TYPE_1`~`TYPE_4` TradingSTM registry | `UNSUPPORTED`, transition source 없음, `UNSUPPORTED_TRADING_LOGIC` |
-| live trading command | Phase 7 전 `command_enabled=false`; 지원 `TYPE_0`도 실제 start command는 아직 실행하지 않음 |
+| trading command | `fake`에서만 `command_enabled=true`; `disabled`·`testnet`·`live`는 Phase 7에서 fail closed |
 
 Domain에는 UI wire 변환을 넣지 않았다. strict `TYPE_0` ↔ `type0` 변환은
 transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID는 UI에
 노출하지 않는다. 미지원 REGIME은 추천·표시·선택하되 start만
 `UNSUPPORTED_TRADING_LOGIC`으로 차단하고 `TYPE_0`으로 fallback하지 않는다.
 
-- [x] 중복 package와 transport 공백을 해소했고 Phase 6 registry/start guard/G-07/UI coverage gate까지 검증했다.
+- [x] 중복 package와 transport 공백을 해소했고 Phase 7 fake session/start/stop/UI command까지 검증했다.
 
 ---
 
@@ -216,16 +231,16 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 | 체크 | Communication 클래스 | 현재 상태와 근거 | 남은 일 |
 |---|---|---|---|
 | [x] | `AppShellUI` | React `App`, `AppHeader`, modal host와 live snapshot/loading/typed failure Boundary를 구현 | 없음 |
-| [ ] | `UIStateController` | `UiApplicationFacade`가 snapshot/event bridge와 Phase 6 REGIME coverage badge·start zero-command·stale confirmation guard를 조정 | Phase 7/10/11 live command와 query/export 조정 |
+| [ ] | `UIStateController` | `UiApplicationFacade`가 snapshot/event bridge와 Phase 7 REGIME/select/start/stop/split command, version 동기화와 stopping/reconciliation 표시를 조정 | Phase 10/11 live query/export 조정 |
 | [x] | `UISTM` | root/feature XState actor와 Phase 5 snapshot 전체 동기화/reconnect를 구현 | 후속 command ack E2E 추가 |
-| [ ] | `TradingController` | `load_account()` slice와 REST commit 후 stream start/failure 순서, `fetch_selected_trading_logic()`의 strict configuration 선택을 구현 | Phase 7 session/context/STM/stop과 Phase 8 order Action 실행 |
-| [ ] | `TradingSTM` | exact 109개 lower-BB transition·queue, 5-row immutable coverage, typed unsupported/no-fallback, G-07 안전 종료를 구현 | Phase 7 session에서 선택된 STM run/Action 실행 연결 |
-| [ ] | `TradingContext` | 읽기 전용 `TradingContextView`/runtime snapshot만 구현 | mutable owner, `initialize`, result/action 적용, version 증가, split ratio 구현 |
+| [ ] | `TradingController` | account, strict selection, mutable Context, session start/stop, queue/scheduler와 typed Action 조정을 구현 | Phase 8 order Action 실행과 fill/history 반영 |
+| [x] | `TradingSTM` | exact 109개 lower-BB transition·queue, 5-row immutable coverage, typed unsupported/no-fallback, G-07 안전 종료와 session `run` 연결을 구현 | 없음 |
+| [x] | `TradingContext` | mutable/versioned owner, `initialize`, ordered runtime patch 적용, typed mutation과 split ratio를 구현 | 없음; Phase 8 entity 반영은 Controller가 호출 |
 | [ ] | `MarketDataController` | backend authoritative WS-first/REST/merge/snapshot 초기화와 RegimeController 최초/full-resync 평가를 구현 | 4H/30m live event 발행과 후속 runtime 연결 |
 | [ ] | `APIGateway` | Kline과 공식 Spot account 전체 잔액·updateTime 정규화를 구현 | 실제 authenticated client 조립과 order operation |
 | [ ] | `WebSocketGateway` | Kline과 `outboundAccountPosition`/`eventStreamTerminated`, stale·duplicate·generation·callback failure 처리를 구현 | 실제 authenticated client/session/reconnect 조립 |
 | [x] | `MarketSnapshot` | canonical Decimal/UTC Kline 4주기, current ETH price, monotonic version과 same-version 지표 파생을 구현 | 없음 |
-| [ ] | `RegimeController` | Phase 3 지표 계산, RegimeSTM Action 실행, 추천/선택 분리, dedup/stale/error trace와 Phase 5 read DTO를 구현 | Phase 7 `set_regime_type`/TradingController 연결 |
+| [x] | `RegimeController` | 지표 계산, RegimeSTM Action 실행, 추천/선택 분리, dedup/stale/error trace와 sole-writer `set_regime_type`/TradingController 연결을 구현 | 없음 |
 | [x] | `IndicatorSnapshot` | Decimal EMA9 series/slope, strict swing, live EMA9과 source version/candle/time provenance를 구현 | 없음 |
 | [x] | `RegimeSTM` | 순수 engine, 13개 transition과 Controller 두 microstep 통합 구현 | 없음 |
 | [ ] | `Order` | 없음 | 최초/재조회 결과, fills, execution summary 구현 |
@@ -251,13 +266,13 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 
 | Case | 현재 완료 범위 | 현재 끊기는 지점 | 완료 Phase |
 |---|---|---|---|
-| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend market·Regime·Account·History/Performance startup, actual-process 메시지 `1`~`5`, Phase 6 REGIME coverage·G-07 정책·UI zero-command | Phase 7 session/start/stop, Phase 9 실제 Binance client, Phase 12 sidecar | Phase 7, 9, 12 |
+| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, Phase 7 fake select/split/start/stop·세 stop branch·lifecycle event | Phase 9 실제 Binance client, Phase 12 sidecar | Phase 7, 9, 12 |
 | Case 2 Buy/Sell | TradingSTM이 주문 Action request를 결정 | `TradingController -> Order -> APIGateway -> Position -> History -> orderFinished` 전체 | Phase 8~9 |
 | Case 3 Trade History | 화면/filter actor, backend TradeHistory/Query, JSONL startup Repository/Performance와 loopback startup rows/summary read | `TradeHistoryController.get_trade_details`, live filter/query/event refresh | Phase 10 |
 | Case 4 CSV Export | popup, date/file validation, fake picker/receipt, backend KST `TradeHistoryQuery` | backend option 검증, `stream_trades`, native picker, 실제 atomic file write | Phase 11~12 |
 
 현재 기준으로 live trading 준비 완료라고 볼 수 있는 Case는 **0개**다. startup read 경로는
-application/transport/UI까지 연결됐지만 Trading session, 주문 pipeline, 실제 Binance
+application/transport/UI와 fake Trading session까지 연결됐지만 주문 pipeline, 실제 Binance
 adapter와 packaged sidecar가 의도적으로 후속 Phase에 남아 있기 때문이다.
 
 - [x] 네 Communication Case의 종단 간 중단 지점을 확인했다.
@@ -309,7 +324,7 @@ adapter와 packaged sidecar가 의도적으로 후속 Phase에 남아 있기 때
 | D-02 | REGIME별 Trading logic | Phase 0에서는 `TYPE_0` 상단 BB 정책이 비어 있었고 UI는 5개를 선택 | Phase 6 현재 `TYPE_0 = SUPPORTED/LOWER_BB` exact 109/`READY`/`SAFE_TERMINATION`; `TYPE_1`~`TYPE_4 = UNSUPPORTED`/registry 없음/`UNSUPPORTED_TRADING_LOGIC`. 미지원 선택은 보존하되 start 0회, fallback 금지 | [x] ADR-001/Phase 6 |
 | D-03 | RegimeSTM canonical signature | Communication은 `run() -> RegimeType`, 구현은 `handle() -> RegimeSTMResult` | `handle(event, context?) : RegimeSTMResult`가 canonical이고 Controller façade가 두 microstep Action 적용 뒤 타입 반환 | [x] ADR-001 |
 | D-04 | TradingSTM 주문 완료 signature | Communication은 parameter 없는 `orderFinished()` | `orderFinished(event, context) : TradingSTMResult` 검증 adapter, concrete normalized outcome만 허용 | [x] ADR-001 |
-| D-05 | position 없는 stop | Communication 4.7은 무조건 sell-all, UI는 position 유무 분기 | 항상 `STOP_CONFIRMED`; quantity 0/no pending은 sell 0회 종료, 보유는 force-sell, pending은 query/cancel/reconcile 후 잔여 매도 | [x] ADR-003 |
+| D-05 | position 없는 stop | Communication 4.7은 무조건 sell-all, UI는 position 유무 분기 | `RUNNING` 최초 stop은 `STOP_CONFIRMED` 선행; quantity 0/no pending은 sell Action 0회 종료, 보유는 force-sell, pending은 query/cancel/reconcile 후 잔여 매도. 이미 중지·종료 상태인 후속 stop은 성공 no-op | [x] ADR-003 |
 | D-06 | 거래 상품 | UI/계좌는 ETH spot 보유량 중심이나 일부 설계 문구는 short를 암시 | Binance Spot `ETHUSDT` long-only. Margin/Futures/short/naked sell 금지 | [x] ADR-003 |
 | D-07 | 4H 지표 공식 | 최소 candle, slope 단위, swing threshold, live price 시점이 미확정 | 14개 확정봉, EMA9 SMA seed/alpha 0.2, 최근 6개 OLS/current price, strict pivot 2/2와 0.30%, same-version live EMA9를 golden vector로 고정 | [x] ADR-004 |
 | D-08 | retry/partial fill/reconcile | 간격·최대 횟수·잔여 주문 정책 미확정 | 같은 주문 조회 `1/2/4/8초 ±20%` 4회, 실제 fill 우선, terminal partial BUY no top-up, SELL 잔여량만 retry, force-sell 3초 최대 4회, restart lock 표 확정 | [x] ADR-002 |
@@ -1128,7 +1143,9 @@ runtime을 즉시 종료한다. 이는 새 상단 전략이 아니라 lower-BB s
 
 ### Phase 7 — TradingContext와 start/stop session lifecycle
 
-**목표:** 메시지 `6`~`8`을 fake exchange에서 완성한다.
+**목표:** 메시지 `6`~`8`의 selection/start/stop application lifecycle과 HTTP command
+계약을 fake `ApplicationRuntime`에서 완성한다. 전체 caller/receiver Communication trace는
+§12와 Phase 13의 별도 완료 조건으로 유지한다.
 
 **생성/수정 파일:**
 
@@ -1139,38 +1156,58 @@ runtime을 즉시 종료한다. 이는 새 상단 전략이 아니라 lower-BB s
 
 **작업 체크리스트:**
 
-- [ ] `TradingContext.initialize(account, selected_regime, position, scale ratios)`를 구현한다.
-- [ ] Context의 모든 mutation을 typed method/Action request로 제한하고 version을 증가시킨다.
-- [ ] `apply_trading_stm_result()`가 action 자체를 실행하지 않고 runtime patch 적용 계약만 담당하게 한다.
-- [ ] `get_split_ratio()`가 pending side에 따라 scale-in/out Decimal을 반환한다.
-- [ ] `RegimeController.set_regime_type()`만 selected regime을 바꾸고 `TradingController.fetch_selected_trading_logic()`를 호출한다.
-- [ ] trading 중 regime 변경은 D-09 정책에 따라 거부하거나 stop/restart로 처리한다.
-- [ ] `TradingController.start_trading()`이 selected/account/position/connection 전제조건을 검증한다.
-- [ ] start가 Context 초기화 후 `TradingSTM.run(context_view)`를 정확히 한 번 호출한다.
-- [ ] 기존 `SerialEventQueue`와 `RunToCompletionEventProcessor`를 Controller에 연결한다.
-- [ ] `PatchRuntimeContext`, lower-event, queue, schedule Action을 Controller가 순서대로 실행한다.
-- [ ] scheduler가 즉시 busy loop를 만들지 않고 candle/deadline/backoff에만 event를 넣는다.
-- [ ] stop은 항상 `STOP_CONFIRMED`를 STM에 먼저 전달한다.
-- [ ] position 0 stop과 position 보유 force-sell branch를 D-05대로 구현한다.
-- [ ] stop 중 신규 market entry/action을 차단한다.
-- [ ] start/stop command ID와 expected context version으로 중복 click을 idempotent 처리한다.
+- [x] `TradingContext.initialize(account, selected_regime, position, scale ratios)`를 구현한다.
+- [x] Context의 모든 mutation을 typed method/Action request로 제한하고 version을 증가시킨다.
+- [x] `apply_trading_stm_result()`가 action 자체를 실행하지 않고 runtime patch 적용 계약만 담당하게 한다.
+- [x] `get_split_ratio()`가 pending side에 따라 scale-in/out Decimal을 반환한다.
+- [x] `RegimeController.set_regime_type()`만 selected regime을 바꾸고 `TradingController.fetch_selected_trading_logic()`를 호출한다.
+- [x] trading 중 regime 변경은 D-09 정책에 따라 거부하거나 stop/restart로 처리한다.
+- [x] `TradingController.start_trading()`이 selected/account/position/connection 전제조건을 검증한다.
+- [x] start가 Context 초기화 후 `TradingSTM.run(context_view)`를 정확히 한 번 호출한다.
+- [x] 기존 `SerialEventQueue`와 `RunToCompletionEventProcessor`를 Controller에 연결한다.
+- [x] `PatchRuntimeContext`, lower-event, queue, schedule Action을 Controller가 순서대로 실행한다.
+- [x] scheduler가 즉시 busy loop를 만들지 않고 candle/deadline/backoff에만 event를 넣는다.
+- [x] `RUNNING` 세션의 최초 stop은 `STOP_CONFIRMED`를 STM에 먼저 전달한다. 이미 `STOPPING`, `RECONCILIATION_REQUIRED`, `TERMINATED`이면 새 STM Action 없는 성공 no-op을 반환한다.
+- [x] position 0 stop과 position 보유 force-sell branch를 D-05대로 구현한다.
+- [x] stop 중 신규 market entry/action을 차단한다.
+- [x] selection/start/stop/split application Operation이 `command_id`, `expected_version`을 받고 typed 결과를 반환하며 중복 click을 idempotent 처리한다.
 
 **검증 시나리오:**
 
-- [ ] REGIME 미선택, API offline, unsupported logic start 거부.
-- [ ] 정상 start와 중복 start.
-- [ ] position 0 stop.
-- [ ] position 보유 stop 요청과 force-sell Action 생성까지.
-- [ ] pending order 중 stop → reconciliation Action.
-- [ ] context version race와 reentrant processing 차단.
-- [ ] timer/subscription cleanup.
+- [x] REGIME 미선택, API offline, unsupported logic start 거부.
+- [x] 정상 start와 중복 start.
+- [x] position 0 stop.
+- [x] position 보유 stop 요청과 force-sell Action 생성까지.
+- [x] pending order 중 stop → reconciliation Action.
+- [x] context version race와 reentrant processing 차단.
+- [x] timer/subscription cleanup.
 
 **완료 조건:**
 
-- [ ] fake exchange에서 Case 1의 select/start/stop 메시지 trace가 완성된다.
-- [ ] 실제 주문/fill pipeline은 아직 Phase 8 fake 구현을 사용한다.
+- [x] fake `ApplicationRuntime` loopback HTTP 계층에서 Case 1의 select/split/start/stop command·event·version 계약을 검증한다. caller/receiver와 Communication message ID를 포함한 전체 trace는 §12와 Phase 13에 남긴다.
+- [x] 실제 주문/fill pipeline은 선구현하지 않고 Phase 8 범위로 유지한다.
 
-**완료 증거:** 미기록
+**완료 증거:**
+
+| 항목 | 기록 |
+|---|---|
+| 실행 시각 | 2026-08-21 15:26 KST |
+| Phase 7 시작 commit | `3e799e126bbb87a88b1e3a522c8f1a7015e5a8e0` (`main`) |
+| 통합 backend | `cd backend && PYTHONPATH=src python3 -m unittest discover -s tests -v` → actual loopback 포함 325/325 통과 |
+| Phase 7 domain/controller | mutable Context initialize/mutation/version/split, STM `run` 1회, Action 순서, queue reentrancy/version-race rollback, scheduler와 session cleanup 검증 통과 |
+| start/selection guard | REGIME 미선택·offline·unsupported·stale·disabled mode 거부, 중복 command replay, active REGIME 변경 `TRADING_ACTIVE`와 기존 선택/STM/Context 보존, 정상 종료 뒤 REGIME 재선택 전 restart 거부 검증 통과 |
+| stop D-05/ADR-003 | `RUNNING` 최초 stop의 `STOP_CONFIRMED` 선행, position 0 sell Action 0회/G-05, 보유 G-06 `ForceSellAll`, pending G-06P cancel/reconcile, 중지 상태 후속 stop no-op과 신규 market 차단 검증 통과 |
+| HTTP lifecycle contract | 실제 fake `ApplicationRuntime` loopback HTTP에서 select → split → start → zero-position stop과 Context version `0 → 1 → 2 → 3 → 4`, idempotent replay/conflict, strict DTO/event correlation 검증 통과. 전체 Communication caller/receiver trace 완료를 뜻하지 않음 |
+| UI | `cd UI && ./node_modules/.bin/vitest run --reporter=dot` → actual Python child/loopback 포함 31 files, 155/155 통과 |
+| UI command/lifecycle | REGIME/start/stop/split body·expected version·idempotency, `REGIME_SELECTED`/`TRADING_SESSION_UPDATED` 단조 동기화, stopping/reconciliation 대기와 terminated 완료 표시 검증 통과 |
+| UI typecheck/build | `tsc -b --pretty false`, Vite 285 modules build, Storybook static build 통과 |
+| contract drift | Python schema v2 renderer, checked-in `backendContracts.generated.ts`와 Tauri native descriptor gate가 일치 |
+| package/static | `compileall`, offline wheel build, clean venv 설치/import, `git diff --check` 통과 |
+| coding convention | architecture test는 변경 Python source의 클래스/함수 docstring과 transport 파일별 블록·문장 주석 존재를 검증한다. 모든 업무 단위의 주석 위치·누락 여부는 별도 최종 diff audit 대상으로 유지 |
+| Binance 공식 문서 | Binance payload/client/order 동작을 추가하거나 변경하지 않았고 Phase 2/4의 기존 정규화 계약만 사용해 새 공식 문서 조회가 필요하지 않았다. |
+| 범위 방어 | Order/Fill/mutable Position entity, Gateway 주문·취소·reconciliation 실행, history append와 실제 Binance client/credential 없음; 외부 효과 Action은 기록만 함 |
+| 주요 산출물 | `domain/trading/context.py`, `application/trading_controller.py`, `application/regime_controller.py`, queue/STM/bootstrap, trading transport route/contract, `BackendUiAdapter`/facade/actor와 Phase 7 unit/integration/process tests |
+| 작업 commit | 생성하지 않음 — 사용자 요청 범위에 commit은 포함되지 않음 |
 
 ---
 
@@ -1424,10 +1461,11 @@ runtime을 즉시 종료한다. 이는 새 상단 전략이 아니라 lower-BB s
 | 13 | 9, 10, 11, 12 | 전체 E2E와 live readiness 판단 |
 
 Phase 2/3 경로와 Phase 4 경로를 선행 완료한 뒤 Phase 5를 구현했고, Phase 0/1의
-mapping 및 package를 선행한 뒤 Phase 6 coverage gate를 완료했다. 다음 작업은
-Phase 7이며 이후에도 병렬 개발이 필요하면 같은 source 파일을 동시에 수정하지 않는다.
+mapping 및 package를 선행한 뒤 Phase 6 coverage gate와 Phase 7 session lifecycle을
+완료했다. 다음 작업은 Phase 8이며 이후에도 병렬 개발이 필요하면 같은 source 파일을
+동시에 수정하지 않는다.
 
-- [x] Phase 6까지 의존 순서를 지키고 선행 완료 조건을 건너뛰지 않았다.
+- [x] Phase 7까지 의존 순서를 지키고 선행 완료 조건을 건너뛰지 않았다.
 
 ---
 
@@ -1440,9 +1478,9 @@ Phase 7이며 이후에도 병렬 개발이 필요하면 같은 source 파일을
 | `2`~`2.2.1` | TradingController, APIGateway, WebSocketGateway, Account | 4/7/9 | `test_account_startup_and_stream_trace_applies_rest_before_delta`, `test_load_account_*` |
 | `3`~`3.3` | TradeHistoryController, Repository, TradeHistory, Performance | 4 | `test_history_startup_trace_reproduces_golden_snapshot`, `test_controller_*` |
 | `4`~`5` | UIStateController, UISTM, AppShellUI | 5 | `createLiveUiApplication.process.test.mjs`, `createLiveUiApplication.test.tsx` |
-| `6`~`6.1.1.1.1` | AppShellUI, UIStateController, RegimeController, TradingController, TradingSTM | 6/7 | Phase 6 `test_message_6_1_1_1_selects_exact_trading_logic_without_fallback`, registry/mapper/RegimePanel/start-gate tests; Phase 7 `test_regime_selection_flow_*` |
-| `7`~`7.1.1.2` | UIStateController, TradingController, TradingContext, TradingSTM | 7 | `test_start_trading_flow_*` |
-| `8`~`8.1.1.3` | UIStateController, TradingController, TradingSTM, Position, APIGateway | 7/8/9 | `test_stop_trading_flow_*` |
+| `6`~`6.1.1.1.1` | AppShellUI, UIStateController, RegimeController, TradingController, TradingSTM | 6/7 | Phase 6 `test_message_6_1_1_1_selects_exact_trading_logic_without_fallback`, registry/mapper/RegimePanel/start-gate tests; Phase 7 `test_supported_selection_starts_exactly_once_and_rejects_active_swap`, `test_case1_select_split_start_duplicate_and_zero_position_stop` |
+| `7`~`7.1.1.2` | UIStateController, TradingController, TradingContext, TradingSTM | 7 | `test_supported_selection_starts_exactly_once_and_rejects_active_swap`, `test_unselected_unsupported_offline_and_disabled_start_fail_closed`, `test_case1_select_split_start_duplicate_and_zero_position_stop` |
+| `8`~`8.1.1.3` | UIStateController, TradingController, TradingSTM, Position, APIGateway | 7/8/9 | Phase 7 `test_zero_position_stop_terminates_without_sell_and_cleans_subscription`, `test_open_position_stop_generates_one_force_sell_and_blocks_events`, `test_pending_stop_cancels_then_reconciles_without_force_sell`; Phase 8/9 order execution trace는 후속 구현 |
 | Case 2 `1`~`10` | TradingController, TradingSTM, Context, MarketSnapshot, Order, APIGateway | 8 | `test_order_submission_and_reconcile_*` |
 | Case 2 `11`~`14` | Position, TradeHistoryController, Performance, Trade, Repository, TradingSTM | 8 | `test_execution_recording_and_feedback_*` |
 | Case 3 `1` 계열 | RecentOrderUI, UIStateController, TradeHistoryController/UI | 10 | `test_show_trade_details_*` |
@@ -1452,9 +1490,11 @@ Phase 7이며 이후에도 병렬 개발이 필요하면 같은 source 파일을
 
 Phase 4의 메시지 `2`~`3.3`과 Phase 5 backend startup 메시지 `1`~`3` 구조화 trace는
 아래 필드를 검증했다. Phase 5 actual-process test는 그 backend trace 뒤에 UISTM `4`와
-AppShellUI render `5`를 이어 `1 → 2 → 3 → 4 → 5` 순서와 화면 결과를 검증했다. 아래
-체크박스는 아직 구현되지 않은 전체 메시지 범위를 포함하므로 전체 추적성 완료 전까지
-유지한다. 각 integration trace는 최소한 다음을 기록한다.
+AppShellUI render `5`를 이어 `1 → 2 → 3 → 4 → 5` 순서와 화면 결과를 검증했다.
+Phase 7의 loopback 테스트는 HTTP command/event/version 계약을 검증하지만 아직
+Communication message ID와 caller/receiver를 한 trace로 기록하지 않으므로 전체 메시지
+trace로 계산하지 않는다. 아래 체크박스는 아직 구현되지 않은 전체 메시지 범위를 포함해
+전체 추적성 완료 전까지 유지한다. 각 완전한 integration trace는 최소한 다음을 기록한다.
 
 - [ ] message ID 또는 Event-Action ID
 - [ ] caller와 receiver
@@ -1549,7 +1589,7 @@ Communication message/operation:
 - [x] Phase 4 — Account/History/Performance 초기 로드
 - [x] Phase 5 — startup/transport/UI live read
 - [x] Phase 6 — REGIME별 TradingSTM coverage
-- [ ] Phase 7 — Trading session start/stop
+- [x] Phase 7 — Trading session start/stop
 - [ ] Phase 8 — Buy/Sell execution pipeline
 - [ ] Phase 9 — Binance testnet adapter
 - [ ] Phase 10 — Trade History live UI
@@ -1563,16 +1603,18 @@ Communication message/operation:
 
 ## 16. 다음 작업
 
-Phase 6은 완료되었다. 다음 구현 작업은 **Phase 7 — TradingContext와 start/stop
-session lifecycle만** 수행한다. Phase 7을 시작하기 전에 Communication 메시지
-`6`~`8`, ADR-001/ADR-003과 TradingController/TradingContext/TradingSTM의
-session·Action 적용 경계를 다시 읽는다.
+Phase 7은 완료되었다. 다음 구현 작업은 **Phase 8 — Order, Position, Trade,
+Performance와 Buy/Sell pipeline만** 수행한다. Phase 8을 시작하기 전에
+Communication Case 2 메시지 `1`~`14`, ADR-002/ADR-003/ADR-004와
+TradingController/Order/Position/TradeHistoryController의 Action 실행·durable 저장
+경계를 다시 읽는다.
 
-Phase 6은 `TYPE_0`의 registry coverage를 `READY`로 만들었지만 production start를
-enable하지 않았다. live `command_enabled=false`를 유지했고, 실제 Context 초기화,
-STM `run()`, scheduler, start/stop command lifecycle과 G-07 Action 실행은 Phase 7
-범위다. `TYPE_1`~`TYPE_4`는 해당 Event-Action Table과 state diagram이 생기기 전까지
-계속 `UNSUPPORTED_TRADING_LOGIC`이다.
+Phase 7은 fake mode에서 Context 초기화, STM `run()`, scheduler, start/stop command와
+UI lifecycle을 연결했다. 외부 주문 효과는 typed Action으로만 보존했으므로 Phase 8은
+Order/Position entity와 fake Gateway execution, fill 반영, history durable append 뒤
+구체 order outcome을 STM에 전달하는 경로를 구현해야 한다. `TYPE_1`~`TYPE_4`는 해당
+Event-Action Table과 state diagram이 생기기 전까지 계속
+`UNSUPPORTED_TRADING_LOGIC`이다.
 
 Phase 5는 실제 Binance client 조립·credential·order submit,
 `TradeHistoryRepository` append/save, `Performance.calculate_realized_result()`/
@@ -1594,4 +1636,5 @@ Phase 11 범위에 남긴다.
 - [x] Phase 5 완료 조건과 증거를 기록했다.
 - [x] Phase 6을 시작하기 전 Communication 6.1.1.1~6.1.1.1.1, ADR-001과 TradingSTM registry/start gate를 다시 확인했다.
 - [x] Phase 6 완료 조건과 증거를 기록했다.
-- [ ] Phase 7을 시작하기 전 Communication 6~8, ADR-001/003과 Trading session/Action 적용 경계를 다시 확인한다.
+- [x] Phase 7을 시작하기 전 Communication 6~8, ADR-001/003과 Trading session/Action 적용 경계를 다시 확인했다.
+- [x] Phase 7 완료 조건과 증거를 기록했다.

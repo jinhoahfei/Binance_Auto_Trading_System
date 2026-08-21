@@ -68,12 +68,14 @@ def _record_startup_trace(
     반환값: 없음
     작성 날짜: 2026/08/21
     """
+    # 성공 여부를 enum과 optional failure code의 일관된 조합으로 정규화한다.
     trace_result = (
         StartupTraceResult.SUCCESS
         if failure is None
         else StartupTraceResult.FAILURE
     )
     typed_failure_code = None if failure is None else failure.code
+    # raw payload 대신 command, version과 논리 식별자만 trace에 보존한다.
     trace_entry = StartupTraceEntry(
         message_id=message_id,
         caller="UIStateController",
@@ -113,6 +115,7 @@ def _raise_stage_failure(
     반환값: 정상 반환 없이 ApplicationStartupError 발생
     작성 날짜: 2026/08/21
     """
+    # 예외를 전파하기 전에 실패한 Communication 호출의 trace를 먼저 publish한다.
     _record_startup_trace(
         runtime,
         message_id=message_id,
@@ -122,6 +125,7 @@ def _raise_stage_failure(
         state_version_after=state_version_after,
         failure=failure,
     )
+    # 원인 예외가 있을 때만 traceback chain을 연결하고 공개 오류는 동일하게 유지한다.
     startup_error = ApplicationStartupError(failure)
     if cause is None:
         raise startup_error
@@ -137,12 +141,14 @@ def _validate_regime_readiness(runtime: ApplicationRuntime) -> None:
     반환값: 준비 조건이 모두 맞으면 없음
     작성 날짜: 2026/08/21
     """
+    # 최초 판정 결과와 추천 REGIME이 모두 publish됐는지 확인한다.
     regime_result = runtime.regime_controller.last_regime_result
     if regime_result is None:
         raise _RegimeReadinessError("last regime result is not ready")
     if runtime.regime_controller.recommended_regime is None:
         raise _RegimeReadinessError("recommended regime is not ready")
 
+    # 판정에 사용한 indicator snapshot도 같은 startup에서 준비돼야 한다.
     indicator_snapshot = runtime.regime_controller.indicator_snapshot
     if indicator_snapshot is None or not indicator_snapshot.ready:
         raise _RegimeReadinessError("indicator snapshot is not ready")
@@ -156,6 +162,7 @@ def _start_market_and_regime(runtime: ApplicationRuntime) -> None:
     반환값: 시장과 REGIME이 모두 준비되면 없음
     작성 날짜: 2026/08/21
     """
+    # Communication 1의 시작 version을 보존하고 시장 초기화를 먼저 수행한다.
     market_version_before = runtime.market_snapshot.version
     try:
         runtime.market_data_controller.initialize_market_data()
@@ -176,6 +183,7 @@ def _start_market_and_regime(runtime: ApplicationRuntime) -> None:
             cause=error,
         )
 
+    # Controller 반환만 신뢰하지 않고 authoritative MarketSnapshot readiness를 재검사한다.
     if not runtime.market_snapshot.ready:
         failure = _create_failure(
             StartupStage.MARKET,
@@ -192,6 +200,7 @@ def _start_market_and_regime(runtime: ApplicationRuntime) -> None:
             failure=failure,
         )
 
+    # 시장과 연쇄 실행된 REGIME 판정의 세 가지 완료조건을 함께 검증한다.
     try:
         _validate_regime_readiness(runtime)
     except _RegimeReadinessError as error:
@@ -211,6 +220,7 @@ def _start_market_and_regime(runtime: ApplicationRuntime) -> None:
             cause=error,
         )
 
+    # 시장과 REGIME이 모두 준비된 뒤에만 Communication 1 성공을 기록한다.
     _record_startup_trace(
         runtime,
         message_id="1",
@@ -229,6 +239,7 @@ def _start_account(runtime: ApplicationRuntime) -> None:
     반환값: Account가 준비되고 subscription이 열리면 없음
     작성 날짜: 2026/08/21
     """
+    # Communication 2의 시작 version을 보존하고 REST→stream 순서의 load를 실행한다.
     account_version_before = runtime.account.version
     try:
         runtime.trading_controller.load_account()
@@ -268,6 +279,7 @@ def _start_account(runtime: ApplicationRuntime) -> None:
             failure=failure,
         )
 
+    # Account snapshot과 stream handle이 모두 준비된 뒤 성공 trace를 기록한다.
     _record_startup_trace(
         runtime,
         message_id="2",
@@ -286,6 +298,7 @@ def _start_history_and_performance(runtime: ApplicationRuntime) -> None:
     반환값: history와 performance가 함께 publish되면 없음
     작성 날짜: 2026/08/21
     """
+    # Communication 3 전 application version을 보존하고 history publication을 실행한다.
     publication_version_before = runtime.state.version
     try:
         runtime.trade_history_controller.load_trade_history()
@@ -327,6 +340,7 @@ def _close_account_subscription_safely(
     반환값: 정리 실패 예외 또는 정상·구독 없음이면 None
     작성 날짜: 2026/08/21
     """
+    # 열린 handle이 있을 때만 cleanup을 시도하고 실패는 원인 예외와 분리해 반환한다.
     account_subscription = runtime.trading_controller.account_subscription
     if account_subscription is None:
         return None
@@ -347,10 +361,12 @@ def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     반환값: 성공한 READY ApplicationStateSnapshot
     작성 날짜: 2026/08/21
     """
+    # factory가 조립한 runtime 외 객체는 lifecycle mutation 전에 거부한다.
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
 
     with runtime.application_lock:
+        # 현재 lifecycle에 따라 duplicate, 동시 시작, 종료 후 시작과 이전 실패를 구분한다.
         current_state = runtime.state
         if current_state.status is ApplicationStatus.READY:
             return current_state  # 성공한 runtime의 중복 startup은 멱등 no-op이다.
@@ -414,13 +430,18 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     반환값: CLOSED ApplicationStateSnapshot
     작성 날짜: 2026/08/21
     """
+    # factory가 조립한 runtime 외 객체는 자원 cleanup 전에 거부한다.
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
 
     with runtime.application_lock:
+        # CLOSED publication은 멱등 반환하고 다른 상태만 소유 자원을 정리한다.
         current_state = runtime.state
         if current_state.status is ApplicationStatus.CLOSED:
             return current_state  # 이미 닫힌 runtime은 자원을 다시 만지지 않는다.
+
+        # 거래 상태를 강제 종료하지 않고 callback·timer·session 구독부터 차단한다.
+        runtime.trading_controller.close_session_resources()
 
         # Kline startup 구독은 MarketDataController가 이미 닫으므로 account만 정리한다.
         account_subscription = runtime.trading_controller.account_subscription

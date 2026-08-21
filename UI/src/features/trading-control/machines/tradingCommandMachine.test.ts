@@ -96,6 +96,7 @@ describe('tradingCommandMachine', () => {
             command_enabled: false,
             is_trading: false,
             has_open_position: false,
+            lifecycle_status: 'not_started',
         });
         actor.send({ type: 'START_CONFIRMED', is_online: true });
 
@@ -153,4 +154,44 @@ describe('tradingCommandMachine', () => {
         expect(actor.getSnapshot().context.has_open_position).toBe(false);
         actor.stop();
     });
+
+    it.each(['stopping', 'reconciliation_required'] as const)(
+        'Phase 7: stop receipt가 %s이면 완료로 오표시하지 않고 authoritative 종료를 기다린다',
+        async (stop_status) => {
+            const command_adapter = new FakeUiCommandAdapter();
+            command_adapter.stop_trading_receipt = {
+                status: stop_status,
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+                version: 3,
+            };
+            const actor = createActor(create_trading_command_machine(command_adapter));
+
+            actor.start();
+            actor.send({ type: 'BACKEND_TRADING_STARTED' });
+            actor.send({ type: 'POSITION_UPDATED', has_open_position: true });
+            actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+            actor.send({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' });
+            await wait_for_actor_settlement();
+
+            expect(actor.getSnapshot().matches('awaiting_stop_completion')).toBe(true);
+            expect(actor.getSnapshot().context.is_trading).toBe(true);
+            expect(actor.getSnapshot().context.has_open_position).toBe(true);
+
+            // 실제 청산 완료 snapshot이 도착한 뒤에만 stopped와 position zero를 적용한다.
+            actor.send({
+                type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
+                selected_regime: 'type0',
+                logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+                command_enabled: true,
+                is_trading: false,
+                has_open_position: false,
+                lifecycle_status: 'terminated',
+            });
+
+            expect(actor.getSnapshot().matches('stopped')).toBe(true);
+            expect(actor.getSnapshot().context.is_trading).toBe(false);
+            expect(actor.getSnapshot().context.has_open_position).toBe(false);
+            actor.stop();
+        },
+    );
 });

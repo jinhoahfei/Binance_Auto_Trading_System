@@ -265,6 +265,7 @@ class GlobalTransitionTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
+        # Pending BUY와 실제 포지션 노출이 동시에 있는 trade-management state를 준비한다.
         stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
         runtime = TradingRuntimeSnapshot(
@@ -275,13 +276,81 @@ class GlobalTransitionTests(unittest.TestCase):
             pending_order_attempt_kind=OrderAttemptKind.INITIAL,
         )
 
+        # STOP_CONFIRMED를 전달해 pending 주문 branch의 우선순위를 판정한다.
+        result = stm.handle(
+            create_test_event(TradingEventType.STOP_CONFIRMED),
+            create_test_context(
+                runtime=runtime,
+                position=PositionSnapshot(
+                    quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                ),
+            ),
+        )
+
+        # G-06P가 먼저 소비하고 lifecycle을 STOPPING에 두는지 확인한다.
+        self.assertEqual(("G-06P",), result.transition_ids)
+        self.assertEqual(RootState.STOPPING, result.state_after.root_state)
+
+    def test_g_05_zero_quantity_ignores_stale_position_owner(self) -> None:
+        """
+        함수 이름: test_g_05_zero_quantity_ignores_stale_position_owner()
+        기능: logical owner가 남아도 authoritative 수량이 0이면 매도 없이 종료하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # Stale logical owner만 남고 authoritative 수량은 0인 state를 준비한다.
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+        runtime = TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B)
+
+        # Position.quantity 0을 owner보다 우선하는 D-05 경계를 검증한다.
         result = stm.handle(
             create_test_event(TradingEventType.STOP_CONFIRMED),
             create_test_context(runtime=runtime),
         )
 
-        self.assertEqual(("G-06P",), result.transition_ids)
-        self.assertEqual(RootState.STOPPING, result.state_after.root_state)
+        # 무노출 branch가 즉시 종료하며 ForceSellAll을 만들지 않는지 확인한다.
+        self.assertEqual(("G-05",), result.transition_ids)
+        self.assertFalse(
+            any(
+                isinstance(action, ForceSellAll)
+                for action in result.action_requests
+            )
+        )  # 0 수량 SELL action은 하나도 생성하지 않는다.
+
+    def test_g_06_open_position_without_owner_requests_force_sell(self) -> None:
+        """
+        함수 이름: test_g_06_open_position_without_owner_requests_force_sell()
+        기능: logical owner가 없어도 authoritative 수량이 양수이면 전량 매도를 요청하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # Logical owner가 없는 trade-management state에 실제 양수 Position을 주입한다.
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+
+        # reconciliation으로 owner를 복구하지 못해도 실제 자산 노출은 매도해야 한다.
+        result = stm.handle(
+            create_test_event(TradingEventType.STOP_CONFIRMED),
+            create_test_context(
+                position=PositionSnapshot(
+                    quantity=Decimal("0.25"),
+                    entry_price=Decimal("100"),
+                ),
+            ),
+        )
+
+        # 실제 노출 branch가 STOPPING과 ForceSellAll 요청을 만드는지 확인한다.
+        self.assertEqual(("G-06",), result.transition_ids)
+        self.assertTrue(
+            any(
+                isinstance(action, ForceSellAll)
+                for action in result.action_requests
+            )
+        )  # 실제 양수 수량이 force-sell branch를 선택한다.
 
 
 class UpperBandSafeTerminationTests(unittest.TestCase):
@@ -290,6 +359,23 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
     기능: G-07의 경계와 노출 상태별 안전 종료 및 후속 전이를 검증한다.
     작성 날짜: 2026/08/21
     """
+
+    def test_force_sell_outcome_payload_rejects_truthy_non_booleans(self) -> None:
+        """
+        함수 이름: test_force_sell_outcome_payload_rejects_truthy_non_booleans()
+        기능: 강제 매도 종료 증거가 정수나 문자열 truthiness를 허용하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # 증거 필드는 Python truthiness가 아니라 exact bool만 받아야 한다.
+        invalid_flag_values = (1, 0, "true", None)
+        for invalid_flag_value in invalid_flag_values:
+            with self.subTest(invalid_flag_value=invalid_flag_value):
+                with self.assertRaises(TypeError):
+                    ForceSellOutcomePayload(
+                        execution_applied=invalid_flag_value,  # type: ignore[arg-type]
+                    )
 
     def test_g_07_does_not_trigger_below_upper_band(self) -> None:
         """
@@ -323,18 +409,22 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # Stale owner가 남아도 수량 0인 upper-band 경계 state를 준비한다.
         stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
         market = MarketEvaluationSnapshot(
             realtime_price=Decimal("120"),
             upper_band=Decimal("120"),
         )
+        runtime = TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B)
 
+        # 가격이 upper band와 같은 inclusive 경계에서 G-07을 실행한다.
         result = stm.handle(
             create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
-            create_test_context(market=market),
+            create_test_context(market=market, runtime=runtime),
         )
 
+        # 즉시 종료 Action과 ForceSellAll 부재를 authoritative 수량 기준으로 확인한다.
         close_action = next(
             action
             for action in result.action_requests
@@ -349,6 +439,12 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         self.assertEqual(RootState.LOGIC_TERMINATED, result.state_after.root_state)
         self.assertEqual("UPPER_BAND_SAFE_TERMINATION", close_action.reason)
         self.assertEqual("UPPER_BAND_SAFE_TERMINATION", stop_action.reason)
+        self.assertFalse(
+            any(
+                isinstance(action, ForceSellAll)
+                for action in result.action_requests
+            )
+        )  # stale owner가 있어도 authoritative 수량 0은 SELL을 만들지 않는다.
 
     def test_g_07_pending_order_takes_precedence_over_position(self) -> None:
         """
@@ -358,6 +454,7 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # Pending BUY와 양수 Position이 함께 있는 upper-band 초과 state를 준비한다.
         stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
         runtime = TradingRuntimeSnapshot(
@@ -372,11 +469,20 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
             upper_band=Decimal("120"),
         )
 
+        # G-07에서 pending reconciliation branch가 force-sell보다 먼저 선택되는지 판정한다.
         result = stm.handle(
             create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
-            create_test_context(market=market, runtime=runtime),
+            create_test_context(
+                market=market,
+                runtime=runtime,
+                position=PositionSnapshot(
+                    quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                ),
+            ),
         )
 
+        # 취소·reconciliation Action을 찾고 direct ForceSellAll 부재를 확인한다.
         cancel_action = next(
             action
             for action in result.action_requests
@@ -407,19 +513,29 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # Pending 없이 양수 Position만 존재하는 upper-band 초과 state를 준비한다.
         stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
-        runtime = TradingRuntimeSnapshot(position_owner=StrategyType.CASE_C)
+        runtime = TradingRuntimeSnapshot()
         market = MarketEvaluationSnapshot(
             realtime_price=Decimal("121"),
             upper_band=Decimal("120"),
         )
 
+        # G-07 안전 종료 요청으로 schedule 취소와 최초 전량매도 Action을 생성한다.
         safe_termination = stm.handle(
             create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
-            create_test_context(market=market, runtime=runtime),
+            create_test_context(
+                market=market,
+                runtime=runtime,
+                position=PositionSnapshot(
+                    quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                ),
+            ),
         )
 
+        # 최초 G-07 결과가 STOPPING과 non-retry ForceSellAll을 포함하는지 확인한다.
         self.assertEqual(("G-07",), safe_termination.transition_ids)
         self.assertEqual(RootState.STOPPING, safe_termination.state_after.root_state)
         self.assertTrue(
@@ -436,8 +552,23 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
             )
         )
 
+        # 구체 체결·저장 증거가 없으면 인자 없는 성공을 추론하지 않는다.
+        missing_completion = stm.handle(
+            create_test_event(
+                TradingEventType.FORCE_SELL_FINISHED,
+                sequence=2,
+            ),
+            create_test_context(version=2),
+        )
+        self.assertFalse(missing_completion.transition_ids)
+        self.assertEqual(
+            RootState.STOPPING,
+            missing_completion.state_after.root_state,
+        )
+
+        # Exact bool 성공 증거가 있는 terminal outcome만 G-06F 완료로 처리한다.
         completion_event = replace(
-            create_test_event(TradingEventType.FORCE_SELL_FINISHED, sequence=2),
+            create_test_event(TradingEventType.FORCE_SELL_FINISHED, sequence=3),
             payload=ForceSellOutcomePayload(),
         )
         completion = stm.handle(
@@ -445,6 +576,7 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
             create_test_context(version=2),
         )
 
+        # 검증된 완료 outcome이 lifecycle을 완전 종료하는지 확인한다.
         self.assertEqual(("G-06F",), completion.transition_ids)
         self.assertEqual(RootState.LOGIC_TERMINATED, completion.state_after.root_state)
 
@@ -456,20 +588,48 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # Pending 없이 양수 Position을 가진 upper-band 경계 state를 준비한다.
         stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
-        runtime = TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B)
+        runtime = TradingRuntimeSnapshot()
         market = MarketEvaluationSnapshot(
             realtime_price=Decimal("120"),
             upper_band=Decimal("120"),
         )
+        # 최초 G-07 전량매도 요청을 발생시켜 STOPPING state로 진입한다.
         stm.handle(
             create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
-            create_test_context(market=market, runtime=runtime),
+            create_test_context(
+                market=market,
+                runtime=runtime,
+                position=PositionSnapshot(
+                    quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                ),
+            ),
         )
 
+        # terminal 미체결 payload가 없으면 retry intent를 새로 만들지 않는다.
+        missing_failure = stm.handle(
+            create_test_event(
+                TradingEventType.FORCE_SELL_FAILED,
+                sequence=2,
+            ),
+            create_test_context(
+                version=2,
+                runtime=runtime,
+                position=PositionSnapshot(
+                    quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                ),
+            ),
+        )
+        self.assertFalse(missing_failure.transition_ids)
+        self.assertFalse(missing_failure.action_requests)
+
+        # Exact terminal-unfilled 증거가 있는 실패 outcome으로 G-06R을 실행한다.
         failure_event = replace(
-            create_test_event(TradingEventType.FORCE_SELL_FAILED, sequence=2),
+            create_test_event(TradingEventType.FORCE_SELL_FAILED, sequence=3),
             payload=ForceSellOutcomePayload(
                 execution_applied=False,
                 history_persisted=False,
@@ -478,9 +638,17 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         )
         failure = stm.handle(
             failure_event,
-            create_test_context(version=2, runtime=runtime),
+            create_test_context(
+                version=2,
+                runtime=runtime,
+                position=PositionSnapshot(
+                    quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                ),
+            ),
         )
 
+        # Retry Action이 명시적으로 재시도 정책을 사용하도록 표시됐는지 확인한다.
         retry_action = next(
             action
             for action in failure.action_requests

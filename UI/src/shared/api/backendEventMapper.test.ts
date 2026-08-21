@@ -88,6 +88,38 @@ describe('backend runtime contract validation', () => {
 
     it.each([
         {
+            name: 'unknown status',
+            patch: { status: 'paused' },
+        },
+        {
+            name: 'out-of-range scale ratio',
+            patch: { scale_in: '1.01' },
+        },
+        {
+            name: 'active state without session',
+            patch: { status: 'running', session_id: null },
+        },
+        {
+            name: 'malformed session UUID',
+            patch: { session_id: 'session-1' },
+        },
+    ])('Phase 7 trading snapshot의 $name을 fail closed한다', ({ patch }) => {
+        const snapshot = create_backend_snapshot_fixture();
+        const malformed_snapshot = {
+            ...snapshot,
+            trading: {
+                ...snapshot.trading,
+                ...patch,
+            },
+        };
+
+        expect(() => validate_backend_snapshot(malformed_snapshot)).toThrowError(
+            expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
+        );
+    });
+
+    it.each([
+        {
             name: 'missing row',
             logic_coverage: [
                 { regime_type: 'type0', support_status: 'supported', start_guard: 'READY' },
@@ -324,7 +356,7 @@ describe('backend runtime contract validation', () => {
 });
 
 describe('backend snapshot and event mapping', () => {
-    it('USDT와 nullable/unavailable 의미를 보존하고 금융 값을 JS Number로 계산하지 않는다', () => {
+    it('USDT와 nullable/unavailable 의미를 보존하고 금액 값을 JS Number로 계산하지 않는다', () => {
         const mapped = map_backend_snapshot(
             create_backend_snapshot_fixture(),
             '2026-08-21',
@@ -333,7 +365,8 @@ describe('backend snapshot and event mapping', () => {
         expect(mapped.facade_options.recommended_regime).toBe('type2');
         expect(mapped.facade_options.applied_regime).toBeNull();
         expect(mapped.facade_options.trading_symbol).toBe('ETH/USDT');
-        expect(mapped.facade_options.scale_in_percentage).toBeUndefined();
+        expect(mapped.facade_options.scale_in_percentage).toBe(50);
+        expect(mapped.facade_options.scale_out_percentage).toBe(50);
         expect(mapped.facade_options.logic_coverage).toEqual([
             { regime_type: 'type0', support_status: 'supported', start_guard: 'READY' },
             { regime_type: 'type1', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
@@ -342,6 +375,13 @@ describe('backend snapshot and event mapping', () => {
             { regime_type: 'type4', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
         ]);
         expect(mapped.facade_options.command_enabled).toBe(false);
+        expect(mapped.facade_options.is_trading).toBe(false);
+        expect(mapped.server_snapshot).toMatchObject({
+            trading_version: 0,
+            trading_session_id: null,
+            has_open_position: false,
+            trading_state_label: 'not_started',
+        });
         expect(JSON.stringify(mapped.facade_options.logic_coverage)).not.toContain('LOWER_BB');
         expect(mapped.server_snapshot.account_asset).toMatchObject({
             quoteAsset: 'USDT',
@@ -372,6 +412,47 @@ describe('backend snapshot and event mapping', () => {
         });
     });
 
+    it('running session의 status/version/ratio/position/session을 authoritative UI 상태로 투영한다', () => {
+        const base_snapshot = create_backend_snapshot_fixture();
+        const running_snapshot = {
+            ...base_snapshot,
+            trading: {
+                ...base_snapshot.trading,
+                mode: 'fake',
+                status: 'running',
+                version: 7,
+                command_enabled: true,
+                scale_in: '0.25',
+                scale_out: '0.75',
+                has_open_position: true,
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            },
+        } as unknown as BackendSnapshot;
+
+        const validated_snapshot = validate_backend_snapshot(running_snapshot);
+        const mapped = map_backend_snapshot(validated_snapshot, '2026-08-21');
+
+        expect(mapped.facade_options).toMatchObject({
+            command_enabled: true,
+            is_trading: true,
+            has_open_position: true,
+            scale_in_percentage: 25,
+            scale_out_percentage: 75,
+        });
+        expect(mapped.server_snapshot).toMatchObject({
+            trading_version: 7,
+            trading_session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            is_trading: true,
+            has_open_position: true,
+            trading_state_label: 'running',
+        });
+        expect(mapped.server_snapshot.account_strategy).toMatchObject({
+            appliedState: 'running',
+            status: '자동매매 실행 중',
+            statusTone: 'positive',
+        });
+    });
+
     it('known ACCOUNT_UPDATED를 facade intent로 mapping하고 unknown event와 readiness signal은 ignore한다', () => {
         const account_event = create_backend_event_fixture(10, 'ACCOUNT_UPDATED', {
             account: create_backend_snapshot_fixture().account,
@@ -386,6 +467,69 @@ describe('backend snapshot and event mapping', () => {
         ]);
         expect(map_backend_event_to_intents(unknown_event)).toEqual([]);
         expect(map_backend_event_to_intents(ready_event)).toEqual([]);
+    });
+
+    it('TRADING_SESSION_UPDATED를 version/ratio/position을 보존한 lifecycle intent로 mapping한다', () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const trading_event = {
+            ...create_backend_event_fixture(10, 'TRADING_SESSION_UPDATED', {
+                trading: {
+                    ...snapshot.trading,
+                    mode: 'fake',
+                    status: 'stopping',
+                    version: 8,
+                    command_enabled: false,
+                    scale_in: '0.4',
+                    scale_out: '0.6',
+                    has_open_position: true,
+                    session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+                },
+            }),
+            aggregate_version: 8,
+        };
+
+        expect(map_backend_event_to_intents(trading_event)).toEqual([{
+            type: 'TRADING_SESSION_SYNCHRONIZED',
+            status: 'stopping',
+            version: 8,
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            command_enabled: false,
+            scale_in: '0.4',
+            scale_out: '0.6',
+            scale_in_percentage: 40,
+            scale_out_percentage: 60,
+            has_open_position: true,
+            logic_coverage: snapshot.trading.logic_coverage,
+            strategy_status: '자동매매 중지 처리 중',
+            strategy_status_tone: 'neutral',
+        }]);
+    });
+
+    it.each([
+        {
+            support_status: 'unsupported',
+            aggregate_version: 1,
+        },
+        {
+            support_status: 'supported',
+            aggregate_version: 2,
+        },
+    ])('REGIME_SELECTED의 support/aggregate version 불일치를 거부한다', ({
+        support_status,
+        aggregate_version,
+    }) => {
+        const event = {
+            ...create_backend_event_fixture(10, 'REGIME_SELECTED', {
+                selected: 'type0',
+                support_status,
+                version: 1,
+            }),
+            aggregate_version,
+        };
+
+        expect(() => map_backend_event_to_intents(event)).toThrowError(
+            expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
+        );
     });
 
     it('unknown event type은 연결 가능한 event로 parse하지만 unknown schema와 malformed UUID는 거부한다', () => {

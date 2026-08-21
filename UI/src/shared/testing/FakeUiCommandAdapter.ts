@@ -5,7 +5,7 @@ import type {
     TradeHistoryQuery,
     TradeRecord,
 } from '../contracts';
-import type { UiCommandPort } from '../ports';
+import type { TradingCommandReceipt, UiCommandPort } from '../ports';
 import { TRADE_RECORD_FIXTURES } from './fixtures';
 
 type FakeCommandName =
@@ -40,6 +40,16 @@ export class FakeUiCommandAdapter implements UiCommandPort {
         file_path: '/Users/demo/Exports/binance_trades_2026-08-12.csv',
         exported_row_count: TRADE_RECORD_FIXTURES.length,
     };
+    start_trading_receipt: TradingCommandReceipt = {
+        status: 'running',
+        session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+        version: 1,
+    };
+    stop_trading_receipt: TradingCommandReceipt = {
+        status: 'terminated',
+        session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+        version: 2,
+    };
 
     private readonly failure_queues = new Map<FakeCommandName, Array<Error>>();
 
@@ -61,36 +71,42 @@ export class FakeUiCommandAdapter implements UiCommandPort {
      * 함수 이름: start_trading()
      * 기능: 자동매매 시작 명령을 기록하고 예약된 실패가 있으면 반환한다.
      * 인자: regime_type -> 적용할 REGIME 유형
-     * 반환값: 명령 완료 Promise
+     * 반환값: 결정적인 running lifecycle 결과 Promise
      * 작성 날짜: 2026/08/12
      */
-    async start_trading(regime_type: RegimeType): Promise<void> {
+    async start_trading(regime_type: RegimeType): Promise<TradingCommandReceipt> {
         this.record_command('start_trading', { regime_type });
         this.throw_queued_failure('start_trading');
+
+        return this.start_trading_receipt;
     }
 
     /**
      * 함수 이름: stop_trading()
-     * 기능: 포지션 매도 없이 자동매매를 중단하는 명령을 기록한다.
+     * 기능: authoritative 자동매매 중지 명령을 기록한다.
      * 인자: 없음
-     * 반환값: 명령 완료 Promise
+     * 반환값: 설정된 authoritative stop lifecycle 결과 Promise
      * 작성 날짜: 2026/08/12
      */
-    async stop_trading(): Promise<void> {
+    async stop_trading(): Promise<TradingCommandReceipt> {
         this.record_command('stop_trading', null);
         this.throw_queued_failure('stop_trading');
+
+        return this.stop_trading_receipt;
     }
 
     /**
      * 함수 이름: force_sell_and_stop()
-     * 기능: 보유 포지션 강제 매도 후 중지 명령을 기록한다.
+     * 기능: position 보유 UI 경로의 authoritative 중지 명령을 기록한다.
      * 인자: 없음
-     * 반환값: 명령 완료 Promise
+     * 반환값: 설정된 authoritative stop lifecycle 결과 Promise
      * 작성 날짜: 2026/08/12
      */
-    async force_sell_and_stop(): Promise<void> {
+    async force_sell_and_stop(): Promise<TradingCommandReceipt> {
         this.record_command('force_sell_and_stop', null);
         this.throw_queued_failure('force_sell_and_stop');
+
+        return this.stop_trading_receipt;
     }
 
     /**

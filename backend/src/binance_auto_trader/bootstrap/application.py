@@ -125,6 +125,7 @@ class StartupFailure:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # enum, 공개 문구와 retry flag를 construction 시점에 함께 검증한다.
         if not isinstance(self.stage, StartupStage):
             raise TypeError("stage must be a StartupStage")
         if not isinstance(self.code, StartupFailureCode):
@@ -152,9 +153,11 @@ class ApplicationStartupError(RuntimeError):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # 검증되지 않은 예외가 typed startup failure로 노출되지 않게 한다.
         if not isinstance(failure, StartupFailure):
             raise TypeError("failure must be a StartupFailure")
 
+        # 표준 예외 문구와 transport가 읽을 metadata를 같은 객체에 보존한다.
         super().__init__(failure.message)
         self.failure = failure
         self.stage = failure.stage
@@ -187,6 +190,7 @@ class StartupTraceEntry:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # Communication trace 식별자는 모두 비어 있지 않은 문자열이어야 한다.
         text_fields = (
             self.message_id,
             self.caller,
@@ -211,6 +215,7 @@ class StartupTraceEntry:
             if version < 0:
                 raise ValueError("startup trace versions must not be negative")
 
+        # 결과 enum과 failure code의 성공·실패 조합을 함께 제한한다.
         if not isinstance(self.result, StartupTraceResult):
             raise TypeError("result must be a StartupTraceResult")
         if self.typed_failure_code is not None and not isinstance(
@@ -282,6 +287,7 @@ class ApplicationStateSnapshot:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # lifecycle enum, 단조 version과 immutable trace collection 형식을 검증한다.
         if not isinstance(self.status, ApplicationStatus):
             raise TypeError("status must be an ApplicationStatus")
         if isinstance(self.version, bool) or not isinstance(self.version, int):
@@ -301,6 +307,7 @@ class ApplicationStateSnapshot:
         ):
             raise TypeError("startup_trace must contain StartupTraceEntry")
 
+        # typed failure는 FAILED publication에만 존재하도록 상태 조합을 제한한다.
         failed = self.status is ApplicationStatus.FAILED
         if failed and self.failure is None:
             raise ValueError("FAILED state requires a startup failure")
@@ -375,6 +382,7 @@ class ApplicationRuntime:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # 외부 설정과 application lifetime identity의 기본 형식을 먼저 검증한다.
         if not isinstance(self.execution_mode, ExecutionMode):
             raise TypeError("execution_mode must be an ExecutionMode")
         if not isinstance(self.startup_command_id, str):
@@ -383,6 +391,7 @@ class ApplicationRuntime:
             raise ValueError("startup_command_id must not be empty")
         if not hasattr(self.application_lock, "__enter__"):
             raise TypeError("application_lock must be a context manager")
+        # Controller와 runtime은 authoritative Account 및 state store identity를 공유해야 한다.
         if self.trading_controller.account is not self.account:
             raise ValueError("TradingController must share the runtime Account")
         if not isinstance(self._state_store, _ApplicationStateStore):
@@ -481,6 +490,7 @@ class ApplicationRuntime:
         반환값: publish된 ApplicationStateSnapshot
         작성 날짜: 2026/08/21
         """
+        # 현재 publication에서 version을 한 번 올린 불변 snapshot을 만든다.
         current_state = self._state_store.state
         next_state = ApplicationStateSnapshot(
             status=status,
@@ -503,6 +513,7 @@ class ApplicationRuntime:
         반환값: trace가 추가된 ApplicationStateSnapshot
         작성 날짜: 2026/08/21
         """
+        # 검증된 trace만 현재 lifecycle 값을 보존한 새 publication에 추가한다.
         if not isinstance(trace_entry, StartupTraceEntry):
             raise TypeError("trace_entry must be a StartupTraceEntry")
 
@@ -522,6 +533,7 @@ def parse_execution_mode(value: object = None) -> ExecutionMode:
     반환값: 네 canonical ExecutionMode 중 하나
     작성 날짜: 2026/08/21
     """
+    # exact 문자열 외 입력은 더 강한 실행 권한으로 해석하지 않는다.
     if not isinstance(value, str):
         return ExecutionMode.DISABLED
 
@@ -556,6 +568,7 @@ def create_application_runtime(
     반환값: 동일 객체 identity와 단일 RLock을 보존하는 ApplicationRuntime
     작성 날짜: 2026/08/21
     """
+    # 외부 의존성과 선택 port 조합을 객체 생성 전에 fail fast로 검증한다.
     has_history_path = history_path is not None
     has_history_repository = history_repository is not None
     if has_history_path == has_history_repository:
@@ -569,8 +582,9 @@ def create_application_runtime(
     if clock is not None and not callable(clock):
         raise TypeError("clock must be callable")
 
-    # Application lifetime의 동기화 primitive와 authoritative entity를 먼저 만든다.
+    # Application lock과 entity를 만들며 실행 mode도 gate 조립 전에 canonicalize한다.
     application_lock = RLock()
+    selected_execution_mode = parse_execution_mode(execution_mode)
     market_snapshot = MarketSnapshot(clock=clock)
     account = Account()
     regime_stm = RegimeSTM()
@@ -586,6 +600,7 @@ def create_application_runtime(
         반환값: Account state가 실제 변경됐으면 True
         작성 날짜: 2026/08/21
         """
+        # 부분 snapshot 적용과 observer 알림을 같은 application publication으로 묶는다.
         with application_lock:
             account_changed = account.apply_stream_snapshot(snapshot)
             if account_changed and account_update_observer is not None:
@@ -598,20 +613,28 @@ def create_application_runtime(
         account_snapshot_callback=apply_account_stream_snapshot,
     )
 
-    # Regime과 시장 Controller는 동일 MarketSnapshot과 RegimeSTM identity를 공유한다.
-    regime_controller = RegimeController(regime_stm, market_snapshot)
+    # 거래 Controller를 먼저 만들어 Regime 선택의 유일한 commit port로 연결한다.
+    trading_controller = TradingController(
+        api_gateway,
+        web_socket_gateway,
+        account,
+        market_snapshot,
+        command_gate=selected_execution_mode is ExecutionMode.FAKE,
+        clock=clock,
+        application_lock=application_lock,
+    )
+    regime_controller = RegimeController(
+        regime_stm,
+        market_snapshot,
+        trading_controller,
+        application_lock=application_lock,
+    )
     market_data_controller = MarketDataController(
         api_gateway,
         web_socket_gateway,
         market_snapshot,
         regime_controller,
         kline_limit=kline_limit,
-    )
-    trading_controller = TradingController(
-        api_gateway,
-        web_socket_gateway,
-        account,
-        market_snapshot,
     )
 
     # Persistence 구현 또는 주입 port 중 정확히 하나로 history startup 경계를 조립한다.
@@ -638,7 +661,7 @@ def create_application_runtime(
     startup_command_id = f"startup-{uuid4().hex}"
 
     return ApplicationRuntime(
-        execution_mode=parse_execution_mode(execution_mode),
+        execution_mode=selected_execution_mode,
         application_lock=application_lock,
         startup_command_id=startup_command_id,
         api_gateway=api_gateway,

@@ -27,9 +27,13 @@ liquidation, funding, leverage와 위험 한도를 별도로 명세해야 한다
 
 ## 2. Stop 상태 분기
 
-사용자 확인 뒤 `TradingController.stopTrading()`은 모든 branch에서 먼저
+사용자 확인 뒤 `RUNNING` 세션에 처음 적용되는 Python Operation
+`TradingController.stop_trading(*, command_id, expected_version)`
+(Communication alias `stopTrading(commandId, expectedVersion)`)은 먼저
 `STOP_CONFIRMED`를 TradingSTM에 전달한다. 그 다음 authoritative Position과 pending
-주문 상태로 아래 절차를 실행한다.
+주문 상태로 아래 절차를 실행하고 `TradingSessionResult`를 반환한다. 이미
+`STOPPING`, `RECONCILIATION_REQUIRED` 또는 `LOGIC_TERMINATED`인 세션의 후속 stop은
+새 STM Action을 만들지 않는 성공 no-op이며 이 분기 표를 다시 실행하지 않는다.
 
 | 조건 | TradingSTM 경로 | Controller 동작 | 완료 조건 |
 |---|---|---|---|
@@ -90,8 +94,8 @@ mode를 효과적으로 `disabled`로 취급한다. 한도 값은 Phase 13의 �
 
 ## 6. 종료와 실패 표시
 
-- stop command는 command ID로 idempotent하게 처리한다.
-- 이미 `STOPPING`이면 새 force-sell intent를 만들지 않고 현재 진행 상태를 반환한다.
+- stop command는 command ID와 expected Context version으로 idempotent하게 처리하고 typed `TradingSessionResult`를 반환한다.
+- 이미 `STOPPING` 또는 `RECONCILIATION_REQUIRED`이면 새 force-sell intent를 만들지 않고 현재 진행 상태를 반환한다.
 - `LOGIC_TERMINATED`에서 다시 stop하면 성공 no-op을 반환한다.
 - 강제 매도 실패 시 UI에는 order ID, 남은 수량, retry 횟수와 다음 조치가 표시되어야
   하며 “중지 완료”로 표시하지 않는다.
@@ -104,5 +108,15 @@ mode를 효과적으로 `disabled`로 취급한다. 한도 값은 Phase 13의 �
 - [x] 포지션 0·보유·pending stop branch와 완료 결과가 확정되었다.
 - [x] 네 실행 모드와 default `disabled`가 확정되었다.
 - [x] live 승인 gate는 값 누락 시 fail closed하도록 확정되었다.
-- [ ] Phase 7에서 position 0 sell 호출 0회와 세 stop branch를 테스트한다.
+- [x] Phase 7에서 position 0 sell Action 0회와 세 stop branch를 테스트했다. 실제 Gateway 호출 검증은 Action executor가 구현되는 Phase 8/9 범위다.
 - [ ] Phase 13에서 사용자가 한도와 release 승인을 별도로 확정한다.
+
+### Phase 7 완료 증거
+
+2026-08-21 KST, 시작 커밋 `3e799e126bbb87a88b1e3a522c8f1a7015e5a8e0`에서
+`RUNNING` 세션의 최초 stop branch가 `STOP_CONFIRMED`를 먼저 처리하도록 연결했다.
+통합 테스트는 무포지션 G-05에서 sell Action이 0회임을 확인하고, 보유 Position의
+G-06 `ForceSellAll`, pending 주문의 G-06P cancel/reconcile Action을 각각 검증한다.
+이미 중지·종료 상태인 후속 stop은 성공 no-op을 반환한다. Phase 8 전에는 이 외부
+효과를 typed Action으로만 기록하며 실제 Gateway 주문·취소·reconciliation은 실행하거나
+호출 횟수를 검증하지 않는다.

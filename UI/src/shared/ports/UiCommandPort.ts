@@ -1,10 +1,20 @@
 import type {
+    BackendTradingStatus,
     CsvExportOptions,
     CsvExportReceipt,
     RegimeType,
     TradeHistoryQuery,
     TradeRecord,
 } from '../contracts';
+
+/**
+ * backend가 start/stop 명령을 수락한 직후 반환하는 authoritative lifecycle 결과이다.
+ */
+export interface TradingCommandReceipt {
+    readonly status: BackendTradingStatus;
+    readonly session_id: string | null;
+    readonly version: number;
+}
 
 /**
  * UI 제어 actor가 backend 또는 데스크톱 adapter에 요청할 수 있는 명령 계약이다.
@@ -14,28 +24,28 @@ export interface UiCommandPort {
      * 함수 이름: start_trading()
      * 기능: 선택한 REGIME으로 자동매매 시작을 요청한다.
      * 인자: regime_type -> 적용할 REGIME 유형
-     * 반환값: 명령 완료 Promise
+     * 반환값: 시작 직후 authoritative lifecycle 결과 Promise
      * 작성 날짜: 2026/08/12
      */
-    start_trading(regime_type: RegimeType): Promise<void>;
+    start_trading(regime_type: RegimeType): Promise<TradingCommandReceipt>;
 
     /**
      * 함수 이름: stop_trading()
-     * 기능: 포지션 매도 없이 자동매매 중지를 요청한다.
+     * 기능: backend가 position/pending 상태를 판정하는 authoritative 자동매매 중지를 요청한다.
      * 인자: 없음
-     * 반환값: 명령 완료 Promise
+     * 반환값: 중지 분기 직후 authoritative lifecycle 결과 Promise
      * 작성 날짜: 2026/08/12
      */
-    stop_trading(): Promise<void>;
+    stop_trading(): Promise<TradingCommandReceipt>;
 
     /**
      * 함수 이름: force_sell_and_stop()
-     * 기능: 포지션 강제 매도 후 자동매매 중지를 요청한다.
+     * 기능: position 보유 확인 UI에서도 같은 authoritative 자동매매 중지를 요청한다.
      * 인자: 없음
-     * 반환값: 명령 완료 Promise
+     * 반환값: backend가 결정한 중지 분기의 lifecycle 결과 Promise
      * 작성 날짜: 2026/08/12
      */
-    force_sell_and_stop(): Promise<void>;
+    force_sell_and_stop(): Promise<TradingCommandReceipt>;
 
     /**
      * 함수 이름: apply_regime()

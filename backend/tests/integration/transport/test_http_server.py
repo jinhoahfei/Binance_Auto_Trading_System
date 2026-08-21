@@ -373,10 +373,14 @@ class LoopbackHttpServerTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # READY runtime과 동일 command를 구분할 stable key·request UUID를 준비한다.
         self.runtime.ready = True
         self.runtime.state.status = "READY"
         idempotency_key = str(uuid4())
+        first_request_id = str(uuid4())
+        second_request_id = str(uuid4())
 
+        # 중복 key, NaN, schema와 필수 field 오류를 실제 command parser에 각각 전달한다.
         duplicate_status, duplicate_payload, _ = _request_json(
             self.server,
             self.token,
@@ -413,34 +417,45 @@ class LoopbackHttpServerTests(unittest.TestCase):
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
-        first_status, first_payload, _ = _request_json(
+        missing_version_status, missing_version_payload, _ = _request_json(
             self.server,
             self.token,
             "POST",
             "/v1/trading/start",
             body='{"schema_version":2}',
             request_id=str(uuid4()),
+            idempotency_key=str(uuid4()),
+        )
+        # Owner가 없는 terminal 실패도 same-key/same-body replay와 body conflict를 구분한다.
+        first_status, first_payload, _ = _request_json(
+            self.server,
+            self.token,
+            "POST",
+            "/v1/csv-exports",
+            body='{"schema_version":2}',
+            request_id=first_request_id,
             idempotency_key=idempotency_key,
         )
         second_status, second_payload, _ = _request_json(
             self.server,
             self.token,
             "POST",
-            "/v1/trading/start",
+            "/v1/csv-exports",
             body='{"schema_version":2}',
-            request_id=str(uuid4()),
+            request_id=second_request_id,
             idempotency_key=idempotency_key,
         )
         conflict_status, conflict_payload, _ = _request_json(
             self.server,
             self.token,
             "POST",
-            "/v1/trading/start",
+            "/v1/csv-exports",
             body='{"schema_version":2,"expected_version":0}',
             request_id=str(uuid4()),
             idempotency_key=idempotency_key,
         )
 
+        # Malformed DTO가 공통 schema error code로 fail closed하는지 확인한다.
         self.assertEqual(duplicate_status, 400)
         self.assertEqual(duplicate_payload["error"]["code"], "MALFORMED_REQUEST")
         self.assertEqual(nan_status, 400)
@@ -454,10 +469,18 @@ class LoopbackHttpServerTests(unittest.TestCase):
             boolean_schema_payload["error"]["code"],
             "UNSUPPORTED_SCHEMA_VERSION",
         )
+        self.assertEqual(missing_version_status, 400)
+        self.assertEqual(
+            missing_version_payload["error"]["code"],
+            "MALFORMED_REQUEST",
+        )
+        # Replay는 현재 request ID를 쓰되 첫 terminal error를 보존하고 conflict는 거부한다.
         self.assertEqual(first_status, 503)
         self.assertEqual(first_payload["error"]["code"], "FEATURE_NOT_AVAILABLE")
         self.assertEqual(second_status, first_status)
-        self.assertEqual(second_payload, first_payload)
+        self.assertEqual(first_payload["request_id"], first_request_id)
+        self.assertEqual(second_payload["request_id"], second_request_id)
+        self.assertEqual(second_payload["error"], first_payload["error"])
         self.assertEqual(conflict_status, 409)
         self.assertEqual(
             conflict_payload["error"]["code"],
@@ -472,6 +495,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # 두 동시 요청이 공유할 READY runtime, key와 synchronized route counter를 준비한다.
         self.runtime.ready = True
         self.runtime.state.status = "READY"
         idempotency_key = str(uuid4())
@@ -482,21 +506,36 @@ class LoopbackHttpServerTests(unittest.TestCase):
         def counting_route(
             endpoint_key: tuple[str, str],
             request_id: str,
+            *,
+            request_body: object | None = None,
+            command_id: str | None = None,
         ) -> object:
             """
             함수 이름: counting_route()
             기능: 동시 요청이 실제 route에 진입한 횟수를 기록하고 경합 시간을 만든다.
             인자: endpoint_key -> command method/path
                 request_id -> request UUID
+                request_body -> dispatcher가 전달한 command DTO
+                command_id -> dispatcher가 전달한 idempotency command ID
             반환값: 원래 route 응답
             작성 날짜: 2026/08/21
             """
             nonlocal route_call_count
+
+            # 실제 route 진입 횟수를 lock 아래 기록한 뒤 두 client의 경합 창을 만든다.
             with route_count_lock:
                 route_call_count += 1
             sleep(0.1)
-            return original_route(endpoint_key, request_id)
 
+            # Counting wrapper가 받은 Phase 7 확장 인자를 원래 dispatcher에 그대로 전달한다.
+            return original_route(
+                endpoint_key,
+                request_id,
+                request_body=request_body,  # type: ignore[arg-type]
+                command_id=command_id,
+            )
+
+        # Counting wrapper를 server에 설치하고 두 thread의 HTTP 응답을 한 목록에 수집한다.
         self.server._route_http_request = counting_route  # type: ignore[method-assign]
         responses: list[tuple[int, dict[str, object] | None, dict[str, str]]] = []
 
@@ -513,22 +552,31 @@ class LoopbackHttpServerTests(unittest.TestCase):
                     self.server,
                     self.token,
                     "POST",
-                    "/v1/trading/start",
+                    "/v1/csv-exports",
                     body='{"schema_version":2}',
                     request_id=str(uuid4()),
                     idempotency_key=idempotency_key,
                 )
             )
 
+        # 동일 key와 body의 command를 동시에 시작하고 제한 시간 안에 모두 합류시킨다.
         command_threads = [Thread(target=send_command) for _ in range(2)]
         for command_thread in command_threads:
             command_thread.start()
         for command_thread in command_threads:
             command_thread.join(timeout=3.0)
 
+        # Single-flight lock이 route 한 번과 동일한 terminal 결과를 보장하는지 확인한다.
         self.assertEqual(route_call_count, 1)
         self.assertEqual(len(responses), 2)
-        self.assertEqual(responses[0][1], responses[1][1])
+
+        # 멱등 replay도 각 HTTP 요청의 correlation ID를 유지하되 나머지 결과는 같아야 한다.
+        first_payload = dict(responses[0][1] or {})
+        second_payload = dict(responses[1][1] or {})
+        first_request_id = first_payload.pop("request_id")
+        second_request_id = second_payload.pop("request_id")
+        self.assertNotEqual(first_request_id, second_request_id)
+        self.assertEqual(first_payload, second_payload)
 
     def test_unknown_method_query_and_cors_preflight_fail_closed(self) -> None:
         """

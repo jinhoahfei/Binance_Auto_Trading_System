@@ -44,8 +44,8 @@ def _handle_upper_band_safe_termination(
 ) -> TransitionOutcome:
     """
     함수 이름: _handle_upper_band_safe_termination()
-    기능: 상단 BB 접촉 시 주문·포지션 보유 상태에 맞는 안전 종료 경로를 선택한다.
-    인자: context -> pending 주문과 포지션 소유권을 포함한 거래 컨텍스트
+    기능: 상단 BB 접촉 시 주문·authoritative 포지션에 맞는 안전 종료 경로를 선택한다.
+    인자: context -> pending 주문과 실제 포지션 수량을 포함한 거래 컨텍스트
     반환값: G-07로 식별되는 배타적 안전 종료 TransitionOutcome
     작성 날짜: 2026/08/21
     """
@@ -68,8 +68,8 @@ def _handle_upper_band_safe_termination(
             exclusive=True,
         )
 
-    # 확정 포지션은 기존 STOP 계약과 같은 STOPPING 및 전량 매도 절차로 종료한다.
-    if runtime.position_owner is not None:
+    # authoritative Position에 실제 수량이 있을 때만 전량 매도를 요청한다.
+    if context.position.is_open:
         return create_transition_outcome(
             "G-07",
             _create_inactive_configuration(RootState.STOPPING),
@@ -87,6 +87,7 @@ def _handle_upper_band_safe_termination(
         ResetCaseBContext(),
         ResetCaseCContext(),
         patch(
+            position_owner=None,
             pending_strategy=None,
             pending_order_side=None,
             pending_order_id=None,
@@ -149,8 +150,8 @@ def handle_global_transition(
                 exclusive=True,
             )
 
-        # 확정 포지션만 남아 있으면 전략 timer를 끄고 전량 매도를 요청한다.
-        if runtime.position_owner is not None:
+        # authoritative Position 수량이 양수인 경우에만 전량 매도를 요청한다.
+        if context.position.is_open:
             return create_transition_outcome(
                 "G-06",
                 _create_inactive_configuration(RootState.STOPPING),
@@ -168,6 +169,7 @@ def handle_global_transition(
             ResetCaseBContext(),
             ResetCaseCContext(),
             patch(
+                position_owner=None,
                 pending_strategy=None,
                 pending_order_side=None,
                 pending_order_id=None,
@@ -184,7 +186,7 @@ def handle_global_transition(
     if (
         state.root_state is RootState.STOPPING
         and event_type is TradingEventType.FORCE_SELL_FINISHED
-        and runtime.position_owner is None
+        and not context.position.is_open
         and runtime.pending_order_id is None
         and _is_force_sell_completion_valid(event)
     ):
@@ -195,6 +197,7 @@ def handle_global_transition(
             ResetCaseBContext(),
             ResetCaseCContext(),
             patch(
+                position_owner=None,
                 pending_strategy=None,
                 pending_order_side=None,
                 pending_order_id=None,
@@ -213,7 +216,8 @@ def handle_global_transition(
     if (
         state.root_state is RootState.STOPPING
         and event_type is TradingEventType.FORCE_SELL_FAILED
-        and runtime.position_owner is not None
+        and context.position.is_open
+        and runtime.pending_order_id is None
         and _is_force_sell_failure_terminal(event)
     ):
         return create_transition_outcome(
@@ -331,9 +335,8 @@ def _is_force_sell_completion_valid(event: TradingEvent) -> bool:
     반환값: 종료 처리가 가능한 완료 event 여부
     작성 날짜: 2026/08/14
     """
+    # Typed payload를 추출하고 체결 반영·이력 저장 증거가 모두 참인지 판정한다.
     payload = event.payload
-    if payload is None:
-        return True
     return (
         isinstance(payload, ForceSellOutcomePayload)
         and payload.execution_applied
@@ -349,7 +352,6 @@ def _is_force_sell_failure_terminal(event: TradingEvent) -> bool:
     반환값: terminal 미체결 확정 여부
     작성 날짜: 2026/08/14
     """
+    # Typed payload를 추출하고 retry 가능한 terminal 미체결 증거를 판정한다.
     payload = event.payload
-    if payload is None:
-        return True
     return isinstance(payload, ForceSellOutcomePayload) and payload.terminal_unfilled

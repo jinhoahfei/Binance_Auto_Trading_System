@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 import json
 import re
@@ -189,6 +189,138 @@ def decimal_to_wire(value: Decimal) -> str:
         raise ValueError("financial Decimal must have a plain representation")
 
     return wire_value
+
+
+def decimal_from_wire(value: object, field_name: str) -> Decimal:
+    """
+    함수 이름: decimal_from_wire()
+    기능: exponent와 float를 허용하지 않는 wire Decimal 문자열을 복원한다.
+    인자: value -> JSON request에서 읽은 값
+        field_name -> typed 오류에 사용할 field 이름
+    반환값: 유한한 canonical Decimal
+    작성 날짜: 2026/08/21
+    """
+    # JSON number와 exponent 표기를 모두 거부해 금융값의 문자열 정밀도를 보존한다.
+    if (
+        not isinstance(value, str)
+        or _PLAIN_DECIMAL_PATTERN.fullmatch(value) is None
+    ):
+        raise TransportContractError(
+            "MALFORMED_REQUEST",
+            f"{field_name} must be a plain decimal string.",
+        )
+
+    # 검증된 plain 문자열을 Decimal로 복원하고 유한한 금융값인지 다시 확인한다.
+    try:
+        decimal_value = Decimal(value)
+    except InvalidOperation as error:
+        raise TransportContractError(
+            "MALFORMED_REQUEST",
+            f"{field_name} must be a valid decimal string.",
+        ) from error
+    if not decimal_value.is_finite():
+        raise TransportContractError(
+            "MALFORMED_REQUEST",
+            f"{field_name} must be finite.",
+        )
+
+    return decimal_value
+
+
+def ratio_from_wire(value: object, field_name: str) -> Decimal:
+    """
+    함수 이름: ratio_from_wire()
+    기능: 0 이상 1 이하인 split ratio Decimal 문자열을 엄격히 복원한다.
+    인자: value -> JSON request의 ratio 값
+        field_name -> typed 오류에 사용할 field 이름
+    반환값: 범위를 검증한 Decimal ratio
+    작성 날짜: 2026/08/21
+    """
+    ratio = decimal_from_wire(value, field_name)
+
+    # 음수 부호가 있는 zero도 UI canonical ratio와 다르므로 관대하게 보정하지 않는다.
+    if ratio.is_signed() or ratio > Decimal("1"):
+        raise TransportContractError(
+            "INVALID_SPLIT_RATIO",
+            f"{field_name} must be between 0 and 1.",
+            status=422,
+        )
+
+    return ratio
+
+
+def require_command_fields(
+    request_body: Mapping[str, object],
+    required_fields: Sequence[str],
+) -> None:
+    """
+    함수 이름: require_command_fields()
+    기능: endpoint command DTO가 schema와 정확한 필드 집합만 가지는지 검증한다.
+    인자: request_body -> JSON decoder가 만든 command object
+        required_fields -> schema_version 외 필수 field 이름 순서
+    반환값: 정확한 DTO이면 없음
+    작성 날짜: 2026/08/21
+    """
+    # DTO container와 endpoint가 선언한 필드 목록 자체를 먼저 엄격히 검증한다.
+    if not isinstance(request_body, Mapping):
+        raise TransportContractError(
+            "MALFORMED_REQUEST",
+            "The request body must be a JSON object.",
+        )
+    if not isinstance(required_fields, Sequence) or isinstance(
+        required_fields,
+        (str, bytes, bytearray),
+    ):
+        raise TypeError("required_fields must be a sequence of strings")
+    if any(not isinstance(field_name, str) for field_name in required_fields):
+        raise TypeError("required_fields must contain strings")
+
+    # Endpoint별 allowlist와 입력 key를 정확히 비교해 typo와 미래 field를 묵인하지 않는다.
+    expected_fields = frozenset(("schema_version", *required_fields))
+    actual_fields = frozenset(request_body)
+    if actual_fields != expected_fields:
+        raise TransportContractError(
+            "MALFORMED_REQUEST",
+            "The request body fields do not match the endpoint contract.",
+            details={
+                "missing_fields": sorted(expected_fields - actual_fields),
+                "unexpected_fields": sorted(actual_fields - expected_fields),
+            },
+        )
+
+    schema_version = request_body["schema_version"]  # exact key 집합 검증 뒤 안전하게 읽는다.
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != SCHEMA_VERSION
+    ):
+        raise TransportContractError(
+            "UNSUPPORTED_SCHEMA_VERSION",
+            "The request schema version is not supported.",
+        )
+
+
+def require_expected_version(request_body: Mapping[str, object]) -> int:
+    """
+    함수 이름: require_expected_version()
+    기능: optimistic concurrency용 expected_version을 bool이 아닌 0 이상 정수로 읽는다.
+    인자: request_body -> expected_version을 포함한 command object
+    반환값: 검증된 context version
+    작성 날짜: 2026/08/21
+    """
+    # bool을 정수로 묵인하지 않고 optimistic version의 타입과 범위를 함께 확인한다.
+    expected_version = request_body.get("expected_version")
+    if (
+        isinstance(expected_version, bool)
+        or not isinstance(expected_version, int)
+        or expected_version < 0
+    ):
+        raise TransportContractError(
+            "MALFORMED_REQUEST",
+            "expected_version must be a non-negative integer.",
+        )
+
+    return expected_version
 
 
 def datetime_to_wire(value: datetime) -> str:
@@ -597,6 +729,43 @@ def map_trading_logic_coverage() -> list[JsonObject]:
     ]
 
 
+def map_trading_snapshot(
+    trading_controller: object,
+    execution_mode: object,
+) -> JsonObject:
+    """
+    함수 이름: map_trading_snapshot()
+    기능: authoritative session Context와 mode gate를 Phase 7 trading DTO로 변환한다.
+    인자: trading_controller -> session과 mutable TradingContext를 소유한 Controller
+        execution_mode -> bootstrap이 검증한 실행 mode enum 또는 문자열
+    반환값: lifecycle, version, ratio와 position 상태를 포함한 trading DTO
+    작성 날짜: 2026/08/21
+    """
+    # Controller가 원자적으로 만든 session snapshot과 execution mode를 wire 값으로 읽는다.
+    session_snapshot = getattr(trading_controller, "snapshot_session")()
+    session_status = getattr(session_snapshot, "status")
+    status_text = getattr(session_status, "value", session_status)
+    mode_text = getattr(execution_mode, "value", execution_mode)
+
+    # Controller lock 아래 만든 snapshot 하나로 lifecycle과 optimistic version을 일치시킨다.
+    return normalize_json_object(
+        {
+            "mode": mode_text,
+            "status": status_text,
+            "version": getattr(session_snapshot, "version"),
+            "command_enabled": getattr(session_snapshot, "command_enabled"),
+            "scale_in": getattr(session_snapshot, "scale_in"),
+            "scale_out": getattr(session_snapshot, "scale_out"),
+            "has_open_position": getattr(
+                session_snapshot,
+                "has_open_position",
+            ),
+            "session_id": getattr(session_snapshot, "session_id"),
+            "logic_coverage": map_trading_logic_coverage(),
+        }
+    )
+
+
 def build_snapshot_dto(
     runtime: RuntimeSnapshotSource,
     session_id: str,
@@ -638,9 +807,6 @@ def build_snapshot_dto(
         key=lambda trade: getattr(trade, "executed_at"),
         reverse=True,
     )[:MAX_RECENT_TRADES]
-    execution_mode = runtime.execution_mode
-    execution_mode_text = getattr(execution_mode, "value", execution_mode)
-
     return normalize_json_object(
         {
             "session_id": session_id,
@@ -656,13 +822,10 @@ def build_snapshot_dto(
                 "recommended": recommended_regime,
                 "selected": selected_regime,
             },
-            "trading": {
-                "mode": execution_mode_text,
-                "status": "not_started",
-                "version": 0,
-                "command_enabled": False,
-                "logic_coverage": map_trading_logic_coverage(),
-            },
+            "trading": map_trading_snapshot(
+                trading_controller,
+                runtime.execution_mode,
+            ),
             "account": map_account_snapshot(account),
             "recent_trades": [map_trade(trade) for trade in recent_trades],
             "performance": map_performance(performance),
@@ -690,7 +853,12 @@ export const BACKEND_SCHEMA_VERSION = {SCHEMA_VERSION} as const;
 export type BackendDecimalString = string;
 export type BackendRegimeType = {regime_values};
 export type BackendExecutionMode = 'disabled' | 'fake' | 'testnet' | 'live';
-export type BackendTradingStatus = 'not_started';
+export type BackendTradingStatus =
+    | 'not_started'
+    | 'running'
+    | 'stopping'
+    | 'reconciliation_required'
+    | 'terminated';
 export type BackendTradingLogicSupportStatus = 'supported' | 'unsupported';
 export type BackendTradingLogicStartGuard =
     | 'READY'
@@ -749,7 +917,11 @@ export interface BackendTradingSnapshot {{
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
     readonly version: number;
-    readonly command_enabled: false;
+    readonly command_enabled: boolean;
+    readonly scale_in: BackendDecimalString;
+    readonly scale_out: BackendDecimalString;
+    readonly has_open_position: boolean;
+    readonly session_id: string | null;
     readonly logic_coverage: ReadonlyArray<BackendTradingLogicCoverage>;
 }}
 

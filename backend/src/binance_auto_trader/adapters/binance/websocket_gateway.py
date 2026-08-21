@@ -592,6 +592,7 @@ class WebSocketGateway:
             Interval,
             dict[datetime, Kline],
         ] = {}
+        # Account readiness는 현재 generation의 transport handle과 연결 flag를 함께 추적한다.
         self._account_generation = 0
         self._account_subscription: Subscription | None = None
         self._account_connected = False
@@ -600,6 +601,22 @@ class WebSocketGateway:
         self._account_fingerprints: set[
             tuple[tuple[str, Decimal, Decimal], ...]
         ] = set()
+
+    @property
+    def account_connected(self) -> bool:
+        """
+        함수 이름: account_connected()
+        기능: 현재 account stream 세대가 연결 상태인지 thread-safe 방식으로 반환한다.
+        인자: 없음
+        반환값: account stream이 연결되어 있으면 True
+        작성 날짜: 2026/08/21
+        """
+        # start 실패, disconnect와 close callback이 갱신하는 동일 lock의 값을 읽는다.
+        with self._lock:
+            return (
+                self._account_connected
+                and self._account_subscription is not None
+            )  # transport handle이 실제 성립한 뒤에만 command readiness를 공개한다.
 
     def start_all_kline_buffering(
         self,

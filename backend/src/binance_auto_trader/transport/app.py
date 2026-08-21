@@ -71,6 +71,14 @@ _COMMAND_ENDPOINTS = frozenset(
         ("POST", "/v1/shutdown"),
     }
 )
+_PHASE7_COMMAND_ENDPOINTS = frozenset(
+    {
+        ("POST", "/v1/regime/selection"),
+        ("POST", "/v1/trading/start"),
+        ("POST", "/v1/trading/stop"),
+        ("PATCH", "/v1/trading/split-ratios"),
+    }
+)
 _KNOWN_ENDPOINTS = frozenset(
     {
         ("GET", "/v1/health"),
@@ -930,7 +938,12 @@ class LoopbackTransportServer:
                 return cached_response
 
             # reservation부터 route 결과 저장까지 한 lock으로 직렬화해 동시 중복 실행을 막는다.
-            response = self._route_http_request(endpoint_key, request_id)
+            response = self._route_http_request(
+                endpoint_key,
+                request_id,
+                request_body=request_body,
+                command_id=idempotency_key,
+            )
             self._store_idempotency_response(
                 idempotency_key,
                 request_fingerprint,
@@ -942,12 +955,17 @@ class LoopbackTransportServer:
         self,
         endpoint_key: tuple[str, str],
         request_id: str,
+        *,
+        request_body: JsonObject | None = None,
+        command_id: str | None = None,
     ) -> TransportResponse:
         """
         함수 이름: _route_http_request()
         기능: 검증된 method/path를 business-free route 함수에 전달한다.
         인자: endpoint_key -> canonical HTTP method와 path
             request_id -> 검증된 request UUID
+            request_body -> command의 검증된 JSON object 또는 GET이면 None
+            command_id -> 검증된 Idempotency-Key 또는 GET이면 None
         반환값: route TransportResponse
         작성 날짜: 2026/08/21
         """
@@ -963,7 +981,22 @@ class LoopbackTransportServer:
             ("POST", "/v1/shutdown"): request_shutdown,
         }
         route_function = route_by_endpoint[endpoint_key]
-        return route_function(request_id, self._route_context)
+
+        # Phase 7 lifecycle command만 body와 command ID를 application 경계에 전달한다.
+        if endpoint_key in _PHASE7_COMMAND_ENDPOINTS:
+            if request_body is None or command_id is None:
+                raise RuntimeError("command route requires body and command ID")
+            return route_function(
+                request_id,
+                self._route_context,
+                request_body,
+                command_id,
+            )
+
+        return route_function(  # GET route는 기존 두 인자 query 계약을 유지한다.
+            request_id,
+            self._route_context,
+        )
 
     def _lookup_idempotency_response(
         self,
@@ -988,7 +1021,14 @@ class LoopbackTransportServer:
                 existing_record.fingerprint,
                 request_fingerprint,
             ):
-                return existing_record.response
+                replay_payload = dict(existing_record.response.payload)
+                replay_payload[
+                    "request_id"
+                ] = request_id  # command 결과는 재사용해도 correlation은 현재 HTTP 요청에 맞춘다.
+                return TransportResponse(
+                    status=existing_record.response.status,
+                    payload=replay_payload,
+                )
 
         conflict = TransportContractError(
             "IDEMPOTENCY_CONFLICT",
@@ -1012,6 +1052,16 @@ class LoopbackTransportServer:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # 재시도 가능한 준비 상태 실패는 같은 key가 정상 재평가될 수 있도록 저장하지 않는다.
+        response_error = response.payload.get("error")
+        if (
+            response.payload.get("ok") is False
+            and isinstance(response_error, Mapping)
+            and response_error.get("retryable") is True
+        ):
+            return
+
+        # 최초 terminal 응답만 key와 fingerprint에 결합해 process-session cache에 저장한다.
         with self._idempotency_lock:
             if idempotency_key in self._idempotency_records:
                 return

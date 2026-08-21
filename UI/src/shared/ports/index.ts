@@ -1,2 +1,1 @@
-export type { UiCommandPort } from './UiCommandPort';
-
+export type { TradingCommandReceipt, UiCommandPort } from './UiCommandPort';

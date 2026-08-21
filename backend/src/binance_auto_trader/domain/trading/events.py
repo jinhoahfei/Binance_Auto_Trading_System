@@ -128,6 +128,25 @@ class ForceSellOutcomePayload:
     history_persisted: bool = True
     terminal_unfilled: bool = False
 
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 강제 매도 결과 증거가 truthy 대체값이 아닌 exact bool인지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # 세 종료 증거를 한 tuple로 묶어 모든 값에 exact-bool 규칙을 동일 적용한다.
+        outcome_flags = (
+            self.execution_applied,
+            self.history_persisted,
+            self.terminal_unfilled,
+        )
+
+        # 문자열과 정수 truthiness가 종료·재시도 증거로 오인되지 않게 차단한다.
+        if any(type(outcome_flag) is not bool for outcome_flag in outcome_flags):
+            raise TypeError("force-sell outcome flags must be bool values")
+
 
 TradingEventPayload: TypeAlias = (
     BuyAttemptPayload | SellAttemptPayload | ForceSellOutcomePayload

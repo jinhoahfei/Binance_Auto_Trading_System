@@ -22,14 +22,18 @@ from .action_requests import (
     RuntimeFieldChange,
 )
 from .context import (
+    ContextVersionConflictError,
     MarketEvaluationSnapshot,
     PendingOrderSnapshot,
     PositionSnapshot,
+    TradingContext,
+    TradingContextStateError,
     TradingContextView,
     TradingRuntimeSnapshot,
 )
 from .event_queue import (
     ContextVersionError,
+    EventQueueCapacityError,
     ReentrantProcessingError,
     RunToCompletionEventProcessor,
     SerialEventQueue,
@@ -84,7 +88,9 @@ __all__ = [
     "CaseCPositionState",
     "CaseCSignalState",
     "CloseLowerEvent",
+    "ContextVersionConflictError",
     "ContextVersionError",
+    "EventQueueCapacityError",
     "EventPriority",
     "ExitReason",
     "ForceSellAll",
@@ -116,6 +122,8 @@ __all__ = [
     "StrategyType",
     "SubmitOrder",
     "TradingActionRequest",
+    "TradingContext",
+    "TradingContextStateError",
     "TradingContextView",
     "TradingEvent",
     "TradingEventType",

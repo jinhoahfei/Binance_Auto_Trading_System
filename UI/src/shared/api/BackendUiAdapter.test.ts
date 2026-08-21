@@ -151,22 +151,28 @@ function create_success_response(request_id: string, data: unknown): Response {
 /**
  * 함수 이름: create_failure_response()
  * 기능: Phase 5 unavailable command와 같은 typed failure envelope Response를 만든다.
- * 인자: request_id -> X-Request-Id 값
+ * 인자: request_id -> X-Request-Id 값, code -> typed failure code
+ *      retryable -> 같은 command 재시도 가능 여부, status -> HTTP status
  * 반환값: JSON Response
  * 작성 날짜: 2026/08/21
  */
-function create_failure_response(request_id: string): Response {
+function create_failure_response(
+    request_id: string,
+    code = 'FEATURE_NOT_AVAILABLE',
+    retryable = false,
+    status = 503,
+): Response {
     return new Response(JSON.stringify({
         schema_version: BACKEND_SCHEMA_VERSION,
         request_id,
         ok: false,
         error: {
-            code: 'FEATURE_NOT_AVAILABLE',
+            code,
             message: 'This feature is not available in the current application phase.',
-            retryable: false,
+            retryable,
             details: {},
         },
-    }), { status: 503 });
+    }), { status });
 }
 
 /**
@@ -230,7 +236,258 @@ describe('BackendUiAdapter HTTP contract', () => {
         expect(command_headers['Idempotency-Key']).toBe(TEST_REQUEST_ID);
         expect(command_call?.[1]?.body).toBe(JSON.stringify({
             schema_version: BACKEND_SCHEMA_VERSION,
+            regime_type: 'type2',
+            expected_version: 0,
         }));
+    });
+
+    it('응답이 불명인 동일 command retry에는 Idempotency-Key를 재사용한다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        let command_attempt = 0;
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+            if (init?.method === 'GET') {
+                return create_success_response(request_id, snapshot);
+            }
+
+            command_attempt += 1;
+            if (command_attempt === 1) {
+                throw new TypeError('simulated connection loss after send');
+            }
+            return create_success_response(request_id, {
+                selected: 'type0',
+                support_status: 'supported',
+                version: 1,
+            });
+        });
+        const uuid_values = [
+            TEST_REQUEST_ID,
+            TEST_IDEMPOTENCY_ID,
+            SECOND_EVENT_ID,
+            THIRD_EVENT_ID,
+        ];
+        let uuid_index = 0;
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: () => uuid_values[uuid_index++]!,
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
+            code: 'BACKEND_UNREACHABLE',
+        });
+        await expect(adapter.apply_regime('type0')).resolves.toBeUndefined();
+
+        const first_command_headers = request_headers(fetch_mock.mock.calls[1]?.[1]);
+        const retry_command_headers = request_headers(fetch_mock.mock.calls[2]?.[1]);
+        expect(first_command_headers['X-Request-Id']).not.toBe(
+            retry_command_headers['X-Request-Id'],
+        );
+        expect(first_command_headers['Idempotency-Key']).toBe(
+            retry_command_headers['Idempotency-Key'],
+        );
+    });
+
+    it('retryable backend 실패 뒤 동일 command가 같은 Idempotency-Key로 복구한다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        let command_attempt = 0;
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+            if (init?.method === 'GET') {
+                return create_success_response(request_id, snapshot);
+            }
+
+            command_attempt += 1;
+            if (command_attempt === 1) {
+                return create_failure_response(
+                    request_id,
+                    'CONNECTION_NOT_READY',
+                    true,
+                    503,
+                );
+            }
+            return create_success_response(request_id, {
+                selected: 'type0',
+                support_status: 'supported',
+                version: 1,
+            });
+        });
+        const retryable_uuid_values = [
+            TEST_REQUEST_ID,
+            TEST_IDEMPOTENCY_ID,
+            SECOND_EVENT_ID,
+            THIRD_EVENT_ID,
+        ];
+        let retryable_uuid_index = 0;
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: () => retryable_uuid_values[retryable_uuid_index++]!,
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
+            code: 'CONNECTION_NOT_READY',
+            retryable: true,
+        });
+        await expect(adapter.apply_regime('type0')).resolves.toBeUndefined();
+
+        const first_headers = request_headers(fetch_mock.mock.calls[1]?.[1]);
+        const retry_headers = request_headers(fetch_mock.mock.calls[2]?.[1]);
+        expect(first_headers['Idempotency-Key']).toBe(
+            retry_headers['Idempotency-Key'],
+        );
+        expect(first_headers['X-Request-Id']).not.toBe(
+            retry_headers['X-Request-Id'],
+        );
+    });
+
+    it('snapshot version을 이어 regime/start/split/authoritative stop DTO를 손실 없이 보낸다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+            const path = new URL(input.toString()).pathname;
+
+            if (path === '/v1/snapshot') {
+                return create_success_response(request_id, snapshot);
+            }
+            if (path === '/v1/regime/selection') {
+                return create_success_response(request_id, {
+                    selected: 'type0',
+                    support_status: 'supported',
+                    version: 1,
+                });
+            }
+            if (path === '/v1/trading/start') {
+                return create_success_response(request_id, {
+                    version: 2,
+                    status: 'running',
+                    session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+                });
+            }
+            if (path === '/v1/trading/split-ratios') {
+                return create_success_response(request_id, {
+                    version: 3,
+                    scale_in: '0.5',
+                    scale_out: '0.25',
+                });
+            }
+
+            return create_success_response(request_id, {
+                version: 4,
+                status: 'terminated',
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            });
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        // Snapshot-first version을 각 성공 결과로 전진시켜 stale command를 renderer에서 만들지 않는다.
+        await adapter.load_snapshot();
+        await adapter.apply_regime('type0');
+        await adapter.start_trading('type0');
+        await adapter.update_split_order('scale_out', 25);
+        await adapter.force_sell_and_stop();
+
+        expect(fetch_mock.mock.calls.slice(1).map((call) => ({
+            path: new URL(call[0].toString()).pathname,
+            method: call[1]?.method,
+            body: JSON.parse(call[1]?.body as string) as unknown,
+            idempotency_key: request_headers(call[1])['Idempotency-Key'],
+        }))).toEqual([
+            {
+                path: '/v1/regime/selection',
+                method: 'POST',
+                body: {
+                    schema_version: BACKEND_SCHEMA_VERSION,
+                    regime_type: 'type0',
+                    expected_version: 0,
+                },
+                idempotency_key: TEST_REQUEST_ID,
+            },
+            {
+                path: '/v1/trading/start',
+                method: 'POST',
+                body: {
+                    schema_version: BACKEND_SCHEMA_VERSION,
+                    expected_version: 1,
+                },
+                idempotency_key: TEST_REQUEST_ID,
+            },
+            {
+                path: '/v1/trading/split-ratios',
+                method: 'PATCH',
+                body: {
+                    schema_version: BACKEND_SCHEMA_VERSION,
+                    scale_in: '0.5',
+                    scale_out: '0.25',
+                    expected_version: 2,
+                },
+                idempotency_key: TEST_REQUEST_ID,
+            },
+            {
+                path: '/v1/trading/stop',
+                method: 'POST',
+                body: {
+                    schema_version: BACKEND_SCHEMA_VERSION,
+                    expected_version: 3,
+                },
+                idempotency_key: TEST_REQUEST_ID,
+            },
+        ]);
+    });
+
+    it('selection 응답이 요청 REGIME과 다르면 local selection/version을 전진시키지 않는다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_success_response(request_id, {
+                    selected: 'type1',
+                    support_status: 'unsupported',
+                    version: 1,
+                });
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
+            code: 'MALFORMED_BACKEND_PAYLOAD',
+        });
+        await expect(adapter.start_trading('type1')).rejects.toMatchObject({
+            code: 'REGIME_SELECTION_REQUIRED',
+        });
+        expect(fetch_mock).toHaveBeenCalledTimes(2);
+    });
+
+    it('selection 응답의 support 상태가 canonical coverage와 다르면 fail closed한다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_success_response(request_id, {
+                    selected: 'type0',
+                    support_status: 'unsupported',
+                    version: 1,
+                });
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
+            code: 'MALFORMED_BACKEND_PAYLOAD',
+        });
     });
 
     it('shutdown typed failure 뒤에는 token을 유지하고 명시 stop에서만 제거한다', async () => {
@@ -356,6 +613,175 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             expect.objectContaining({ type: 'FUTURE_EVENT', sequence: 12 }),
         );
         expect(callbacks.on_reconnecting).not.toHaveBeenCalled();
+        adapter.stop();
+    });
+
+    it('TRADING_SESSION_UPDATED의 version과 ratio를 다음 command DTO 기준으로 사용한다', async () => {
+        const sockets: Array<FakeBackendWebSocket> = [];
+        const callbacks = create_callbacks();
+        const snapshot = create_backend_snapshot_fixture();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(request_headers(init)['X-Request-Id']!, {
+                version: 9,
+                scale_in: '0.25',
+                scale_out: '0.6',
+            });
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            create_web_socket: (url) => {
+                const socket = new FakeBackendWebSocket(url);
+                sockets.push(socket);
+                return socket;
+            },
+        });
+
+        adapter.start_live_events(snapshot, callbacks);
+        sockets[0]!.emit_message({
+            ...create_backend_event_fixture(
+                10,
+                'TRADING_SESSION_UPDATED',
+                {
+                    trading: {
+                        ...snapshot.trading,
+                        mode: 'fake',
+                        status: 'stopping',
+                        version: 8,
+                        scale_in: '0.4',
+                        scale_out: '0.6',
+                        has_open_position: true,
+                        session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+                    },
+                },
+            ),
+            aggregate_version: 8,
+        });
+        await adapter.update_split_order('scale_in', 25);
+
+        expect(callbacks.on_event).toHaveBeenCalledWith([
+            expect.objectContaining({
+                type: 'TRADING_SESSION_SYNCHRONIZED',
+                status: 'stopping',
+                version: 8,
+            }),
+        ], expect.objectContaining({ type: 'TRADING_SESSION_UPDATED' }));
+        expect(JSON.parse(fetch_mock.mock.calls[0]?.[1]?.body as string) as unknown).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION,
+            scale_in: '0.25',
+            scale_out: '0.6',
+            expected_version: 8,
+        });
+        adapter.stop();
+    });
+
+    it('요청 중 더 높은 WS version이 오면 늦은 HTTP command 응답을 적용하지 않는다', async () => {
+        const sockets: Array<FakeBackendWebSocket> = [];
+        const callbacks = create_callbacks();
+        const snapshot = create_backend_snapshot_fixture();
+        let command_attempt = 0;
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+            command_attempt += 1;
+            if (command_attempt === 1) {
+                sockets[0]!.emit_message({
+                    ...create_backend_event_fixture(
+                        10,
+                        'TRADING_SESSION_UPDATED',
+                        {
+                            trading: {
+                                ...snapshot.trading,
+                                mode: 'fake',
+                                status: 'running',
+                                version: 8,
+                                scale_in: '0.4',
+                                scale_out: '0.6',
+                                has_open_position: false,
+                                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+                            },
+                        },
+                    ),
+                    aggregate_version: 8,
+                });
+                return create_success_response(request_id, {
+                    version: 7,
+                    scale_in: '0.25',
+                    scale_out: '0.5',
+                });
+            }
+            return create_success_response(request_id, {
+                version: 9,
+                scale_in: '0.4',
+                scale_out: '0.3',
+            });
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            create_web_socket: (url) => {
+                const socket = new FakeBackendWebSocket(url);
+                sockets.push(socket);
+                return socket;
+            },
+        });
+
+        adapter.start_live_events(snapshot, callbacks);
+        await expect(adapter.update_split_order('scale_in', 25)).rejects.toMatchObject({
+            code: 'STALE_BACKEND_RESPONSE',
+        });
+        await expect(adapter.update_split_order('scale_out', 30)).resolves.toBeUndefined();
+
+        expect(JSON.parse(fetch_mock.mock.calls[1]?.[1]?.body as string) as unknown).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION,
+            scale_in: '0.4',
+            scale_out: '0.3',
+            expected_version: 8,
+        });
+        adapter.stop();
+    });
+
+    it('REGIME_SELECTED의 selection/version을 다음 start command 기준으로 사용한다', async () => {
+        const sockets: Array<FakeBackendWebSocket> = [];
+        const callbacks = create_callbacks();
+        const snapshot = create_backend_snapshot_fixture();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(request_headers(init)['X-Request-Id']!, {
+                status: 'running',
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+                version: 2,
+            });
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            create_web_socket: (url) => {
+                const socket = new FakeBackendWebSocket(url);
+                sockets.push(socket);
+                return socket;
+            },
+        });
+
+        adapter.start_live_events(snapshot, callbacks);
+        sockets[0]!.emit_message({
+            ...create_backend_event_fixture(10, 'REGIME_SELECTED', {
+                selected: 'type0',
+                support_status: 'supported',
+                version: 1,
+            }),
+            aggregate_version: 1,
+        });
+        await adapter.start_trading('type0');
+
+        expect(callbacks.on_event).toHaveBeenCalledWith([{
+            type: 'REGIME_SELECTION_SYNCHRONIZED',
+            selected: 'type0',
+            support_status: 'supported',
+            version: 1,
+        }], expect.objectContaining({ type: 'REGIME_SELECTED' }));
+        expect(JSON.parse(fetch_mock.mock.calls[0]?.[1]?.body as string) as unknown).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION,
+            expected_version: 1,
+        });
         adapter.stop();
     });
 

@@ -1,12 +1,13 @@
 import { assign, fromPromise, setup } from 'xstate';
 import {
     DEFAULT_TRADING_LOGIC_COVERAGE,
+    type BackendTradingStatus,
     type RegimeType,
     type TradingLogicCoverage,
     type UiCommandFailure,
 } from '../../../shared/contracts';
 import { to_ui_command_failure } from '../../../shared/errors';
-import type { UiCommandPort } from '../../../shared/ports';
+import type { TradingCommandReceipt, UiCommandPort } from '../../../shared/ports';
 
 export interface TradingCommandContext {
     readonly selected_regime: RegimeType | null;
@@ -43,6 +44,7 @@ export type TradingCommandEvent =
         readonly command_enabled: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
+        readonly lifecycle_status: BackendTradingStatus;
     }
     | {
         readonly type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED';
@@ -51,6 +53,7 @@ export type TradingCommandEvent =
         readonly command_enabled: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
+        readonly lifecycle_status: BackendTradingStatus;
     }
     | {
         readonly type: 'START_BUTTON_CLICKED';
@@ -135,20 +138,33 @@ export function create_trading_command_machine(
             events: {} as TradingCommandEvent,
         },
         actors: {
-            start_trading: fromPromise<void, RegimeType>(async ({ input }) => {
-                await command_port.start_trading(input);
+            start_trading: fromPromise<TradingCommandReceipt, RegimeType>(async ({ input }) => {
+                return command_port.start_trading(input);
             }),
-            stop_trading: fromPromise<void>(async () => {
-                await command_port.stop_trading();
+            stop_trading: fromPromise<TradingCommandReceipt>(async () => {
+                return command_port.stop_trading();
             }),
-            force_sell_and_stop: fromPromise<void>(async () => {
-                await command_port.force_sell_and_stop();
+            force_sell_and_stop: fromPromise<TradingCommandReceipt>(async () => {
+                return command_port.force_sell_and_stop();
             }),
         },
         guards: {
             snapshot_is_running: ({ event }) => {
                 return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
-                    && event.is_trading;
+                    && event.lifecycle_status === 'running';
+            },
+            snapshot_is_awaiting_stop: ({ event }) => {
+                return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                    && (event.lifecycle_status === 'stopping'
+                        || event.lifecycle_status === 'reconciliation_required');
+            },
+            stop_result_is_terminal: ({ event }) => {
+                const receipt = 'output' in event
+                    ? event.output as TradingCommandReceipt
+                    : null;
+
+                return receipt?.status === 'terminated'
+                    || receipt?.status === 'not_started';
             },
             is_regime_missing: ({ event }) => {
                 return event.type === 'START_BUTTON_CLICKED' && event.regime === null;
@@ -296,6 +312,11 @@ export function create_trading_command_machine(
                 is_trading: false,
                 error: null,
             }),
+            mark_stop_accepted: assign({
+                is_trading: true,
+                notice: null,
+                error: null,
+            }),
             clear_open_position: assign({
                 has_open_position: false,
             }),
@@ -323,6 +344,11 @@ export function create_trading_command_machine(
         },
         on: {
             TRADING_SNAPSHOT_SYNCHRONIZED: [
+                {
+                    guard: 'snapshot_is_awaiting_stop',
+                    target: '.awaiting_stop_completion',
+                    actions: 'synchronize_trading_snapshot',
+                },
                 {
                     guard: 'snapshot_is_running',
                     target: '.running',
@@ -515,10 +541,17 @@ export function create_trading_command_machine(
                 invoke: {
                     id: 'stop_command',
                     src: 'stop_trading',
-                    onDone: {
-                        target: 'stopped',
-                        actions: 'mark_trading_stopped',
-                    },
+                    onDone: [
+                        {
+                            guard: 'stop_result_is_terminal',
+                            target: 'stopped',
+                            actions: 'mark_trading_stopped',
+                        },
+                        {
+                            target: 'awaiting_stop_completion',
+                            actions: 'mark_stop_accepted',
+                        },
+                    ],
                     onError: {
                         target: 'stop_confirmation',
                         actions: 'remember_failure',
@@ -549,10 +582,17 @@ export function create_trading_command_machine(
                 invoke: {
                     id: 'force_sell_command',
                     src: 'force_sell_and_stop',
-                    onDone: {
-                        target: 'stopped',
-                        actions: ['clear_open_position', 'mark_trading_stopped'],
-                    },
+                    onDone: [
+                        {
+                            guard: 'stop_result_is_terminal',
+                            target: 'stopped',
+                            actions: ['clear_open_position', 'mark_trading_stopped'],
+                        },
+                        {
+                            target: 'awaiting_stop_completion',
+                            actions: 'mark_stop_accepted',
+                        },
+                    ],
                     onError: {
                         target: 'force_sell_confirmation',
                         actions: 'remember_failure',
@@ -569,12 +609,23 @@ export function create_trading_command_machine(
                     src: 'stop_trading',
                     onDone: {
                         target: 'api_connection_required',
-                        actions: 'mark_trading_stopped',
                     },
                     onError: {
                         target: 'api_connection_required',
-                        actions: ['remember_failure', 'mark_trading_stopped'],
+                        actions: 'remember_failure',
                     },
+                },
+            },
+            // Backend가 stop을 수락했지만 position/pending 정리가 끝나지 않은 동안 신규 명령을 차단한다.
+            awaiting_stop_completion: {
+                meta: {
+                    spec_ids: ['PHASE7-AUTHORITATIVE-STOP'],
+                    pending: true,
+                },
+                entry: 'mark_stop_accepted',
+                on: {
+                    START_BUTTON_CLICKED: {},
+                    STOP_BUTTON_CLICKED: {},
                 },
             },
         },

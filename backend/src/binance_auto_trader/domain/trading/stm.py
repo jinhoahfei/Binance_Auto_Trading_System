@@ -183,6 +183,34 @@ class TradingSTM:
 
         return self.handle(event, context)
 
+    def rollback_unpublished_result(
+        self,
+        result: TradingSTMResult,
+    ) -> None:
+        """
+        함수 이름: rollback_unpublished_result()
+        기능: Context version race로 action publication 전 폐기된 최신 STM 결과를 원상 복구한다.
+        인자: result -> action 실행 전에 폐기하기로 결정된 최신 TradingSTMResult
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        if not isinstance(result, TradingSTMResult):
+            raise TypeError("result must be a TradingSTMResult")
+
+        # 다른 handle 또는 rollback과 겹치면 상태를 추측해서 되돌리지 않는다.
+        if not self._handle_lock.acquire(blocking=False):
+            raise RuntimeError("TradingSTM rollback is not reentrant")
+
+        try:
+            if self._state != result.state_after:
+                raise RuntimeError(
+                    "Only the latest unpublished TradingSTM result can be rolled back"
+                )
+
+            self._state = result.state_before  # Context에 publish되지 않은 전이만 되돌린다.
+        finally:
+            self._handle_lock.release()
+
     def _handle_locked(
         self,
         event: TradingEvent,

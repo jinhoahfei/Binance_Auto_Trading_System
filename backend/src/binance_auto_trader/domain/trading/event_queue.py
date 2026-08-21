@@ -33,6 +33,14 @@ class ReentrantProcessingError(RuntimeError):
     """
 
 
+class EventQueueCapacityError(RuntimeError):
+    """
+    클래스 이름: EventQueueCapacityError
+    기능: pending event나 dedup identity 한도를 넘은 세션을 fail closed한다.
+    작성 날짜: 2026/08/21
+    """
+
+
 @dataclass(order=True, slots=True)
 class _QueueEntry:
     """
@@ -53,17 +61,35 @@ class SerialEventQueue:
     작성 날짜: 2026/08/14
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        max_pending_events: int = 10_000,
+        max_seen_event_ids: int = 100_000,
+    ) -> None:
         """
         함수 이름: __init__()
         기능: 비어 있는 event heap과 순번·중복·동시성 관리 상태를 초기화한다.
-        인자: 없음
+        인자: max_pending_events -> 동시에 대기할 event 상한
+            max_seen_event_ids -> 한 session에서 수락할 고유 event ID 상한
         반환값: 없음
         작성 날짜: 2026/08/14
         """
+        # bool을 정수로 인정하지 않고 운영 한도를 1 이상의 exact int로 제한한다.
+        for limit_name, limit_value in (
+            ("max_pending_events", max_pending_events),
+            ("max_seen_event_ids", max_seen_event_ids),
+        ):
+            if isinstance(limit_value, bool) or not isinstance(limit_value, int):
+                raise TypeError(f"{limit_name} must be an integer")
+            if limit_value < 1:
+                raise ValueError(f"{limit_name} must be positive")
+
         self._event_heap: list[_QueueEntry] = []
         self._next_sequence = 1
         self._seen_event_ids: set[str] = set()
+        self._max_pending_events = max_pending_events
+        self._max_seen_event_ids = max_seen_event_ids
         self._lock = Lock()
 
     def enqueue(
@@ -88,6 +114,12 @@ class SerialEventQueue:
             # 같은 event ID를 이미 한 번 수락했다면 재수신한 입력을 버린다.
             if queued_event.event_id in self._seen_event_ids:
                 return None
+
+            # 메모리를 늘리는 새 identity는 pending·session dedup 상한에서 fail closed한다.
+            if len(self._event_heap) >= self._max_pending_events:
+                raise EventQueueCapacityError("Pending event capacity was reached")
+            if len(self._seen_event_ids) >= self._max_seen_event_ids:
+                raise EventQueueCapacityError("Event identity capacity was reached")
 
             self._next_sequence += 1
             self._seen_event_ids.add(queued_event.event_id)
@@ -120,6 +152,50 @@ class SerialEventQueue:
 
             return heapq.heappop(self._event_heap).event
 
+    def restore_claimed(self, event: TradingEvent) -> None:
+        """
+        함수 이름: restore_claimed()
+        기능: Context race로 publish하지 못한 claimed event를 기존 identity와 순서로 복구한다.
+        인자: event -> pop됐지만 action이 실행되지 않은 queue event
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # Queue가 발급한 identity를 검사하기 전에 typed event 입력만 허용한다.
+        if not isinstance(event, TradingEvent):
+            raise TypeError("event must be a TradingEvent")
+
+        # dedup set은 유지하면서 원래 우선순위와 FIFO sequence를 heap에 되돌린다.
+        with self._lock:
+            if event.event_id is None or event.event_id not in self._seen_event_ids:
+                raise ValueError("Only a previously accepted event can be restored")
+            if any(
+                entry.event.event_id == event.event_id
+                for entry in self._event_heap
+            ):
+                raise ValueError("Claimed event is already queued")
+            heapq.heappush(
+                self._event_heap,
+                _QueueEntry(
+                    priority=int(event.priority),
+                    sequence_number=event.sequence_number,
+                    event=event,
+                ),
+            )
+
+    def clear(self) -> int:
+        """
+        함수 이름: clear()
+        기능: 세션 중지 시 아직 처리하지 않은 event를 원자적으로 모두 폐기한다.
+        인자: 없음
+        반환값: queue에서 제거한 event 수
+        작성 날짜: 2026/08/21
+        """
+        # 이미 처리한 ID dedup 기록은 유지해 stop 이후 같은 outcome 재수신도 차단한다.
+        with self._lock:
+            removed_count = len(self._event_heap)
+            self._event_heap.clear()  # 대기 market·timer event 참조를 즉시 해제한다.
+            return removed_count
+
     def __len__(self) -> int:
         """
         함수 이름: __len__()
@@ -138,7 +214,7 @@ ActionExecutorResult: TypeAlias = Iterable[TradingEvent] | None
 class ActionExecutor(Protocol):
     """
     클래스 이름: ActionExecutor
-    기능: QueueEvent가 아닌 하나의 action을 실행할 Controller callback 규약이다.
+    기능: 하나의 action을 순서대로 관찰·실행할 Controller callback 규약이다.
     작성 날짜: 2026/08/14
     """
 
@@ -183,10 +259,15 @@ class RunToCompletionEventProcessor:
         반환값: 없음
         작성 날짜: 2026/08/14
         """
+        # 주입된 STM·Context·executor와 빈 queue까지 그대로 한 processor 세션에 보존한다.
         self._stm = stm
         self._context_provider = context_provider
         self._action_executor = action_executor
-        self._queue = event_queue or SerialEventQueue()
+        self._queue = (
+            event_queue
+            if event_queue is not None
+            else SerialEventQueue()
+        )  # 빈 주입 queue도 동일 session identity로 반드시 보존한다.
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._processing = False
 
@@ -228,6 +309,13 @@ class RunToCompletionEventProcessor:
 
             # 상태 판단 뒤 context가 바뀌면 어떤 외부 부수 효과도 실행하지 않는다.
             if self._context_provider().version != result.context_version:
+                # Publish되지 않은 STM state를 되돌리고 claimed event identity도 queue에 복구한다.
+                self._stm.rollback_unpublished_result(
+                    result
+                )  # Context와 STM이 서로 다른 version으로 남지 않게 원상 복구한다.
+                self._queue.restore_claimed(
+                    event
+                )  # stable terminal outcome도 최신 Context에서 다시 처리할 수 있게 한다.
                 raise ContextVersionError(
                     "Context changed between snapshot creation and action execution"
                 )
@@ -237,6 +325,12 @@ class RunToCompletionEventProcessor:
             returned_events: list[TradingEvent] = []
             for action in result.action_requests:
                 if isinstance(action, QueueEvent):
+                    # QueueEvent도 원본 batch 순서로 executor에 노출한 뒤 내부 삽입만 보류한다.
+                    action_result = self._action_executor(action)
+                    if inspect.isawaitable(action_result):
+                        action_result = await action_result
+                    if action_result is not None:
+                        returned_events.extend(action_result)
                     queued_event_requests.append(action)
                     continue
 

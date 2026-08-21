@@ -135,6 +135,10 @@ class FakeBinanceClient:
         self.account_subscriptions: list[FakeSubscription] = []
         self.account_stream_error: Exception | None = None
 
+        # Subscribe 도중과 완료 후 account readiness를 비교할 선택 probe 기록을 준비한다.
+        self.account_readiness_probe: Callable[[], bool] | None = None
+        self.account_readiness_observations: list[bool] = []
+
     def get_account(self) -> object:
         """
         함수 이름: get_account()
@@ -206,6 +210,12 @@ class FakeBinanceClient:
         """
         if self.account_stream_error is not None:
             raise self.account_stream_error
+
+        # subscribe 호출 중에는 아직 established handle이 없다는 readiness를 관찰한다.
+        if self.account_readiness_probe is not None:
+            self.account_readiness_observations.append(
+                self.account_readiness_probe()
+            )
 
         subscription = FakeSubscription()
         self.account_message_callbacks.append(on_message)
@@ -347,6 +357,28 @@ class WebSocketGatewayAccountTests(unittest.TestCase):
     기능: 공식 account event의 partial snapshot, dedup과 stream 세대를 검증한다.
     작성 날짜: 2026/08/21
     """
+
+    def test_account_readiness_waits_for_established_subscription(self) -> None:
+        """
+        함수 이름: test_account_readiness_waits_for_established_subscription()
+        기능: client subscribe가 반환되기 전 account 연결 Guard가 열리지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        # Subscribe 내부에서 gateway readiness를 읽는 fake client와 gateway를 연결한다.
+        client = FakeBinanceClient()
+        gateway = WebSocketGateway(
+            client,
+            account_snapshot_callback=lambda _snapshot: None,
+        )
+        client.account_readiness_probe = lambda: gateway.account_connected
+
+        gateway.start_account_info_stream()  # Transport handle이 설정되는 전체 startup을 실행한다.
+
+        # Subscribe 반환 전에는 닫혀 있고 established handle 이후에만 열리는지 확인한다.
+        self.assertEqual([False], client.account_readiness_observations)
+        self.assertTrue(gateway.account_connected)
 
     def test_account_event_normalizes_current_envelope_to_partial_snapshot(self) -> None:
         """

@@ -71,7 +71,7 @@ upper_band`인 경우 다음 세 branch는 배타적이며 pending 주문을 가
    `UPPER_BAND_SAFE_TERMINATION`으로 취소를 요청한 뒤, 같은 주문 ID를
    `stop_after_reconciliation = True`로 조정한다. 이 branch에서는
    `ForceSellAll`을 즉시 요청하지 않는다.
-2. pending 주문이 없고 `position_owner`가 있으면 `STOPPING`으로 전이하고
+2. pending 주문이 없고 authoritative `context.position.quantity > 0`이면 `STOPPING`으로 전이하고
    전략 평가를 취소한 뒤 `ForceSellAll`을 요청한다. 후속 완료·실패는
    기존 `G-06F`/`G-06R`로 처리한다.
 3. 둘 다 없으면 `LOGIC_TERMINATED`로 즉시 전이하고 lower event와 Case
@@ -91,8 +91,16 @@ coverage와 start Guard는 `READY`이며, 조용한 no-op이나 인계 fallback�
 
 Registry의 `READY`는 선택한 전략 구성이 완전하다는 domain 신호이지 즉시
 production 주문을 허용한다는 의미가 아니다. Phase 7의 session 시작
-orchestration이 구현되기 전까지 live snapshot의 `command_enabled`는 `false`이며,
-지원된 `TYPE_0`을 선택해도 실제 start command는 기능 미제공으로 차단한다.
+orchestration은 `fake` mode에서만 `command_enabled = true`로 연결한다.
+`disabled`, `testnet`, `live`는 Phase 7에서 fail closed이며 실제 Gateway 주문은
+Phase 8 이후의 실행 mode gate를 별도로 통과해야 한다.
+
+Phase 7 application 경계에서 사용자 선택은
+`RegimeController.set_regime_type(regime_type, *, command_id, expected_version)`으로만
+commit하고 typed `TradingLogicSelectionResult`를 반환한다. start/stop도 같은 command
+ID와 expected Context version 계약을 사용해 typed `TradingSessionResult`를 반환한다.
+이 metadata는 HTTP transport가 생성·검증해 application Operation에 전달하며 추천
+REGIME 갱신 경로에서는 사용하지 않는다.
 
 ### 2.3 RegimeSTM public 계약
 
@@ -171,7 +179,7 @@ event를 전달한다. 인자 없는 호출이나 pending Context로 성공·실
 - [x] Phase 1에서 중복 Python `RegimeType`을 `domain/common/enums.py` 한 enum으로 통합했다.
 - [x] Phase 6에서 TYPE_0 상단 BB gap을 안전 종료 정책으로 닫고 mapping/fallback gate를 코드·테스트로 고정했다.
 - [x] UI snapshot과 선택 화면에 다섯 REGIME 지원 상태를 반영하고 미지원 start를 차단했다.
-- [ ] Phase 7에서 session 시작 orchestration과 active 변경의 `TRADING_ACTIVE` 오류를 완성한다.
+- [x] Phase 7에서 versioned selection/start/stop application Operation, session 시작 orchestration과 active 변경의 `TRADING_ACTIVE` 오류를 완성했다.
 
 ## 5. Baseline 증거
 
@@ -186,3 +194,14 @@ event를 전달한다. 인자 없는 호출이나 pending Context로 성공·실
 | UI build | `./node_modules/.bin/vite build` | 274 modules, 성공 |
 
 검증 과정에서 production source 동작은 변경하지 않았다.
+
+### Phase 7 완료 증거
+
+2026-08-21 KST, 시작 커밋 `3e799e126bbb87a88b1e3a522c8f1a7015e5a8e0`에서
+mutable `TradingContext` 초기화 뒤 session 전용 `TradingSTM.run()`이 정확히 한 번
+호출되는 start 흐름을 구현했다. active 상태에서 REGIME 변경은
+`TRADING_ACTIVE`로 거부되고 선택값, STM 인스턴스와 Context가 모두 유지된다. selection,
+start와 stop은 `command_id`·`expected_version`을 검증하고 typed 결과를 반환한다.
+정상 종료 뒤 같은 REGIME도 새 selection command 전에는 restart할 수 없다. 통합 backend
+`unittest` 325개와 UI Vitest 155개가 통과했으며, 실제 Binance 주문은
+호출하지 않았다.

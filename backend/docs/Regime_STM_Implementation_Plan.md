@@ -2,10 +2,10 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | Implemented — 통합 roadmap Phase 3 추천 vertical slice 완료 |
+| 문서 상태 | Implemented — 통합 roadmap Phase 3 추천과 Phase 7 사용자 선택 연결 동기화 완료 |
 | 작성일 | 2026-08-14 |
 | 최종 명세 반영일 | 2026-08-21 |
-| 대상 | `RegimeController`, `RegimeSTM`, 4H REGIME 추천 평가 경계 |
+| 대상 | `RegimeController`, `RegimeSTM`, 4H REGIME 추천 평가와 사용자 선택 경계 |
 | 핵심 목표 | Event-Action Table의 상태·가드·다음 상태·Action 종류는 `RegimeSTM`이 결정하고, `Action` 열의 실제 작업은 `RegimeController`가 수행하도록 책임을 분리한다. |
 
 ## 1. 결론
@@ -465,10 +465,14 @@ Communication Diagram 8.11과 8.13의 operation은 다음처럼 구체화한다.
 |---|---|
 | `RegimeController.calculate4HIndicators(snapshot) : IndicatorSnapshot` | Controller의 순수 계산 보조 operation으로 유지한다. 확정봉과 진행봉을 분리하고 결과에 원본 snapshot version을 연결한다. |
 | `RegimeController.recommendRegime(indicators) : RegimeType` | 기존 호출 호환용 façade로만 둔다. canonical 경로는 trigger와 MarketSnapshot을 함께 받는 `evaluate_regime()`이며, façade도 내부에서 동일 Action 실행 경로를 사용해야 한다. |
-| `RegimeController.setRegimeType(regimeType) : void` | 사용자 선택값만 갱신하고 선택된 TradingSTM 연결을 수행한다. 추천 Action에서 호출하지 않는다. |
+| `RegimeController.setRegimeType(regimeType, commandId, expectedVersion) : TradingLogicSelectionResult` | Phase 7의 유일한 사용자 선택 writer다. 선택한 TradingSTM을 fallback 없이 조회하고 active/version/idempotency 검증을 통과한 뒤 선택값을 commit한다. 추천 Action에서는 호출하지 않는다. |
 | `RegimeSTM.run(indicators) : RegimeType` (폐기된 초안) | 책임을 혼합하므로 canonical API로 사용하지 않는다. 초기화 wrapper가 필요하면 `handle()`을 호출해 `RegimeSTMResult`를 반환해야 한다. |
 
 `RegimeSTM`의 canonical API는 다음과 같다.
+
+Python의 사용자 선택 Operation은
+`set_regime_type(regime_type, *, command_id, expected_version)`이며 transport가 전달한
+command metadata를 검증하고 typed `TradingLogicSelectionResult`를 반환한다.
 
 ```python
 class RegimeSTM:
@@ -857,6 +861,7 @@ import 경계 검증을 통합 roadmap Phase 3에서 완료했다.
 - 같은 event/context trace를 재생하면 같은 transition, 상태 및 Action 요청이 나온다.
 - trace만으로 evaluation ID, Event-Action ID, 전후 상태, 입력 snapshot, 요청 Action, 적용 추천을 역추적할 수 있다.
 
-위 기준은 통합 roadmap Phase 3에서 달성했다. `RegimeController`의 추천 결과를
-실제 UI transport와 연결하는 작업은 roadmap Phase 5, 사용자 REGIME 선택과 Trading 연결은
-roadmap Phase 7에서 진행한다.
+위 추천 평가 기준은 통합 roadmap Phase 3에서 달성했다. `RegimeController`의 추천 결과를
+실제 UI transport와 연결하는 작업은 roadmap Phase 5에서, 사용자 REGIME 선택을
+`TradingController`의 versioned Context와 연결하는 작업은 roadmap Phase 7에서 완료했다.
+두 경로는 추천값과 사용자 선택값의 writer를 계속 분리한다.

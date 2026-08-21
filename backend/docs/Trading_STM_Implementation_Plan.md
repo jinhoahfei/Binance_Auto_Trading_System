@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | Accepted design — 통합 roadmap Phase 6 REGIME coverage 동기화 완료 |
+| 문서 상태 | Accepted design — 통합 roadmap Phase 6 REGIME coverage와 Phase 7 session lifecycle 동기화 완료 |
 | 작성일 | 2026-08-14 |
 | 최종 명세 반영일 | 2026-08-21 |
 | 대상 | `TradingSTM`, `TradingController`, `TradingContext` 및 주문 결과 피드백 경계 |
@@ -786,7 +786,7 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 | runtime Context | pending 주문 필드, `trading_phase`, Case 활성화와 exit 관련 공통 변수를 명세에 추가했다. |
 | transition 추적성 | 기존 104개 행에 주문/중지 피드백 5개를 추가해 총 109개 ID로 확정했다. |
 
-### 16.2 통합 roadmap Phase 6 coverage 확정 결과
+### 16.2 통합 roadmap Phase 6 coverage와 Phase 7 lifecycle 확정 결과
 
 정책 값은 ADR-001~ADR-003과 Communication 명세를 기준으로 한다.
 
@@ -796,10 +796,13 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 | 부분 체결 잔여 수량 | fill delta를 먼저 반영한다. terminal partial BUY는 자동 top-up하지 않고 실제 수량으로 진입을 확정하며, SELL/force-sell은 이전 주문 terminal 확인 뒤 잔여 Position만 같은 exit intent로 정리한다. |
 | REGIME coverage registry | `TYPE_0`은 `SUPPORTED`, `LOWER_BB` 정확히 109개 transition, start Guard `READY`, `UpperBandPolicy.SAFE_TERMINATION`으로 고정한다. `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`, registry 없음, `UNSUPPORTED_TRADING_LOGIC`이다. |
 | G-07 상단 BB 계약 | pending 주문 취소·조정, 확정 포지션 전량 매도, 무주문·무포지션 즉시 종료의 세 branch로 완결한다. 새 상단 전략이나 fallback은 없다. |
-| UI/start 경계 | 미지원 REGIME의 추천·표시·선택은 허용하고 start만 차단한다. `READY`는 domain registry Guard이며 Phase 7 전 live `command_enabled`는 `false`다. |
+| UI/start 경계 | 미지원 REGIME의 추천·표시·선택은 허용하고 start만 차단한다. `READY`는 domain registry Guard이며 Phase 7에서는 `fake` mode만 `command_enabled = true`, `disabled`·`testnet`·`live`는 fail closed다. |
+| versioned application Operation | selection/start/stop/split은 `command_id`와 `expected_version`을 받고 각각 `TradingLogicSelectionResult`, `TradingSessionResult`, `SplitRatioResult`를 반환한다. 같은 ID·payload는 최초 성공 결과를 재사용하고 다른 payload의 ID 재사용은 거부한다. |
+| stop 재호출 | `RUNNING` 세션의 최초 stop만 `STOP_CONFIRMED`를 먼저 전달한다. 이미 `STOPPING`, `RECONCILIATION_REQUIRED`, `TERMINATED`이면 새 STM Action 없는 성공 no-op을 반환한다. |
+| Phase 7 trace 범위 | fake `ApplicationRuntime` loopback HTTP test는 command, event correlation과 Context version을 검증한다. Communication message ID와 caller/receiver를 포함한 전체 trace는 통합 roadmap §12와 Phase 13에 남긴다. |
 | `orderFinished()` Communication | `orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult` 검증 adapter로 동기화했다. 구체 outcome만 허용하고 canonical `handle`로 위임한다. |
 | `RECONCILIATION_REQUIRED` 복구 | 상태 불명은 같은 ID 조회, 저장 실패는 같은 order ID 저장만 재시도한다. startup open-order/recent-fill reconciliation이 끝나기 전 신규 Action을 차단하고 불일치는 운영자에게 표시한다. |
-| typed Context 전체 schema | 현재 `context.py`의 frozen dataclass, enum, optional 불변식과 lower-event typed Action reset 범위를 source/test 기준으로 사용한다. 임의 dictionary patch를 금지한다. |
+| typed Context 전체 schema | mutable/versioned `TradingContext`가 Account·REGIME·ratio·PositionSnapshot·pending/runtime을 소유하고 STM에는 immutable `TradingContextView`를 전달한다. enum, optional 불변식과 lower-event typed Action reset 범위를 source/test 기준으로 사용하며 임의 dictionary patch를 금지한다. |
 
 Phase 0에서 격리했던 상단 BB gap은 Phase 6에서 Event-Action Table의
 G-07 안전 종료 계약으로 닫혔다. 이 결정은 `TradingController`와
@@ -810,8 +813,9 @@ G-07 안전 종료 계약으로 닫혔다. 이 결정은 `TradingController`와
 ## 17. 구현 순서
 
 이 절의 Phase는 TradingSTM 문서가 초기에 정의한 내부 구현 순서이다.
-프로젝트 통합 roadmap의 동명 Phase와는 범위가 다르며, 현재 REGIME
-coverage 상태는 이 문서 §16.2와 통합 roadmap Phase 6을 따른다.
+프로젝트 통합 roadmap의 동명 Phase와는 범위가 다르며, 현재 REGIME coverage는
+통합 roadmap Phase 6, mutable Context와 session lifecycle은 통합 roadmap Phase 7을
+따른다. 두 현재 계약은 이 문서 §16.2에 함께 기록한다.
 
 ### Phase 0 — 명세 정규화
 

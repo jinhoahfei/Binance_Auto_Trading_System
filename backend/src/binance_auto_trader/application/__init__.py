@@ -6,9 +6,19 @@ from .regime_controller import (
     RegimeEvaluationError,
     RegimeEvaluationFailureCode,
     RegimeEvaluationTrace,
+    TradingSelectionPort,
 )
 from .trade_history_controller import TradeHistoryController
-from .trading_controller import TradingController
+from .trading_controller import (
+    SplitRatioResult,
+    TradingController,
+    TradingLogicSelectionResult,
+    TradingSessionError,
+    TradingSessionFailureCode,
+    TradingSessionResult,
+    TradingSessionSnapshot,
+    TradingSessionStatus,
+)
 
 
 __all__ = [
@@ -17,6 +27,14 @@ __all__ = [
     "RegimeEvaluationError",
     "RegimeEvaluationFailureCode",
     "RegimeEvaluationTrace",
+    "SplitRatioResult",
     "TradeHistoryController",
     "TradingController",
+    "TradingLogicSelectionResult",
+    "TradingSelectionPort",
+    "TradingSessionError",
+    "TradingSessionFailureCode",
+    "TradingSessionResult",
+    "TradingSessionSnapshot",
+    "TradingSessionStatus",
 ]

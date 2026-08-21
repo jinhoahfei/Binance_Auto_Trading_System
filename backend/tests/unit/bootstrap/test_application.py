@@ -199,6 +199,7 @@ class ApplicationFactoryTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # 주입 repository와 fake mode client로 identity 검사용 runtime을 조립한다.
         history_repository = _StubHistoryRepository()
         runtime = create_application_runtime(
             _StubRestClient(),
@@ -225,10 +226,23 @@ class ApplicationFactoryTests(unittest.TestCase):
             runtime.regime_stm,
         )
         self.assertIs(
+            runtime.regime_controller._trading_selection_port,
+            runtime.trading_controller,
+        )
+        self.assertIs(
+            runtime.trading_controller._session_lock,
+            runtime.application_lock,
+        )
+        self.assertIs(
+            runtime.regime_controller._evaluation_lock,
+            runtime.application_lock,
+        )
+        self.assertIs(
             runtime.trade_history_controller._repository,
             history_repository,
         )
         self.assertIs(runtime.execution_mode, ExecutionMode.FAKE)
+        self.assertTrue(runtime.trading_controller.command_enabled)
         self.assertIs(runtime.state.status, ApplicationStatus.CREATED)
         self.assertFalse(runtime.ready)
         self.assertIsNone(runtime.failure)
@@ -241,6 +255,7 @@ class ApplicationFactoryTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # 두 실패 조합에서 재사용할 client와 repository test double을 준비한다.
         rest_client = _StubRestClient()
         web_socket_client = _StubWebSocketClient()
         repository = _StubHistoryRepository()

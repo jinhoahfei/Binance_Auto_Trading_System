@@ -1,10 +1,13 @@
 """4시간봉 지표 계산과 RegimeSTM Action 수행을 조정하는 controller를 정의한다."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 from threading import RLock
+from typing import Protocol
 
 from binance_auto_trader.domain.common import Interval, RegimeType
 from binance_auto_trader.domain.market import (
@@ -44,6 +47,55 @@ _SUCCESS_COMMUNICATION_STEPS = (
     "1.5.1:RegimeController->RegimeSTM.handle:trigger",
     "1.5.1:RegimeController->RegimeSTM.handle:EVALUATION_READY",
 )
+
+
+class TradingSelectionPort(Protocol):
+    """
+    클래스 이름: TradingSelectionPort
+    기능: RegimeController가 거래 계층 구현을 import하지 않고 선택을 위임하는 계약이다.
+    작성 날짜: 2026/08/21
+    """
+
+    @property
+    def selected_regime(self) -> RegimeType | None:
+        """
+        함수 이름: selected_regime()
+        기능: 거래 Context가 현재 보존하는 authoritative 사용자 선택을 반환한다.
+        인자: 없음
+        반환값: 현재 선택된 RegimeType 또는 아직 없으면 None
+        작성 날짜: 2026/08/21
+        """
+        ...
+
+    def fetch_selected_trading_logic(self, regime_type: RegimeType) -> object:
+        """
+        함수 이름: fetch_selected_trading_logic()
+        기능: 선택 REGIME의 executable 거래 로직 factory 결과를 요청한다.
+        인자: regime_type -> 선택할 canonical RegimeType
+        반환값: 지원 로직 객체
+        작성 날짜: 2026/08/21
+        """
+        ...
+
+    def commit_regime_selection(
+        self,
+        regime_type: RegimeType,
+        selected_stm: object | None,
+        *,
+        command_id: str,
+        expected_version: int,
+    ) -> object:
+        """
+        함수 이름: commit_regime_selection()
+        기능: factory 결과와 사용자 선택을 versioned 거래 Context에 commit한다.
+        인자: regime_type -> 선택할 canonical RegimeType
+            selected_stm -> 지원 로직 객체 또는 미지원이면 None
+            command_id -> mutation 멱등 식별자
+            expected_version -> 호출자가 관측한 context version
+        반환값: 거래 계층의 selection 결과
+        작성 날짜: 2026/08/21
+        """
+        ...
 
 
 class RegimeEvaluationFailureCode(str, Enum):
@@ -485,21 +537,27 @@ class RegimeController:
         "_recommended_regime",
         "_regime_stm",
         "_selected_regime",
+        "_trading_selection_port",
     )
 
     def __init__(
         self,
         regime_stm: RegimeSTM,
         market_snapshot: MarketSnapshot | None = None,
+        trading_selection_port: TradingSelectionPort | None = None,
+        application_lock: RLock | None = None,
     ) -> None:
         """
         함수 이름: __init__()
-        기능: 순수 RegimeSTM과 선택적인 authoritative MarketSnapshot을 조립한다.
+        기능: 순수 RegimeSTM, MarketSnapshot과 선택적인 거래 선택 port를 조립한다.
         인자: regime_stm -> 전이와 Action 요청을 결정할 순수 상태 머신
             market_snapshot -> same-version 검증에 사용할 시장 snapshot
+            trading_selection_port -> 사용자 선택을 거래 Context에 commit할 port
+            application_lock -> transport publication과 공유할 application RLock 또는 None
         반환값: 없음
         작성 날짜: 2026/08/20
         """
+        # 필수 STM·snapshot, 선택 port operation과 공유 application lock 계약을 검증한다.
         if not isinstance(regime_stm, RegimeSTM):
             raise TypeError("regime_stm must be a RegimeSTM")
         if market_snapshot is not None and not isinstance(
@@ -509,7 +567,25 @@ class RegimeController:
             raise TypeError(
                 "market_snapshot must be a MarketSnapshot or None"
             )
+        if trading_selection_port is not None:
+            required_operations = (
+                "fetch_selected_trading_logic",
+                "commit_regime_selection",
+            )
+            if any(
+                not callable(getattr(trading_selection_port, operation, None))
+                for operation in required_operations
+            ):
+                raise TypeError(
+                    "trading_selection_port must provide selection operations"
+                )
+        if application_lock is not None and not hasattr(
+            application_lock,
+            "__enter__",
+        ):
+            raise TypeError("application_lock must be a context manager or None")
 
+        # 추천 평가 state와 사용자 선택 port를 하나의 Controller lock 경계에 조립한다.
         self._regime_stm = regime_stm
         self._market_snapshot = market_snapshot
         self._failed_market_snapshot: MarketSnapshot | None = None
@@ -521,11 +597,12 @@ class RegimeController:
         self._indicator_source_market_snapshot: MarketSnapshot | None = None
         self._recommended_regime: RegimeType | None = None
         self._selected_regime: RegimeType | None = None
+        self._trading_selection_port = trading_selection_port
         self._last_regime_result: RegimeResult | None = None
         self._latest_processed_candle_open_time: datetime | None = None
         self._processed_candle_ids: set[str] = set()
         self._evaluation_traces: list[RegimeEvaluationTrace] = []
-        self._evaluation_lock = RLock()
+        self._evaluation_lock = application_lock or RLock()
 
     @property
     def indicator_snapshot(self) -> IndicatorSnapshot | None:
@@ -557,11 +634,64 @@ class RegimeController:
         함수 이름: selected_regime()
         기능: 추천과 분리된 사용자 선택 REGIME을 반환한다.
         인자: 없음
-        반환값: Phase 3에서 변경하지 않는 사용자 선택값
+        반환값: 거래 Context와 동기화한 사용자 선택값 또는 미선택 None
         작성 날짜: 2026/08/20
         """
         with self._evaluation_lock:
             return self._selected_regime
+
+    def set_regime_type(
+        self,
+        regime_type: RegimeType,
+        *,
+        command_id: str,
+        expected_version: int,
+    ) -> object:
+        """
+        함수 이름: set_regime_type()
+        기능: 사용자 선택 REGIME의 exact 거래 로직을 조회하고 유일한 선택 경로로 commit한다.
+        인자: regime_type -> UI가 선택한 canonical RegimeType
+            command_id -> selection mutation의 멱등 식별자
+            expected_version -> 호출자가 관측한 TradingContext version
+        반환값: 거래 계층이 생성한 selection 결과
+        작성 날짜: 2026/08/21
+        """
+        # Wire 문자열을 보정하지 않고 canonical domain REGIME만 selection 경계에 받는다.
+        if not isinstance(regime_type, RegimeType):
+            raise TypeError("regime_type must be a RegimeType")
+
+        # Factory 조회, versioned commit과 public selection cache 갱신을 직렬화한다.
+        with self._evaluation_lock:
+            selection_port = self._trading_selection_port
+            if selection_port is None:
+                raise RuntimeError("Trading selection port is not configured")
+
+            # factory는 fallback 없이 호출하며 미지원 typed 오류만 선택 보존으로 변환한다.
+            try:
+                selected_stm = selection_port.fetch_selected_trading_logic(
+                    regime_type
+                )
+            except RuntimeError as error:
+                if getattr(error, "code", None) != "UNSUPPORTED_TRADING_LOGIC":
+                    raise
+                selected_stm = None
+
+            # 거래 계층의 active·version 검증이 성공한 뒤에만 공개 선택값을 교체한다.
+            result = selection_port.commit_regime_selection(
+                regime_type,
+                selected_stm,
+                command_id=command_id,
+                expected_version=expected_version,
+            )
+            authoritative_regime = selection_port.selected_regime
+            if authoritative_regime is None:
+                raise RuntimeError(
+                    "Trading selection commit did not preserve a REGIME"
+                )
+            self._selected_regime = (
+                authoritative_regime
+            )  # cached replay도 현재 거래 Context 선택과 owner 값을 맞춘다.
+            return result
 
     @property
     def last_regime_result(self) -> RegimeResult | None:

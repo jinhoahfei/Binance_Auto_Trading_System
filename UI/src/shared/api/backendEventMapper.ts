@@ -8,6 +8,8 @@ import type {
     BackendResyncRequired,
     BackendSnapshot,
     BackendTradeSnapshot,
+    BackendTradingStatus,
+    BackendTradingSnapshot,
 } from '../contracts';
 import { BACKEND_SCHEMA_VERSION } from '../contracts';
 import type {
@@ -53,6 +55,13 @@ const BACKEND_EXECUTION_MODES: ReadonlySet<string> = new Set([
     'fake',
     'testnet',
     'live',
+]);
+const BACKEND_TRADING_STATUSES: ReadonlySet<BackendTradingStatus> = new Set([
+    'not_started',
+    'running',
+    'stopping',
+    'reconciliation_required',
+    'terminated',
 ]);
 
 /**
@@ -239,6 +248,51 @@ function assert_nullable_string(value: unknown, field_name: string): string | nu
 }
 
 /**
+ * 함수 이름: assert_unit_interval_ratio()
+ * 기능: split ratio Decimal 문자열을 닫힌 구간 0~1로 검증한다.
+ * 인자: value -> 검증할 JSON 값, field_name -> 오류 field 이름
+ * 반환값: 검증된 Decimal ratio 문자열
+ * 작성 날짜: 2026/08/21
+ */
+function assert_unit_interval_ratio(value: unknown, field_name: string): string {
+    const ratio = assert_decimal_string(value, field_name);
+
+    if (!/^(?:0(?:\.[0-9]+)?|1(?:\.0+)?)$/u.test(ratio)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            `${field_name} must be between zero and one`,
+        );
+    }
+
+    return ratio;
+}
+
+/**
+ * 함수 이름: map_trading_status_presentation()
+ * 기능: backend lifecycle status를 StrategyCard의 설명과 tone으로 변환한다.
+ * 인자: status -> runtime validation이 끝난 trading status
+ * 반환값: 상태 설명과 표시 tone
+ * 작성 날짜: 2026/08/21
+ */
+function map_trading_status_presentation(status: BackendTradingStatus): {
+    readonly label: string;
+    readonly tone: 'positive' | 'neutral';
+} {
+    switch (status) {
+        case 'running':
+            return { label: '자동매매 실행 중', tone: 'positive' };
+        case 'stopping':
+            return { label: '자동매매 중지 처리 중', tone: 'neutral' };
+        case 'reconciliation_required':
+            return { label: '주문 상태 확인 필요', tone: 'neutral' };
+        case 'terminated':
+            return { label: '자동매매 종료', tone: 'neutral' };
+        case 'not_started':
+            return { label: '매매 시작 전', tone: 'neutral' };
+    }
+}
+
+/**
  * 함수 이름: assert_utc_timestamp()
  * 기능: backend 시각이 UTC Z suffix의 RFC 3339 문자열인지 검증한다.
  * 인자: value -> 검증할 JSON 값, field_name -> 오류 field 이름
@@ -330,6 +384,45 @@ function validate_trading_logic_coverage(
             start_guard: expected_guard,
         };
     });
+}
+
+/**
+ * 함수 이름: validate_trading_snapshot()
+ * 기능: snapshot과 TRADING_SESSION_UPDATED가 공유하는 Phase 7 lifecycle DTO를 검증한다.
+ * 인자: value -> trading snapshot JSON 값
+ * 반환값: generated authoritative trading snapshot
+ * 작성 날짜: 2026/08/21
+ */
+function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
+    const trading = assert_record(value, 'trading');
+
+    if (typeof trading.mode !== 'string' || !BACKEND_EXECUTION_MODES.has(trading.mode)) {
+        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'trading.mode is invalid');
+    }
+    if (typeof trading.status !== 'string'
+        || !BACKEND_TRADING_STATUSES.has(trading.status as BackendTradingStatus)) {
+        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'trading state is invalid');
+    }
+    assert_boolean(trading.command_enabled, 'trading.command_enabled');
+    assert_unit_interval_ratio(trading.scale_in, 'trading.scale_in');
+    assert_unit_interval_ratio(trading.scale_out, 'trading.scale_out');
+    assert_boolean(trading.has_open_position, 'trading.has_open_position');
+    if (trading.session_id !== null) {
+        assert_uuid(trading.session_id, 'trading.session_id');
+    }
+    if ((trading.status === 'running'
+            || trading.status === 'stopping'
+            || trading.status === 'reconciliation_required')
+        && trading.session_id === null) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'An active trading state requires a trading session ID',
+        );
+    }
+    validate_trading_logic_coverage(trading.logic_coverage);
+    assert_safe_integer(trading.version, 'trading.version');
+
+    return value as BackendTradingSnapshot;
 }
 
 /**
@@ -541,7 +634,7 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
     const connection = assert_record(snapshot.connection, 'snapshot.connection');
     const market = assert_record(snapshot.market, 'snapshot.market');
     const regime = assert_record(snapshot.regime, 'snapshot.regime');
-    const trading = assert_record(snapshot.trading, 'snapshot.trading');
+    const trading = validate_trading_snapshot(snapshot.trading);
     const recent_trades = snapshot.recent_trades;
 
     assert_uuid(snapshot.session_id, 'snapshot.session_id');
@@ -604,15 +697,6 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
             'Backend snapshot does not contain a recommendation',
         );
     }
-
-    if (typeof trading.mode !== 'string' || !BACKEND_EXECUTION_MODES.has(trading.mode)) {
-        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'trading.mode is invalid');
-    }
-    if (trading.status !== 'not_started' || trading.command_enabled !== false) {
-        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'trading state is invalid');
-    }
-    validate_trading_logic_coverage(trading.logic_coverage);
-    assert_safe_integer(trading.version, 'trading.version');
 
     const account = validate_account_snapshot(snapshot.account);
     if (account.current_price === null
@@ -965,21 +1049,26 @@ export function map_backend_snapshot(
     snapshot: BackendSnapshot,
     today: string,
 ): MappedBackendSnapshot {
+    const trading = snapshot.trading;
     const regime_metrics = map_indicator_metrics(snapshot.regime.indicator);
     const logic_coverage = validate_trading_logic_coverage(snapshot.trading.logic_coverage);
     const recent_trades = snapshot.recent_trades.map(map_trade_record);
     const account_asset = map_account_asset(snapshot.account);
     const trade_history_summary = map_performance_summary(snapshot.performance);
+    const trading_presentation = map_trading_status_presentation(trading.status);
     const account_strategy = {
-        appliedState: snapshot.trading.status,
+        appliedState: trading.status,
         // Performance 누적값은 현재 REGIME 상태별 성과가 아니므로 StrategyCard에는 투영하지 않는다.
         profitAmount: '-',
         profitRate: '-',
-        status: '매매 시작 전',
-        statusTone: 'neutral' as const,
+        status: trading_presentation.label,
+        statusTone: trading_presentation.tone,
     };
+    const is_trading = trading.status !== 'not_started' && trading.status !== 'terminated';
     const server_snapshot: UiServerOwnedSnapshot = {
         last_sequence: snapshot.last_sequence,
+        trading_version: trading.version,
+        trading_session_id: trading.session_id,
         trading_symbol: snapshot.market.symbol === 'ETHUSDT'
             ? 'ETH/USDT'
             : snapshot.market.symbol,
@@ -987,14 +1076,17 @@ export function map_backend_snapshot(
         applied_regime: snapshot.regime.selected,
         regime_metrics,
         logic_coverage,
-        command_enabled: snapshot.trading.command_enabled,
+        command_enabled: trading.command_enabled,
         recent_trades,
         history_records: recent_trades,
         account_strategy,
         account_asset,
         trade_history_summary,
-        is_trading: false,
-        trading_state_label: snapshot.trading.status,
+        scale_in_percentage: Number(trading.scale_in) * 100,
+        scale_out_percentage: Number(trading.scale_out) * 100,
+        is_trading,
+        has_open_position: trading.has_open_position,
+        trading_state_label: trading.status,
     };
 
     return {
@@ -1011,7 +1103,10 @@ export function map_backend_snapshot(
             account_strategy: server_snapshot.account_strategy,
             account_asset: server_snapshot.account_asset,
             trade_history_summary: server_snapshot.trade_history_summary,
+            scale_in_percentage: server_snapshot.scale_in_percentage,
+            scale_out_percentage: server_snapshot.scale_out_percentage,
             is_trading: server_snapshot.is_trading,
+            has_open_position: server_snapshot.has_open_position,
         },
         server_snapshot,
     };
@@ -1060,8 +1155,7 @@ export function map_backend_event_to_intents(
             }
             return intents;
         }
-        case 'REGIME_APPLIED':
-        case 'REGIME_SELECTED': {
+        case 'REGIME_APPLIED': {
             const regime_value = payload.regime ?? payload.selected;
             if (typeof regime_value !== 'string' || !BACKEND_REGIME_TYPES.has(regime_value)) {
                 throw new BackendContractError(
@@ -1070,6 +1164,67 @@ export function map_backend_event_to_intents(
                 );
             }
             return [{ type: 'REGIME_APPLIED', regime: regime_value as RegimeType }];
+        }
+        case 'REGIME_SELECTED': {
+            const selected = payload.selected;
+            if (typeof selected !== 'string' || !BACKEND_REGIME_TYPES.has(selected)) {
+                throw new BackendContractError(
+                    'MALFORMED_BACKEND_PAYLOAD',
+                    'REGIME_SELECTED selection is invalid',
+                );
+            }
+            // Phase 6 registry coverage와 event support 상태를 교차 검증해 fallback을 차단한다.
+            const expected_support_status = selected === 'type0'
+                ? 'supported'
+                : 'unsupported';
+            if (payload.support_status !== expected_support_status) {
+                throw new BackendContractError(
+                    'MALFORMED_BACKEND_PAYLOAD',
+                    'REGIME_SELECTED support status is inconsistent',
+                );
+            }
+            const version = assert_safe_integer(payload.version, 'REGIME_SELECTED.version');
+            if (event.aggregate_version !== version) {
+                throw new BackendContractError(
+                    'MALFORMED_BACKEND_PAYLOAD',
+                    'REGIME_SELECTED aggregate version does not match its payload',
+                );
+            }
+
+            return [{
+                type: 'REGIME_SELECTION_SYNCHRONIZED',
+                selected: selected as RegimeType,
+                support_status: expected_support_status,
+                version,
+            }];
+        }
+        case 'TRADING_SESSION_UPDATED': {
+            const trading = validate_trading_snapshot(payload.trading);
+            const presentation = map_trading_status_presentation(trading.status);
+
+            // Envelope와 payload version을 함께 확인해 다른 Context 상태를 같은 event로 섞지 못하게 한다.
+            if (event.aggregate_version !== trading.version) {
+                throw new BackendContractError(
+                    'MALFORMED_BACKEND_PAYLOAD',
+                    'Trading event aggregate version does not match its payload',
+                );
+            }
+
+            return [{
+                type: 'TRADING_SESSION_SYNCHRONIZED',
+                status: trading.status,
+                version: trading.version,
+                session_id: trading.session_id,
+                command_enabled: trading.command_enabled,
+                scale_in: trading.scale_in,
+                scale_out: trading.scale_out,
+                scale_in_percentage: Number(trading.scale_in) * 100,
+                scale_out_percentage: Number(trading.scale_out) * 100,
+                has_open_position: trading.has_open_position,
+                logic_coverage: validate_trading_logic_coverage(trading.logic_coverage),
+                strategy_status: presentation.label,
+                strategy_status_tone: presentation.tone,
+            }];
         }
         case 'PERFORMANCE_UPDATED': {
             const performance = validate_performance_snapshot(

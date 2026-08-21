@@ -149,6 +149,8 @@ describe('UiApplicationFacade', () => {
             type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
             snapshot: {
                 last_sequence: 12,
+                trading_version: 4,
+                trading_session_id: null,
                 trading_symbol: 'ETH/USDT',
                 recommended_regime: 'type1',
                 applied_regime: 'type0',
@@ -193,7 +195,7 @@ describe('UiApplicationFacade', () => {
                 },
                 is_trading: false,
                 has_open_position: true,
-                trading_state_label: 'WAITING',
+                trading_state_label: 'not_started',
             },
         });
 
@@ -233,6 +235,8 @@ describe('UiApplicationFacade', () => {
             type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
             snapshot: {
                 last_sequence: 2,
+                trading_version: 5,
+                trading_session_id: null,
                 trading_symbol: 'ETH/USDT',
                 recommended_regime: 'type0',
                 applied_regime: 'type0',
@@ -241,6 +245,8 @@ describe('UiApplicationFacade', () => {
                 command_enabled: false,
                 recent_trades: [],
                 history_records: [],
+                scale_in_percentage: 50,
+                scale_out_percentage: 50,
                 account_strategy: {
                     appliedState: 'not_started',
                     profitAmount: '-',
@@ -283,6 +289,73 @@ describe('UiApplicationFacade', () => {
         expect(facade.get_view_model().active_modal).toBe('trading_unavailable_notice');
         expect(facade.get_view_model().trading.unavailable_reason).toBe('command_disabled');
         expect(command_adapter.command_records).toHaveLength(0);
+        facade.stop();
+    });
+
+    it('Phase 7 lifecycle event는 stopping을 pending으로 유지하고 terminated에서만 완료한다', () => {
+        const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
+            today: '2026-08-21',
+            applied_regime: 'type0',
+            command_enabled: true,
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'BACKEND_TRADING_STARTED' });
+        facade.dispatch({ type: 'POSITION_UPDATED', has_open_position: true });
+        facade.dispatch({
+            type: 'TRADING_SESSION_SYNCHRONIZED',
+            status: 'stopping',
+            version: 5,
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            command_enabled: false,
+            scale_in: '0.4',
+            scale_out: '0.6',
+            scale_in_percentage: 40,
+            scale_out_percentage: 60,
+            has_open_position: true,
+            logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+            strategy_status: '자동매매 중지 처리 중',
+            strategy_status_tone: 'neutral',
+        });
+
+        expect(facade.get_view_model().trading).toMatchObject({
+            is_trading: true,
+            is_pending: true,
+            has_open_position: true,
+        });
+        expect(facade.get_view_model().split_order).toMatchObject({
+            scale_in_percentage: 40,
+            scale_out_percentage: 60,
+        });
+        expect(facade.get_view_model().chart.active_trading_logic_state).toBe('stopping');
+        expect(facade.get_view_model().account_summary.strategy).toMatchObject({
+            appliedState: 'stopping',
+            status: '자동매매 중지 처리 중',
+            statusTone: 'neutral',
+        });
+
+        facade.dispatch({
+            type: 'TRADING_SESSION_SYNCHRONIZED',
+            status: 'terminated',
+            version: 6,
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            command_enabled: true,
+            scale_in: '0.4',
+            scale_out: '0.6',
+            scale_in_percentage: 40,
+            scale_out_percentage: 60,
+            has_open_position: false,
+            logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+            strategy_status: '자동매매 종료',
+            strategy_status_tone: 'neutral',
+        });
+
+        expect(facade.get_view_model().trading).toMatchObject({
+            is_trading: false,
+            is_pending: false,
+            has_open_position: false,
+        });
+        expect(facade.get_view_model().account_summary.strategy.status).toBe('자동매매 종료');
         facade.stop();
     });
 });

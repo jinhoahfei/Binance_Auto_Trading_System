@@ -136,7 +136,7 @@ class RegimeControllerBoundaryTests(unittest.TestCase):
     def test_controller_owned_values_have_separate_write_paths(self) -> None:
         """
         함수 이름: test_controller_owned_values_have_separate_write_paths()
-        기능: 추천값은 Action handler만, 선택값은 초기화 외 추천 경로에서 쓰지 않는지 검증한다.
+        기능: 추천값은 Action handler만, 선택값은 명시적 Phase 7 선택 경로만 쓰는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/20
@@ -176,7 +176,7 @@ class RegimeControllerBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(
             assignment_methods["_selected_regime"],
-            {"__init__"},
+            {"__init__", "set_regime_type"},
         )
 
 
