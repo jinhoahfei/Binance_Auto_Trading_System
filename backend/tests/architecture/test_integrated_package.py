@@ -15,6 +15,7 @@ from binance_auto_trader.domain.regime.transitions import (
 from binance_auto_trader.domain.trading import (
     RegimeType as TradingPublicType,
     TradingSTM,
+    UnsupportedTradingLogicError,
 )
 from binance_auto_trader.domain.trading.transitions.catalog import (
     TRANSITION_IDS as TRADING_TRANSITION_IDS,
@@ -85,10 +86,19 @@ class IntegratedPackageArchitectureTests(unittest.TestCase):
         """
         for regime_type in tuple(RegimeType)[1:]:
             with self.subTest(regime_type=regime_type):
-                with self.assertRaises(ValueError):
+                with self.assertRaises(UnsupportedTradingLogicError) as factory_error:
                     TradingSTM.get_stm_instance(regime_type)
-                with self.assertRaises(ValueError):
+                with self.assertRaises(UnsupportedTradingLogicError) as direct_error:
                     TradingSTM(regime_type)
+
+                self.assertEqual(
+                    "UNSUPPORTED_TRADING_LOGIC",
+                    factory_error.exception.code,
+                )
+                self.assertEqual(
+                    "UNSUPPORTED_TRADING_LOGIC",
+                    direct_error.exception.code,
+                )
 
         for invalid_regime_type in ("TYPE_0", "type0", 0, None):
             with self.subTest(invalid_regime_type=invalid_regime_type):

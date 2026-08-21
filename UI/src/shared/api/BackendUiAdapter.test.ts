@@ -228,7 +228,9 @@ describe('BackendUiAdapter HTTP contract', () => {
         expect(command_call?.[0]).toBe('http://127.0.0.1:42123/v1/regime/selection');
         expect(command_headers.Authorization).toBe(`Bearer ${TEST_BACKEND_TOKEN}`);
         expect(command_headers['Idempotency-Key']).toBe(TEST_REQUEST_ID);
-        expect(command_call?.[1]?.body).toBe(JSON.stringify({ schema_version: 1 }));
+        expect(command_call?.[1]?.body).toBe(JSON.stringify({
+            schema_version: BACKEND_SCHEMA_VERSION,
+        }));
     });
 
     it('shutdown typed failure 뒤에는 token을 유지하고 명시 stop에서만 제거한다', async () => {
@@ -300,7 +302,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         socket.emit_open();
         expect(socket.sent_frames).toHaveLength(1);
         expect(JSON.parse(socket.sent_frames[0]!) as unknown).toEqual({
-            schema_version: 1,
+            schema_version: BACKEND_SCHEMA_VERSION,
             type: 'AUTHENTICATE',
             token: TEST_BACKEND_TOKEN,
             after_sequence: 9,
@@ -419,7 +421,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
 
         adapter.start_live_events(snapshot, callbacks);
         sockets[0]!.emit_message({
-            schema_version: 1,
+            schema_version: BACKEND_SCHEMA_VERSION,
             session_id: TEST_BACKEND_SESSION_ID,
             type: 'RESYNC_REQUIRED',
             reason: 'REPLAY_GAP',
@@ -498,7 +500,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         adapter.start_live_events(create_backend_snapshot_fixture(), callbacks);
         sockets[0]!.emit_message({
             ...create_backend_event_fixture(10, 'FUTURE_EVENT', {}),
-            schema_version: 2,
+            schema_version: 1,
         });
 
         expect(callbacks.on_failure).toHaveBeenCalledWith(expect.objectContaining({

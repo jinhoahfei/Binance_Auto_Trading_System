@@ -1,3 +1,4 @@
+import { DEFAULT_TRADING_LOGIC_COVERAGE } from '../../../shared/contracts';
 import { RegimeMetric } from './RegimeMetric';
 import { RegimeTypeButton } from './RegimeTypeButton';
 import type { RegimeOption, RegimePanelProps, RegimeType } from '../types';
@@ -42,6 +43,7 @@ export function RegimePanel({
     candidate = null,
     disabled = false,
     highlight = false,
+    logicCoverage = DEFAULT_TRADING_LOGIC_COVERAGE,
     metrics,
     onIntent,
     recommended,
@@ -83,6 +85,9 @@ export function RegimePanel({
                                     regime,
                                 })}
                                 selected={applied === option.type}
+                                supportStatus={logicCoverage.find((coverage) => {
+                                    return coverage.regime_type === option.type;
+                                })?.support_status ?? 'unsupported'}
                                 type={option.type}
                             />
                         ))}

@@ -154,7 +154,7 @@ class TransportProcessRunnerTests(unittest.TestCase):
 
         try:
             self.assertNotIn(token, ready_payload.decode("utf-8"))
-            self.assertEqual(ready_descriptor["schema_version"], 1)
+            self.assertEqual(ready_descriptor["schema_version"], 2)
             self.assertGreater(ready_descriptor["port"], 0)
 
             # Ready 뒤 actual child process의 authenticated health endpoint를 조회한다.

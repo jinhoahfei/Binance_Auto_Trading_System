@@ -1,11 +1,15 @@
 /* 이 파일은 Python transport schema에서 생성됩니다. 직접 수정하지 마세요. */
 
-export const BACKEND_SCHEMA_VERSION = 1 as const;
+export const BACKEND_SCHEMA_VERSION = 2 as const;
 
 export type BackendDecimalString = string;
 export type BackendRegimeType = 'type0' | 'type1' | 'type2' | 'type3' | 'type4';
 export type BackendExecutionMode = 'disabled' | 'fake' | 'testnet' | 'live';
 export type BackendTradingStatus = 'not_started';
+export type BackendTradingLogicSupportStatus = 'supported' | 'unsupported';
+export type BackendTradingLogicStartGuard =
+    | 'READY'
+    | 'UNSUPPORTED_TRADING_LOGIC';
 export type BackendTradeSide = 'BUY' | 'SELL';
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
 
@@ -50,11 +54,18 @@ export interface BackendRegimeSnapshot {
     readonly selected: BackendRegimeType | null;
 }
 
+export interface BackendTradingLogicCoverage {
+    readonly regime_type: BackendRegimeType;
+    readonly support_status: BackendTradingLogicSupportStatus;
+    readonly start_guard: BackendTradingLogicStartGuard;
+}
+
 export interface BackendTradingSnapshot {
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
     readonly version: number;
     readonly command_enabled: false;
+    readonly logic_coverage: ReadonlyArray<BackendTradingLogicCoverage>;
 }
 
 export interface BackendBalanceSnapshot {

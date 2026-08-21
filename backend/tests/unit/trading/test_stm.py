@@ -9,8 +9,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.trading.action_requests import (
+    CancelPendingOrder,
+    CancelScheduledEvaluation,
+    CloseLowerEvent,
+    ForceSellAll,
     QueueEvent,
+    ReconcileOrder,
+    StopTradingRuntime,
     SubmitOrder,
 )
 from binance_auto_trader.domain.trading.context import (
@@ -21,6 +28,7 @@ from binance_auto_trader.domain.trading.context import (
 )
 from binance_auto_trader.domain.trading.events import (
     EventPriority,
+    ForceSellOutcomePayload,
     TradingEvent,
     TradingEventType,
 )
@@ -215,7 +223,7 @@ class GlobalTransitionTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         result = stm.run(create_test_context())
 
         self.assertEqual(("G-01",), result.transition_ids)
@@ -229,7 +237,7 @@ class GlobalTransitionTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm.run(create_test_context())
         market = MarketEvaluationSnapshot(
             realtime_price=Decimal("99"),
@@ -257,7 +265,7 @@ class GlobalTransitionTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
         runtime = TradingRuntimeSnapshot(
             position_owner=StrategyType.CASE_B,
@@ -276,6 +284,213 @@ class GlobalTransitionTests(unittest.TestCase):
         self.assertEqual(RootState.STOPPING, result.state_after.root_state)
 
 
+class UpperBandSafeTerminationTests(unittest.TestCase):
+    """
+    클래스 이름: UpperBandSafeTerminationTests
+    기능: G-07의 경계와 노출 상태별 안전 종료 및 후속 전이를 검증한다.
+    작성 날짜: 2026/08/21
+    """
+
+    def test_g_07_does_not_trigger_below_upper_band(self) -> None:
+        """
+        함수 이름: test_g_07_does_not_trigger_below_upper_band()
+        기능: 실시간 가격이 상단 BB 미만이면 G-07이 소비되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+        market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("119.99999999"),
+            upper_band=Decimal("120"),
+        )
+
+        result = stm.handle(
+            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
+            create_test_context(market=market),
+        )
+
+        self.assertFalse(result.consumed)
+        self.assertEqual((), result.transition_ids)
+        self.assertEqual(RootState.TRADE_MANAGEMENT, result.state_after.root_state)
+
+    def test_g_07_boundary_without_exposure_terminates_immediately(self) -> None:
+        """
+        함수 이름: test_g_07_boundary_without_exposure_terminates_immediately()
+        기능: 상단 BB와 같은 가격에서 주문·포지션이 없으면 즉시 종료하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+        market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("120"),
+            upper_band=Decimal("120"),
+        )
+
+        result = stm.handle(
+            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
+            create_test_context(market=market),
+        )
+
+        close_action = next(
+            action
+            for action in result.action_requests
+            if isinstance(action, CloseLowerEvent)
+        )
+        stop_action = next(
+            action
+            for action in result.action_requests
+            if isinstance(action, StopTradingRuntime)
+        )
+        self.assertEqual(("G-07",), result.transition_ids)
+        self.assertEqual(RootState.LOGIC_TERMINATED, result.state_after.root_state)
+        self.assertEqual("UPPER_BAND_SAFE_TERMINATION", close_action.reason)
+        self.assertEqual("UPPER_BAND_SAFE_TERMINATION", stop_action.reason)
+
+    def test_g_07_pending_order_takes_precedence_over_position(self) -> None:
+        """
+        함수 이름: test_g_07_pending_order_takes_precedence_over_position()
+        기능: pending 주문과 포지션이 함께 있으면 취소·재조정이 매도보다 우선하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+        runtime = TradingRuntimeSnapshot(
+            position_owner=StrategyType.CASE_B,
+            pending_strategy=StrategyType.CASE_B,
+            pending_order_side=OrderSide.BUY,
+            pending_order_id="order-g07",
+            pending_order_attempt_kind=OrderAttemptKind.INITIAL,
+        )
+        market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("121"),
+            upper_band=Decimal("120"),
+        )
+
+        result = stm.handle(
+            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
+            create_test_context(market=market, runtime=runtime),
+        )
+
+        cancel_action = next(
+            action
+            for action in result.action_requests
+            if isinstance(action, CancelPendingOrder)
+        )
+        reconcile_action = next(
+            action
+            for action in result.action_requests
+            if isinstance(action, ReconcileOrder)
+        )
+        self.assertEqual(("G-07",), result.transition_ids)
+        self.assertEqual(RootState.STOPPING, result.state_after.root_state)
+        self.assertEqual("order-g07", cancel_action.order_id)
+        self.assertEqual("UPPER_BAND_SAFE_TERMINATION", cancel_action.reason)
+        self.assertTrue(reconcile_action.stop_after_reconciliation)
+        self.assertFalse(
+            any(
+                isinstance(action, ForceSellAll)
+                for action in result.action_requests
+            )
+        )
+
+    def test_g_07_position_uses_force_sell_then_g_06f_completion(self) -> None:
+        """
+        함수 이름: test_g_07_position_uses_force_sell_then_g_06f_completion()
+        기능: 확정 포지션이 G-07 전량 매도와 G-06F 완료 경로로 종료되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+        runtime = TradingRuntimeSnapshot(position_owner=StrategyType.CASE_C)
+        market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("121"),
+            upper_band=Decimal("120"),
+        )
+
+        safe_termination = stm.handle(
+            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
+            create_test_context(market=market, runtime=runtime),
+        )
+
+        self.assertEqual(("G-07",), safe_termination.transition_ids)
+        self.assertEqual(RootState.STOPPING, safe_termination.state_after.root_state)
+        self.assertTrue(
+            any(
+                isinstance(action, CancelScheduledEvaluation)
+                for action in safe_termination.action_requests
+            )
+        )
+        self.assertTrue(
+            any(
+                isinstance(action, ForceSellAll)
+                and not action.retry
+                for action in safe_termination.action_requests
+            )
+        )
+
+        completion_event = replace(
+            create_test_event(TradingEventType.FORCE_SELL_FINISHED, sequence=2),
+            payload=ForceSellOutcomePayload(),
+        )
+        completion = stm.handle(
+            completion_event,
+            create_test_context(version=2),
+        )
+
+        self.assertEqual(("G-06F",), completion.transition_ids)
+        self.assertEqual(RootState.LOGIC_TERMINATED, completion.state_after.root_state)
+
+    def test_g_07_force_sell_failure_uses_g_06r_retry_policy(self) -> None:
+        """
+        함수 이름: test_g_07_force_sell_failure_uses_g_06r_retry_policy()
+        기능: 안전 종료 전량 매도의 terminal 미체결이 기존 G-06R 재시도를 사용하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+        runtime = TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B)
+        market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("120"),
+            upper_band=Decimal("120"),
+        )
+        stm.handle(
+            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
+            create_test_context(market=market, runtime=runtime),
+        )
+
+        failure_event = replace(
+            create_test_event(TradingEventType.FORCE_SELL_FAILED, sequence=2),
+            payload=ForceSellOutcomePayload(
+                execution_applied=False,
+                history_persisted=False,
+                terminal_unfilled=True,
+            ),
+        )
+        failure = stm.handle(
+            failure_event,
+            create_test_context(version=2, runtime=runtime),
+        )
+
+        retry_action = next(
+            action
+            for action in failure.action_requests
+            if isinstance(action, ForceSellAll)
+        )
+        self.assertEqual(("G-06R",), failure.transition_ids)
+        self.assertTrue(retry_action.retry)
+        self.assertTrue(retry_action.use_retry_policy)
+
+
 class ParallelRegionTests(unittest.TestCase):
     """
     클래스 이름: ParallelRegionTests
@@ -291,7 +506,7 @@ class ParallelRegionTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
         runtime = TradingRuntimeSnapshot(
             lower_event_id="lower-1",
@@ -326,7 +541,7 @@ class ParallelRegionTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -364,7 +579,7 @@ class ParallelRegionTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -419,7 +634,7 @@ class PriorityAndBoundaryTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.CASE_B_POSITION_MANAGEMENT,
@@ -469,7 +684,7 @@ class PriorityAndBoundaryTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.CASE_C_POSITION_MANAGEMENT,
@@ -508,7 +723,7 @@ class PriorityAndBoundaryTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -539,7 +754,7 @@ class PriorityAndBoundaryTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -574,7 +789,7 @@ class PriorityAndBoundaryTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.CASE_B_POSITION_MANAGEMENT,

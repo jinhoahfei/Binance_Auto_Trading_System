@@ -232,6 +232,24 @@ class TransportContractTests(unittest.TestCase):
         self.assertEqual(snapshot["market"]["current_price"], "4321.5000")
         self.assertEqual(snapshot["regime"]["recommended"], "type2")
         self.assertIsNone(snapshot["regime"]["selected"])
+        self.assertEqual(
+            snapshot["trading"]["logic_coverage"],
+            [
+                {
+                    "regime_type": "type0",
+                    "support_status": "supported",
+                    "start_guard": "READY",
+                },
+                *(
+                    {
+                        "regime_type": f"type{index}",
+                        "support_status": "unsupported",
+                        "start_guard": "UNSUPPORTED_TRADING_LOGIC",
+                    }
+                    for index in range(1, 5)
+                ),
+            ],
+        )
         self.assertEqual(snapshot["account"]["quote_asset"], "USDT")
         self.assertEqual(snapshot["account"]["balances"][0]["total"], "1.75")
 
@@ -241,6 +259,7 @@ class TransportContractTests(unittest.TestCase):
         self.assertNotIn("slippage", trade_row)
         self.assertNotIn("krw", json_text := str(snapshot).lower())
         self.assertNotIn("nan", json_text)
+        self.assertNotIn("lower_bb", json_text)
 
     def test_typescript_renderer_is_deterministic_and_matches_checked_in_file(
         self,

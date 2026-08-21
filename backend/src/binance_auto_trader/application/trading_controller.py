@@ -1,4 +1,4 @@
-"""Phase 4 계좌 초기 load 순서만 조정하는 TradingController slice를 정의한다."""
+"""계좌 초기화와 REGIME별 TradingSTM 선택을 조정하는 Controller를 정의한다."""
 
 from threading import RLock
 
@@ -7,17 +7,19 @@ from binance_auto_trader.adapters.binance.websocket_gateway import (
     Subscription,
     WebSocketGateway,
 )
+from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.market import MarketSnapshot
 from binance_auto_trader.domain.trading.account import (
     Account,
     SUPPORTED_VALUATION_ASSET,
 )
+from binance_auto_trader.domain.trading.stm import TradingSTM
 
 
 class TradingController:
     """
     클래스 이름: TradingController
-    기능: REST 계좌 적용 뒤 account stream을 시작하는 startup slice를 조정한다.
+    기능: 계좌 startup 순서와 선택 REGIME의 TradingSTM factory 경계를 조정한다.
     작성 날짜: 2026/08/21
     """
 
@@ -71,6 +73,20 @@ class TradingController:
         작성 날짜: 2026/08/21
         """
         return self._account_subscription
+
+    def fetch_selected_trading_logic(
+        self,
+        regime_type: RegimeType,
+    ) -> TradingSTM:
+        """
+        함수 이름: fetch_selected_trading_logic()
+        기능: fallback 없이 선택한 canonical REGIME에 대응하는 새 TradingSTM을 생성한다.
+        인자: regime_type -> UI에서 명시적으로 선택한 canonical REGIME
+        반환값: 지원된 거래 로직의 세션 전용 TradingSTM
+        작성 날짜: 2026/08/21
+        """
+        # Session Context와 lifecycle은 Phase 7 책임이므로 factory 선택만 위임한다.
+        return TradingSTM.get_stm_instance(regime_type)  # 미지원 오류를 그대로 전달한다.
 
     def load_account(
         self,

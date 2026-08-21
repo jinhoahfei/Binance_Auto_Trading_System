@@ -13,6 +13,7 @@ import { BACKEND_SCHEMA_VERSION } from '../contracts';
 import type {
     RegimeMetric,
     RegimeType,
+    TradingLogicCoverage,
     TradeRecord,
 } from '../contracts';
 import {
@@ -40,6 +41,13 @@ const BACKEND_REGIME_TYPES: ReadonlySet<string> = new Set([
     'type3',
     'type4',
 ]);
+const CANONICAL_REGIME_TYPES: ReadonlyArray<RegimeType> = [
+    'type0',
+    'type1',
+    'type2',
+    'type3',
+    'type4',
+];
 const BACKEND_EXECUTION_MODES: ReadonlySet<string> = new Set([
     'disabled',
     'fake',
@@ -264,6 +272,64 @@ function assert_schema_version(value: unknown): void {
             'Backend schema version is not supported',
         );
     }
+}
+
+/**
+ * 함수 이름: validate_trading_logic_coverage()
+ * 기능: REGIME별 TradingSTM coverage를 빠짐없는 canonical 5행과 일관된 guard로 검증한다.
+ * 인자: value -> trading.logic_coverage JSON 값
+ * 반환값: UI actor가 그대로 보존할 REGIME별 coverage 목록
+ * 작성 날짜: 2026/08/21
+ */
+function validate_trading_logic_coverage(
+    value: unknown,
+): ReadonlyArray<TradingLogicCoverage> {
+    if (!Array.isArray(value) || value.length !== CANONICAL_REGIME_TYPES.length) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.logic_coverage must contain the canonical five regimes',
+        );
+    }
+
+    // 배열 순서까지 canonical mapping으로 고정해 중복, 누락, 알 수 없는 REGIME을 함께 차단한다.
+    return value.map((coverage_value, index) => {
+        const coverage = assert_record(
+            coverage_value,
+            `trading.logic_coverage[${index}]`,
+        );
+        const expected_regime = CANONICAL_REGIME_TYPES[index]!;
+
+        if (coverage.regime_type !== expected_regime) {
+            throw new BackendContractError(
+                'MALFORMED_BACKEND_PAYLOAD',
+                'trading.logic_coverage regime order is invalid',
+            );
+        }
+        if (coverage.support_status !== 'supported'
+            && coverage.support_status !== 'unsupported') {
+            throw new BackendContractError(
+                'MALFORMED_BACKEND_PAYLOAD',
+                'trading.logic_coverage support status is invalid',
+            );
+        }
+
+        const expected_guard = coverage.support_status === 'supported'
+            ? 'READY'
+            : 'UNSUPPORTED_TRADING_LOGIC';
+
+        if (coverage.start_guard !== expected_guard) {
+            throw new BackendContractError(
+                'MALFORMED_BACKEND_PAYLOAD',
+                'trading.logic_coverage start guard is inconsistent',
+            );
+        }
+
+        return {
+            regime_type: expected_regime,
+            support_status: coverage.support_status,
+            start_guard: expected_guard,
+        };
+    });
 }
 
 /**
@@ -545,6 +611,7 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
     if (trading.status !== 'not_started' || trading.command_enabled !== false) {
         throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'trading state is invalid');
     }
+    validate_trading_logic_coverage(trading.logic_coverage);
     assert_safe_integer(trading.version, 'trading.version');
 
     const account = validate_account_snapshot(snapshot.account);
@@ -899,6 +966,7 @@ export function map_backend_snapshot(
     today: string,
 ): MappedBackendSnapshot {
     const regime_metrics = map_indicator_metrics(snapshot.regime.indicator);
+    const logic_coverage = validate_trading_logic_coverage(snapshot.trading.logic_coverage);
     const recent_trades = snapshot.recent_trades.map(map_trade_record);
     const account_asset = map_account_asset(snapshot.account);
     const trade_history_summary = map_performance_summary(snapshot.performance);
@@ -918,6 +986,8 @@ export function map_backend_snapshot(
         recommended_regime: snapshot.regime.recommended,
         applied_regime: snapshot.regime.selected,
         regime_metrics,
+        logic_coverage,
+        command_enabled: snapshot.trading.command_enabled,
         recent_trades,
         history_records: recent_trades,
         account_strategy,
@@ -934,6 +1004,8 @@ export function map_backend_snapshot(
             recommended_regime: server_snapshot.recommended_regime,
             applied_regime: server_snapshot.applied_regime,
             regime_metrics: server_snapshot.regime_metrics,
+            logic_coverage: server_snapshot.logic_coverage,
+            command_enabled: server_snapshot.command_enabled,
             recent_trades: server_snapshot.recent_trades,
             history_records: server_snapshot.history_records,
             account_strategy: server_snapshot.account_strategy,

@@ -7,7 +7,6 @@ from ..action_requests import (
     CancelScheduledEvaluation,
     CloseLowerEvent,
     ForceSellAll,
-    HandoffToUpperBandPolicy,
     ReconcileOrder,
     ResetCaseBContext,
     ResetCaseCContext,
@@ -38,6 +37,69 @@ def _create_inactive_configuration(
     작성 날짜: 2026/08/14
     """
     return TradingStateConfiguration(root_state=root_state)
+
+
+def _handle_upper_band_safe_termination(
+    context: TradingContextView,
+) -> TransitionOutcome:
+    """
+    함수 이름: _handle_upper_band_safe_termination()
+    기능: 상단 BB 접촉 시 주문·포지션 보유 상태에 맞는 안전 종료 경로를 선택한다.
+    인자: context -> pending 주문과 포지션 소유권을 포함한 거래 컨텍스트
+    반환값: G-07로 식별되는 배타적 안전 종료 TransitionOutcome
+    작성 날짜: 2026/08/21
+    """
+    runtime = context.runtime  # 세 branch는 같은 평가 시점의 불변 snapshot을 공유한다.
+
+    # pending 주문을 먼저 reconciliation해 미확정 체결 위에 중복 매도를 만들지 않는다.
+    if runtime.pending_order_id is not None:
+        return create_transition_outcome(
+            "G-07",
+            _create_inactive_configuration(RootState.STOPPING),
+            patch(trading_phase=TradingPhase.STOPPING),
+            CancelPendingOrder(
+                order_id=runtime.pending_order_id,
+                reason="UPPER_BAND_SAFE_TERMINATION",
+            ),
+            ReconcileOrder(
+                order_id=runtime.pending_order_id,
+                stop_after_reconciliation=True,
+            ),
+            exclusive=True,
+        )
+
+    # 확정 포지션은 기존 STOP 계약과 같은 STOPPING 및 전량 매도 절차로 종료한다.
+    if runtime.position_owner is not None:
+        return create_transition_outcome(
+            "G-07",
+            _create_inactive_configuration(RootState.STOPPING),
+            patch(trading_phase=TradingPhase.STOPPING),
+            CancelScheduledEvaluation(scope="trading-strategy"),
+            ForceSellAll(),
+            exclusive=True,
+        )
+
+    # 주문과 포지션이 모두 없으면 하단 event와 runtime을 한 번에 안전 종료한다.
+    return create_transition_outcome(
+        "G-07",
+        _create_inactive_configuration(RootState.LOGIC_TERMINATED),
+        CloseLowerEvent(reason="UPPER_BAND_SAFE_TERMINATION"),
+        ResetCaseBContext(),
+        ResetCaseCContext(),
+        patch(
+            pending_strategy=None,
+            pending_order_side=None,
+            pending_order_id=None,
+            pending_order_attempt_kind=None,
+            pending_intent_id=None,
+            pending_exit_reason=None,
+            pending_return_state=None,
+            trading_phase=TradingPhase.TERMINATED,
+        ),
+        CancelScheduledEvaluation(scope="trading-session"),
+        StopTradingRuntime(reason="UPPER_BAND_SAFE_TERMINATION"),
+        exclusive=True,
+    )
 
 
 def handle_global_transition(
@@ -161,23 +223,13 @@ def handle_global_transition(
             exclusive=True,
         )
 
-    # 상단 Band 접촉 시 lower 정책 timer를 취소하고 포지션 관리 책임을 인계한다.
+    # 상단 Band 접촉은 미구현 상단 전략으로 넘기지 않고 승인된 종료 계약을 재사용한다.
     if (
         state.root_state is RootState.TRADE_MANAGEMENT
         and event_type is TradingEventType.UPPER_BAND_TOUCHED
         and context.market.realtime_price >= context.market.upper_band
     ):
-        return create_transition_outcome(
-            "G-07",
-            _create_inactive_configuration(RootState.UPPER_BB_STATE_MACHINE),
-            CancelScheduledEvaluation(scope="lower-band-policy"),
-            HandoffToUpperBandPolicy(
-                position_owner=runtime.position_owner,
-                lower_event_id=runtime.lower_event_id,
-            ),
-            CloseLowerEvent(reason="UPPER_BAND_HANDOFF"),
-            exclusive=True,
-        )
+        return _handle_upper_band_safe_termination(context)
 
     # 세션 시작은 Context 초기화 action과 LOWER_TOUCH_WATCH 진입만 수행한다.
     if (

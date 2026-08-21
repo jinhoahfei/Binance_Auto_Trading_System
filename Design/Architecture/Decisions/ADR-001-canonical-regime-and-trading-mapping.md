@@ -46,33 +46,53 @@
   식별하는 private registry key로만 유지하고 Phase 1에서 공용 `RegimeType` enum에서
   제거한다.
 
-### 2.2 Phase 0 baseline의 Trading registry 매핑
+### 2.2 Phase 6 Trading registry coverage 결정
 
-현재 구현과 근거 문서를 기준으로 다음 매핑을 잠근다.
+현재 구현과 근거 문서를 기준으로 다음 불변 매핑을 잠근다.
 
-| REGIME | Trading registry | 상태 | 선택 후 start 동작 | 근거 |
-|---|---|---|---|---|
-| `TYPE_0` | `LOWER_BB` 109개 transition | 매핑됨 / 구현 부분 완료 | Phase 6 전에는 `TRADING_LOGIC_INCOMPLETE`; 상단 BB 인계 계약까지 검증된 뒤 enable | `regime_design.md` §9의 “기존 30m 횡보 로직”, `UI_Behavior.md` §3의 “Basic Iterative 횡보장 조건”, 현재 유일한 30m 구현인 하단 BB registry |
-| `TYPE_1` | 없음 | 미지원 | `UNSUPPORTED_TRADING_LOGIC` | 약상승 30m Event-Action Table/registry 없음 |
-| `TYPE_2` | 없음 | 미지원 | `UNSUPPORTED_TRADING_LOGIC` | 상위 gate 설명만 있고 강상승 30m Event-Action Table/registry 없음 |
-| `TYPE_3` | 없음 | 미지원 | `UNSUPPORTED_TRADING_LOGIC` | 약하락 30m Event-Action Table/registry 없음 |
-| `TYPE_4` | 없음 | 미지원 | `UNSUPPORTED_TRADING_LOGIC` | 하위 gate 설명만 있고 강하락 30m Event-Action Table/registry 없음 |
+| REGIME | Trading registry | 지원 상태 | Registry start Guard | 상단 BB 정책 | 근거 |
+|---|---|---|---|---|---|
+| `TYPE_0` | `LOWER_BB` 정확히 109개 transition | `SUPPORTED` | `READY` | `SAFE_TERMINATION` | `regime_design.md` §9의 “기존 30m 횡보 로직”, `UI_Behavior.md` §3의 “Basic Iterative 횡보장 조건”, 현재 유일한 30m 구현인 하단 BB registry |
+| `TYPE_1` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 약상승 30m Event-Action Table/registry 없음 |
+| `TYPE_2` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 상위 gate 설명만 있고 강상승 30m Event-Action Table/registry 없음 |
+| `TYPE_3` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 약하락 30m Event-Action Table/registry 없음 |
+| `TYPE_4` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 하위 gate 설명만 있고 강하락 30m Event-Action Table/registry 없음 |
 
 `TYPE_0 -> LOWER_BB`는 기존 문서의 이름이 완전히 일치해서 발견된 매핑이 아니라,
 위 세 근거를 함께 적용해 Phase 0에서 확정한 architecture decision이다. 향후 근거가
 달라지면 이 ADR을 대체하고 Communication 명세와 Event-Action Table을 먼저 변경한다.
 
-현재 lower-BB registry의 `G-07`은 상단 BB 상태로 인계하지만 대상 정책의 Operation과
-Event-Action Table이 아직 없다. 따라서 Phase 0 baseline에서는 다섯 REGIME 모두
-production start가 비활성이다. `TYPE_0`은 mapping 자체는 확정되었지만 Phase 6에서 상단
-BB 인계 계약과 registry coverage를 완성하거나, 별도의 안전한 종료 정책을 명세·검증한
-뒤에만 start를 enable한다. 이를 조용히 no-op 상태로 운용하지 않는다.
+Phase 6에서 lower-BB registry의 `G-07`은 미구현 상단 전략으로 인계하지 않고
+`UpperBandPolicy.SAFE_TERMINATION`을 적용하도록 확정했다. `realtime_price >=
+upper_band`인 경우 다음 세 branch는 배타적이며 pending 주문을 가장 먼저
+처리한다.
+
+1. `pending_order_id != None`이면 `STOPPING`으로 전이하고 reason
+   `UPPER_BAND_SAFE_TERMINATION`으로 취소를 요청한 뒤, 같은 주문 ID를
+   `stop_after_reconciliation = True`로 조정한다. 이 branch에서는
+   `ForceSellAll`을 즉시 요청하지 않는다.
+2. pending 주문이 없고 `position_owner`가 있으면 `STOPPING`으로 전이하고
+   전략 평가를 취소한 뒤 `ForceSellAll`을 요청한다. 후속 완료·실패는
+   기존 `G-06F`/`G-06R`로 처리한다.
+3. 둘 다 없으면 `LOGIC_TERMINATED`로 즉시 전이하고 lower event와 Case
+   Context를 정리한 뒤 `trading_phase = TERMINATED`, session 평가 취소,
+   runtime 종료를 순서대로 요청한다.
+
+이 계약은 상단 BB 매매 전략을 추가한 것이 아니라 기존 STOP 처리를 재사용해
+하단 BB session을 안전하게 종료하는 정책이다. 따라서 `TYPE_0`의 registry
+coverage와 start Guard는 `READY`이며, 조용한 no-op이나 인계 fallback은 없다.
 
 미지원 타입도 추천·표시·선택할 수는 있다. 다만 UI는 지원 상태를 함께 표시하고,
-`TradingController.fetchSelectedTradingLogic(...)`과 `/v1/trading/start`는 각각
-`TRADING_LOGIC_INCOMPLETE` 또는 `UNSUPPORTED_TRADING_LOGIC`으로 시작을 거부한다. 어떤
-경우에도 `TYPE_0`이나 `LOWER_BB`로 fallback하지 않는다. 새 REGIME을 지원하려면 해당
-30m Event-Action Table, 상태도, registry ID 목록과 경계 테스트가 먼저 있어야 한다.
+`TradingController.fetchSelectedTradingLogic(...)`은 `TYPE_1`~`TYPE_4`에 인스턴스를
+만들지 않고 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. 어떤 경우에도
+`TYPE_0`이나 `LOWER_BB`로 fallback하지 않는다. 새 REGIME을 지원하려면
+해당 30m Event-Action Table, 상태도, registry ID 목록과 경계 테스트가 먼저
+있어야 한다.
+
+Registry의 `READY`는 선택한 전략 구성이 완전하다는 domain 신호이지 즉시
+production 주문을 허용한다는 의미가 아니다. Phase 7의 session 시작
+orchestration이 구현되기 전까지 live snapshot의 `command_enabled`는 `false`이며,
+지원된 `TYPE_0`을 선택해도 실제 start command는 기능 미제공으로 차단한다.
 
 ### 2.3 RegimeSTM public 계약
 
@@ -144,13 +164,14 @@ event를 전달한다. 인자 없는 호출이나 pending Context로 성공·실
 ## 4. 구현 및 검증 의무
 
 - [x] 다섯 domain/wire 값의 일대일 표가 확정되었다.
-- [x] `TYPE_0` mapping은 부분 완료, `TYPE_1`~`TYPE_4`는 미지원이며 현재 다섯 타입 모두 start disabled로 확정되었다.
+- [x] `TYPE_0`은 `SUPPORTED/LOWER_BB/READY/SAFE_TERMINATION`, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`/registry 없음/`UNSUPPORTED_TRADING_LOGIC`으로 고정되었다.
 - [x] lower-BB registry의 소속과 근거가 기록되었다.
 - [x] 두 STM의 canonical signature가 실제 구현과 일치한다.
 - [x] active session의 REGIME 변경 거부가 확정되었다.
 - [x] Phase 1에서 중복 Python `RegimeType`을 `domain/common/enums.py` 한 enum으로 통합했다.
-- [ ] Phase 6에서 TYPE_0 상단 BB 인계 gap을 닫고 mapping/fallback gate를 코드·테스트로 고정한다.
-- [ ] UI 연결 Phase에서 미지원 표시와 `TRADING_ACTIVE` 오류를 반영한다.
+- [x] Phase 6에서 TYPE_0 상단 BB gap을 안전 종료 정책으로 닫고 mapping/fallback gate를 코드·테스트로 고정했다.
+- [x] UI snapshot과 선택 화면에 다섯 REGIME 지원 상태를 반영하고 미지원 start를 차단했다.
+- [ ] Phase 7에서 session 시작 orchestration과 active 변경의 `TRADING_ACTIVE` 오류를 완성한다.
 
 ## 5. Baseline 증거
 

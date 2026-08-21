@@ -45,6 +45,7 @@ export function create_demo_ui_application(): DemoUiApplication {
         },
         recommended_regime: DEFAULT_DASHBOARD_PROPS.regime.recommended,
         applied_regime: null,
+        command_enabled: true,
         regime_metrics: DEFAULT_DASHBOARD_PROPS.regime.metrics,
         recent_trades: DEMO_RECENT_TRADE_RECORDS,
         history_records: DEMO_HISTORY_TRADE_RECORDS,

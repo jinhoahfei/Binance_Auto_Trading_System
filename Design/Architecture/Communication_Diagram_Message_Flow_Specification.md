@@ -196,8 +196,8 @@ Operation 표는 UML 표기이므로 기존 다이어그램의 camelCase를 보�
 | `6` | `User -> AppShellUI` | `selectRegime(regimeType : RegimeType) : void` | 사용자가 선택한 REGIME | `void` | 사용자가 실제 거래에 적용할 REGIME을 선택한다. | 추천 REGIME과 별개의 사용자 선택값이며 Boundary가 `6.1`로 전달한다. |
 | `6.1` | `AppShellUI -> UIStateController` | `selectRegime(regimeType : RegimeType) : void` | 선택 REGIME | `void` | UI 입력을 제어 계층에 전달한다. | UIStateController는 `6.1.1`을 통해 RegimeController에 선택을 적용한다. |
 | `6.1.1` | `UIStateController -> RegimeController` | `setRegimeType(regimeType : RegimeType) : void` | 선택 REGIME | `void` | 추천값이 아닌 사용자의 적용 REGIME을 설정한다. | 원본 라벨에는 괄호가 없다. active trading session에서는 `TRADING_ACTIVE`로 거부하고 기존 선택을 유지한다. 정지 상태에서는 선택값과 지원 상태를 보존한 뒤 `6.1.1.1`로 거래 logic을 조회한다. |
-| `6.1.1.1` | `RegimeController -> TradingController` | `fetchSelectedTradingLogic(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 선택된 TradingSTM 또는 typed failure | 선택 REGIME에 맞는 trading logic을 요청한다. | 원본 철자는 `fetchSelectedTardingLogic()`이다. `TYPE_0`은 lower-BB registry에 매핑되지만 상단 BB 인계 gap을 닫기 전에는 `TRADING_LOGIC_INCOMPLETE`, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED_TRADING_LOGIC`이다. fallback은 없다. |
-| `6.1.1.1.1` | `TradingController -> TradingSTM` | `getSTMInstance(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 해당 TradingSTM 인스턴스 또는 typed failure | 선택된 logic을 실행할 session 전용 STM 인스턴스를 가져온다. | ADR-001의 mapping을 엄격하게 적용한다. `TYPE_0 -> LOWER_BB` mapping은 확정되었지만 production start enable 여부는 Phase 6 coverage gate가 결정한다. 미지원 타입에는 인스턴스를 만들지 않는다. |
+| `6.1.1.1` | `RegimeController -> TradingController` | `fetchSelectedTradingLogic(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 선택된 TradingSTM 또는 typed failure | 선택 REGIME에 맞는 trading logic을 요청한다. | 원본 철자는 `fetchSelectedTardingLogic()`이다. `TYPE_0`은 `SUPPORTED/LOWER_BB/READY`이며 상단 BB에서 `SAFE_TERMINATION`을 사용한다. `TYPE_1`~`TYPE_4`는 `UNSUPPORTED_TRADING_LOGIC`이며 fallback은 없다. |
+| `6.1.1.1.1` | `TradingController -> TradingSTM` | `getSTMInstance(regimeType : RegimeType) : TradingSTM` | 선택 REGIME | 해당 TradingSTM 인스턴스 또는 typed failure | 선택된 logic을 실행할 session 전용 STM 인스턴스를 가져온다. | ADR-001의 불변 mapping을 엄격하게 적용한다. `TYPE_0`만 정확히 109개 lower-BB transition이 있는 새 session 인스턴스를 받고, 미지원 타입에는 인스턴스를 만들지 않는다. |
 
 ### 4.6 자동매매 시작
 
@@ -207,7 +207,7 @@ Operation 표는 UML 표기이므로 기존 다이어그램의 camelCase를 보�
 |---|---|---|---|---|---|---|
 | `7` | `User -> AppShellUI` | `startConfirmed() : void` | 없음 | `void` | 사용자가 시작 확인 팝업에서 거래 시작을 확정한다. | Boundary가 `7.1`로 확인 event를 전달한다. |
 | `7.1` | `AppShellUI -> UIStateController` | `startTrading() : void` | 없음 | `void` | 자동매매 시작 UI event를 전달한다. | UI 상태 전이 후 실제 trading 시작을 `7.1.1`에 위임한다. |
-| `7.1.1` | `UIStateController -> TradingController` | `startTrading() : void` | 없음 | `void` | TradingController에 자동매매 시작을 요청한다. | Controller는 selected REGIME, 지원 mapping, connection, Account/Position과 실행 mode gate를 먼저 검증한다. 미지원/불완전이면 Context를 초기화하지 않고 `UNSUPPORTED_TRADING_LOGIC` 또는 `TRADING_LOGIC_INCOMPLETE`로 거부한다. 성공 시 `7.1.1.1` 뒤 `7.1.1.2`를 실행한다. |
+| `7.1.1` | `UIStateController -> TradingController` | `startTrading() : void` | 없음 | `void` | TradingController에 자동매매 시작을 요청한다. | Controller는 selected REGIME, 지원 mapping, connection, Account/Position과 실행 mode gate를 먼저 검증한다. 미지원이면 Context를 초기화하지 않고 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. Phase 7 전 live snapshot의 `command_enabled = false`이므로 지원 REGIME이어도 실제 start command는 호출하지 않는다. Phase 7에서 본 Operation을 연결한 뒤 성공 시 `7.1.1.1`과 `7.1.1.2`를 순서대로 실행한다. |
 | `7.1.1.1` | `TradingController -> TradingContext` | `initialize(account : Account, selectedRegime : RegimeType, position : Position, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void` | 계좌, 선택 REGIME, 현재 포지션, 분할 비율 | `void` | **이 부분은 diagram에서 추가되어야함.** TradingSTM이 사용할 시작 context를 초기화한다. | Start/Stop 그림에 기존 클래스인 `:TradingContext` lifeline도 함께 추가한다. `positionOwner`, pending 주문 값, `tradingPhase`, `lowerEventId` 등 runtime 값을 일관된 시작값으로 만들고 계좌·포지션·설정 참조를 연결한다. |
 | `7.1.1.2` | `TradingController -> TradingSTM` | `run(context : TradingContextView) : TradingSTMResult` | 초기화된 TradingContext에서 만든 불변 view | 초기 trading action | TradingSTM을 실행한다. | 원본 그림의 번호는 `7.1.1.1`이다. Controller가 mutable Context를 snapshot으로 만든 뒤 넘긴다. STM은 시작 가능 조건과 초기 상태를 결정하고 반환 Action은 Controller가 소비한다. |
 
@@ -465,10 +465,11 @@ Operation
 - `startTrading() : void`
 - `stopTrading() : void`
 
-`fetchSelectedTradingLogic`은 `TYPE_0`을 lower-BB에만 매핑한다. 다만 상단 BB 인계가
-미완료인 Phase 0 baseline에서는 `TRADING_LOGIC_INCOMPLETE`로 start를 차단한다. 다른
-타입은 `UNSUPPORTED_TRADING_LOGIC`, active session의 변경은 `TRADING_ACTIVE`로 거부하며
-기존 STM과 Context를 유지한다.
+`fetchSelectedTradingLogic`은 `TYPE_0`을 정확히 109개 transition의 lower-BB
+registry에만 매핑하고 상단 BB 접촉은 `SAFE_TERMINATION`으로 완결한다.
+다른 타입은 `UNSUPPORTED_TRADING_LOGIC`, active session의 변경은
+`TRADING_ACTIVE`로 거부하며 기존 STM과 Context를 유지한다. Phase 7 전에는
+`command_enabled = false`이므로 이 selection 조회가 즉시 runtime 시작을 의미하지 않는다.
 
 ### 8.5 TradingSTM
 
@@ -945,13 +946,13 @@ Operation
 - `openReadStream(path : Path) : InputStream`
 - `createCustomizedCSV(path : Path, fileName : String, rows : Stream<String>) : CSVExportResult`
 
-## 10. Phase 0 확정 정책과 Operation 추적성
+## 10. 확정 정책과 Operation 추적성
 
 ### 10.1 적용 ADR
 
 | ADR | 잠근 정책 |
 |---|---|
-| `ADR-001-canonical-regime-and-trading-mapping.md` | canonical REGIME/wire 값, `TYPE_0 -> LOWER_BB`, 미지원 거부, 두 STM signature, active 변경 금지 |
+| `ADR-001-canonical-regime-and-trading-mapping.md` | canonical REGIME/wire 값, `TYPE_0 -> LOWER_BB` 109개와 상단 `SAFE_TERMINATION`, 미지원 거부, 두 STM signature, active 변경 금지 |
 | `ADR-002-order-retry-and-reconciliation.md` | timeout/partial/unknown/cancel/restart, retry 횟수와 순서 |
 | `ADR-003-stop-and-product-mode.md` | Spot `ETHUSDT` long-only, stop guard, 실행 mode와 live gate |
 | `ADR-004-persistence-performance-and-csv.md` | 4H 지표 golden vector, JSONL, Performance/KST, summary, CSV |
@@ -962,17 +963,27 @@ ADR의 세부 numeric/schema 표는 이 문서의 Operation이 구현할 정책�
 
 ### 10.2 REGIME 지원과 상품 범위
 
-| Domain | Wire | Phase 0 baseline trading registry | Start 결과 |
+| Domain | Wire | Phase 6 trading registry | Registry start Guard |
 |---|---|---|---|
-| `TYPE_0` | `type0` | `LOWER_BB` 109개 transition, 상단 BB 인계 미완료 | `TRADING_LOGIC_INCOMPLETE` |
+| `TYPE_0` | `type0` | `LOWER_BB` 정확히 109개 transition, 상단 `SAFE_TERMINATION` | `READY` |
 | `TYPE_1` | `type1` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
 | `TYPE_2` | `type2` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
 | `TYPE_3` | `type3` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
 | `TYPE_4` | `type4` | 없음 | `UNSUPPORTED_TRADING_LOGIC` |
 
+`TYPE_0`의 `UpperBandPolicy.SAFE_TERMINATION`은 새 상단 매매 전략이 아니다.
+G-07에서 pending 주문이 있으면 포지션 유무와 관계없이 `STOPPING`으로
+전이해 `UPPER_BAND_SAFE_TERMINATION`으로 취소하고 같은 ID를
+`stop_after_reconciliation = True`로 조정하며 즉시 전량 매도하지 않는다.
+pending이 없고 포지션이 있으면 `STOPPING`에서 전략 평가를 취소하고
+전량 매도한 뒤 G-06F/G-06R로 완결한다. 둘 다 없으면 lower event,
+Case B/C Context와 pending 필드를 정리하고 `TERMINATED`를 적용한 뒤
+session 평가와 runtime을 즉시 종료한다.
+
 상품은 Binance Spot `ETHUSDT` long-only다. Margin/Futures/short와 naked sell은 금지한다.
-현재 다섯 타입 모두 production start disabled이며, TYPE_0은 Phase 6에서 상단 BB 인계
-gap과 coverage gate를 통과한 뒤에만 enable할 수 있다. 미지원 타입을 `TYPE_0`이나
+`TYPE_0`의 registry coverage는 시작 가능하지만 Phase 7의 session orchestration
+구현 전이므로 live `command_enabled`는 `false`다. `TYPE_1`~`TYPE_4`는
+추천·표시·선택을 허용하되 start만 차단한다. 미지원 타입을 `TYPE_0`이나
 lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`로 거부하고 stop
 완료 뒤 새 session을 요구한다.
 
@@ -989,7 +1000,8 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 |---|---|---|---|
 | D-03 / `1.5.1` | `RegimeController -> RegimeSTM` | `handle(event, context?) : RegimeSTMResult` | STM은 전이/Action 요청만 결정, Controller가 두 microstep Action 수행 |
 | D-02 / `6.1.1.1` | `RegimeController -> TradingController` | `fetchSelectedTradingLogic(regimeType) : TradingSTM` | mapping 적용, 미지원 typed failure, fallback 금지 |
-| D-02 / `6.1.1.1.1` | `TradingController -> TradingSTM` | `getSTMInstance(regimeType) : TradingSTM` | session 전용 registry 생성, TYPE_0 mapping은 확정되었으나 Phase 6 전 start disabled |
+| D-02 / `6.1.1.1.1` | `TradingController -> TradingSTM` | `getSTMInstance(regimeType) : TradingSTM` | `TYPE_0`에만 109개 lower-BB registry의 session 전용 STM을 생성하고 미지원은 typed failure |
+| D-02 / `G-07` | `TradingController -> TradingSTM` | `handle(UPPER_BAND_TOUCHED, context) : TradingSTMResult` | pending 우선의 세 가지 `SAFE_TERMINATION` branch 중 하나만 결정하고 미구현 상단 전략으로 인계하지 않음 |
 | D-05 / `8.1.1.1` | `TradingController -> TradingSTM` | `handle(STOP_CONFIRMED, context) : TradingSTMResult` | Position/pending guard는 기존 STM G-05/G-06/G-06P가 결정 |
 | D-05 / `8.1.1.2b` | `TradingController -> APIGateway` | `sellAllPosition(symbol, quantity) : OrderResult` | `quantity > 0`에서만 호출, Spot 보유량 초과 금지 |
 | D-08 / `8.1.1.2p`·Case 2 `8` | `TradingController -> APIGateway` | `queryOrderResult(symbol, orderId?, clientOrderId?) : OrderResult` | 같은 주문의 사실 정규화, retry schedule은 Controller 책임 |
@@ -1013,7 +1025,7 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 - process boundary adapter인 `BackendUiAdapter` 외에 새 Communication 업무 클래스는
   Phase 0에서 승인하지 않았다.
 
-### 10.6 Phase 0 명세 확인
+### 10.6 명세 확인
 
 - [x] canonical REGIME과 다섯 mapping 상태가 명시되었다.
 - [x] 메시지 `1.5.1`과 클래스 8.13의 RegimeSTM signature가 일치한다.
@@ -1021,3 +1033,6 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 - [x] stop의 무포지션·보유·pending branch와 완료 조건이 명시되었다.
 - [x] 기존 27개 클래스에 Operation을 우선 배치하고 새 strategy class를 만들지 않았다.
 - [x] 실제 주문, credential과 live 활성화는 포함하지 않았다.
+- [x] Phase 6에서 `TYPE_0`의 109개 lower-BB registry와 G-07 안전 종료를
+  `READY`로 고정했고 `TYPE_1`~`TYPE_4`는 typed failure로 거부했다.
+- [x] Registry `READY`와 Phase 7 전 live `command_enabled = false`를 분리했다.

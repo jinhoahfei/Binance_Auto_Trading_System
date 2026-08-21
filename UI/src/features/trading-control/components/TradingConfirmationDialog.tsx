@@ -1,4 +1,5 @@
 import { Button, ModalSurface, StatusIndicatorIcon } from '../../../shared/ui';
+import type { TradingUnavailableReason } from '../machines/tradingCommandMachine';
 
 import styles from './TradingConfirmationDialog.module.css';
 
@@ -8,7 +9,8 @@ export type TradingDialogKind =
   | 'stop'
   | 'forceStop'
   | 'regimeRequired'
-  | 'connectionRequired';
+  | 'connectionRequired'
+  | 'tradingUnavailable';
 
 export interface TradingConfirmationDialogProps {
   open: boolean;
@@ -16,6 +18,7 @@ export interface TradingConfirmationDialogProps {
   regimeLabel?: string;
   pending?: boolean;
   error?: string | null | undefined;
+  unavailableReason?: TradingUnavailableReason | null;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -33,11 +36,16 @@ interface DialogCopy {
 /**
  * 함수 이름: get_dialog_copy()
  * 기능: 자동매매 상태별 Figma 문구와 버튼 역할을 반환한다.
- * 인자: kind -> 표시할 자동매매 모달 종류, regimeLabel -> 선택된 REGIME 문구
+ * 인자: kind -> 표시할 자동매매 모달 종류, regimeLabel -> 선택된 REGIME 문구,
+ *      unavailableReason -> coverage gate가 반환한 시작 차단 사유
  * 반환값: 모달에 표시할 문구 및 색상 정보
  * 작성 날짜: 2026/08/12
  */
-function get_dialog_copy(kind: TradingDialogKind, regimeLabel: string): DialogCopy {
+function get_dialog_copy(
+  kind: TradingDialogKind,
+  regimeLabel: string,
+  unavailableReason: TradingUnavailableReason | null,
+): DialogCopy {
   const copies: Record<TradingDialogKind, DialogCopy> = {
     start: {
       title: '자동매매를 시작할까요?',
@@ -93,6 +101,25 @@ function get_dialog_copy(kind: TradingDialogKind, regimeLabel: string): DialogCo
       confirmLabel: '확인',
       tone: 'info',
     },
+    tradingUnavailable: unavailableReason === 'unsupported_logic'
+      ? {
+        title: '자동매매를 시작할 수 없습니다',
+        description: '선택한 REGIME의 TradingSTM은 현재 지원되지 않습니다.',
+        label: '시작 차단 사유',
+        detail: 'UNSUPPORTED_TRADING_LOGIC · 지원 상태를 확인해주세요.',
+        cancelLabel: '닫기',
+        confirmLabel: '확인',
+        tone: 'info',
+      }
+      : {
+        title: '자동매매를 시작할 수 없습니다',
+        description: '거래 시작 명령이 아직 활성화되지 않았습니다.',
+        label: '명령 준비 상태',
+        detail: '시작 기능이 준비된 뒤 다시 시도해주세요.',
+        cancelLabel: '닫기',
+        confirmLabel: '확인',
+        tone: 'info',
+      },
   };
 
   return copies[kind];
@@ -108,13 +135,14 @@ function get_dialog_copy(kind: TradingDialogKind, regimeLabel: string): DialogCo
 export function TradingConfirmationDialog({
   open,
   kind,
-  regimeLabel = 'Type 0(횡보)',
+  regimeLabel = '미선택 REGIME', // 호출 누락을 TYPE_0 선택으로 표시하지 않는다.
   pending = false,
   error,
+  unavailableReason = null,
   onCancel,
   onConfirm,
 }: TradingConfirmationDialogProps) {
-  const copy = get_dialog_copy(kind, regimeLabel);
+  const copy = get_dialog_copy(kind, regimeLabel, unavailableReason);
   const is_pending = pending || kind === 'starting';
   const icon_tone = copy.tone === 'positive' ? 'positive' : 'negative';
 

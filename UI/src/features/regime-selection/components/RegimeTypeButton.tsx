@@ -1,3 +1,4 @@
+import type { TradingLogicSupportStatus } from '../../../shared/contracts';
 import type { RegimeOption, RegimeType } from '../types';
 import styles from './RegimeTypeButton.module.css';
 
@@ -6,6 +7,7 @@ export interface RegimeTypeButtonProps extends RegimeOption {
     readonly disabled?: boolean;
     readonly onSelect?: (regime: RegimeType) => void;
     readonly selected?: boolean;
+    readonly supportStatus: TradingLogicSupportStatus;
 }
 
 /**
@@ -34,6 +36,7 @@ export function RegimeTypeButton({
     label,
     onSelect,
     selected = false,
+    supportStatus,
     type,
 }: RegimeTypeButtonProps) {
     const button_class_name = [
@@ -42,10 +45,13 @@ export function RegimeTypeButton({
         selected ? styles.selected : '',
         candidate ? styles.candidate : '',
     ].filter(Boolean).join(' ');
+    const support_label = supportStatus === 'supported' ? '지원' : '미지원';
+    const support_description_id = `regime-${type}-trading-support`;
 
     return (
         <button
             aria-label={`${type} ${label} 적용 요청`}
+            aria-describedby={support_description_id}
             aria-pressed={selected}
             className={button_class_name}
             data-candidate={candidate || undefined}
@@ -55,6 +61,12 @@ export function RegimeTypeButton({
         >
             <span className={styles.type}>{type}</span>
             <span className={styles.label}>{label}</span>
+            <span
+                className={`${styles.supportBadge} ${styles[supportStatus]}`}
+                id={support_description_id}
+            >
+                {support_label}
+            </span>
         </button>
     );
 }

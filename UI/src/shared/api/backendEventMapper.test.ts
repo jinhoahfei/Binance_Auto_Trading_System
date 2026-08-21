@@ -60,11 +60,83 @@ function create_unsupported_btc_product_snapshot(): BackendSnapshot {
     };
 }
 
+/**
+ * 함수 이름: create_snapshot_with_logic_coverage()
+ * 기능: runtime validation 실패 경계를 검증하도록 trading coverage wire 값만 교체한다.
+ * 인자: logic_coverage -> trading.logic_coverage에 넣을 임의 JSON 값
+ * 반환값: coverage 외 field는 coherent fixture와 같은 snapshot 모양
+ * 작성 날짜: 2026/08/21
+ */
+function create_snapshot_with_logic_coverage(logic_coverage: unknown): unknown {
+    const snapshot = create_backend_snapshot_fixture();
+
+    return {
+        ...snapshot,
+        trading: {
+            ...snapshot.trading,
+            logic_coverage,
+        },
+    };
+}
+
 describe('backend runtime contract validation', () => {
     it('ready coherent snapshot의 UUID, Decimal, UTC와 required aggregate를 검증한다', () => {
         const snapshot = create_backend_snapshot_fixture();
 
         expect(validate_backend_snapshot(snapshot)).toBe(snapshot);
+    });
+
+    it.each([
+        {
+            name: 'missing row',
+            logic_coverage: [
+                { regime_type: 'type0', support_status: 'supported', start_guard: 'READY' },
+            ],
+        },
+        {
+            name: 'duplicate regime',
+            logic_coverage: [
+                { regime_type: 'type0', support_status: 'supported', start_guard: 'READY' },
+                { regime_type: 'type1', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type1', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type3', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type4', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+            ],
+        },
+        {
+            name: 'unknown regime',
+            logic_coverage: [
+                { regime_type: 'type0', support_status: 'supported', start_guard: 'READY' },
+                { regime_type: 'type1', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type2', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type3', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type5', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+            ],
+        },
+        {
+            name: 'unknown support status',
+            logic_coverage: [
+                { regime_type: 'type0', support_status: 'ready', start_guard: 'READY' },
+                { regime_type: 'type1', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type2', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type3', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type4', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+            ],
+        },
+        {
+            name: 'inconsistent start guard',
+            logic_coverage: [
+                { regime_type: 'type0', support_status: 'supported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type1', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type2', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type3', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+                { regime_type: 'type4', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+            ],
+        },
+    ])('$name TradingSTM coverage를 fail closed한다', ({ logic_coverage }) => {
+        expect(() => validate_backend_snapshot(
+            create_snapshot_with_logic_coverage(logic_coverage),
+        )).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
     });
 
     it.each([
@@ -230,7 +302,7 @@ describe('backend runtime contract validation', () => {
 
         expect(() => decode_backend_http_envelope(
             {
-                schema_version: 2,
+                schema_version: 1,
                 request_id: TEST_REQUEST_ID,
                 ok: true,
                 data: snapshot,
@@ -262,6 +334,15 @@ describe('backend snapshot and event mapping', () => {
         expect(mapped.facade_options.applied_regime).toBeNull();
         expect(mapped.facade_options.trading_symbol).toBe('ETH/USDT');
         expect(mapped.facade_options.scale_in_percentage).toBeUndefined();
+        expect(mapped.facade_options.logic_coverage).toEqual([
+            { regime_type: 'type0', support_status: 'supported', start_guard: 'READY' },
+            { regime_type: 'type1', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+            { regime_type: 'type2', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+            { regime_type: 'type3', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+            { regime_type: 'type4', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
+        ]);
+        expect(mapped.facade_options.command_enabled).toBe(false);
+        expect(JSON.stringify(mapped.facade_options.logic_coverage)).not.toContain('LOWER_BB');
         expect(mapped.server_snapshot.account_asset).toMatchObject({
             quoteAsset: 'USDT',
             quoteValue: '120.00 USDT',
@@ -316,7 +397,7 @@ describe('backend snapshot and event mapping', () => {
         });
         expect(() => parse_backend_web_socket_message(JSON.stringify({
             ...event,
-            schema_version: 2,
+            schema_version: 1,
         }))).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_SCHEMA_VERSION' }));
         expect(() => parse_backend_web_socket_message(JSON.stringify({
             ...event,

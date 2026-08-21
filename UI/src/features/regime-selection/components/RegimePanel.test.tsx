@@ -16,6 +16,8 @@ describe('RegimePanel', () => {
         screen.getAllByRole('button').forEach((button) => {
             expect(button).toHaveAttribute('aria-pressed', 'false');
         });
+        expect(screen.getAllByText('지원')).toHaveLength(1);
+        expect(screen.getAllByText('미지원')).toHaveLength(4);
     });
 
     it('CR-02: 적용 타입을 표시하고 선택 intent를 전달한다', () => {
@@ -41,6 +43,8 @@ describe('RegimePanel', () => {
             type: 'REGIME_TYPE_REQUESTED',
             regime: 'type3',
         });
+        expect(screen.getByRole('button', { name: 'type3 약하락 적용 요청' }))
+            .toHaveAccessibleDescription('미지원');
     });
 
     it('REGIME 적용 실패 사유를 재시도 확인창에 표시한다', () => {

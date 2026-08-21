@@ -382,7 +382,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":1,"schema_version":1}',
+            body='{"schema_version":2,"schema_version":2}',
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
@@ -391,7 +391,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":1,"value":NaN}',
+            body='{"schema_version":2,"value":NaN}',
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
@@ -400,7 +400,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":2}',
+            body='{"schema_version":1}',
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
@@ -418,7 +418,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":1}',
+            body='{"schema_version":2}',
             request_id=str(uuid4()),
             idempotency_key=idempotency_key,
         )
@@ -427,7 +427,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":1}',
+            body='{"schema_version":2}',
             request_id=str(uuid4()),
             idempotency_key=idempotency_key,
         )
@@ -436,7 +436,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":1,"expected_version":0}',
+            body='{"schema_version":2,"expected_version":0}',
             request_id=str(uuid4()),
             idempotency_key=idempotency_key,
         )
@@ -514,7 +514,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
                     self.token,
                     "POST",
                     "/v1/trading/start",
-                    body='{"schema_version":1}',
+                    body='{"schema_version":2}',
                     request_id=str(uuid4()),
                     idempotency_key=idempotency_key,
                 )

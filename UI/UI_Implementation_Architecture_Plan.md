@@ -457,7 +457,7 @@ WebSocket event의 공통 envelope 예시는 다음과 같다.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "event_id": "evt_...",
   "sequence": 1024,
   "occurred_at": "2026-08-10T10:00:00Z",

@@ -21,7 +21,8 @@
 - `application/market_data_controller.py`: WS 먼저 구독, REST 조회,
   buffer 병합, snapshot 교체 순서 조정
 - `application/trading_controller.py`: REST 계좌 적용 뒤 account stream을
-  시작하는 `load_account()` slice
+  시작하는 `load_account()`과 REGIME coverage를 엄격히 조회하는
+  `fetch_selected_trading_logic()` slice
 - `application/trade_history_controller.py`: Repository → TradeHistory →
   Performance 초기 복원
 - `bootstrap/`: 기존 Entity/Gateway/Controller 조립, 실행 mode와
@@ -99,9 +100,18 @@ regime_stm = RegimeSTM()
 trading_stm = TradingSTM.get_stm_instance(RegimeType.TYPE_0)
 ```
 
-`TYPE_0`은 Phase 0에서 기존 lower-BB registry와 매핑되었지만, Phase 6의
-상단 BB 인계 coverage gate 전에는 production trading start를 허용하지
-않습니다. `TYPE_1`~`TYPE_4`를 `TYPE_0`으로 대체하지 않습니다.
+Phase 6의 불변 coverage registry에서 `TYPE_0`은 `SUPPORTED`, `LOWER_BB`
+정확히 109개 transition, start Guard `READY`, 상단 BB 정책
+`SAFE_TERMINATION`입니다. `TYPE_1`~`TYPE_4`는 registry가 없는
+`UNSUPPORTED`이며 `UNSUPPORTED_TRADING_LOGIC`으로 거부합니다. 인자를 생략해
+`TYPE_0`을 기본으로 선택하거나 미지원 REGIME을 lower-BB로 대체하지
+않습니다.
+
+상단 BB 안전 종료에서는 pending 주문을 포지션보다 우선해 취소하고
+같은 ID를 `stop_after_reconciliation = True`로 조정합니다. pending이 없고
+포지션이 있으면 기존 STOPPING/force-sell 계약을 재사용하고, 둘 다
+없으면 lower event·Case Context를 정리한 뒤 runtime을 즉시 종료합니다.
+이는 새 상단 매매 전략이 아닙니다.
 
 실제 주문 adapter는 `SubmitOrder`의 `idempotency_key`를 client order key로 사용하고, `NEW`, `PARTIALLY_FILLED`, `UNKNOWN` 결과에서는 새 주문을 제출하지 말고 `ReconcileOrder` 계약에 따라 같은 주문 ID를 조회해야 합니다.
 
@@ -123,10 +133,12 @@ HTTP는 Bearer token, canonical request ID, exact Host/Origin과 command idempot
 snapshot과 `last_sequence`는 application lock 아래 원자적으로 읽습니다.
 
 현재 live read snapshot은 ETHUSDT/USDT 값을 그대로 제공하고 REGIME 추천과 사용자
-선택을 분리합니다. Phase 5에는 Trading session, Position, 주문, 상세 history query,
-CSV와 안전 종료 owner가 없으므로 관련 command route는 `FEATURE_NOT_AVAILABLE`로
-fail closed하며 TradingSTM을 호출하지 않습니다. 실제 Binance client와 credential은
-Phase 9, packaged Tauri sidecar lifecycle은 Phase 12 범위입니다.
+선택을 분리하며 다섯 REGIME의 `support_status`/`start_guard`를 제공합니다.
+미지원 REGIME은 추천·표시·선택할 수 있지만 start는 차단됩니다. Phase 7의
+Trading session orchestration 전이므로 live `command_enabled`는 `false`이고,
+관련 command route는 `FEATURE_NOT_AVAILABLE`로 fail closed하며 TradingSTM session을
+시작하지 않습니다. 실제 Binance client와 credential은 Phase 9, packaged Tauri
+sidecar lifecycle은 Phase 12 범위입니다.
 
 ## 테스트
 

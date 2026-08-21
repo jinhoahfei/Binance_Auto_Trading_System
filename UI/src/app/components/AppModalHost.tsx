@@ -31,9 +31,12 @@ export interface AppModalHostProps {
 export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
     const calendar_navigation = use_csv_calendar_navigation();
     const active_modal = viewModel.active_modal;
-    const applied_regime = viewModel.regime.applied ?? viewModel.regime.recommended ?? 'type0';
-    const candidate_regime = viewModel.regime.candidate ?? applied_regime;
-    const applied_regime_label = `${applied_regime} · ${REGIME_LABELS[applied_regime]}`;
+
+    // 시작 확인 문구는 적용 REGIME이 없을 때 type0을 만들어내지 않고 미선택 의미를 보존한다.
+    const applied_regime = viewModel.regime.applied;
+    const applied_regime_label = applied_regime === null
+        ? '미선택 REGIME'
+        : `${applied_regime} · ${REGIME_LABELS[applied_regime]}`;
 
     switch (active_modal) {
         case 'start_confirmation':
@@ -69,6 +72,20 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
                     pending={viewModel.trading.is_pending}
                 />
             );
+        case 'trading_unavailable_notice':
+            return (
+                <TradingConfirmationDialog
+                    kind="tradingUnavailable"
+                    onCancel={() => controller.dispatch({
+                        type: 'TRADING_UNAVAILABLE_NOTICE_CONFIRMED',
+                    })}
+                    onConfirm={() => controller.dispatch({
+                        type: 'TRADING_UNAVAILABLE_NOTICE_CONFIRMED',
+                    })}
+                    open
+                    unavailableReason={viewModel.trading.unavailable_reason}
+                />
+            );
         case 'stop_confirmation':
             return (
                 <TradingConfirmationDialog
@@ -91,7 +108,13 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
                     pending={viewModel.trading.is_pending}
                 />
             );
-        case 'regime_change_confirmation':
+        case 'regime_change_confirmation': {
+            const candidate_regime = viewModel.regime.candidate;
+
+            if (candidate_regime === null) {
+                return null;  // 후보가 없는 잘못된 확인 상태에서는 임의 REGIME을 표시하지 않는다.
+            }
+
             return (
                 <RegimeChangeDialog
                     error={viewModel.regime.error?.message}
@@ -103,6 +126,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
                     regimeLabel={REGIME_LABELS[candidate_regime]}
                 />
             );
+        }
         case 'csv_export':
             return (
                 <CSVExportDialog

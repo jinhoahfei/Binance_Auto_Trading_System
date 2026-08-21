@@ -6,7 +6,7 @@
 | 결정일 | 2026-08-20 |
 | 적용 결정 | D-14 |
 | API major version | `v1` |
-| schema version | `1` |
+| schema version | `2` |
 
 ## 1. 경계와 책임
 
@@ -58,7 +58,7 @@ POST/PATCH command는 추가로 `Idempotency-Key`를 요구한다. token 비교�
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "request_id": "uuid",
   "ok": true,
   "data": {}
@@ -69,7 +69,7 @@ POST/PATCH command는 추가로 `Idempotency-Key`를 요구한다. token 비교�
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "request_id": "uuid",
   "ok": false,
   "error": {
@@ -103,6 +103,11 @@ trace를 넣지 않는다. 같은 `Idempotency-Key`와 같은 body의 재요청�
 `GET /v1/trades`의 날짜·side validation과 CSV의 업무 validation은 Controller/domain
 value object가 최종 수행한다. route의 schema validation은 type/shape/size 제한만 담당한다.
 
+schema version 2의 `/v1/snapshot.trading.logic_coverage`는 canonical 순서의
+`type0`~`type4`를 정확히 한 번씩 포함한다. 각 행은 `support_status`와
+`start_guard`를 가지며 UI는 누락·중복·알 수 없는 조합을 fail closed한다. 이는 시작
+안전성에 필요한 필수 필드이므로 해당 필드가 없던 schema version 1과 구분한다.
+
 HTTP status 기본 매핑은 다음과 같다.
 
 | Status | 의미 |
@@ -122,7 +127,7 @@ HTTP status 기본 매핑은 다음과 같다.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "session_id": "uuid",
   "event_id": "uuid",
   "sequence": 42,
@@ -152,7 +157,7 @@ URL query나 subprotocol에 넣지 않는다.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "type": "AUTHENTICATE",
   "token": "session-token",
   "after_sequence": 41

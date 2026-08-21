@@ -1,4 +1,7 @@
-import type { RegimeType } from '../../shared/contracts';
+import type {
+    RegimeType,
+    TradingLogicCoverage,
+} from '../../shared/contracts';
 
 export type { RegimeType } from '../../shared/contracts';
 
@@ -26,6 +29,7 @@ export interface RegimePanelProps {
     readonly candidate?: RegimeType | null;
     readonly disabled?: boolean;
     readonly highlight?: boolean;
+    readonly logicCoverage?: ReadonlyArray<TradingLogicCoverage>;
     readonly metrics: ReadonlyArray<RegimeMetricViewModel>;
     readonly onIntent?: (intent: RegimePanelIntent) => void;
     readonly recommended: RegimeType | null;

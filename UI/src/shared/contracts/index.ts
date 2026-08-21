@@ -9,12 +9,16 @@ export type {
     LocalDateString,
     RegimeMetric,
     RegimeType,
+    TradingLogicCoverage,
+    TradingLogicStartGuard,
+    TradingLogicSupportStatus,
     TradeHistoryQuery,
     TradeRecord,
     TradeSide,
     TradeSideFilter,
     UiCommandFailure,
 } from './uiContracts';
+export { DEFAULT_TRADING_LOGIC_COVERAGE } from './uiContracts';
 export {
     BACKEND_SCHEMA_VERSION,
 } from './backendContracts.generated';
@@ -43,6 +47,9 @@ export type {
     BackendSwingSnapshot,
     BackendTradeSide,
     BackendTradeSnapshot,
+    BackendTradingLogicCoverage,
+    BackendTradingLogicStartGuard,
+    BackendTradingLogicSupportStatus,
     BackendTradingStatus,
     BackendTradingSnapshot,
 } from './backendContracts.generated';

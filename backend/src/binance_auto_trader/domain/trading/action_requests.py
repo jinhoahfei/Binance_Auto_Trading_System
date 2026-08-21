@@ -233,25 +233,12 @@ class CancelPendingOrder:
 class ForceSellAll:
     """
     클래스 이름: ForceSellAll
-    기능: STOPPING 절차에서 남은 포지션 전량 매도를 요청한다.
+    기능: STOP 또는 상단 BB 안전 종료 절차에서 남은 포지션 전량 매도를 요청한다.
     작성 날짜: 2026/08/14
     """
 
     retry: bool = False
     use_retry_policy: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class HandoffToUpperBandPolicy:
-    """
-    클래스 이름: HandoffToUpperBandPolicy
-    기능: 포지션 관리 책임을 상단 Bollinger Band 정책으로 인계하도록 요청한다.
-    작성 날짜: 2026/08/14
-    """
-
-    position_owner: StrategyType | None
-    lower_event_id: str | None
-
 
 @dataclass(frozen=True, slots=True)
 class StopTradingRuntime:
@@ -288,7 +275,6 @@ TradingActionRequest: TypeAlias = (
     | SubmitOrder
     | CancelPendingOrder
     | ForceSellAll
-    | HandoffToUpperBandPolicy
     | StopTradingRuntime
     | ReconcileOrder
 )

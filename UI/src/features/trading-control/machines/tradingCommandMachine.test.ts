@@ -1,5 +1,6 @@
 import { createActor } from 'xstate';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_TRADING_LOGIC_COVERAGE } from '../../../shared/contracts';
 import { FakeUiCommandAdapter } from '../../../shared/testing';
 import { create_trading_command_machine } from './tradingCommandMachine';
 
@@ -31,18 +32,76 @@ describe('tradingCommandMachine', () => {
 
     it('U3-05: 확인된 온라인 시작은 한 번만 호출하고 실행 상태가 된다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter));
+        const actor = createActor(create_trading_command_machine(command_adapter, {
+            command_enabled: true,
+        }));
 
         actor.start();
-        actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type2', is_online: true });
+        actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
         actor.send({ type: 'START_CONFIRMED', is_online: true });
         actor.send({ type: 'START_CONFIRMED', is_online: true });
         await wait_for_actor_settlement();
 
         expect(actor.getSnapshot().matches('running')).toBe(true);
         expect(command_adapter.command_records).toEqual([
-            { name: 'start_trading', payload: { regime_type: 'type2' } },
+            { name: 'start_trading', payload: { regime_type: 'type0' } },
         ]);
+        actor.stop();
+    });
+
+    it('Phase 6: 미지원 REGIME은 선택을 보존하고 시작 명령을 보내지 않는다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter, {
+            command_enabled: true,
+        }));
+
+        actor.start();
+        actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type3', is_online: true });
+
+        expect(actor.getSnapshot().matches('trading_unavailable_notice')).toBe(true);
+        expect(actor.getSnapshot().context.selected_regime).toBe('type3');
+        expect(actor.getSnapshot().context.unavailable_reason).toBe('unsupported_logic');
+        expect(command_adapter.command_records).toHaveLength(0);
+        actor.stop();
+    });
+
+    it('Phase 6: 지원 REGIME도 command가 비활성화되면 시작 명령을 보내지 않는다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter));
+
+        actor.start();
+        actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
+
+        expect(actor.getSnapshot().matches('trading_unavailable_notice')).toBe(true);
+        expect(actor.getSnapshot().context.unavailable_reason).toBe('command_disabled');
+        expect(command_adapter.command_records).toHaveLength(0);
+        actor.stop();
+    });
+
+    it('Phase 6: 시작 확인 중 resync로 command가 닫히면 stale 확인을 차단한다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter, {
+            command_enabled: true,
+        }));
+
+        actor.start();
+        actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
+        expect(actor.getSnapshot().matches('start_confirmation')).toBe(true);
+
+        // 확인 modal을 유지한 채 최신 backend gate를 반영해 오래된 확인을 재검증한다.
+        actor.send({
+            type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED',
+            selected_regime: 'type0',
+            logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+            command_enabled: false,
+            is_trading: false,
+            has_open_position: false,
+        });
+        actor.send({ type: 'START_CONFIRMED', is_online: true });
+
+        expect(actor.getSnapshot().matches('trading_unavailable_notice')).toBe(true);
+        expect(actor.getSnapshot().context.unavailable_reason).toBe('command_disabled');
+        expect(command_adapter.command_records).toHaveLength(0);
         actor.stop();
     });
 

@@ -273,6 +273,7 @@ export function present_dashboard_props(
             recommended: view_model.regime.recommended,
             applied: view_model.regime.applied,
             candidate: view_model.regime.candidate,
+            logicCoverage: view_model.regime.logic_coverage,
             metrics: view_model.regime.metrics,
             disabled: view_model.regime.is_pending,
             highlight: view_model.regime.is_highlighted,

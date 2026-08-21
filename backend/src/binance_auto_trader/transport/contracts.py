@@ -13,9 +13,12 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from binance_auto_trader.domain.common import RegimeType
+from binance_auto_trader.domain.trading.logic_registry import (
+    list_trading_logic_configurations,
+)
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_HTTP_BODY_BYTES = 1024 * 1024
 MAX_WEBSOCKET_FRAME_BYTES = 1024 * 1024
 MAX_TRADE_PAGE_SIZE = 1_000
@@ -571,6 +574,29 @@ def map_performance(performance: object) -> JsonObject:
     )
 
 
+def map_trading_logic_coverage() -> list[JsonObject]:
+    """
+    함수 이름: map_trading_logic_coverage()
+    기능: 불변 domain registry를 UI 시작 Gate에 필요한 공개 지원 상태 목록으로 변환한다.
+    인자: 없음
+    반환값: canonical REGIME 순서의 다섯 거래 로직 지원 상태 DTO
+    작성 날짜: 2026/08/21
+    """
+    configurations = list_trading_logic_configurations()  # domain canonical 순서를 유지한다.
+
+    # 내부 transition source와 ID는 숨기고 UI 판단에 필요한 최소 계약만 공개한다.
+    return [
+        normalize_json_object(
+            {
+                "regime_type": configuration.regime_type,
+                "support_status": configuration.support_status,
+                "start_guard": configuration.start_guard,
+            }
+        )
+        for configuration in configurations
+    ]
+
+
 def build_snapshot_dto(
     runtime: RuntimeSnapshotSource,
     session_id: str,
@@ -635,6 +661,7 @@ def build_snapshot_dto(
                 "status": "not_started",
                 "version": 0,
                 "command_enabled": False,
+                "logic_coverage": map_trading_logic_coverage(),
             },
             "account": map_account_snapshot(account),
             "recent_trades": [map_trade(trade) for trade in recent_trades],
@@ -664,6 +691,10 @@ export type BackendDecimalString = string;
 export type BackendRegimeType = {regime_values};
 export type BackendExecutionMode = 'disabled' | 'fake' | 'testnet' | 'live';
 export type BackendTradingStatus = 'not_started';
+export type BackendTradingLogicSupportStatus = 'supported' | 'unsupported';
+export type BackendTradingLogicStartGuard =
+    | 'READY'
+    | 'UNSUPPORTED_TRADING_LOGIC';
 export type BackendTradeSide = 'BUY' | 'SELL';
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
 
@@ -708,11 +739,18 @@ export interface BackendRegimeSnapshot {{
     readonly selected: BackendRegimeType | null;
 }}
 
+export interface BackendTradingLogicCoverage {{
+    readonly regime_type: BackendRegimeType;
+    readonly support_status: BackendTradingLogicSupportStatus;
+    readonly start_guard: BackendTradingLogicStartGuard;
+}}
+
 export interface BackendTradingSnapshot {{
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
     readonly version: number;
     readonly command_enabled: false;
+    readonly logic_coverage: ReadonlyArray<BackendTradingLogicCoverage>;
 }}
 
 export interface BackendBalanceSnapshot {{

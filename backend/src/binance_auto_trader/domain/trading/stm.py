@@ -9,6 +9,10 @@ from ..common import RegimeType
 from .action_requests import QueueEvent, SubmitOrder, TradingActionRequest
 from .context import TradingContextView
 from .events import EventPriority, TradingEvent, TradingEventType
+from .logic_registry import (
+    TradingLogicConfiguration,
+    require_supported_trading_logic_configuration,
+)
 from .results import TradingSTMResult
 from .states import (
     CaseBPositionState,
@@ -29,7 +33,6 @@ from .transitions.case_c_position_transitions import (
     handle_case_c_position_transition,
 )
 from .transitions.case_c_signal_transitions import handle_case_c_signal_transition
-from .transitions.catalog import TRANSITION_IDS
 from .transitions.global_transitions import handle_global_transition
 from .transitions.ownership_transitions import handle_ownership_transition
 
@@ -41,7 +44,7 @@ class TradingSTM:
     작성 날짜: 2026/08/14
     """
 
-    def __init__(self, regime_type: RegimeType = RegimeType.TYPE_0) -> None:
+    def __init__(self, regime_type: RegimeType) -> None:
         """
         함수 이름: __init__()
         기능: 전략 유형과 초기 상태를 저장하고 비재진입 잠금을 준비한다.
@@ -49,14 +52,12 @@ class TradingSTM:
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        if not isinstance(regime_type, RegimeType):
-            raise TypeError("regime_type must be a RegimeType")
+        # 지원 여부를 먼저 검증해 누락 입력과 다른 REGIME의 TYPE_0 fallback을 차단한다.
+        self._configuration = require_supported_trading_logic_configuration(
+            regime_type
+        )
 
-        if regime_type is not RegimeType.TYPE_0:
-            raise ValueError(f"Unsupported regime type: {regime_type}")
-
-        # 세션이 시작된 뒤 바뀌지 않는 전략과 초기 상태 구성을 저장한다.
-        self._regime_type = regime_type
+        # 세션이 시작된 뒤 바뀌지 않는 전략 registry와 초기 상태 구성을 저장한다.
         self._state = TradingStateConfiguration()
 
         # 동시에 두 이벤트가 상태를 변경하지 못하도록 비재진입 잠금을 사용한다.
@@ -71,7 +72,7 @@ class TradingSTM:
         반환값: 지정된 전략 유형으로 초기화한 TradingSTM 인스턴스
         작성 날짜: 2026/08/14
         """
-        return cls(regime_type)
+        return cls(regime_type)  # 생성자가 support gate와 registry 선택을 단일 수행한다.
 
     @property
     def regime_type(self) -> RegimeType:
@@ -82,7 +83,18 @@ class TradingSTM:
         반환값: 현재 상태 머신의 전략 유형
         작성 날짜: 2026/08/14
         """
-        return self._regime_type
+        return self._configuration.regime_type  # 별도의 mutable 선택값을 두지 않는다.
+
+    @property
+    def configuration(self) -> TradingLogicConfiguration:
+        """
+        함수 이름: configuration()
+        기능: 상태 머신이 선택한 불변 거래 로직 registry 구성을 조회한다.
+        인자: 없음
+        반환값: 현재 REGIME의 TradingLogicConfiguration
+        작성 날짜: 2026/08/21
+        """
+        return self._configuration  # session 전체에서 같은 frozen 객체를 공개한다.
 
     @property
     def current_state(self) -> TradingStateConfiguration:
@@ -311,7 +323,9 @@ class TradingSTM:
         작성 날짜: 2026/08/14
         """
         # 문서화되지 않은 전이 식별자가 실행 추적에 섞이지 않도록 먼저 검증한다.
-        unknown_ids = set(selected.transition_ids).difference(TRANSITION_IDS)
+        unknown_ids = set(selected.transition_ids).difference(
+            self._configuration.transition_ids
+        )
         if unknown_ids:
             raise RuntimeError(f"Unknown transition IDs: {sorted(unknown_ids)}")
 

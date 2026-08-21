@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.trading.action_requests import (
     OpenLowerEvent,
     PatchRuntimeContext,
@@ -253,7 +254,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -319,7 +320,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(root_state=RootState.LOWER_TOUCH_WATCH)
         context_view = TradingContextView(
             version=1,
@@ -360,7 +361,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -431,7 +432,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -485,7 +486,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM()
+        stm = TradingSTM(RegimeType.TYPE_0)
         context_view = TradingContextView(
             version=1,
             evaluated_at=TEST_EVALUATION_TIME,

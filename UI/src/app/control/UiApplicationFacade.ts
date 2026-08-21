@@ -23,7 +23,11 @@ import {
     create_trade_history_summary_machine,
     type TradeHistorySummaryViewModel,
 } from '../../features/trade-history';
-import { create_trading_command_machine } from '../../features/trading-control';
+import {
+    create_trading_command_machine,
+    resolve_trading_start_unavailable_reason,
+    type TradingUnavailableReason,
+} from '../../features/trading-control';
 import type {
     ChartDrawing,
     ChartInterval,
@@ -32,6 +36,7 @@ import type {
     LocalDateString,
     RegimeMetric,
     RegimeType,
+    TradingLogicCoverage,
     TradeRecord,
     TradeSideFilter,
     UiCommandFailure,
@@ -107,6 +112,8 @@ export interface UiApplicationFacadeOptions {
     readonly recommended_regime?: RegimeType | null;
     readonly applied_regime?: RegimeType | null;
     readonly regime_metrics?: ReadonlyArray<RegimeMetric>;
+    readonly logic_coverage?: ReadonlyArray<TradingLogicCoverage>;
+    readonly command_enabled?: boolean;
     readonly recent_trades?: ReadonlyArray<TradeRecord>;
     readonly history_records?: ReadonlyArray<TradeRecord>;
     readonly scale_in_percentage?: number;
@@ -127,6 +134,8 @@ export interface UiServerOwnedSnapshot {
     readonly recommended_regime: RegimeType | null;
     readonly applied_regime: RegimeType | null;
     readonly regime_metrics: ReadonlyArray<RegimeMetric>;
+    readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
+    readonly command_enabled: boolean;
     readonly recent_trades: ReadonlyArray<TradeRecord>;
     readonly history_records: ReadonlyArray<TradeRecord>;
     readonly scale_in_percentage?: number;
@@ -158,6 +167,7 @@ export type UiApplicationIntent =
     | { readonly type: 'SELECT_REGIME_NOTICE_CONFIRMED' }
     | { readonly type: 'SELECT_REGIME_NOTICE_CLOSED' }
     | { readonly type: 'API_CONNECTION_NOTICE_CONFIRMED' }
+    | { readonly type: 'TRADING_UNAVAILABLE_NOTICE_CONFIRMED' }
     | { readonly type: 'STOP_TRADING_CLICKED'; readonly has_open_position: boolean }
     | { readonly type: 'STOP_TRADING_CONFIRMED' }
     | { readonly type: 'STOP_TRADING_CANCELED' }
@@ -275,9 +285,11 @@ export interface AppViewModel {
         readonly error: string | null;
     };
     readonly trading: {
+        readonly command_enabled: boolean;
         readonly is_trading: boolean;
         readonly is_pending: boolean;
         readonly has_open_position: boolean;
+        readonly unavailable_reason: TradingUnavailableReason | null;
         readonly error: UiCommandFailure | null;
     };
     readonly regime: {
@@ -287,6 +299,7 @@ export interface AppViewModel {
         readonly is_highlighted: boolean;
         readonly is_pending: boolean;
         readonly metrics: ReadonlyArray<RegimeMetric>;
+        readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
         readonly error: UiCommandFailure | null;
     };
     readonly chart: {
@@ -387,12 +400,14 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
             error: snapshot.connection.context.last_error,
         },
         trading: {
+            command_enabled: snapshot.trading.context.command_enabled,
             is_trading: snapshot.trading.context.is_trading,
             is_pending: snapshot.trading.matches('starting')
                 || snapshot.trading.matches('stopping')
                 || snapshot.trading.matches('force_selling')
                 || snapshot.trading.matches('disconnect_stopping'),
             has_open_position: snapshot.trading.context.has_open_position,
+            unavailable_reason: snapshot.trading.context.unavailable_reason,
             error: snapshot.trading.context.error,
         },
         regime: {
@@ -402,6 +417,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
             is_highlighted: snapshot.regime.context.is_highlighted,
             is_pending: snapshot.regime.matches('applying'),
             metrics: snapshot.regime.context.metrics,
+            logic_coverage: snapshot.trading.context.logic_coverage,
             error: snapshot.regime.context.error,
         },
         chart: {
@@ -564,6 +580,12 @@ export class UiApplicationFacade {
                     : { summary: options.trade_history_summary }),
             })),
             trading: createActor(create_trading_command_machine(command_port, {
+                ...(options.logic_coverage === undefined
+                    ? {}
+                    : { logic_coverage: options.logic_coverage }),
+                ...(options.command_enabled === undefined
+                    ? {}
+                    : { command_enabled: options.command_enabled }),
                 ...(options.is_trading === undefined
                     ? {}
                     : { is_trading: options.is_trading }),
@@ -652,11 +674,19 @@ export class UiApplicationFacade {
             case 'START_TRADING_CLICKED': {
                 const regime = this.actors.regime.getSnapshot().context.applied_regime;
                 const is_online = this.actors.connection.getSnapshot().matches('api_online');
+                const trading_context = this.actors.trading.getSnapshot().context;
+                const unavailable_reason = resolve_trading_start_unavailable_reason(
+                    trading_context.logic_coverage,
+                    trading_context.command_enabled,
+                    regime,
+                );
                 const modal = regime === null
                     ? 'select_regime_notice'
-                    : is_online
-                        ? 'start_confirmation'
-                        : 'api_connection_required';
+                    : unavailable_reason !== null
+                        ? 'trading_unavailable_notice'
+                        : is_online
+                            ? 'start_confirmation'
+                            : 'api_connection_required';
 
                 if (!this.can_open_modal(modal)) {
                     return false;
@@ -687,6 +717,9 @@ export class UiApplicationFacade {
                 break;
             case 'API_CONNECTION_NOTICE_CONFIRMED':
                 this.actors.trading.send({ type: 'API_CONNECTION_NOTICE_CONFIRMED' });
+                break;
+            case 'TRADING_UNAVAILABLE_NOTICE_CONFIRMED':
+                this.actors.trading.send({ type: 'TRADING_UNAVAILABLE_NOTICE_CONFIRMED' });
                 break;
             case 'STOP_TRADING_CLICKED': {
                 const modal = intent.has_open_position
@@ -1077,6 +1110,7 @@ export class UiApplicationFacade {
         const preserve_regime_interaction = active_modal === 'regime_change_confirmation';
         const preserve_trading_interaction = active_modal === 'select_regime_notice'
             || active_modal === 'api_connection_required'
+            || active_modal === 'trading_unavailable_notice'
             || active_modal === 'start_confirmation'
             || active_modal === 'stop_confirmation'
             || active_modal === 'force_sell_stop_confirmation';
@@ -1127,6 +1161,9 @@ export class UiApplicationFacade {
                 type: preserve_trading_interaction
                     ? 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
                     : 'TRADING_SNAPSHOT_SYNCHRONIZED',
+                selected_regime: synchronized_snapshot.applied_regime,
+                logic_coverage: synchronized_snapshot.logic_coverage,
+                command_enabled: synchronized_snapshot.command_enabled,
                 is_trading: synchronized_snapshot.is_trading,
                 has_open_position: synchronized_snapshot.has_open_position
                     ?? this.actors.trading.getSnapshot().context.has_open_position,
@@ -1218,6 +1255,9 @@ export class UiApplicationFacade {
         if (trading_snapshot.matches('api_connection_required')
             || trading_snapshot.matches('disconnect_stopping')) {
             return 'api_connection_required';
+        }
+        if (trading_snapshot.matches('trading_unavailable_notice')) {
+            return 'trading_unavailable_notice';
         }
         if (trading_snapshot.matches('start_confirmation') || trading_snapshot.matches('starting')) {
             return 'start_confirmation';

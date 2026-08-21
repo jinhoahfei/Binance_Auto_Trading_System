@@ -586,10 +586,10 @@ regime-selection/
 
 | 파일 | 역할 |
 |---|---|
-| `components/RegimePanel.tsx` | 추천 타입, 실제 적용 타입, 5개 수동 선택 버튼, 4개 판단 지표와 강조 상태를 표시한다. 적용값이 `null`이면 아무 버튼도 선택하지 않는다. |
+| `components/RegimePanel.tsx` | 추천 타입, 실제 적용 타입, 5개 수동 선택 버튼, 4개 판단 지표와 강조 상태를 표시한다. backend `logic_coverage`의 지원/미지원 badge를 모든 타입에 같이 표시하고 미지원 타입도 추천·선택은 허용한다. 적용값이 `null`이면 아무 버튼도 선택하지 않는다. |
 | `components/RegimePanel.module.css` | Figma 948×116 panel, 내부 3영역, 선택 button과 5회 glow animation/reduced-motion 대체를 정의한다. |
-| `components/RegimePanel.test.tsx` | 초기 미선택과 적용 타입 표시/intent, REGIME 적용 실패 사유의 alert 표시를 검증한다. |
-| `components/RegimeTypeButton.tsx` | 하나의 REGIME type을 상승·하락 tone과 candidate/applied 상태로 표시한다. |
+| `components/RegimePanel.test.tsx` | 초기 미선택과 적용 타입 표시/intent, REGIME 적용 실패 사유의 alert, 다섯 지원 badge와 미지원 타입 선택 허용을 검증한다. |
+| `components/RegimeTypeButton.tsx` | 하나의 REGIME type을 상승·하락 tone, candidate/applied 상태, TradingSTM 지원 badge로 표시한다. 미지원 badge는 선택 버튼을 disabled로 만들지 않는다. |
 | `components/RegimeTypeButton.module.css` | type별 color, selected, candidate outline, disabled 상태를 정의한다. |
 | `components/RegimeMetric.tsx` | REGIME 판단 지표 이름과 값을 tone과 함께 표시한다. |
 | `components/RegimeMetric.module.css` | 지표 label/value와 상태 dot를 스타일링한다. |
@@ -597,7 +597,7 @@ regime-selection/
 | `components/RegimeChangeDialog.module.css` | 확인 modal의 type 안내 박스, 오류 문구와 action 행을 Figma 좌표에 맞춘다. 오류가 있으면 고정 높이를 해제해 내용 잘림을 막는다. |
 | `machines/regimeMachine.ts` | 추천값, 적용값, 확인 전 candidate, 4초/5회 panel 강조, 비동기 apply command를 관리한다. |
 | `machines/regimeMachine.test.ts` | click만으로 적용되지 않는지, 취소 시 기존값 보존, 확인 후 adapter 적용을 검증한다. |
-| `types.ts` | REGIME type, metric, panel props와 `RegimePanelIntent`를 정의한다. |
+| `types.ts` | REGIME type, metric, `TradingLogicCoverage`를 받는 panel props와 `RegimePanelIntent`를 정의한다. |
 | `index.ts` | regime-selection의 공개 Boundary와 actor API다. |
 
 ### 8.8 `split-order`
@@ -690,11 +690,11 @@ trading-control/
 |---|---|
 | `components/AppHeader.tsx` | 브랜드, LIVE/OFFLINE 상태, 자동매매 실행과 매매 중지 버튼을 표시한다. 실행 상태와 pending 상태에 따라 버튼을 제어한다. |
 | `components/AppHeader.module.css` | 72px header, logo, 연결 badge, 실행·중지 action을 Figma 규격으로 배치한다. |
-| `components/TradingConfirmationDialog.tsx` | 시작, 시작 중, 일반 중지, 강제 매도 중지, REGIME 미선택, API 미연결 variant를 하나의 공통 확인 Boundary로 표시한다. 명령 실패 시 actor 오류를 `role="alert"`로 표시한다. |
+| `components/TradingConfirmationDialog.tsx` | 시작, 시작 중, 일반 중지, 강제 매도 중지, REGIME 미선택, API 미연결, trading unavailable variant를 하나의 공통 확인 Boundary로 표시한다. unavailable은 `UNSUPPORTED_TRADING_LOGIC`과 `command_enabled = false`를 구분해 하나의 안내 modal slot에 설명하고, 명령 실패 시 actor 오류를 `role="alert"`로 표시한다. |
 | `components/TradingConfirmationDialog.module.css` | 64px 안내 박스, 진행 bar, 오류 문구, tone과 버튼 행을 정의한다. 오류가 없을 때는 공통 modal 고정 좌표를 유지하고 오류가 있으면 높이를 확장한다. |
-| `components/TradingConfirmationDialog.test.tsx` | 거래 명령 실패 사유가 재시도 확인창의 alert로 노출되는지 검증한다. |
-| `machines/tradingCommandMachine.ts` | 시작 guard, 시작 확인, 실행, 일반 중지, 강제 매도 중지, API 단절 중지를 adapter invoke와 함께 관리한다. 실제 position snapshot은 성공한 강제 매도에서만 비운다. |
-| `machines/tradingCommandMachine.test.ts` | REGIME 미선택, 중복 없는 시작, 강제 매도 실패·취소 시 position 보존, 성공 시 position clear를 검증한다. |
+| `components/TradingConfirmationDialog.test.tsx` | 거래 명령 실패 사유가 재시도 확인창의 alert로 노출되는지와 미지원/command 미준비 안내 문구를 검증한다. |
+| `machines/tradingCommandMachine.ts` | 시작 guard, 시작 확인, 실행, 일반 중지, 강제 매도 중지, API 단절 중지를 adapter invoke와 함께 관리한다. 시작 요청과 확인 둘 다에서 최신 `logic_coverage`/`command_enabled`를 검사해 stale confirmation의 zero-command를 보장한다. 실제 position snapshot은 성공한 강제 매도에서만 비운다. |
+| `machines/tradingCommandMachine.test.ts` | REGIME 미선택, 미지원/command 미준비의 zero-command, 확인 대기 중 resync 후 차단, 중복 없는 시작, 강제 매도 실패·취소 시 position 보존, 성공 시 position clear를 검증한다. |
 | `index.ts` | header, 거래 dialog와 command machine의 공개 API다. |
 
 ## 9. UI Event-Action Table 구현 위치
@@ -705,7 +705,7 @@ Event-Action Table은 한 파일의 switch문으로 구현하지 않았다. 서�
 |---|---|---|
 | 화면 이동과 modal slot | `src/app/machines/uiShellMachine.ts` | dashboard/history 이동, H* 의미, modal 단일화 |
 | API 연결 표시 | `features/connection-status/machines/connectionMachine.ts` | offline, connecting, online, reconnecting |
-| 자동매매 시작·중지 | `features/trading-control/machines/tradingCommandMachine.ts` | REGIME/API guard, 확인, pending, running, force-sell |
+| 자동매매 시작·중지 | `features/trading-control/machines/tradingCommandMachine.ts` | REGIME/API guard, REGIME coverage/command readiness guard, 확인, pending, running, force-sell |
 | REGIME 선택·강조 | `features/regime-selection/machines/regimeMachine.ts` | recommended, candidate, applied, highlight, apply invoke |
 | 차트 | `features/price-chart/machines/chartMachine.ts` | interval, indicator, fullscreen, drawing, line menu |
 | 우측 트레이딩 panel | `features/recent-orders/machines/recentOrdersMachine.ts` | 최근 체결/실시간 지표 tab과 실시간 update |
@@ -813,11 +813,11 @@ src/shared/
 | 파일 | 역할 |
 |---|---|
 | `api/BackendUiAdapter.ts` | Bearer/request/idempotency header, timeout과 HTTP envelope를 처리하고 query 없는 WebSocket 첫-frame 인증, sequence dedup/gap, snapshot-first full resync를 구현한다. 업무 guard는 소유하지 않는다. |
-| `api/backendEventMapper.ts` | generated wire 값을 strict runtime 검증하고 backend snapshot/event를 계산 없는 UI record와 facade intent로 변환한다. ETHUSDT/ETH/USDT와 market-indicator version/price coherence를 검증하며 KRW 환산, entry price, position, slippage나 상태별 성과를 추측하지 않는다. |
+| `api/backendEventMapper.ts` | generated wire 값을 strict runtime 검증하고 backend snapshot/event를 계산 없는 UI record와 facade intent로 변환한다. ETHUSDT/ETH/USDT와 market-indicator version/price coherence, canonical 5개 `logic_coverage` 순서, support/status Guard 일치를 fail closed로 검증하며 KRW 환산, entry price, position, slippage나 상태별 성과를 추측하지 않는다. |
 | `api/*.test.ts` | malformed/unknown schema, request/session mismatch, product/cross-field 불일치, duplicate·out-of-order·gap sequence, reconnect snapshot 우선, USDT 단위와 unavailable 값을 검증한다. |
 | `api/backendTestFixtures.ts` | production token과 분리된 transport contract unit fixture를 제공한다. |
-| `contracts/backendContracts.generated.ts` | Python transport schema renderer의 deterministic 출력이다. 직접 수정하지 않으며 backend drift test가 byte-for-byte 일치를 확인한다. |
-| `contracts/uiContracts.ts` | generated `RegimeType`을 재사용하고 기간, 거래 방향, `TradeRecord`, chart drawing, CSV option/receipt와 공통 오류 형식을 정의한다. |
+| `contracts/backendContracts.generated.ts` | Python transport schema renderer의 deterministic 출력이다. trading snapshot의 `command_enabled`, canonical `logic_coverage` (`regime_type`, `support_status`, `start_guard`)를 포함하며 직접 수정하지 않음을 backend drift test가 byte-for-byte로 확인한다. private `LOWER_BB` key와 transition ID는 UI에 노출하지 않는다. |
+| `contracts/uiContracts.ts` | generated `RegimeType`을 재사용하고 `TradingLogicCoverage`와 production default(TYPE_0 supported, TYPE_1~4 unsupported), 기간, 거래 방향, `TradeRecord`, chart drawing, CSV option/receipt와 공통 오류 형식을 정의한다. |
 | `contracts/index.ts` | 공통 contract type의 공개 barrel이다. |
 | `formatting/decimalText.ts` | 금융 문자열을 JS number 연산 없이 부호·소수점·quote asset 표시로 변환한다. |
 | `errors/commandFailure.ts` | adapter typed failure의 code/message를 actor별 fallback과 한 형식으로 정규화한다. |
@@ -1019,7 +1019,7 @@ snapshot/event가 소유한다.
 |---|---|---|
 | backend 계좌·REGIME read | production `BackendUiAdapter` snapshot/event 연결 완료 | 실제 Binance client와 credential은 Phase 9 |
 | Binance 공개 차트 | REST/WebSocket 실시간 연결 완료 | 향후 Python market-data backend 도입 시 hook 내부 adapter 교체 |
-| 자동매매 | live route는 typed unavailable, demo는 fake 성공 | Phase 6~8의 지원 gate와 TradingController session/주문 owner |
+| 자동매매 | Phase 6 REGIME coverage 표시·zero-command gate 연결 완료. live `command_enabled = false`로 typed unavailable, demo는 fake 성공 | Phase 7~8 TradingController session/주문 owner |
 | REGIME 계산 | backend 추천/지표 read 완료, 적용 command는 unavailable | Phase 7 `set_regime_type` owner |
 | 계좌/포지션 | live Account read 완료, Position은 unavailable | Phase 7~8 authoritative Position owner |
 | 거래 내역 | startup recent/performance read 완료, 상세 query unavailable | Phase 10 detail/query owner |

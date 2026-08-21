@@ -1,4 +1,4 @@
-"""Communication 메시지 2~2.2.1의 account 초기 로드 흐름을 검증한다."""
+"""Communication 메시지 2~2.2.1과 6.1.1.1의 Controller 흐름을 검증한다."""
 
 from __future__ import annotations
 
@@ -16,9 +16,17 @@ from binance_auto_trader.adapters.binance.websocket_gateway import (
 from binance_auto_trader.application.trading_controller import (
     TradingController,
 )
-from binance_auto_trader.domain.common import Interval, SUPPORTED_INTERVALS
+from binance_auto_trader.domain.common import (
+    Interval,
+    RegimeType,
+    SUPPORTED_INTERVALS,
+)
 from binance_auto_trader.domain.market import Kline, MarketSnapshot
 from binance_auto_trader.domain.trading.account import Account, AccountSnapshot
+from binance_auto_trader.domain.trading.logic_registry import (
+    TradingLogicStartGuard,
+    UnsupportedTradingLogicError,
+)
 
 from tests.integration.trace_helpers import (
     TraceEntry,
@@ -417,9 +425,52 @@ class TracingAccount(Account):
 class AccountStreamFlowTests(unittest.TestCase):
     """
     클래스 이름: AccountStreamFlowTests
-    기능: REST full snapshot, Account commit, WS start의 Communication 순서를 검증한다.
+    기능: Account startup과 selected REGIME TradingSTM 선택의 Communication 흐름을 검증한다.
     작성 날짜: 2026/08/21
     """
+
+    def test_message_6_1_1_1_selects_exact_trading_logic_without_fallback(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_message_6_1_1_1_selects_exact_trading_logic_without_fallback()
+        기능: 메시지 6.1.1.1이 TYPE_0 새 STM만 반환하고 TYPE_1~4를 typed 오류로 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/21
+        """
+        account = Account()
+        web_socket_client = SynchronousAccountWebSocketClient([])
+        controller = TradingController(
+            APIGateway(FakeAccountRESTClient([])),
+            WebSocketGateway(
+                web_socket_client,
+                account_snapshot_callback=account.apply_stream_snapshot,
+            ),
+            account,
+            _ready_market_snapshot(),
+        )
+
+        # 선택 요청마다 session 전용 STM을 만들되 같은 immutable registry를 공유한다.
+        first = controller.fetch_selected_trading_logic(RegimeType.TYPE_0)
+        second = controller.fetch_selected_trading_logic(RegimeType.TYPE_0)
+
+        self.assertIsNot(first, second)
+        self.assertIs(first.configuration, second.configuration)
+        self.assertEqual(109, len(first.configuration.transition_ids))
+        self.assertIs(TradingLogicStartGuard.READY, first.configuration.start_guard)
+
+        for regime_type in tuple(RegimeType)[1:]:
+            with self.subTest(regime_type=regime_type):
+                with self.assertRaises(UnsupportedTradingLogicError) as raised:
+                    controller.fetch_selected_trading_logic(regime_type)
+                self.assertEqual(
+                    "UNSUPPORTED_TRADING_LOGIC",
+                    raised.exception.code,
+                )
+
+        with self.assertRaises(TypeError):
+            controller.fetch_selected_trading_logic("type0")  # type: ignore[arg-type]
 
     def test_account_startup_and_stream_trace_applies_rest_before_delta(self) -> None:
         """

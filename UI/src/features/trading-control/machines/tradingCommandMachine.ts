@@ -1,21 +1,36 @@
 import { assign, fromPromise, setup } from 'xstate';
-import type { RegimeType, UiCommandFailure } from '../../../shared/contracts';
+import {
+    DEFAULT_TRADING_LOGIC_COVERAGE,
+    type RegimeType,
+    type TradingLogicCoverage,
+    type UiCommandFailure,
+} from '../../../shared/contracts';
 import { to_ui_command_failure } from '../../../shared/errors';
 import type { UiCommandPort } from '../../../shared/ports';
 
 export interface TradingCommandContext {
     readonly selected_regime: RegimeType | null;
+    readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
+    readonly command_enabled: boolean;
     readonly is_trading: boolean;
     readonly has_open_position: boolean;
     readonly regime_highlight_requested: boolean;
     readonly notice: 'not_running' | null;
+    readonly unavailable_reason: TradingUnavailableReason | null;
     readonly error: UiCommandFailure | null;
 }
+
+/**
+ * 시작을 차단한 Phase 6 coverage 또는 command 준비 상태 사유이다.
+ */
+export type TradingUnavailableReason = 'unsupported_logic' | 'command_disabled';
 
 /**
  * backend startup snapshot으로 trading actor의 authoritative 상태를 초기화하는 옵션이다.
  */
 export interface TradingCommandMachineOptions {
+    readonly logic_coverage?: ReadonlyArray<TradingLogicCoverage>;
+    readonly command_enabled?: boolean;
     readonly is_trading?: boolean;
     readonly has_open_position?: boolean;
 }
@@ -23,11 +38,17 @@ export interface TradingCommandMachineOptions {
 export type TradingCommandEvent =
     | {
         readonly type: 'TRADING_SNAPSHOT_SYNCHRONIZED';
+        readonly selected_regime: RegimeType | null;
+        readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
+        readonly command_enabled: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
     }
     | {
         readonly type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED';
+        readonly selected_regime: RegimeType | null;
+        readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
+        readonly command_enabled: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
     }
@@ -41,6 +62,7 @@ export type TradingCommandEvent =
     | { readonly type: 'SELECT_REGIME_NOTICE_CONFIRMED' }
     | { readonly type: 'SELECT_REGIME_NOTICE_CLOSED' }
     | { readonly type: 'API_CONNECTION_NOTICE_CONFIRMED' }
+    | { readonly type: 'TRADING_UNAVAILABLE_NOTICE_CONFIRMED' }
     | { readonly type: 'STOP_BUTTON_CLICKED'; readonly has_open_position: boolean }
     | { readonly type: 'STOP_CONFIRMED' }
     | { readonly type: 'STOP_CANCELED' }
@@ -64,6 +86,36 @@ function to_command_failure(error: unknown): UiCommandFailure {
         'UI_COMMAND_FAILED',
         '요청을 완료하지 못했습니다.',
     );
+}
+
+/**
+ * 함수 이름: resolve_trading_start_unavailable_reason()
+ * 기능: 선택 REGIME coverage와 command 준비 상태를 backend 우선순위로 확인한다.
+ * 인자: logic_coverage -> 최신 REGIME별 coverage, command_enabled -> command 준비 여부,
+ *      regime -> 시작하려는 REGIME
+ * 반환값: 시작 차단 사유 또는 시작 가능한 경우 null
+ * 작성 날짜: 2026/08/21
+ */
+export function resolve_trading_start_unavailable_reason(
+    logic_coverage: ReadonlyArray<TradingLogicCoverage>,
+    command_enabled: boolean,
+    regime: RegimeType | null,
+): TradingUnavailableReason | null {
+    if (regime === null) {
+        return null;
+    }
+
+    // 누락된 coverage도 지원으로 추측하지 않고 unsupported와 같은 fail-closed 결과로 처리한다.
+    const coverage = logic_coverage.find((item) => item.regime_type === regime);
+
+    if (coverage?.support_status !== 'supported' || coverage.start_guard !== 'READY') {
+        return 'unsupported_logic';
+    }
+    if (!command_enabled) {
+        return 'command_disabled';
+    }
+
+    return null;  // 두 backend 소유 gate가 모두 준비된 경우에만 확인 단계로 진행한다.
 }
 
 /**
@@ -101,6 +153,25 @@ export function create_trading_command_machine(
             is_regime_missing: ({ event }) => {
                 return event.type === 'START_BUTTON_CLICKED' && event.regime === null;
             },
+            is_regime_missing_at_confirmation: ({ context, event }) => {
+                return event.type === 'START_CONFIRMED' && context.selected_regime === null;
+            },
+            is_start_unavailable_at_request: ({ context, event }) => {
+                return event.type === 'START_BUTTON_CLICKED'
+                    && resolve_trading_start_unavailable_reason(
+                        context.logic_coverage,
+                        context.command_enabled,
+                        event.regime,
+                    ) !== null;
+            },
+            is_start_unavailable_at_confirmation: ({ context, event }) => {
+                return event.type === 'START_CONFIRMED'
+                    && resolve_trading_start_unavailable_reason(
+                        context.logic_coverage,
+                        context.command_enabled,
+                        context.selected_regime,
+                    ) !== null;
+            },
             is_api_offline_at_start_request: ({ event }) => {
                 return event.type === 'START_BUTTON_CLICKED' && !event.is_online;
             },
@@ -113,6 +184,24 @@ export function create_trading_command_machine(
         },
         actions: {
             synchronize_trading_snapshot: assign({
+                selected_regime: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.selected_regime
+                        : context.selected_regime;
+                },
+                logic_coverage: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.logic_coverage
+                        : context.logic_coverage;
+                },
+                command_enabled: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.command_enabled
+                        : context.command_enabled;
+                },
                 is_trading: ({ context, event }) => {
                     return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
                         || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
@@ -135,6 +224,11 @@ export function create_trading_command_machine(
                         ? null
                         : context.error;
                 },
+                unavailable_reason: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        ? null
+                        : context.unavailable_reason;
+                },
             }),
             remember_start_request: assign({
                 selected_regime: ({ event }) => {
@@ -142,7 +236,32 @@ export function create_trading_command_machine(
                 },
                 regime_highlight_requested: false,
                 notice: null,
+                unavailable_reason: null,
                 error: null,
+            }),
+            remember_start_unavailability: assign({
+                selected_regime: ({ context, event }) => {
+                    return event.type === 'START_BUTTON_CLICKED'
+                        ? event.regime
+                        : context.selected_regime;
+                },
+                unavailable_reason: ({ context, event }) => {
+                    const requested_regime = event.type === 'START_BUTTON_CLICKED'
+                        ? event.regime
+                        : context.selected_regime;
+
+                    return resolve_trading_start_unavailable_reason(
+                        context.logic_coverage,
+                        context.command_enabled,
+                        requested_regime,
+                    );
+                },
+                regime_highlight_requested: false,
+                notice: null,
+                error: null,
+            }),
+            clear_start_unavailability: assign({
+                unavailable_reason: null,
             }),
             remember_position: assign({
                 has_open_position: ({ context, event }) => {
@@ -193,10 +312,13 @@ export function create_trading_command_machine(
         initial: options.is_trading === true ? 'running' : 'stopped',
         context: {
             selected_regime: null,
+            logic_coverage: options.logic_coverage ?? DEFAULT_TRADING_LOGIC_COVERAGE,
+            command_enabled: options.command_enabled ?? false,
             is_trading: options.is_trading ?? false,
             has_open_position: options.has_open_position ?? false,
             regime_highlight_requested: false,
             notice: null,
+            unavailable_reason: null,
             error: null,
         },
         on: {
@@ -240,6 +362,11 @@ export function create_trading_command_machine(
                             actions: 'remember_start_request',
                         },
                         {
+                            guard: 'is_start_unavailable_at_request',
+                            target: 'trading_unavailable_notice',
+                            actions: 'remember_start_unavailability',
+                        },
+                        {
                             guard: 'is_api_offline_at_start_request',
                             target: 'api_connection_required',
                             actions: 'remember_start_request',
@@ -279,12 +406,33 @@ export function create_trading_command_machine(
                     },
                 },
             },
+            trading_unavailable_notice: {
+                meta: {
+                    spec_ids: ['PHASE6-COVERAGE-GATE'],
+                },
+                on: {
+                    TRADING_UNAVAILABLE_NOTICE_CONFIRMED: {
+                        target: 'stopped',
+                        actions: 'clear_start_unavailability',
+                    },
+                },
+            },
             start_confirmation: {
                 meta: {
                     spec_ids: ['U3-02', 'U3-05', 'U3-06', 'U3-07', 'VR-02', 'ER-05'],
                 },
                 on: {
                     START_CONFIRMED: [
+                        {
+                            guard: 'is_regime_missing_at_confirmation',
+                            target: 'select_regime_notice',
+                            actions: 'clear_start_unavailability',
+                        },
+                        {
+                            guard: 'is_start_unavailable_at_confirmation',
+                            target: 'trading_unavailable_notice',
+                            actions: 'remember_start_unavailability',
+                        },
                         {
                             guard: 'is_api_offline_at_confirmation',
                             target: 'api_connection_required',

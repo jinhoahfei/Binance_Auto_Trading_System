@@ -91,6 +91,33 @@ export function create_backend_snapshot_fixture(): BackendSnapshot {
             status: 'not_started',
             version: 0,
             command_enabled: false,
+            logic_coverage: [
+                {
+                    regime_type: 'type0',
+                    support_status: 'supported',
+                    start_guard: 'READY',
+                },
+                {
+                    regime_type: 'type1',
+                    support_status: 'unsupported',
+                    start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+                },
+                {
+                    regime_type: 'type2',
+                    support_status: 'unsupported',
+                    start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+                },
+                {
+                    regime_type: 'type3',
+                    support_status: 'unsupported',
+                    start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+                },
+                {
+                    regime_type: 'type4',
+                    support_status: 'unsupported',
+                    start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+                },
+            ],
         },
         account: create_backend_account_fixture(),
         recent_trades: [{

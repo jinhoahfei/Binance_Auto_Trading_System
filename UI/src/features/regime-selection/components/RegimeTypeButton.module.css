@@ -3,12 +3,12 @@
     display: flex;
     flex: 0 0 68px;
     flex-direction: column;
-    gap: 1px;
+    gap: 0;
     align-items: center;
     justify-content: center;
     width: 68px;
-    height: 48px;
-    padding: 7px 5px 6px;
+    height: 52px;
+    padding: 3px 5px;
     overflow: hidden;
     background: var(--color-bg-control-strong);
     border: 1px solid color-mix(in srgb, var(--button-tone) 55%, var(--color-border-default));
@@ -71,4 +71,26 @@
     font-weight: 600;
     line-height: 14px;
     text-align: center;
+}
+
+.supportBadge {
+    min-width: 32px;
+    padding: 0 4px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 11px;
+    border: 1px solid currentcolor;
+    border-radius: 999px;
+}
+
+.supported {
+    color: var(--color-status-positive);
+}
+
+.unsupported {
+    color: var(--color-status-negative);
+}
+
+.selected .supportBadge {
+    color: var(--color-text-primary);
 }

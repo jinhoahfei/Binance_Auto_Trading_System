@@ -6,6 +6,7 @@ export type UiModalKind =
     | 'start_confirmation'
     | 'select_regime_notice'
     | 'api_connection_required'
+    | 'trading_unavailable_notice'
     | 'stop_confirmation'
     | 'force_sell_stop_confirmation'
     | 'regime_change_confirmation'
@@ -134,4 +135,3 @@ export function create_ui_shell_machine() {
         },
     });
 }
-

@@ -1,4 +1,9 @@
-import type { BackendRegimeType } from './backendContracts.generated';
+import type {
+    BackendRegimeType,
+    BackendTradingLogicCoverage,
+    BackendTradingLogicStartGuard,
+    BackendTradingLogicSupportStatus,
+} from './backendContracts.generated';
 
 /**
  * UI와 제어 actor 사이에서 사용하는 소수 문자열이다.
@@ -9,6 +14,52 @@ export type DecimalString = string;
  * UI가 선택하거나 표시할 수 있는 REGIME 유형이다.
  */
 export type RegimeType = BackendRegimeType;
+
+/**
+ * TradingSTM coverage gate가 REGIME별로 공개하는 지원 상태이다.
+ */
+export type TradingLogicSupportStatus = BackendTradingLogicSupportStatus;
+
+/**
+ * TradingSTM 시작 가능 여부를 설명하는 backend 소유 guard 결과이다.
+ */
+export type TradingLogicStartGuard = BackendTradingLogicStartGuard;
+
+/**
+ * 한 REGIME의 TradingSTM coverage와 시작 guard를 함께 보존하는 UI 계약이다.
+ */
+export type TradingLogicCoverage = BackendTradingLogicCoverage;
+
+/**
+ * backend 미연결 UI와 fail-closed 초기 상태가 공유하는 Phase 6 coverage 기본값이다.
+ */
+export const DEFAULT_TRADING_LOGIC_COVERAGE = [
+    {
+        regime_type: 'type0',
+        support_status: 'supported',
+        start_guard: 'READY',
+    },
+    {
+        regime_type: 'type1',
+        support_status: 'unsupported',
+        start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+    },
+    {
+        regime_type: 'type2',
+        support_status: 'unsupported',
+        start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+    },
+    {
+        regime_type: 'type3',
+        support_status: 'unsupported',
+        start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+    },
+    {
+        regime_type: 'type4',
+        support_status: 'unsupported',
+        start_guard: 'UNSUPPORTED_TRADING_LOGIC',
+    },
+] as const satisfies ReadonlyArray<TradingLogicCoverage>;
 
 /**
  * 가격 차트가 지원하는 봉 주기이다.

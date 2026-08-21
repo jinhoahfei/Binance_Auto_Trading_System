@@ -133,10 +133,10 @@ class PhaseFourBoundaryArchitectureTests(unittest.TestCase):
             with self.subTest(source_path=source_path):
                 self.assertFalse(imported_modules & forbidden_modules)
 
-    def test_phase_four_controllers_do_not_implement_later_phases(self) -> None:
+    def test_controllers_do_not_implement_session_order_csv_or_transport(self) -> None:
         """
-        함수 이름: test_phase_four_controllers_do_not_implement_later_phases()
-        기능: 초기 load Controller에 STM·주문·CSV·transport 책임이 섞이지 않는지 검증한다.
+        함수 이름: test_controllers_do_not_implement_session_order_csv_or_transport()
+        기능: Controller에 Phase 7+ session·주문·CSV·transport 책임이 섞이지 않는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -149,7 +149,6 @@ class PhaseFourBoundaryArchitectureTests(unittest.TestCase):
             "CSVFileGateway",
             "Order",
             "Position",
-            "TradingSTM",
             "UIStateController",
         }
         forbidden_module_parts = {"bootstrap", "transport", "ui"}

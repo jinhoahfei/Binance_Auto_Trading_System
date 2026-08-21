@@ -36,7 +36,8 @@
 - 실시간 감시: 현재가 기준 realtime %B
 - Bollinger Band: 30분봉 close 기준 20기간, 표준편차 2
 - `%B = (current_price - lower) / (upper - lower)`
-- 하단 BB 대응 목적이므로 상단 BB에 닿으면 상단 BB 상태 머신으로 넘긴다.
+- 하단 BB 대응 목적이므로 상단 BB에 닿으면 새 상단 전략을 시작하지 않고
+  주문·포지션 상태에 맞는 안전 종료 절차로 전환한다.
 
 공통 원칙:
 
@@ -182,7 +183,7 @@ if realtime_pct_b < 0.60 for 5 seconds:
 
 ```python
 if upper_band_touched:
-    move_to_upper_band_state_machine()
+    apply_upper_band_safe_termination()
 ```
 
 ### 3.8 손절
@@ -743,7 +744,7 @@ Case B stop/emergency stop sell 완료
 2. 포지션 진입 후 청산 완료
 3. realtime %B >= 0.25 회복 후 Case C 소모 처리
 4. 새로운 30분봉에서 다시 하단 BB 터치 발생
-5. 상단 BB 터치로 Upper BB 상태 머신 전환
+5. 상단 BB 터치로 lower-BB session 안전 종료
 ```
 
 ### 5.7 백테스트 case 수 보존을 위한 규칙
@@ -868,22 +869,42 @@ while lower_event_active:
                 end_lower_event_or_enter_cooldown()
 
     if upper_band_touched:
-        handoff_to_upper_band_state_machine()
+        apply_upper_band_safe_termination()
 ```
 
-### 5.10 상단 BB 전환
+### 5.10 상단 BB 안전 종료
 
-Case B 또는 Case C 진행 중 상단 BB에 닿으면 하단 BB 전략이 아니라 상단 BB 대응으로 넘긴다.
+Case B 또는 Case C 진행 중 상단 BB에 닿으면 `G-07`이
+`UpperBandPolicy.SAFE_TERMINATION`을 적용한다. 이 정책은 미구현 상단
+상태 머신으로 인계하는 전략이 아니라 lower-BB session을 종료하는
+안전 정책이다.
 
 ```python
 if current_price >= upper_band:
-    close_or_handoff_position_by_policy()
-    move_to_upper_band_state_machine()
+    if pending_order_id is not None:
+        enter_stopping()
+        cancel_pending_order(reason="UPPER_BAND_SAFE_TERMINATION")
+        reconcile_same_order(stop_after_reconciliation=True)
+    elif position_owner is not None:
+        enter_stopping()
+        cancel_strategy_evaluation()
+        force_sell_all()
+    else:
+        close_lower_event_and_reset_case_context()
+        set_trading_phase_terminated()
+        cancel_session_evaluation()
+        stop_trading_runtime(reason="UPPER_BAND_SAFE_TERMINATION")
 ```
 
-Case B trend hold 중에는 상단 BB 터치 시 상단 BB 상태 머신으로 넘기는 것이 자연스럽다.
+pending 주문 branch는 포지션 보유 branch보다 우선한다. 두 상태가 함께
+있어도 `ForceSellAll`을 즉시 요청하지 않고, 같은 주문 ID의 취소·조정으로
+실제 fill과 잔여 수량을 먼저 확정한다. 조정 후 포지션이 남으면 기존
+STOP 계약의 전량 매도로 이어진다.
 
-Case C는 평균회귀 단기 전략이므로 보통 `%B 0.10` 익절권에서 종료되지만, 예외적으로 급반등이 상단까지 이어지면 상단 BB 로직에 인계할 수 있다.
+포지션만 있는 branch는 `STOPPING`으로 전이해 전략 평가를 취소하고
+전량 매도를 요청한다. 후속 체결·실패는 기존 `G-06F`/`G-06R`이
+처리한다. 주문과 포지션이 모두 없는 branch는 lower event, Case B/C
+Context, pending 필드를 정리하고 즉시 `LOGIC_TERMINATED`로 종료한다.
 
 ---
 
@@ -928,7 +949,7 @@ realtime %B <= -0.15 + CCI <= -140
   -> TP_TRAIL 종료 + exit %B < 0.40일 때만 Case B 판정 유지
   -> 그 외 Case C 종료도 Case B 판정 대기는 유지 가능
   -> Case C 회복조건 만족 후 다시 하단 BB 터치 시 B/C 모두 새 이벤트로 재판정
-  -> 상단 BB 터치 시 상단 BB 상태 머신으로 인계
+  -> 상단 BB 터치 시 pending 우선의 lower-BB session 안전 종료
 ```
 
 ---
