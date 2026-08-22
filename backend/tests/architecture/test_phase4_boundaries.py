@@ -133,22 +133,22 @@ class PhaseFourBoundaryArchitectureTests(unittest.TestCase):
             with self.subTest(source_path=source_path):
                 self.assertFalse(imported_modules & forbidden_modules)
 
-    def test_controllers_do_not_implement_order_csv_or_transport(self) -> None:
+    def test_controllers_keep_csv_transport_and_ui_outside_application(self) -> None:
         """
-        함수 이름: test_controllers_do_not_implement_order_csv_or_transport()
-        기능: Phase 7 session Controller에 실제 주문·CSV·transport 책임이 섞이지 않는지 검증한다.
+        함수 이름: test_controllers_keep_csv_transport_and_ui_outside_application()
+        기능: Phase 8 Order 조정은 허용하되 CSV, transport와 UI 책임은 Controller 밖인지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/21
+        작성 날짜: 2026/08/22
         """
         controller_paths = (
             SOURCE_ROOT / "application" / "trading_controller.py",
             SOURCE_ROOT / "application" / "trade_history_controller.py",
         )
+
+        # Phase 8 Controller의 domain Order/Position 참조는 정당한 application 조정 책임이다.
         forbidden_names = {
             "CSVFileGateway",
-            "Order",
-            "Position",
             "UIStateController",
         }
         forbidden_module_parts = {"bootstrap", "transport", "ui"}

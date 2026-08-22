@@ -10,6 +10,9 @@ from .regime_controller import (
 )
 from .trade_history_controller import TradeHistoryController
 from .trading_controller import (
+    OrderExecutionFailureCode,
+    OrderExecutionTraceEntry,
+    OrderExecutionTraceResult,
     SplitRatioResult,
     TradingController,
     TradingLogicSelectionResult,
@@ -23,6 +26,9 @@ from .trading_controller import (
 
 __all__ = [
     "MarketDataController",
+    "OrderExecutionFailureCode",
+    "OrderExecutionTraceEntry",
+    "OrderExecutionTraceResult",
     "RegimeController",
     "RegimeEvaluationError",
     "RegimeEvaluationFailureCode",

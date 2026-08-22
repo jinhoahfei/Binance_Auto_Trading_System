@@ -17,6 +17,23 @@ from .results import TradingSTMResult
 from .stm import TradingSTM
 
 
+# 주문 adapter가 만든 구체 결과만 TradingSTM.order_finished 경계를 통과시킨다.
+_ORDER_FINISHED_EVENT_TYPES = frozenset(
+    {
+        TradingEventType.CASE_B_POSITION_OPENED,
+        TradingEventType.CASE_B_BUY_FAILED,
+        TradingEventType.CASE_B_SELL_FILLED,
+        TradingEventType.CASE_B_SELL_FAILED,
+        TradingEventType.CASE_C_POSITION_OPENED,
+        TradingEventType.CASE_C_BUY_FAILED,
+        TradingEventType.CASE_C_SELL_FILLED,
+        TradingEventType.CASE_C_SELL_FAILED,
+        TradingEventType.FORCE_SELL_FINISHED,
+        TradingEventType.FORCE_SELL_FAILED,
+    }
+)
+
+
 class ContextVersionError(RuntimeError):
     """
     클래스 이름: ContextVersionError
@@ -209,6 +226,11 @@ class SerialEventQueue:
 
 
 ActionExecutorResult: TypeAlias = Iterable[TradingEvent] | None
+OrderFinishedObserver: TypeAlias = Callable[
+    [TradingEvent, TradingContextView],
+    None,
+]
+EventProcessingObserver: TypeAlias = Callable[[TradingEvent | None], None]
 
 
 class ActionExecutor(Protocol):
@@ -247,6 +269,8 @@ class RunToCompletionEventProcessor:
         action_executor: ActionExecutor,
         event_queue: SerialEventQueue | None = None,
         clock: Callable[[], datetime] | None = None,
+        order_finished_observer: OrderFinishedObserver | None = None,
+        event_processing_observer: EventProcessingObserver | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -256,9 +280,21 @@ class RunToCompletionEventProcessor:
             action_executor -> 외부 부수 효과 action을 실행하는 callback
             event_queue -> 사용할 직렬 queue, 생략하면 새 queue 생성
             clock -> 내부 event 발생 시각 공급 함수, 생략하면 현재 UTC 시각 사용
+            order_finished_observer -> order_finished 성공을 관찰할 optional callback
+            event_processing_observer -> action batch의 원 event 식별자를 열고 닫는 optional callback
         반환값: 없음
         작성 날짜: 2026/08/14
         """
+        # 선택 callback도 호출 가능한 값만 허용해 주문 microstep 중 타입 실패를 막는다.
+        if order_finished_observer is not None and not callable(
+            order_finished_observer
+        ):
+            raise TypeError("order_finished_observer must be callable or None")
+        if event_processing_observer is not None and not callable(
+            event_processing_observer
+        ):
+            raise TypeError("event_processing_observer must be callable or None")
+
         # 주입된 STM·Context·executor와 빈 queue까지 그대로 한 processor 세션에 보존한다.
         self._stm = stm
         self._context_provider = context_provider
@@ -269,6 +305,8 @@ class RunToCompletionEventProcessor:
             else SerialEventQueue()
         )  # 빈 주입 queue도 동일 session identity로 반드시 보존한다.
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._order_finished_observer = order_finished_observer
+        self._event_processing_observer = event_processing_observer
         self._processing = False
 
     @property
@@ -304,8 +342,23 @@ class RunToCompletionEventProcessor:
             context = self._context_provider()
             if _is_stale_lower_event(event, context):
                 return None
+            if self._event_processing_observer is not None:
+                self._event_processing_observer(
+                    event
+                )  # 이 microstep의 모든 action trace가 실제 event ID를 공유한다.
 
-            result = self._stm.handle(event, context)
+            # 주문 결과는 일반 event 처리와 구분해 Communication 메시지 14 adapter를 지난다.
+            is_order_finished_event = event.event_type in _ORDER_FINISHED_EVENT_TYPES
+            if is_order_finished_event:
+                result = self._stm.order_finished(
+                    event,
+                    context,
+                )  # Position과 durable history가 반영된 최신 Context만 전달한다.
+            else:
+                result = self._stm.handle(
+                    event,
+                    context,
+                )  # 시장·timer·사용자 event는 기존 일반 경계를 유지한다.
 
             # 상태 판단 뒤 context가 바뀌면 어떤 외부 부수 효과도 실행하지 않는다.
             if self._context_provider().version != result.context_version:
@@ -319,6 +372,16 @@ class RunToCompletionEventProcessor:
                 raise ContextVersionError(
                     "Context changed between snapshot creation and action execution"
                 )
+
+            # STM 호출과 Context version 검증이 모두 성공한 경우에만 메시지 14 관찰을 알린다.
+            if (
+                is_order_finished_event
+                and self._order_finished_observer is not None
+            ):
+                self._order_finished_observer(
+                    event,
+                    context,
+                )  # queue 수락만으로 성공 trace를 만들지 않고 실제 microstep에서 기록한다.
 
             # 전체 action batch를 실행하되 내부 QueueEvent는 후속 삽입용으로 보류한다.
             queued_event_requests: list[QueueEvent] = []
@@ -368,6 +431,8 @@ class RunToCompletionEventProcessor:
         finally:
             # 실패 여부와 무관하게 다음 top-level event가 처리될 수 있도록 복원한다.
             self._processing = False
+            if self._event_processing_observer is not None:
+                self._event_processing_observer(None)
 
     async def drain(self, *, max_microsteps: int = 10_000) -> list[TradingSTMResult]:
         """

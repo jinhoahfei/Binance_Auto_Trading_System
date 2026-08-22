@@ -34,6 +34,7 @@ from binance_auto_trader.domain.trading.events import (
     TradingEvent,
     TradingEventType,
 )
+from binance_auto_trader.domain.trading.results import TradingSTMResult
 from binance_auto_trader.domain.trading.states import (
     CaseBSignalState,
     CaseCSignalState,
@@ -182,6 +183,46 @@ class MutableContextHarness:
                 ]
 
         return None
+
+
+class OrderFinishedTrackingSTM(TradingSTM):
+    """
+    클래스 이름: OrderFinishedTrackingSTM
+    기능: 구체 주문 결과가 message 14 adapter를 통과했는지 호출 횟수로 관찰한다.
+    작성 날짜: 2026/08/22
+    """
+
+    def __init__(self, regime_type: RegimeType) -> None:
+        """
+        함수 이름: __init__()
+        기능: 실제 TradingSTM 상태와 빈 order_finished 호출 기록을 초기화한다.
+        인자: regime_type -> 테스트할 거래 REGIME
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 실제 전이 구현은 부모에 유지하고 adapter 호출 증거만 별도 보존한다.
+        super().__init__(regime_type)
+        self.order_finished_call_count = 0
+
+    def order_finished(
+        self,
+        event: TradingEvent,
+        context: TradingContextView,
+    ) -> TradingSTMResult:
+        """
+        함수 이름: order_finished()
+        기능: 호출 횟수를 기록한 뒤 실제 concrete outcome adapter를 실행한다.
+        인자: event -> Position과 history 반영 뒤 생성된 주문 결과 event
+            context -> 반영 후 최신 TradingContext snapshot
+        반환값: 부모 TradingSTM의 TradingSTMResult
+        작성 날짜: 2026/08/22
+        """
+        # 일반 handle과 구분되는 Communication 메시지 14 진입 횟수를 먼저 기록한다.
+        self.order_finished_call_count += 1
+        return super().order_finished(
+            event,
+            context,
+        )  # 실제 허용 event 검증과 STM 전이는 부모 구현을 그대로 사용한다.
 
 
 class SerialEventQueueTests(unittest.TestCase):
@@ -418,7 +459,7 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
         반환값: 없음
         작성 날짜: 2026/08/14
         """
-        stm = TradingSTM(RegimeType.TYPE_0)
+        stm = OrderFinishedTrackingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration(
             root_state=RootState.TRADE_MANAGEMENT,
             ownership_state=OwnershipState.NO_POSITION,
@@ -480,6 +521,10 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
             OwnershipState.CASE_C_POSITION_MANAGEMENT,
             stm.current_state.ownership_state,
         )
+        self.assertEqual(
+            1,
+            stm.order_finished_call_count,
+        )  # concrete order outcome 한 건이 정확히 message 14를 통과한다.
 
     async def test_action_cannot_recursively_process_queue(self) -> None:
         """

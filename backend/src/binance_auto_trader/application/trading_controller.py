@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
-from decimal import Decimal
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from enum import Enum
+import hashlib
 from threading import RLock
 from uuid import uuid4
 
@@ -16,6 +17,9 @@ from binance_auto_trader.adapters.binance.websocket_gateway import (
     Subscription,
     WebSocketGateway,
 )
+from binance_auto_trader.application.trade_history_controller import (
+    TradeHistoryController,
+)
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.market import MarketSnapshot
 from binance_auto_trader.domain.trading.account import (
@@ -23,6 +27,7 @@ from binance_auto_trader.domain.trading.account import (
     SUPPORTED_VALUATION_ASSET,
 )
 from binance_auto_trader.domain.trading.action_requests import (
+    CancelPendingOrder,
     CancelScheduledEvaluation,
     CloseLowerEvent,
     ForceSellAll,
@@ -32,9 +37,13 @@ from binance_auto_trader.domain.trading.action_requests import (
     ReevaluationTrigger,
     ResetCaseBContext,
     ResetCaseCContext,
+    ReconcileOrder,
+    RuntimeField,
     ScheduleReevaluation,
     StopTradingRuntime,
+    SubmitOrder,
     TradingActionRequest,
+    patch,
 )
 from binance_auto_trader.domain.trading.context import (
     ContextVersionConflictError,
@@ -48,8 +57,10 @@ from binance_auto_trader.domain.trading.event_queue import (
     SerialEventQueue,
 )
 from binance_auto_trader.domain.trading.events import (
+    BuyAttemptPayload,
     EventPriority,
     ForceSellOutcomePayload,
+    SellAttemptPayload,
     TradingEvent,
     TradingEventType,
 )
@@ -58,8 +69,21 @@ from binance_auto_trader.domain.trading.logic_registry import (
     TradingLogicSupportStatus,
     get_trading_logic_configuration,
 )
+from binance_auto_trader.domain.trading.order import (
+    ACTIVE_ORDER_STATUSES,
+    ExecutionSummary,
+    Fill,
+    Order,
+    OrderResult,
+    OrderStatus,
+    TERMINAL_ORDER_STATUSES,
+)
+from binance_auto_trader.domain.trading.position import Position
 from binance_auto_trader.domain.trading.results import TradingSTMResult
 from binance_auto_trader.domain.trading.states import (
+    ExitReason,
+    OrderAttemptKind,
+    OrderSide,
     RootState,
     StrategyType,
     TradingPhase,
@@ -69,6 +93,17 @@ from binance_auto_trader.domain.trading.stm import TradingSTM
 
 # 멱등 기록 한도와 외부 source별 허용 event를 module 수준의 불변 정책으로 고정한다.
 _MAX_COMMAND_RECORDS = 1_024
+_BASE_ASSET = "ETH"
+_QUOTE_ASSET = "USDT"
+_TRADING_SYMBOL = "ETHUSDT"
+_MAX_SUBMISSIONS_PER_INTENT = 5
+_ORDER_RECONCILIATION_DELAYS = (
+    timedelta(seconds=1),
+    timedelta(seconds=2),
+    timedelta(seconds=4),
+    timedelta(seconds=8),
+)
+_FORCE_SELL_RETRY_DELAY = timedelta(seconds=3)
 _PUBLIC_MARKET_EVENT_TYPES = frozenset(
     {
         TradingEventType.MARKET_DATA_UPDATED,
@@ -91,6 +126,33 @@ _PUBLIC_ORDER_OUTCOME_TYPES = frozenset(
     }
 )
 
+# Communication Case 2의 caller/receiver를 message ID별 불변 trace 계약으로 고정한다.
+_ORDER_TRACE_PARTICIPANTS = {
+    "1": ("TradingController", "TradingSTM"),
+    "2": ("TradingController", "TradingContext"),
+    "3": ("TradingController", "TradingContext"),
+    "4": ("TradingController", "MarketSnapshot"),
+    "5": ("TradingController", "Order"),
+    "6": ("TradingController", "APIGateway"),
+    "6.1": ("APIGateway", "BinanceRESTClient"),
+    "7": ("TradingController", "Order"),
+    "8": ("TradingController", "APIGateway"),
+    "8.1": ("APIGateway", "BinanceRESTClient"),
+    "8.2": ("APIGateway", "BinanceRESTClient"),
+    "9": ("TradingController", "Order"),
+    "10": ("TradingController", "Order"),
+    "11": ("TradingController", "Position"),
+    "12": ("TradingController", "Position"),
+    "13": ("TradingController", "TradeHistoryController"),
+    "13.1": ("TradeHistoryController", "Performance"),
+    "13.2": ("TradeHistoryController", "Trade"),
+    "13.3": ("TradeHistoryController", "TradeHistory"),
+    "13.4": ("TradeHistoryController", "Performance"),
+    "13.5": ("TradeHistoryController", "TradeHistoryRepository"),
+    "13.5.1": ("TradeHistoryRepository", "FileSystem"),
+    "14": ("TradingController", "TradingSTM"),
+}
+
 
 def _utc_now() -> datetime:
     """
@@ -101,6 +163,17 @@ def _utc_now() -> datetime:
     작성 날짜: 2026/08/21
     """
     return datetime.now(timezone.utc)
+
+
+def _unit_order_retry_jitter_factor() -> Decimal:
+    """
+    함수 이름: _unit_order_retry_jitter_factor()
+    기능: Phase 8 fake와 결정론적 테스트에서 기본 대기를 그대로 유지한다.
+    인자: 없음
+    반환값: ADR-002가 허용하는 경계 내 Decimal jitter factor 1.0
+    작성 날짜: 2026/08/22
+    """
+    return Decimal("1.0")  # 실거래 adapter는 Phase 13에서 별도의 난수 provider를 주입한다.
 
 
 class TradingSessionStatus(str, Enum):
@@ -176,6 +249,112 @@ class TradingSessionError(RuntimeError):
         self.failure_code = code  # application과 transport가 같은 enum identity를 공유한다.
         self.current_version = current_version
         self.expected_version = expected_version
+
+
+class OrderExecutionFailureCode(str, Enum):
+    """
+    클래스 이름: OrderExecutionFailureCode
+    기능: Phase 8 주문 pipeline이 reconciliation으로 닫히는 typed failure 사유를 정의한다.
+    작성 날짜: 2026/08/22
+    """
+
+    ZERO_ORDER_QUANTITY = "ZERO_ORDER_QUANTITY"
+    SUBMISSION_BUDGET_EXHAUSTED = "SUBMISSION_BUDGET_EXHAUSTED"
+    QUERY_BUDGET_EXHAUSTED = "QUERY_BUDGET_EXHAUSTED"
+    GATEWAY_REQUEST_FAILED = "GATEWAY_REQUEST_FAILED"
+    ORDER_RESULT_INVALID = "ORDER_RESULT_INVALID"
+    POSITION_UPDATE_FAILED = "POSITION_UPDATE_FAILED"
+    HISTORY_PERSISTENCE_FAILED = "HISTORY_PERSISTENCE_FAILED"
+    PENDING_ORDER_NOT_FOUND = "PENDING_ORDER_NOT_FOUND"
+
+
+class OrderExecutionTraceResult(str, Enum):
+    """
+    클래스 이름: OrderExecutionTraceResult
+    기능: Case 2 trace 단계의 성공과 실패 결과를 typed 값으로 구분한다.
+    작성 날짜: 2026/08/22
+    """
+
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+
+
+@dataclass(frozen=True, slots=True)
+class OrderExecutionTraceEntry:
+    """
+    클래스 이름: OrderExecutionTraceEntry
+    기능: Case 2 message 상관관계와 Context version 및 안전한 결과를 불변 기록한다.
+    작성 날짜: 2026/08/22
+    """
+
+    message_id: str
+    caller: str
+    receiver: str
+    command_event_id: str
+    context_version_before: int
+    context_version_after: int
+    intent_id: str
+    client_order_id: str
+    order_id: str | None
+    result: OrderExecutionTraceResult
+    failure_code: OrderExecutionFailureCode | None = None
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: trace 식별자·version·결과와 typed failure 조합을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 공개 trace의 모든 필수 상관 문자열은 secret 없이 공백 없는 값이어야 한다.
+        required_text_values = (
+            self.message_id,
+            self.caller,
+            self.receiver,
+            self.command_event_id,
+            self.intent_id,
+            self.client_order_id,
+        )
+        if any(not isinstance(value, str) for value in required_text_values):
+            raise TypeError("order trace identifiers must be strings")
+        if any(not value.strip() for value in required_text_values):
+            raise ValueError("order trace identifiers must not be empty")
+        if self.order_id is not None and (
+            not isinstance(self.order_id, str) or not self.order_id.strip()
+        ):
+            raise ValueError("order_id must be a non-empty string or None")
+
+        # 두 Context version은 bool이 아닌 단조 0 이상 정수여야 한다.
+        versions = (
+            self.context_version_before,
+            self.context_version_after,
+        )
+        if any(
+            isinstance(version, bool) or not isinstance(version, int)
+            for version in versions
+        ):
+            raise TypeError("order trace versions must be integers")
+        if any(version < 0 for version in versions):
+            raise ValueError("order trace versions must not be negative")
+        if self.context_version_after < self.context_version_before:
+            raise ValueError("order trace Context version must not move backward")
+
+        # 성공에는 failure code가 없고 실패에는 반드시 typed code가 있어야 한다.
+        if not isinstance(self.result, OrderExecutionTraceResult):
+            raise TypeError("result must be an OrderExecutionTraceResult")
+        if self.failure_code is not None and not isinstance(
+            self.failure_code,
+            OrderExecutionFailureCode,
+        ):
+            raise TypeError(
+                "failure_code must be an OrderExecutionFailureCode or None"
+            )
+        if self.result is OrderExecutionTraceResult.SUCCESS:
+            if self.failure_code is not None:
+                raise ValueError("successful trace cannot contain failure_code")
+        elif self.failure_code is None:
+            raise ValueError("failed trace requires failure_code")
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +439,50 @@ class _ScheduledEvaluation:
 
     action: ScheduleReevaluation
     due_at: datetime
+
+
+@dataclass(slots=True)
+class _OrderExecutionState:
+    """
+    클래스 이름: _OrderExecutionState
+    기능: 한 client order ID의 reconciliation·회계·저장 진행 상태를 Controller 내부에 묶는다.
+    작성 날짜: 2026/08/22
+    """
+
+    order: Order
+    force_sell: bool
+    reconciliation_attempts: int = 0
+    stop_after_reconciliation: bool = False
+    allocated_cost_basis: Decimal = Decimal("0")
+    terminal_summary: ExecutionSummary | None = None
+    pending_outcome: TradingEvent | None = None
+    persistence_pending: bool = False
+    stop_followup_started: bool = False
+    awaiting_terminal_zero_confirmation: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ScheduledOrderQuery:
+    """
+    클래스 이름: _ScheduledOrderQuery
+    기능: 같은 Order를 다시 조회할 가장 빠른 시각을 재귀 호출 없이 보존한다.
+    작성 날짜: 2026/08/22
+    """
+
+    client_order_id: str
+    due_at: datetime
+
+
+@dataclass(slots=True)
+class _AccountFreeOverlay:
+    """
+    클래스 이름: _AccountFreeOverlay
+    기능: account stream 반영 전의 실제 fill이 free 잔액에 준 변화를 자산별로 보수적 보정한다.
+    작성 날짜: 2026/08/22
+    """
+
+    observed_free: Decimal
+    adjustment: Decimal = Decimal("0")
 
 
 class _EventDrivenScheduler:
@@ -422,6 +645,9 @@ class TradingController:
         command_gate: bool | Callable[[], bool] = False,
         context: TradingContext | None = None,
         position_snapshot: PositionSnapshot | None = None,
+        position: Position | None = None,
+        trade_history_controller: TradeHistoryController | None = None,
+        order_retry_jitter: Callable[[], Decimal] | None = None,
         clock: Callable[[], datetime] | None = None,
         application_lock: RLock | None = None,
     ) -> None:
@@ -435,6 +661,9 @@ class TradingController:
             command_gate -> fake mode에서만 True인 bool 또는 callable
             context -> 주입할 mutable TradingContext 또는 None
             position_snapshot -> 시작 전에 reconciliation된 포지션
+            position -> 실제 fill과 average cost를 소유할 Phase 8 Position 또는 None
+            trade_history_controller -> terminal execution을 durable 기록할 Controller 또는 None
+            order_retry_jitter -> 각 일반 주문 대기에 적용할 0.8~1.2 Decimal provider 또는 None
             clock -> event와 scheduler가 공유할 UTC clock 또는 None
             application_lock -> transport publication과 공유할 application RLock 또는 None
         반환값: 없음
@@ -454,6 +683,17 @@ class TradingController:
             PositionSnapshot,
         ):
             raise TypeError("position_snapshot must be a PositionSnapshot or None")
+        if position is not None and not isinstance(position, Position):
+            raise TypeError("position must be a Position or None")
+        if trade_history_controller is not None and not isinstance(
+            trade_history_controller,
+            TradeHistoryController,
+        ):
+            raise TypeError(
+                "trade_history_controller must be a TradeHistoryController or None"
+            )
+        if order_retry_jitter is not None and not callable(order_retry_jitter):
+            raise TypeError("order_retry_jitter must be callable or None")
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
         if application_lock is not None and not hasattr(
@@ -470,7 +710,30 @@ class TradingController:
         self._command_gate = command_gate
         self._clock = clock or _utc_now
         self._context = context or TradingContext(clock=self._clock)
-        self._position_snapshot = position_snapshot or PositionSnapshot()
+        self._position = position
+        self._trade_history_controller = trade_history_controller
+        self._order_retry_jitter = (
+            order_retry_jitter or _unit_order_retry_jitter_factor
+        )  # Phase 8 fake는 factor 1.0, 실거래는 동일 경계에 난수 provider를 주입한다.
+
+        # Phase 8 Position이 주입되면 시작 Guard와 Context도 같은 authoritative 수량을 사용한다.
+        if position is not None:
+            position_state = position.get_snapshot()
+            entity_snapshot = PositionSnapshot(
+                quantity=position_state.quantity,
+                entry_price=(
+                    position_state.average_entry_price
+                    if position_state.quantity > Decimal("0")
+                    else None
+                ),
+            )
+            if position_snapshot is not None and position_snapshot != entity_snapshot:
+                raise ValueError(
+                    "position_snapshot must match the injected Position"
+                )
+            self._position_snapshot = entity_snapshot
+        else:
+            self._position_snapshot = position_snapshot or PositionSnapshot()
         # account 수명 자원과 session 수명 자원은 서로 다른 cleanup 목록으로 관리한다.
         self._account_subscription: Subscription | None = None
         self._session_subscriptions: list[Subscription] = []
@@ -497,6 +760,19 @@ class TradingController:
         self._command_records: dict[tuple[str, str], _CommandRecord] = {}
         self._command_order: deque[tuple[str, str]] = deque()
 
+        # 주문별 조회·저장 상태와 retry 예산은 session Controller 한 곳에서만 변경한다.
+        self._order_states_by_client_id: dict[str, _OrderExecutionState] = {}
+        self._order_states_by_order_id: dict[str, _OrderExecutionState] = {}
+        self._scheduled_order_queries: dict[str, _ScheduledOrderQuery] = {}
+        self._submission_attempts_by_intent: dict[str, int] = {}
+        self._quantity_overrides_by_intent: dict[str, Decimal] = {}
+        self._persistence_states_by_order_id: dict[str, _OrderExecutionState] = {}
+        self._force_sell_intent_id: str | None = None
+        self._force_sell_retry_due_at: datetime | None = None
+        self._order_trace: list[OrderExecutionTraceEntry] = []
+        self._active_trace_event_id: str | None = None
+        self._account_free_overlays: dict[str, _AccountFreeOverlay] = {}
+
     @property
     def account(self) -> Account:
         """
@@ -518,6 +794,18 @@ class TradingController:
         작성 날짜: 2026/08/21
         """
         return self._account_subscription
+
+    @property
+    def position(self) -> Position | None:
+        """
+        함수 이름: position()
+        기능: Phase 8 pipeline이 실제 fill을 반영하는 mutable Position을 반환한다.
+        인자: 없음
+        반환값: 주입된 Position 또는 legacy Controller이면 None
+        작성 날짜: 2026/08/22
+        """
+        with self._session_lock:
+            return self._position  # mutation은 Controller pipeline에만 두고 identity만 공개한다.
 
     @property
     def context(self) -> TradingContextView:
@@ -616,13 +904,37 @@ class TradingController:
     def external_action_requests(self) -> tuple[TradingActionRequest, ...]:
         """
         함수 이름: external_action_requests()
-        기능: Phase 8 adapter가 아직 실행하지 않은 주문·reconciliation 요청을 반환한다.
+        기능: 주문 실행 여부와 무관하게 Controller가 관찰한 외부 effect Action을 반환한다.
         인자: 없음
-        반환값: 외부 부수 효과 action tuple
+        반환값: 원본 순서의 외부 부수 효과 action tuple
         작성 날짜: 2026/08/21
         """
         with self._session_lock:
             return tuple(self._external_actions)
+
+    @property
+    def order_execution_trace(self) -> tuple[OrderExecutionTraceEntry, ...]:
+        """
+        함수 이름: order_execution_trace()
+        기능: Phase 8 Case 2 message 실행 증거를 원본 순서의 immutable tuple로 반환한다.
+        인자: 없음
+        반환값: OrderExecutionTraceEntry tuple
+        작성 날짜: 2026/08/22
+        """
+        with self._session_lock:
+            return tuple(self._order_trace)  # 외부 호출자가 내부 trace를 변경하지 못하게 한다.
+
+    @property
+    def pending_order_query_count(self) -> int:
+        """
+        함수 이름: pending_order_query_count()
+        기능: 같은 ID reconciliation을 기다리는 Order 수를 반환한다.
+        인자: 없음
+        반환값: pending query schedule 개수
+        작성 날짜: 2026/08/22
+        """
+        with self._session_lock:
+            return len(self._scheduled_order_queries)
 
     @property
     def pending_schedule_count(self) -> int:
@@ -862,6 +1174,24 @@ class TradingController:
             previous_external_actions = tuple(self._external_actions)
             previous_cleanup_failures = tuple(self._cleanup_failures)
             previous_cleanup_state = self._cleanup_in_progress
+            previous_order_states_by_client_id = dict(
+                self._order_states_by_client_id
+            )
+            previous_order_states_by_order_id = dict(
+                self._order_states_by_order_id
+            )
+            previous_scheduled_order_queries = dict(
+                self._scheduled_order_queries
+            )
+            previous_submission_attempts = dict(
+                self._submission_attempts_by_intent
+            )
+            previous_quantity_overrides = dict(
+                self._quantity_overrides_by_intent
+            )
+            previous_force_sell_intent_id = self._force_sell_intent_id
+            previous_force_sell_retry_due_at = self._force_sell_retry_due_at
+            previous_order_trace = tuple(self._order_trace)
 
             try:
                 # 모든 Guard를 통과한 뒤 Context와 새 session-owned 자원을 초기화한다.
@@ -882,12 +1212,25 @@ class TradingController:
                     action_executor=self._execute_action,
                     event_queue=self._event_queue,
                     clock=self._clock,
+                    order_finished_observer=self._record_order_finished_trace,
+                    event_processing_observer=self._observe_processing_event,
                 )
                 self._scheduler.clear()
                 self._action_trace.clear()
                 self._external_actions.clear()
                 self._cleanup_failures.clear()
                 self._cleanup_in_progress = False
+
+                # 새 session은 이전 terminal 주문 trace와 retry 예산을 재사용하지 않는다.
+                self._order_states_by_client_id.clear()
+                self._order_states_by_order_id.clear()
+                self._scheduled_order_queries.clear()
+                self._submission_attempts_by_intent.clear()
+                self._quantity_overrides_by_intent.clear()
+                self._force_sell_intent_id = None
+                self._force_sell_retry_due_at = None
+                self._order_trace.clear()
+                self._active_trace_event_id = None
 
                 # initialize된 동일 Context snapshot으로 run을 정확히 한 번 호출한다.
                 start_result = selected_stm.run(self._context.snapshot())
@@ -907,6 +1250,16 @@ class TradingController:
                 self._external_actions = list(previous_external_actions)
                 self._cleanup_failures = list(previous_cleanup_failures)
                 self._cleanup_in_progress = previous_cleanup_state
+                self._order_states_by_client_id = (
+                    previous_order_states_by_client_id
+                )
+                self._order_states_by_order_id = previous_order_states_by_order_id
+                self._scheduled_order_queries = previous_scheduled_order_queries
+                self._submission_attempts_by_intent = previous_submission_attempts
+                self._quantity_overrides_by_intent = previous_quantity_overrides
+                self._force_sell_intent_id = previous_force_sell_intent_id
+                self._force_sell_retry_due_at = previous_force_sell_retry_due_at
+                self._order_trace = list(previous_order_trace)
                 self._status = previous_status
                 raise
 
@@ -991,15 +1344,22 @@ class TradingController:
                 event_id=f"stop-{self._session_id}-{command_id}",
             )
 
+            # STOP 이전에 대기하던 시장·timer만 폐기해 이후 생성될 주문 outcome은 보존한다.
+            self._scheduler.clear()
+            if self._event_queue is not None:
+                self._event_queue.clear()
+
             # D05에 따라 cleanup이나 force-sell 기록 전에 STM.handle을 먼저 호출한다.
             stop_result = active_stm.handle(
                 stop_event,
                 self._context.snapshot(),
             )
-            self._apply_stm_result(stop_result)
-            self._scheduler.clear()  # 모든 stop branch에서 신규 timer event를 즉시 차단한다.
-            if self._event_queue is not None:
-                self._event_queue.clear()  # STOP 이후 대기 중인 시장·timer event를 모두 폐기한다.
+            previous_trace_event_id = self._active_trace_event_id
+            self._active_trace_event_id = stop_event.event_id
+            try:
+                self._apply_stm_result(stop_result)
+            finally:
+                self._active_trace_event_id = previous_trace_event_id
             self._synchronize_status_from_context(active_stm)
             result = self._create_session_result(stop_result)
             self._store_command_record(
@@ -1173,18 +1533,24 @@ class TradingController:
         작성 날짜: 2026/08/21
         """
         with self._session_lock:
-            # scheduler release는 RUNNING이며 intake가 열린 session에서만 허용한다.
-            if (
-                self._cleanup_in_progress
-                or self._status is not TradingSessionStatus.RUNNING
-            ):
+            # cleanup 뒤에는 전략 timer와 주문 reconciliation 모두 새 event를 만들지 않는다.
+            if self._cleanup_in_progress:
                 return ()
             if self._event_queue is None:
                 raise RuntimeError("running session requires an event queue")
 
+            # RETRY_BACKOFF trigger는 STOPPING에서도 same-order query와 force retry를 깨운다.
+            order_events: tuple[TradingEvent, ...] = ()
+            if trigger is ReevaluationTrigger.RETRY_BACKOFF:
+                order_events = self.trigger_order_reconciliation(
+                    occurred_at=occurred_at,
+                )
+            if self._status is not TradingSessionStatus.RUNNING:
+                return order_events
+
             # due schedule을 꺼낸 순서대로 dedup queue에 넣고 실제 수락 event만 반환한다.
             released_events = self._scheduler.release(trigger, occurred_at)
-            enqueued_events: list[TradingEvent] = []
+            enqueued_events: list[TradingEvent] = list(order_events)
             for released_event in released_events:
                 enqueued_event = self._event_queue.enqueue(released_event)
                 if enqueued_event is not None:
@@ -1315,6 +1681,7 @@ class TradingController:
             )
             current_price = self._market_snapshot.get_current_eth_price()
             self._account.apply_initial_snapshot(account_snapshot, current_price)
+            self._account_free_overlays.clear()  # 새 full snapshot이 이전 session fill 보정을 대체한다.
             self._account_subscription = None
             account_subscription = (
                 self._web_socket_gateway.start_account_info_stream()
@@ -1398,10 +1765,22 @@ class TradingController:
                 "A reconciled open position blocks a new trading session",
                 current_version=self._context.version,
             )
+        if self._position is not None and self._position.quantity > Decimal("0"):
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "The authoritative Position blocks a new trading session",
+                current_version=self._context.version,
+            )
         if self._context.initialized and self._context.pending_order is not None:
             raise TradingSessionError(
                 TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
                 "A pending order must be reconciled before trading starts",
+                current_version=self._context.version,
+            )
+        if self._persistence_states_by_order_id:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Pending trade persistence blocks a new trading session",
                 current_version=self._context.version,
             )
 
@@ -1424,8 +1803,10 @@ class TradingController:
             )
 
         # patch도 원래 위치에서 적용해 Context mutation과 외부 요청의 순서를 보존한다.
+        returned_events: list[TradingEvent] = []
         for action in result.action_requests:
             if isinstance(action, PatchRuntimeContext):
+                trace_identity = self._prepare_order_patch_trace(action)
                 patch_result = replace(
                     result,
                     action_requests=(action,),
@@ -1434,6 +1815,7 @@ class TradingController:
                 self._context.apply_trading_stm_result(
                     patch_result
                 )  # Context는 이 위치의 runtime patch만 실행하고 다른 Action은 모른다.
+                self._complete_order_patch_trace(trace_identity)
                 self._action_trace.append(action)
                 continue
             if isinstance(action, QueueEvent):
@@ -1441,51 +1823,1841 @@ class TradingController:
                 self._enqueue_internal_action(action)
                 continue
 
-            self._execute_action(action)
+            returned_events.extend(self._execute_action(action))
+
+        # direct start/stop 경로의 동기 주문 결과도 batch 완료 뒤 같은 serial queue에 넣는다.
+        if returned_events:
+            if self._event_queue is None:
+                raise RuntimeError("order outcomes require an initialized event queue")
+            for returned_event in returned_events:
+                self._event_queue.enqueue(
+                    returned_event,
+                    internal=True,
+                )  # message 14는 재귀 호출 없이 다음 microstep에서만 실행한다.
 
     def _execute_action(
         self,
         action: TradingActionRequest,
-    ) -> None:
+    ) -> tuple[TradingEvent, ...]:
         """
         함수 이름: _execute_action()
         기능: typed action 하나를 Context method, scheduler, cleanup 또는 Phase 8 요청으로 분배한다.
         인자: action -> STM이 생성한 하나의 TradingActionRequest
-        반환값: 없음
+        반환값: 동기 완료된 concrete order outcome event tuple
         작성 날짜: 2026/08/21
         """
         self._action_trace.append(action)  # 부수 효과 전에 요청 순서를 먼저 고정한다.
 
         # Context mutation은 임의 setattr 대신 domain typed method로만 적용한다.
         if isinstance(action, PatchRuntimeContext):
+            trace_identity = self._prepare_order_patch_trace(action)
             self._context.apply_runtime_patch(action)
-            return
+            self._complete_order_patch_trace(trace_identity)
+            return ()
         if isinstance(action, OpenLowerEvent):
             self._context.open_lower_event(action)
-            return
+            return ()
         if isinstance(action, CloseLowerEvent):
             self._context.close_lower_event(action)
-            return
+            return ()
         if isinstance(action, ResetCaseBContext):
             self._context.reset_case_b_context(action)
-            return
+            return ()
         if isinstance(action, ResetCaseCContext):
             self._context.reset_case_c_context(action)
-            return
+            return ()
         if isinstance(action, ScheduleReevaluation):
-            self._scheduler.schedule(action)
-            return
+            scheduled_action = self._apply_order_retry_delay(action)
+            if scheduled_action is not None:
+                self._scheduler.schedule(scheduled_action)
+            return ()
         if isinstance(action, CancelScheduledEvaluation):
             self._scheduler.cancel(action.scope)
-            return
+            return ()
         if isinstance(action, StopTradingRuntime):
             self._cleanup_session_resources()
-            return
+            return ()
         if isinstance(action, QueueEvent):
-            return  # processor가 action batch 뒤에 enqueue하고 Controller는 trace만 소유한다.
+            return ()  # processor가 action batch 뒤에 enqueue하고 Controller는 trace만 소유한다.
 
-        # Phase 8 전에는 주문·취소·reconcile·force-sell을 API로 실행하지 않는다.
+        # 외부 effect trace는 실제 fake Gateway 실행 여부와 무관하게 원본 Action을 보존한다.
         self._external_actions.append(action)
+        if not self._order_pipeline_enabled:
+            return ()  # legacy/disabled fixture는 Phase 7의 수동 outcome 경계를 유지한다.
+        if isinstance(action, SubmitOrder):
+            return self._submit_order_action(action)
+        if isinstance(action, CancelPendingOrder):
+            return self._cancel_pending_order_action(action)
+        if isinstance(action, ReconcileOrder):
+            return self._reconcile_order_action(action)
+        if isinstance(action, ForceSellAll):
+            return self._force_sell_action(action)
+
+        return ()  # TypeAlias가 확장되더라도 알 수 없는 외부 effect를 임의 실행하지 않는다.
+
+    @property
+    def _order_pipeline_enabled(self) -> bool:
+        """
+        함수 이름: _order_pipeline_enabled()
+        기능: fake mode와 Position·history owner가 모두 준비된 경우에만 주문 effect를 허용한다.
+        인자: 없음
+        반환값: Phase 8 pipeline 실행 가능 여부
+        작성 날짜: 2026/08/22
+        """
+        return (
+            self.command_enabled
+            and self._position is not None
+            and self._trade_history_controller is not None
+        )  # dependency가 하나라도 없으면 기존 수동 adapter 경계로 fail closed한다.
+
+    def _prepare_order_patch_trace(
+        self,
+        action: PatchRuntimeContext,
+    ) -> tuple[str, str, int] | None:
+        """
+        함수 이름: _prepare_order_patch_trace()
+        기능: 주문 예약 patch에서 intent를 찾아 Context mutation 전 메시지 1을 기록한다.
+        인자: action -> 적용 직전의 typed runtime patch
+        반환값: 메시지 2 완료에 쓸 intent, client ID, 이전 version 또는 주문 patch가 아니면 None
+        작성 날짜: 2026/08/22
+        """
+        # pending intent를 문자열로 설정하는 patch만 Case 2 주문 결정 경계로 취급한다.
+        intent_id = next(
+            (
+                change.value
+                for change in action.changes
+                if change.field is RuntimeField.PENDING_INTENT_ID
+                and isinstance(change.value, str)
+            ),
+            None,
+        )
+        if intent_id is None:
+            return None  # 일반 runtime patch는 주문 Communication trace를 만들지 않는다.
+
+        # 아직 제출 전이므로 현재 intent attempt에서 사용할 결정론적 client ID를 계산한다.
+        submission_attempt = self._submission_attempts_by_intent.get(intent_id, 0)
+        client_order_id = self._create_client_order_id(
+            intent_id,
+            submission_attempt,
+        )
+        version_before = self._context.version
+        self._append_order_trace_values(
+            "1",
+            intent_id,
+            client_order_id,
+            None,
+            version_before,
+        )
+        return (intent_id, client_order_id, version_before)
+
+    def _complete_order_patch_trace(
+        self,
+        trace_identity: tuple[str, str, int] | None,
+    ) -> None:
+        """
+        함수 이름: _complete_order_patch_trace()
+        기능: 주문 예약 Context patch 성공 직후 메시지 2와 증가한 version을 기록한다.
+        인자: trace_identity -> mutation 전에 준비한 intent·client ID·version 또는 None
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        if trace_identity is None:
+            return  # 주문과 무관한 patch에는 메시지 2도 존재하지 않는다.
+
+        # 메시지 2의 before는 patch 전, after는 실제 mutation 후 Context version이다.
+        intent_id, client_order_id, version_before = trace_identity
+        self._append_order_trace_values(
+            "2",
+            intent_id,
+            client_order_id,
+            None,
+            version_before,
+        )
+
+    def _apply_order_retry_delay(
+        self,
+        action: ScheduleReevaluation,
+    ) -> ScheduleReevaluation | None:
+        """
+        함수 이름: _apply_order_retry_delay()
+        기능: STM의 retry 요청에 intent별 1·2·4·8초 지연과 총 5회 제출 예산을 적용한다.
+        인자: action -> STM이 만든 재평가 요청
+        반환값: delay를 보강한 action 또는 예산 소진이면 None
+        작성 날짜: 2026/08/22
+        """
+        # 시장·candle scheduler와 이미 명시된 delay는 주문 retry 정책으로 바꾸지 않는다.
+        if (
+            action.trigger is not ReevaluationTrigger.RETRY_BACKOFF
+            or action.earliest_delay is not None
+        ):
+            return action
+
+        # 주문 retry만 intent별 제출 횟수와 bounded schedule을 사용한다.
+        intent_id = self._context.runtime.pending_intent_id
+        if intent_id is None:
+            return action  # 주문 의도와 무관한 backoff는 기존 즉시 trigger 계약을 유지한다.
+        submission_count = self._submission_attempts_by_intent.get(intent_id, 0)
+        if submission_count >= _MAX_SUBMISSIONS_PER_INTENT:
+            self._handle_submission_budget_exhausted(intent_id)
+            return None
+
+        # 최초 실패 뒤 1초부터 네 번째 재제출 전 8초까지 deterministic 지연을 선택한다.
+        delay_index = max(0, submission_count - 1)
+        retry_delay = self._jittered_order_retry_delay(
+            _ORDER_RECONCILIATION_DELAYS[delay_index]
+        )
+        return replace(
+            action,
+            earliest_delay=retry_delay,
+        )  # 주입 factor 1.0을 쓰는 fake에서는 정확히 1·2·4·8초가 된다.
+
+    def _jittered_order_retry_delay(self, base_delay: timedelta) -> timedelta:
+        """
+        함수 이름: _jittered_order_retry_delay()
+        기능: ADR-002의 주입 jitter factor를 기본 대기에 정밀하게 적용한다.
+        인자: base_delay -> 1·2·4·8초 중 하나인 기본 대기
+        반환값: 0.8~1.2 factor가 적용된 timedelta
+        작성 날짜: 2026/08/22
+        """
+        if not isinstance(base_delay, timedelta) or base_delay <= timedelta(0):
+            raise ValueError("base_delay must be a positive timedelta")
+
+        # provider 결과는 float를 혼용하지 않고 ADR 경계 안의 유한 Decimal로 제한한다.
+        factor = self._order_retry_jitter()
+        if not isinstance(factor, Decimal):
+            raise TypeError("order retry jitter factor must be a Decimal")
+        if (
+            not factor.is_finite()
+            or factor < Decimal("0.8")
+            or factor > Decimal("1.2")
+        ):
+            raise ValueError("order retry jitter factor must be between 0.8 and 1.2")
+
+        # microsecond 정수로 변환해 binary float 오차 없이 재현 가능한 scheduler 시각을 만든다.
+        base_microseconds = (
+            (base_delay.days * 86_400 + base_delay.seconds) * 1_000_000
+            + base_delay.microseconds
+        )
+        jittered_microseconds = int(
+            (Decimal(base_microseconds) * factor).to_integral_value(
+                rounding=ROUND_HALF_EVEN
+            )
+        )
+        return timedelta(microseconds=jittered_microseconds)
+
+    def _handle_submission_budget_exhausted(self, intent_id: str) -> None:
+        """
+        함수 이름: _handle_submission_budget_exhausted()
+        기능: 총 5회 제출 후 최종 실패를 보존하되 잔여 Position이 있을 때만 운영 lock을 유지한다.
+        인자: intent_id -> 예산을 모두 소비한 원 주문 의도 ID
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        if not isinstance(intent_id, str) or not intent_id.strip():
+            raise ValueError("intent_id must be a non-empty string")
+
+        # ADR-002에 따라 실제 Position 잔량이 남은 실패만 운영 lock으로 보존한다.
+        state = self._find_latest_state_for_intent(intent_id)
+        position_quantity = (
+            Decimal("0")
+            if self._position is None
+            else self._position.quantity
+        )
+        if position_quantity > Decimal("0"):
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.SUBMISSION_BUDGET_EXHAUSTED,
+                message_id=None,
+            )
+            return
+
+        # Position 0 BUY는 이미 최종 실패 event를 STM에 전달했으므로 pending 의도를 정상 종료한다.
+        self._quantity_overrides_by_intent.pop(intent_id, None)
+        self._context.update_pending_order(None)
+        if self._context.initialized:
+            self._context.apply_runtime_patch(
+                patch(trading_phase=TradingPhase.IDLE)
+            )
+
+    def _submit_order_action(
+        self,
+        action: SubmitOrder,
+        *,
+        force_sell: bool = False,
+        quantity_override: Decimal | None = None,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _submit_order_action()
+        기능: intent 수량을 계산해 Order를 한 번 제출하고 결과를 같은 pipeline에 반영한다.
+        인자: action -> STM 또는 force-sell adapter의 주문 의도
+            force_sell -> stop 전량 매도인지 여부
+            quantity_override -> residual 전량 등 비율 대신 사용할 검증된 수량
+        반환값: terminal·durable 완료 시 concrete outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # 외부 effect 입력과 optional residual 수량을 Gateway 호출 전에 검증한다.
+        if not isinstance(action, SubmitOrder):
+            raise TypeError("action must be a SubmitOrder")
+        if quantity_override is not None and (
+            not isinstance(quantity_override, Decimal)
+            or not quantity_override.is_finite()
+            or quantity_override <= Decimal("0")
+        ):
+            raise ValueError("quantity_override must be a positive finite Decimal")
+
+        # unresolved query나 저장 실패가 있으면 같은 intent를 포함한 모든 신규 제출을 차단한다.
+        if self._status is TradingSessionStatus.RECONCILIATION_REQUIRED:
+            return ()
+        if self._persistence_states_by_order_id:
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
+                message_id="13.5",
+            )
+            return ()
+        existing_state = self._find_active_state_for_intent(action.idempotency_key)
+        if existing_state is not None:
+            self._schedule_order_query(existing_state, None)
+            return ()  # active/UNKNOWN 주문은 새 client ID 대신 같은 Order를 조회한다.
+
+        # terminal로 확정된 이전 attempt만 있는 경우에도 intent의 총 제출 예산을 지킨다.
+        submission_count = self._submission_attempts_by_intent.get(
+            action.idempotency_key,
+            0,
+        )
+        if submission_count >= _MAX_SUBMISSIONS_PER_INTENT:
+            self._handle_submission_budget_exhausted(action.idempotency_key)
+            return ()
+
+        # Context patch 때 예고한 동일 attempt client ID로 실제 Order identity를 만든다.
+        provisional_client_id = self._create_client_order_id(
+            action.idempotency_key,
+            submission_count,
+        )
+
+        # 메시지 3·4의 split ratio와 decision price를 실제 Order 생성 전에 읽는다.
+        context_version = self._context.version
+        split_ratio = self._context.get_split_ratio()
+        self._append_order_trace_values(
+            "3",
+            action.idempotency_key,
+            provisional_client_id,
+            None,
+            context_version,
+        )
+        market_price = self._market_snapshot.get_current_eth_price()
+        self._append_order_trace_values(
+            "4",
+            action.idempotency_key,
+            provisional_client_id,
+            None,
+            context_version,
+        )
+
+        # residual override가 없으면 Account/Position의 free 수량과 선택 split을 사용한다.
+        selected_override = quantity_override
+        if selected_override is None:
+            selected_override = self._quantity_overrides_by_intent.pop(
+                action.idempotency_key,
+                None,
+            )
+        requested_quantity = self._calculate_order_quantity(
+            action.side,
+            split_ratio,
+            market_price,
+            selected_override,
+            force_sell=force_sell,
+        )
+        if requested_quantity <= Decimal("0"):
+            self._append_order_trace_values(
+                "5",
+                action.idempotency_key,
+                provisional_client_id,
+                None,
+                self._context.version,
+                failure_code=OrderExecutionFailureCode.ZERO_ORDER_QUANTITY,
+            )
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.ZERO_ORDER_QUANTITY,
+                message_id=None,
+            )
+            return ()  # 수량 0에서는 Gateway를 단 한 번도 호출하지 않는다.
+
+        # 수량 확정 뒤 선택 REGIME과 Order aggregate를 한 submission state로 등록한다.
+        selected_regime = self._selected_regime
+        if selected_regime is None:
+            raise RuntimeError("an active order requires a selected REGIME")
+        order = Order(
+            intent_id=action.idempotency_key,
+            client_order_id=provisional_client_id,
+            submission_attempt=submission_count,
+            symbol=_TRADING_SYMBOL,
+            side=action.side,
+            strategy=action.strategy,
+            regime_type=selected_regime,
+            requested_quantity=requested_quantity,
+            submitted_quantity=requested_quantity,
+            market_price_at_decision=market_price,
+            exit_reason=action.exit_reason,
+        )
+        state = _OrderExecutionState(
+            order=order,
+            force_sell=force_sell,
+        )
+        self._order_states_by_client_id[order.client_order_id] = state
+        self._submission_attempts_by_intent[action.idempotency_key] = (
+            submission_count + 1
+        )
+        self._append_order_trace(order, "5", context_version)
+        self._publish_pending_order(state)  # Gateway 호출 전부터 client ID를 in-flight 복구 근거로 게시한다.
+
+        # 메시지 6/6.1은 실제 Gateway 결과를 관찰한 뒤 성공·실패를 같은 식별자로 기록한다.
+        gateway_version = self._context.version
+        try:
+            if force_sell:
+                result = self._api_gateway.sell_all_position(order)
+            else:
+                result = self._api_gateway.submit_order(order)
+        except Exception as error:
+            self._append_order_trace(
+                order,
+                "6",
+                gateway_version,
+                failure_code=OrderExecutionFailureCode.GATEWAY_REQUEST_FAILED,
+            )
+            self._append_order_trace(
+                order,
+                "6.1",
+                gateway_version,
+                failure_code=OrderExecutionFailureCode.GATEWAY_REQUEST_FAILED,
+            )
+            result = OrderResult(
+                symbol=order.symbol,
+                client_order_id=order.client_order_id,
+                status=OrderStatus.UNKNOWN,
+                processed_at=self._clock(),
+                failure_reason=type(error).__name__,
+            )  # 제출 결과 불명은 실패 재제출이 아니라 동일 client ID 조회로 전환한다.
+        else:
+            self._append_order_trace(order, "6", gateway_version)
+            self._append_order_trace(order, "6.1", gateway_version)
+
+        return self._handle_order_result(state, result, initial=True)
+
+    def _calculate_order_quantity(
+        self,
+        side: OrderSide,
+        split_ratio: Decimal,
+        market_price: Decimal,
+        quantity_override: Decimal | None,
+        *,
+        force_sell: bool,
+    ) -> Decimal:
+        """
+        함수 이름: _calculate_order_quantity()
+        기능: BUY free quote 또는 SELL Position/free base에서 요청 수량을 Decimal 계산한다.
+        인자: side -> 주문 방향
+            split_ratio -> Context에서 읽은 매수·매도 비율
+            market_price -> Order decision 시점 ETHUSDT 가격
+            quantity_override -> terminal partial 뒤 잔량 또는 None
+            force_sell -> split 없이 잔여 Position 전량인지 여부
+        반환값: filter 적용 전 원래 요청 수량
+        작성 날짜: 2026/08/22
+        """
+        # 수량 공식의 enum과 Decimal 입력을 계산 전에 fail closed한다.
+        if not isinstance(side, OrderSide):
+            raise TypeError("side must be an OrderSide")
+        if not isinstance(split_ratio, Decimal) or not split_ratio.is_finite():
+            raise TypeError("split_ratio must be a finite Decimal")
+        if not isinstance(market_price, Decimal) or market_price <= Decimal("0"):
+            raise ValueError("market_price must be a positive Decimal")
+
+        # 전역 Decimal context와 무관하게 주문 수량도 ADR-004 Decimal128 정책으로 계산한다.
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+
+            # BUY는 stream 반영 전 fill 보정을 포함한 free USDT를 결정 가격으로 환산한다.
+            if side is OrderSide.BUY:
+                free_quote = self._get_effective_free_balance(_QUOTE_ASSET)
+                maximum_quantity = free_quote / market_price
+                if quantity_override is not None:
+                    return min(quantity_override, maximum_quantity)
+                return free_quote * split_ratio / market_price
+
+            # SELL은 authoritative Position과 확인된 fill을 반영한 free ETH 중 작은 값만 제출한다.
+            position = self._require_position()
+            free_base = self._get_effective_free_balance(_BASE_ASSET)
+            maximum_sell_quantity = min(position.quantity, free_base)
+            if quantity_override is not None:
+                return min(quantity_override, maximum_sell_quantity)
+            if force_sell:
+                return maximum_sell_quantity
+            return maximum_sell_quantity * split_ratio
+
+    def _get_effective_free_balance(self, asset: str) -> Decimal:
+        """
+        함수 이름: _get_effective_free_balance()
+        기능: Account stream이 아직 반영하지 않은 확정 fill 변화를 원 자산 free 잔액에 합성한다.
+        인자: asset -> ETH 또는 USDT
+        반환값: 중복 사용을 차단할 0 이상 Decimal free 잔액
+        작성 날짜: 2026/08/22
+        """
+        if asset not in (_BASE_ASSET, _QUOTE_ASSET):
+            raise ValueError("effective free balance supports only ETH and USDT")
+
+        balance = self._account.balances.get(asset)
+        observed_free = Decimal("0") if balance is None else balance.free
+        overlay = self._account_free_overlays.get(asset)
+        if overlay is None:
+            return observed_free
+
+        # 해당 자산의 raw free가 바뀌면 account stream이 이전 fill을 포함한 새 절대값을 준 것으로 본다.
+        if observed_free != overlay.observed_free:
+            self._account_free_overlays.pop(asset, None)
+            return observed_free
+
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            return max(Decimal("0"), observed_free + overlay.adjustment)
+
+    def _apply_account_fill_overlay(
+        self,
+        side: OrderSide,
+        fills: tuple[Fill, ...],
+    ) -> None:
+        """
+        함수 이름: _apply_account_fill_overlay()
+        기능: 새로 Position에 반영한 fill의 base·quote·fee 변화를 account stream 대기 overlay에 더한다.
+        인자: side -> 체결 주문 방향
+            fills -> 이번에 처음 반영한 fill tuple
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Fill domain 검증을 통과한 값만 받으므로 두 자산 변화를 Decimal128로 합산한다.
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            base_adjustment = sum(
+                (fill.quantity for fill in fills),
+                start=Decimal("0"),
+            )
+            quote_adjustment = sum(
+                (fill.executed_amount for fill in fills),
+                start=Decimal("0"),
+            )
+            if side is OrderSide.SELL:
+                base_adjustment = -base_adjustment
+            else:
+                quote_adjustment = -quote_adjustment
+            for fill in fills:
+                if fill.fee_asset == _BASE_ASSET:
+                    base_adjustment -= fill.fee_amount
+                else:
+                    quote_adjustment -= fill.fee_amount
+
+            adjustments = {
+                _BASE_ASSET: base_adjustment,
+                _QUOTE_ASSET: quote_adjustment,
+            }
+            for asset, adjustment in adjustments.items():
+                balance = self._account.balances.get(asset)
+                observed_free = Decimal("0") if balance is None else balance.free
+                overlay = self._account_free_overlays.get(asset)
+                if overlay is None or overlay.observed_free != observed_free:
+                    overlay = _AccountFreeOverlay(observed_free=observed_free)
+                    self._account_free_overlays[asset] = overlay
+                overlay.adjustment += adjustment
+
+    @staticmethod
+    def _create_client_order_id(intent_id: str, submission_attempt: int) -> str:
+        """
+        함수 이름: _create_client_order_id()
+        기능: 같은 intent와 submission attempt에서 결정론적이고 짧은 client order ID를 만든다.
+        인자: intent_id -> STM이 보존하는 원 주문 의도 ID
+            submission_attempt -> 0부터 증가하는 제출 시도 번호
+        반환값: fake/향후 Binance adapter가 사용할 client order ID
+        작성 날짜: 2026/08/22
+        """
+        # 원 intent 문자열을 그대로 외부에 노출하지 않고 안정된 SHA-256 prefix로 상관시킨다.
+        digest = hashlib.sha256(intent_id.encode("utf-8")).hexdigest()[:20]
+        return f"bat-{digest}-{submission_attempt}"
+
+    def _handle_order_result(
+        self,
+        state: _OrderExecutionState,
+        result: OrderResult,
+        *,
+        initial: bool,
+        schedule_from: datetime | None = None,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _handle_order_result()
+        기능: 최초·재조회 결과를 Order에 반영하고 새 fill delta와 terminal 저장을 조정한다.
+        인자: state -> 같은 client ID의 Controller 실행 상태
+            result -> Gateway의 normalized OrderResult
+            initial -> apply 또는 reapply 경계 선택 여부
+            schedule_from -> 후속 query 예약의 authoritative 관측 시각 또는 None
+        반환값: durable terminal outcome tuple 또는 active이면 빈 tuple
+        작성 날짜: 2026/08/22
+        """
+        # mutable aggregate와 Gateway 결과 및 최초/후속 경계를 적용 전에 검증한다.
+        if not isinstance(state, _OrderExecutionState):
+            raise TypeError("state must be an _OrderExecutionState")
+        if not isinstance(result, OrderResult):
+            raise TypeError("result must be an OrderResult")
+        if type(initial) is not bool:
+            raise TypeError("initial must be a bool")
+
+        # apply/reapply 전체를 예외 경계로 묶어 충돌 시 거래소 사실을 임의 보정하지 않는다.
+        order = state.order
+        message_id = "7" if initial else "9"
+        version_before = self._context.version
+        try:
+            if initial:
+                order.apply_order_result(result)
+            else:
+                order.reapply_order_result(result)
+        except Exception:
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                message_id=message_id,
+            )
+            return ()
+        self._append_order_trace(order, message_id, version_before)
+
+        # exchange ID를 처음 확인한 순간부터 client와 exchange 두 index가 같은 state를 가리킨다.
+        if order.exchange_order_id is not None:
+            self._order_states_by_order_id[order.exchange_order_id] = state
+        self._publish_pending_order(state)  # terminal effect가 실패해도 복구할 exchange/client ID를 먼저 게시한다.
+
+        # 최초 terminal zero-fill은 제출 응답만 믿지 않고 같은 ID query의 terminal·0-fill로 확정한다.
+        if state.awaiting_terminal_zero_confirmation:
+            if result.status not in TERMINAL_ORDER_STATUSES:
+                if order.unapplied_fills and not self._apply_unapplied_fills(state):
+                    return ()
+                self._schedule_order_query(
+                    state,
+                    result.retry_after,
+                    scheduled_from=schedule_from,
+                )
+                return ()
+            state.awaiting_terminal_zero_confirmation = False
+
+        if not order.is_terminal:
+            # active partial은 final Trade 없이 새 fill delta만 Position에 조기 반영한다.
+            if order.unapplied_fills and not self._apply_unapplied_fills(state):
+                return ()
+            self._schedule_order_query(
+                state,
+                result.retry_after,
+                scheduled_from=schedule_from,
+            )
+            return ()
+
+        # terminal zero-fill은 Trade 없이 같은 intent retry가 가능한 concrete 실패로 끝낸다.
+        self._scheduled_order_queries.pop(order.client_order_id, None)
+        if not order.fills:
+            if initial:
+                state.awaiting_terminal_zero_confirmation = True
+                self._schedule_order_query(
+                    state,
+                    result.retry_after,
+                    scheduled_from=schedule_from,
+                )
+                return ()  # 조회 확인 전에는 실패 event나 새 client ID를 만들지 않는다.
+
+            # 일반 retry는 직전 요청 수량을 보존해 residual SELL에 split ratio를 다시 적용하지 않는다.
+            if not state.force_sell and not state.stop_after_reconciliation:
+                self._quantity_overrides_by_intent[order.intent_id] = (
+                    order.requested_quantity
+                )  # 다음 attempt에서도 같은 intent 수량을 현재 Account/Position 한도로만 제한한다.
+            self._context.update_pending_order(
+                None,
+                preserve_intent_id=not state.force_sell,
+            )
+            if state.stop_after_reconciliation:
+                if self._require_position().quantity > Decimal("0"):
+                    state.stop_followup_started = True
+                    return self._force_sell_action(ForceSellAll())
+                stop_event = self._create_order_outcome_event(
+                    state,
+                    succeeded=True,
+                    force_outcome=True,
+                )
+                state.pending_outcome = stop_event
+                return (stop_event,)
+            failure_event = self._create_order_outcome_event(
+                state,
+                succeeded=False,
+            )
+            state.pending_outcome = failure_event
+            return (failure_event,)
+
+        # terminal 경로는 메시지 10 누적 summary를 먼저 고정한 뒤 새 delta를 Position에 반영한다.
+        try:
+            state.terminal_summary = order.build_execution_summary()
+        except Exception:
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                message_id="10",
+            )
+            return ()
+        self._append_order_trace(order, "10", self._context.version)
+        if order.unapplied_fills and not self._apply_unapplied_fills(state):
+            return ()
+
+        return self._finalize_terminal_execution(state)
+
+    def _apply_unapplied_fills(self, state: _OrderExecutionState) -> bool:
+        """
+        함수 이름: _apply_unapplied_fills()
+        기능: Order에서 아직 반영하지 않은 fill subset만 Position과 Context에 원자 적용한다.
+        인자: state -> Order와 누적 SELL 배분 원가를 가진 실행 상태
+        반환값: Position·Context 반영 성공 여부
+        작성 날짜: 2026/08/22
+        """
+        # Order가 추적한 applied key를 기준으로 이번 Position delta만 분리한다.
+        order = state.order
+        unapplied_fills = order.unapplied_fills
+        if not unapplied_fills:
+            return True
+
+        # active partial에도 terminal 요구를 끄고 실제 새 fill subset만 같은 summary로 만든다.
+        try:
+            delta_summary = order.build_execution_summary(
+                fills=unapplied_fills,
+                require_terminal=False,
+            )
+        except Exception:
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                message_id="10",
+            )
+            return False
+        if state.terminal_summary is None:
+            self._append_order_trace(
+                order,
+                "10",
+                self._context.version,
+            )  # active partial도 delta summary 생성 직후에 11/12보다 먼저 기록한다.
+
+        position = self._require_position()
+        version_before = self._context.version
+        allocated_cost_basis = Decimal("0")
+        try:
+            if order.side is OrderSide.SELL:
+                allocated_cost_basis = position.get_cost_basis(
+                    delta_summary.executed_quantity
+                )
+                self._append_order_trace(order, "11", version_before)
+
+            # 메시지 12는 원가 고정 뒤 실행하고 fill applied 표시는 성공 이후에만 기록한다.
+            position.apply_execution(delta_summary)
+            self._apply_account_fill_overlay(order.side, unapplied_fills)
+            order.mark_fills_applied(unapplied_fills)
+            if order.side is OrderSide.SELL:
+                with localcontext() as decimal_context:
+                    decimal_context.prec = 34
+                    decimal_context.rounding = ROUND_HALF_EVEN
+                    state.allocated_cost_basis = (
+                        state.allocated_cost_basis + allocated_cost_basis
+                    )  # partial별 사전 원가 합도 ADR-004 Decimal128 정밀도를 유지한다.
+            self._publish_position_to_context(position)
+            self._append_order_trace(order, "12", version_before)
+        except Exception:
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.POSITION_UPDATE_FAILED,
+                message_id="12",
+            )
+            return False
+
+        return True
+
+    def _publish_position_to_context(self, position: Position) -> None:
+        """
+        함수 이름: _publish_position_to_context()
+        기능: mutable Position의 한 snapshot을 TradingContext 수량·owner와 함께 publish한다.
+        인자: position -> 체결 반영을 마친 authoritative Position
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Position lock에서 읽은 한 snapshot을 기존 Context DTO 형식으로 변환한다.
+        position_state = position.get_snapshot()
+        context_snapshot = PositionSnapshot(
+            quantity=position_state.quantity,
+            entry_price=(
+                position_state.average_entry_price
+                if position_state.quantity > Decimal("0")
+                else None
+            ),
+        )
+
+        # start prerequisite와 STM Guard가 같은 Position 수량과 owner를 보도록 한 번에 갱신한다.
+        self._position_snapshot = context_snapshot
+        self._context.update_position(
+            context_snapshot,
+            position_owner=position_state.owner,
+        )  # buy fill 전에는 호출되지 않으므로 owner도 실제 fill 이후에만 설정된다.
+
+    def _publish_pending_order(self, state: _OrderExecutionState) -> None:
+        """
+        함수 이름: _publish_pending_order()
+        기능: active/UNKNOWN Order identity와 partial 증거를 Context pending snapshot에 반영한다.
+        인자: state -> publish할 Order 실행 상태
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # exchange ID가 있으면 우선 사용하고 attempt 종류는 제출 번호에서 결정한다.
+        order = state.order
+        pending_identifier = order.exchange_order_id or order.client_order_id
+        attempt_kind = (
+            OrderAttemptKind.INITIAL
+            if order.submission_attempt == 0
+            else OrderAttemptKind.RETRY
+        )
+        self._context.update_pending_order(
+            PendingOrderSnapshot(
+                order_id=pending_identifier,
+                strategy=order.strategy,
+                side=order.side,
+                attempt_kind=attempt_kind,
+                has_partial_fill=bool(order.fills),
+                status_unknown=order.status is OrderStatus.UNKNOWN,
+            )
+        )  # runtime intent ID는 앞선 STM patch 값을 그대로 유지한다.
+
+    def _schedule_order_query(
+        self,
+        state: _OrderExecutionState,
+        retry_after: timedelta | None,
+        *,
+        scheduled_from: datetime | None = None,
+    ) -> None:
+        """
+        함수 이름: _schedule_order_query()
+        기능: 같은 client/exchange Order의 다음 1·2·4·8초 reconciliation 조회를 예약한다.
+        인자: state -> 조회할 기존 Order 상태
+            retry_after -> Gateway가 제공한 0~30초 대기 또는 None
+            scheduled_from -> 직전 query를 관찰한 scheduler 시각 또는 None
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 주입 시각도 scheduler와 같이 timezone-aware인지 예약 전에 검증한다.
+        if scheduled_from is not None and (
+            not isinstance(scheduled_from, datetime)
+            or scheduled_from.tzinfo is None
+            or scheduled_from.utcoffset() is None
+        ):
+            raise ValueError(
+                "scheduled_from must be a timezone-aware datetime or None"
+            )
+
+        # 네 번의 실제 query를 모두 소비한 주문은 새 schedule 없이 운영 lock으로 전환한다.
+        if state.reconciliation_attempts >= len(_ORDER_RECONCILIATION_DELAYS):
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.QUERY_BUDGET_EXHAUSTED,
+                message_id=None,
+            )
+            return
+
+        # 공식 Retry-After가 기본 exponential delay보다 길면 그 제한을 우선한다.
+        selected_delay = self._jittered_order_retry_delay(
+            _ORDER_RECONCILIATION_DELAYS[state.reconciliation_attempts]
+        )
+        if retry_after is not None:
+            selected_delay = max(selected_delay, retry_after)
+        schedule_base = scheduled_from or self._clock()
+        due_at = schedule_base + selected_delay
+        self._scheduled_order_queries[state.order.client_order_id] = (
+            _ScheduledOrderQuery(
+                client_order_id=state.order.client_order_id,
+                due_at=due_at,
+            )
+        )  # 같은 client ID schedule은 최신 시간 제약 하나로 대체한다.
+
+    def _finalize_terminal_execution(
+        self,
+        state: _OrderExecutionState,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _finalize_terminal_execution()
+        기능: terminal 누적 summary를 한 Trade로 durable 기록한 뒤에만 concrete outcome을 만든다.
+        인자: state -> Position delta 반영을 끝낸 terminal Order 상태
+        반환값: 저장 성공 뒤 생성한 concrete outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # terminal summary와 SELL 원가를 history operation 하나의 입력으로 준비한다.
+        order = state.order
+        version_before = self._context.version
+        summary = state.terminal_summary
+        if summary is None:
+            try:
+                summary = order.build_execution_summary()
+            except Exception:
+                self._enter_order_reconciliation(
+                    state,
+                    OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                    message_id="10",
+                )
+                return ()
+            state.terminal_summary = summary
+            self._append_order_trace(order, "10", version_before)
+
+        # SELL만 Position 적용 전에 누적한 배분 원가를 history 계산에 전달한다.
+        history_controller = self._require_trade_history_controller()
+        allocated_cost_basis = (
+            state.allocated_cost_basis
+            if order.side is OrderSide.SELL
+            else None
+        )
+        try:
+            history_controller.record_order_execution(
+                order,
+                summary,
+                allocated_cost_basis,
+            )
+        except Exception:
+            # Position과 exchange 사실은 되돌리지 않고 같은 order save-only retry 상태로 잠근다.
+            storage_is_pending = (
+                summary.order_id in history_controller.dirty_order_ids
+            )
+            if storage_is_pending:
+                state.persistence_pending = True
+                self._persistence_states_by_order_id[summary.order_id] = state
+            selected_failure_code = (
+                OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED
+                if storage_is_pending
+                else OrderExecutionFailureCode.ORDER_RESULT_INVALID
+            )
+            self._append_order_trace(
+                order,
+                "13",
+                self._context.version,
+                failure_code=selected_failure_code,
+            )
+            if storage_is_pending:
+                # dirty candidate는 13.1~13.4가 성공하고 filesystem durable 경계만 실패했음을 증명한다.
+                if order.side is OrderSide.SELL:
+                    self._append_order_trace(
+                        order,
+                        "13.1",
+                        self._context.version,
+                    )
+                for message_id in ("13.2", "13.3", "13.4"):
+                    self._append_order_trace(
+                        order,
+                        message_id,
+                        self._context.version,
+                    )
+                for message_id in ("13.5", "13.5.1"):
+                    self._append_order_trace(
+                        order,
+                        message_id,
+                        self._context.version,
+                        failure_code=selected_failure_code,
+                    )
+            self._enter_order_reconciliation(
+                state,
+                selected_failure_code,
+                message_id=None,
+            )
+            return ()
+
+        # Controller operation 성공 뒤 내부 collaborator 순서를 동일 trace 순서로 공개한다.
+        self._append_order_trace(order, "13", self._context.version)
+        if order.side is OrderSide.SELL:
+            self._append_order_trace(order, "13.1", self._context.version)
+        self._append_order_trace(order, "13.2", self._context.version)
+        self._append_order_trace(order, "13.3", self._context.version)
+        self._append_order_trace(order, "13.4", self._context.version)
+        self._append_order_trace(order, "13.5", self._context.version)
+        self._append_order_trace(order, "13.5.1", self._context.version)
+
+        return self._complete_terminal_after_history(state)
+
+    def _complete_terminal_after_history(
+        self,
+        state: _OrderExecutionState,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _complete_terminal_after_history()
+        기능: durable history 성공 뒤 pending을 해제하고 일반·stop outcome을 결정한다.
+        인자: state -> terminal summary와 저장 성공을 가진 실행 상태
+        반환값: 다음 microstep에 전달할 concrete outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # durable 성공한 주문의 save/query marker와 Context pending identity를 먼저 해제한다.
+        order = state.order
+        state.persistence_pending = False
+        if order.exchange_order_id is not None:
+            self._persistence_states_by_order_id.pop(order.exchange_order_id, None)
+        self._scheduled_order_queries.pop(order.client_order_id, None)
+        self._context.update_pending_order(
+            None,
+            preserve_intent_id=(
+                not state.force_sell
+                and order.side is OrderSide.SELL
+                and self._require_position().quantity > Decimal("0")
+            ),
+        )
+        if (
+            not state.force_sell
+            and not state.stop_after_reconciliation
+            and order.side is OrderSide.BUY
+        ):
+            self._context.apply_runtime_patch(
+                patch(trading_phase=TradingPhase.IDLE)
+            )  # 성공 BUY은 Position owner가 반영됐으므로 entry pending 단계를 종료한다.
+
+        # STOP pending reconciliation은 일반 전략 event를 내지 않고 잔량 force-sell까지 이어간다.
+        if state.stop_after_reconciliation:
+            if self._require_position().quantity > Decimal("0"):
+                state.stop_followup_started = True
+                return self._force_sell_action(ForceSellAll())
+            stop_event = self._create_order_outcome_event(
+                state,
+                succeeded=True,
+                force_outcome=True,
+            )
+            state.pending_outcome = stop_event
+            return (stop_event,)
+
+        if state.force_sell:
+            force_succeeded = self._require_position().quantity == Decimal("0")
+            force_event = self._create_order_outcome_event(
+                state,
+                succeeded=force_succeeded,
+            )
+            state.pending_outcome = force_event
+            return (force_event,)
+
+        # BUY terminal partial은 top-up하지 않고 성공하며 SELL은 잔량 전체를 같은 intent로 retry한다.
+        if order.side is OrderSide.BUY:
+            outcome = self._create_order_outcome_event(state, succeeded=True)
+        elif self._require_position().quantity == Decimal("0"):
+            outcome = self._create_order_outcome_event(state, succeeded=True)
+        else:
+            self._quantity_overrides_by_intent[order.intent_id] = (
+                self._require_position().quantity
+            )
+            outcome = self._create_order_outcome_event(state, succeeded=False)
+        state.pending_outcome = outcome
+
+        return (outcome,)
+
+    def _create_order_outcome_event(
+        self,
+        state: _OrderExecutionState,
+        *,
+        succeeded: bool,
+        force_outcome: bool = False,
+    ) -> TradingEvent:
+        """
+        함수 이름: _create_order_outcome_event()
+        기능: strategy·side·force 구분에 맞는 concrete TradingEvent와 typed payload를 만든다.
+        인자: state -> 완료된 Order 실행 상태
+            succeeded -> Position/history까지 성공했는지 여부
+            force_outcome -> pending stop 완료를 force 결과로 표시할지 여부
+        반환값: stable ID를 가진 ORDER_OUTCOME TradingEvent
+        작성 날짜: 2026/08/22
+        """
+        # outcome flag와 attempt 정보를 typed payload mapping 전에 확정한다.
+        if type(succeeded) is not bool or type(force_outcome) is not bool:
+            raise TypeError("outcome flags must be bool values")
+        order = state.order
+        attempt_kind = (
+            OrderAttemptKind.INITIAL
+            if order.submission_attempt == 0
+            else OrderAttemptKind.RETRY
+        )
+
+        # stop force-sell은 전략 CASE와 무관한 전역 concrete outcome/payload를 사용한다.
+        if state.force_sell or force_outcome:
+            event_type = (
+                TradingEventType.FORCE_SELL_FINISHED
+                if succeeded
+                else TradingEventType.FORCE_SELL_FAILED
+            )
+            payload: object = ForceSellOutcomePayload(
+                execution_applied=succeeded or bool(order.fills),
+                history_persisted=(
+                    not order.fills or not state.persistence_pending
+                ),
+                terminal_unfilled=not succeeded,
+            )
+        elif order.side is OrderSide.BUY:
+            event_type = self._buy_outcome_type(order.strategy, succeeded)
+            payload = BuyAttemptPayload(attempt_kind=attempt_kind)
+        else:
+            event_type = self._sell_outcome_type(order.strategy, succeeded)
+            payload = SellAttemptPayload(attempt_kind=attempt_kind)
+
+        # event ID는 같은 order/outcome replay가 serial queue dedup에서 한 번만 처리되게 한다.
+        event = TradingEvent(
+            event_type=event_type,
+            occurred_at=self._clock(),
+            priority=EventPriority.ORDER_OUTCOME,
+            event_id=f"order-outcome-{order.client_order_id}-{event_type.value}",
+            lower_event_id=self._context.runtime.lower_event_id,
+            order_id=order.exchange_order_id or order.client_order_id,
+            payload=payload,
+        )
+        return event
+
+    @staticmethod
+    def _buy_outcome_type(
+        strategy: StrategyType,
+        succeeded: bool,
+    ) -> TradingEventType:
+        """
+        함수 이름: _buy_outcome_type()
+        기능: BUY 전략과 성공 여부를 concrete Case B/C event type으로 변환한다.
+        인자: strategy -> 주문 소유 전략
+            succeeded -> terminal execution 성공 여부
+        반환값: CASE_B 또는 CASE_C BUY 결과 type
+        작성 날짜: 2026/08/22
+        """
+        # 두 지원 전략의 BUY 성공·실패 event를 명시적으로 나눈다.
+        if strategy is StrategyType.CASE_B:
+            return (
+                TradingEventType.CASE_B_POSITION_OPENED
+                if succeeded
+                else TradingEventType.CASE_B_BUY_FAILED
+            )
+        return (
+            TradingEventType.CASE_C_POSITION_OPENED
+            if succeeded
+            else TradingEventType.CASE_C_BUY_FAILED
+        )
+
+    @staticmethod
+    def _sell_outcome_type(
+        strategy: StrategyType,
+        succeeded: bool,
+    ) -> TradingEventType:
+        """
+        함수 이름: _sell_outcome_type()
+        기능: SELL 전략과 성공 여부를 concrete Case B/C event type으로 변환한다.
+        인자: strategy -> Position 소유 전략
+            succeeded -> 전량 청산 및 저장 성공 여부
+        반환값: CASE_B 또는 CASE_C SELL 결과 type
+        작성 날짜: 2026/08/22
+        """
+        # 두 지원 전략의 SELL 성공·실패 event를 명시적으로 나눈다.
+        if strategy is StrategyType.CASE_B:
+            return (
+                TradingEventType.CASE_B_SELL_FILLED
+                if succeeded
+                else TradingEventType.CASE_B_SELL_FAILED
+            )
+        return (
+            TradingEventType.CASE_C_SELL_FILLED
+            if succeeded
+            else TradingEventType.CASE_C_SELL_FAILED
+        )
+
+    def trigger_order_reconciliation(
+        self,
+        *,
+        occurred_at: datetime | None = None,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: trigger_order_reconciliation()
+        기능: due인 same-order query와 force-sell retry를 한 번씩 실행해 outcome을 queue에 넣는다.
+        인자: occurred_at -> deterministic scheduler 관측 UTC 시각 또는 None
+        반환값: 이번 호출에서 생성·enqueue한 concrete outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # scheduler 관측 시각을 검증한 뒤 session lock 안에서 due 작업만 소비한다.
+        selected_time = occurred_at or self._clock()
+        if not isinstance(selected_time, datetime):
+            raise TypeError("occurred_at must be a datetime or None")
+        if selected_time.tzinfo is None or selected_time.utcoffset() is None:
+            raise ValueError("occurred_at must be timezone-aware")
+
+        with self._session_lock:
+            # 주문 reconciliation은 실행·중지·운영 lock 세 상태에서만 진행할 수 있다.
+            if self._status not in (
+                TradingSessionStatus.RUNNING,
+                TradingSessionStatus.STOPPING,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            ):
+                return ()
+
+            # client ID 정렬로 같은 due 시각의 fake test 실행 순서를 결정론적으로 고정한다.
+            due_queries = tuple(
+                sorted(
+                    (
+                        scheduled_query
+                        for scheduled_query in self._scheduled_order_queries.values()
+                        if scheduled_query.due_at <= selected_time
+                    ),
+                    key=lambda scheduled_query: (
+                        scheduled_query.due_at,
+                        scheduled_query.client_order_id,
+                    ),
+                )
+            )
+            outcomes: list[TradingEvent] = []
+            for scheduled_query in due_queries:
+                self._scheduled_order_queries.pop(
+                    scheduled_query.client_order_id,
+                    None,
+                )
+                state = self._order_states_by_client_id.get(
+                    scheduled_query.client_order_id
+                )
+                if state is None or (
+                    state.order.is_terminal
+                    and not state.awaiting_terminal_zero_confirmation
+                ):
+                    continue
+                outcomes.extend(
+                    self._query_existing_order(
+                        state,
+                        observed_at=selected_time,
+                    )
+                )
+
+            # G-06R은 고정 3초가 지난 trigger에서만 새 client ID의 residual SELL을 제출한다.
+            if (
+                self._force_sell_retry_due_at is not None
+                and self._force_sell_retry_due_at <= selected_time
+            ):
+                self._force_sell_retry_due_at = None
+                outcomes.extend(self._submit_force_sell_retry())
+
+            return self._enqueue_order_outcomes(outcomes)
+
+    def _query_existing_order(
+        self,
+        state: _OrderExecutionState,
+        *,
+        observed_at: datetime | None = None,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _query_existing_order()
+        기능: 신규 제출 없이 state의 같은 Order ID를 한 번 조회하고 reapply한다.
+        인자: state -> 기존 client/exchange ID를 소유한 실행 상태
+            observed_at -> trigger가 이 query를 관찰한 결정론적 시각 또는 None
+        반환값: terminal 완료 시 concrete outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # 새 client ID를 만들지 않고 같은 Order의 최대 4회 query 예산을 먼저 검사한다.
+        if state.reconciliation_attempts >= len(_ORDER_RECONCILIATION_DELAYS):
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.QUERY_BUDGET_EXHAUSTED,
+                message_id=None,
+            )
+            return ()
+
+        # 실제 REST query를 시도하는 순간에 예산과 Case 2 추적을 함께 소비한다.
+        order = state.order
+        state.reconciliation_attempts += 1  # Retry-After가 있어도 실제 query 한 번은 예산을 소비한다.
+        gateway_version = self._context.version
+        # transport 예외는 체결 0으로 간주하지 않고 UNKNOWN으로 정규화해 same-order 조회를 계속한다.
+        try:
+            result = self._api_gateway.query_order_result(order)
+        except Exception as error:
+            for message_id in ("8", "8.1", "8.2"):
+                self._append_order_trace(
+                    order,
+                    message_id,
+                    gateway_version,
+                    failure_code=(
+                        OrderExecutionFailureCode.GATEWAY_REQUEST_FAILED
+                    ),
+                )
+            result = OrderResult(
+                symbol=order.symbol,
+                client_order_id=order.client_order_id,
+                exchange_order_id=order.exchange_order_id,
+                status=OrderStatus.UNKNOWN,
+                processed_at=self._clock(),
+                failure_reason=type(error).__name__,
+            )
+        else:
+            for message_id in ("8", "8.1", "8.2"):
+                self._append_order_trace(
+                    order,
+                    message_id,
+                    gateway_version,
+                )
+
+        return self._handle_order_result(
+            state,
+            result,
+            initial=False,
+            schedule_from=observed_at,
+        )
+
+    def _cancel_pending_order_action(
+        self,
+        action: CancelPendingOrder,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _cancel_pending_order_action()
+        기능: STOP pending Order를 먼저 조회하고 active일 때만 같은 ID를 취소한다.
+        인자: action -> 취소할 pending order ID와 사유
+        반환값: terminal 반영과 stop completion에서 생성된 outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # Context가 보존한 exchange/client ID를 Controller state로 해석한 뒤에만 외부 effect를 호출한다.
+        state = self._find_state_by_order_identifier(action.order_id)
+        if state is None:
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.PENDING_ORDER_NOT_FOUND,
+                message_id="8",
+            )
+            return ()
+        # 사용자 STOP과 상단 밴드 안전 종료는 모두 terminal 확인 뒤 잔량 force-sell로 이어진다.
+        state.stop_after_reconciliation = action.reason in (
+            "STOP_CONFIRMED",
+            "UPPER_BAND_SAFE_TERMINATION",
+        )
+
+        # cancel 전에 같은 주문을 query해 이미 terminal인 주문에 불필요한 cancel을 보내지 않는다.
+        outcomes = self._query_existing_order(state)
+        if state.order.is_terminal or outcomes:
+            return outcomes
+        if state.order.status in (
+            OrderStatus.UNKNOWN,
+            OrderStatus.PENDING_CANCEL,
+        ):
+            return ()  # UNKNOWN/cancel timeout 중에는 force-sell을 동시에 만들지 않는다.
+
+        try:
+            cancel_result = self._api_gateway.cancel_order(state.order)
+        except Exception:
+            self._schedule_order_query(state, None)
+            return ()
+
+        # cancel 응답의 상태·fill은 provisional로 두고 반드시 후속 same-order query로 확정한다.
+        self._schedule_order_query(state, cancel_result.retry_after)
+        return ()
+
+    def _reconcile_order_action(
+        self,
+        action: ReconcileOrder,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _reconcile_order_action()
+        기능: cancel 뒤 동일 ID를 재조회하고 stop 잔량이 확정된 뒤에만 force-sell한다.
+        인자: action -> 조회할 order ID와 stop 후속 여부
+        반환값: terminal stop 또는 force-sell outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # cancel 응답이 아닌 보존 ID의 실제 state를 기준으로 후속 경로를 결정한다.
+        state = self._find_state_by_order_identifier(action.order_id)
+        if state is None:
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.PENDING_ORDER_NOT_FOUND,
+                message_id="8",
+            )
+            return ()
+        state.stop_after_reconciliation = action.stop_after_reconciliation
+
+        # 앞선 cancel action에서 이미 terminal completion을 만들었으면 중복 force/order event를 만들지 않는다.
+        if state.pending_outcome is not None or state.stop_followup_started:
+            return ()
+        if state.order.is_terminal:
+            if self._require_position().quantity > Decimal("0"):
+                return self._force_sell_action(ForceSellAll())
+            stop_event = self._create_order_outcome_event(
+                state,
+                succeeded=True,
+                force_outcome=True,
+            )
+            state.pending_outcome = stop_event
+            return (stop_event,)
+
+        return self._query_existing_order(state)  # cancel 이후에도 반드시 같은 ID만 조회한다.
+
+    def _force_sell_action(
+        self,
+        action: ForceSellAll,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _force_sell_action()
+        기능: STOP Position 전량을 일반 Order pipeline으로 제출하거나 3초 retry를 예약한다.
+        인자: action -> 최초 또는 retry force-sell 요청
+        반환값: 동기 terminal이면 force outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # force intent를 만들기 전에 authoritative Position의 실제 잔량으로 zero-order를 차단한다.
+        position = self._require_position()
+        if position.quantity <= Decimal("0"):
+            return ()  # Position 0에서는 sell API를 호출하지 않는다.
+
+        # STOP session 하나의 intent ID를 모든 3초 residual attempt가 공유한다.
+        intent_id = self._force_sell_intent_id
+        if intent_id is None:
+            session_id = self._session_id or "unstarted"
+            intent_id = f"force-sell:{session_id}"
+            self._force_sell_intent_id = intent_id
+        # retry action은 즉시 제출하지 않고 예산을 확인한 뒤 due 시각만 예약한다.
+        submission_count = self._submission_attempts_by_intent.get(intent_id, 0)
+        if action.retry:
+            if submission_count >= _MAX_SUBMISSIONS_PER_INTENT:
+                self._enter_order_reconciliation(
+                    self._find_latest_state_for_intent(intent_id),
+                    OrderExecutionFailureCode.SUBMISSION_BUDGET_EXHAUSTED,
+                    message_id=None,
+                )
+                return ()
+            self._force_sell_retry_due_at = self._clock() + _FORCE_SELL_RETRY_DELAY
+            return ()  # G-06R action stack에서 즉시 재귀 제출하지 않는다.
+
+        return self._submit_force_sell(intent_id, position.quantity)
+
+    def _submit_force_sell_retry(self) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _submit_force_sell_retry()
+        기능: due G-06R retry에서 현재 잔여 Position 전량만 새 client ID로 제출한다.
+        인자: 없음
+        반환값: 동기 terminal force outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # due trigger는 최초 STOP에서 생성한 intent identity가 존재할 때만 잔량을 재평가한다.
+        intent_id = self._force_sell_intent_id
+        if intent_id is None:
+            raise RuntimeError("force-sell retry requires an intent ID")
+        # 재시도 시점의 Position이 0이면 이미 달성된 의도로 보고 REST 제출을 생략한다.
+        position = self._require_position()
+        if position.quantity <= Decimal("0"):
+            return ()
+
+        return self._submit_force_sell(intent_id, position.quantity)
+
+    def _submit_force_sell(
+        self,
+        intent_id: str,
+        quantity: Decimal,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _submit_force_sell()
+        기능: force intent runtime을 예약하고 현재 Position owner의 SELL Order를 제출한다.
+        인자: intent_id -> 모든 force retry가 공유할 의도 ID
+            quantity -> 이번에 제출할 잔여 Position 수량
+        반환값: 동기 terminal force outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # Position owner를 반드시 보존해 force fill도 원 전략의 Trade와 같은 소유자로 기록한다.
+        position = self._require_position()
+        owner = position.owner
+        if owner is None:
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.POSITION_UPDATE_FAILED,
+                message_id="11",
+            )
+            return ()
+        # 제출 횟수는 client ID attempt와 STM outcome payload에 동일하게 사용한다.
+        attempt = self._submission_attempts_by_intent.get(intent_id, 0)
+        attempt_kind = (
+            OrderAttemptKind.INITIAL if attempt == 0 else OrderAttemptKind.RETRY
+        )
+
+        # Force sell도 일반 pending Context 필드를 채워 same-order query와 STOP Guard를 공유한다.
+        self._context.apply_runtime_patch(
+            patch(
+                pending_strategy=owner,
+                pending_order_side=OrderSide.SELL,
+                pending_order_attempt_kind=attempt_kind,
+                pending_intent_id=intent_id,
+                trading_phase=TradingPhase.STOPPING,
+            )
+        )
+        submit_action = SubmitOrder(
+            strategy=owner,
+            side=OrderSide.SELL,
+            attempt_kind=attempt_kind,
+            idempotency_key=intent_id,
+            exit_reason=(
+                self._context.runtime.pending_exit_reason
+                or ExitReason.STOP
+            ),
+        )
+        return self._submit_order_action(
+            submit_action,
+            force_sell=True,
+            quantity_override=quantity,
+        )
+
+    def retry_pending_order_persistence(
+        self,
+        order_id: str,
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: retry_pending_order_persistence()
+        기능: exchange 주문을 재제출하지 않고 같은 terminal Trade의 durable save만 재시도한다.
+        인자: order_id -> 저장 실패한 exchange order ID
+        반환값: 저장 성공 뒤 enqueue한 concrete outcome tuple
+        작성 날짜: 2026/08/22
+        """
+        # durable retry key는 exchange order ID로만 받아 임의 client ID의 재제출 경로를 없앤다.
+        if not isinstance(order_id, str):
+            raise TypeError("order_id must be a string")
+        if not order_id or not order_id.isascii() or not order_id.isdigit():
+            raise ValueError("order_id must be a positive integer string")
+
+        # Position을 rollback하지 않은 채 pending save state를 원자적으로 해제한다.
+        with self._session_lock:
+            state = self._persistence_states_by_order_id.get(order_id)
+            if state is None:
+                raise KeyError(f"order_id {order_id} has no pending persistence")
+            history_controller = self._require_trade_history_controller()
+
+            # Controller는 Gateway를 호출하지 않고 TradeHistoryController의 same-order save만 호출한다.
+            try:
+                history_controller.retry_pending_persistence(order_id)
+            except Exception:
+                for message_id in ("13.5", "13.5.1"):
+                    self._append_order_trace(
+                        state.order,
+                        message_id,
+                        self._context.version,
+                        failure_code=(
+                            OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED
+                        ),
+                    )
+                raise
+            for message_id in ("13.5", "13.5.1"):
+                self._append_order_trace(
+                    state.order,
+                    message_id,
+                    self._context.version,
+                )  # recovery trace는 최초 실패 뒤 같은 order의 durable 확정을 별도로 남긴다.
+            state.persistence_pending = False
+            self._persistence_states_by_order_id.pop(order_id, None)
+
+            # 저장 성공으로 reconciliation 원인이 해소되면 원래 주문 단계에서 outcome을 계속한다.
+            phase = (
+                TradingPhase.STOPPING
+                if state.force_sell or state.stop_after_reconciliation
+                else (
+                    TradingPhase.ENTRY_ORDER_PENDING
+                    if state.order.side is OrderSide.BUY
+                    else TradingPhase.EXIT_ORDER_PENDING
+                )
+            )
+            self._context.apply_runtime_patch(patch(trading_phase=phase))
+            self._status = (
+                TradingSessionStatus.STOPPING
+                if state.force_sell or state.stop_after_reconciliation
+                else TradingSessionStatus.RUNNING
+            )  # 저장 lock 해소를 먼저 publish해 후속 residual submit이 자체 차단되지 않게 한다.
+            outcomes = self._complete_terminal_after_history(state)
+            return self._enqueue_order_outcomes(outcomes)
+
+    def _enqueue_order_outcomes(
+        self,
+        outcomes: list[TradingEvent] | tuple[TradingEvent, ...],
+    ) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _enqueue_order_outcomes()
+        기능: concrete order outcome을 serial queue에 INTERNAL 우선순위로 중복 없이 넣는다.
+        인자: outcomes -> 저장과 Position 반영을 마친 event collection
+        반환값: 실제 queue가 수락한 event tuple
+        작성 날짜: 2026/08/22
+        """
+        # durable 저장까지 끝나지 않은 outcome이 queue를 통해 STM에 도달하지 못하게 한다.
+        if self._event_queue is None:
+            if outcomes:
+                raise RuntimeError("order outcomes require an initialized event queue")
+            return ()
+
+        # serial queue dedup이 실제 수락한 concrete event만 호출자에게 반환한다.
+        enqueued_events: list[TradingEvent] = []
+        for outcome in outcomes:
+            enqueued_event = self._event_queue.enqueue(
+                outcome,
+                internal=True,
+            )
+            if enqueued_event is not None:
+                enqueued_events.append(enqueued_event)
+
+        return tuple(enqueued_events)
+
+    def _find_state_by_order_identifier(
+        self,
+        order_identifier: str | None,
+    ) -> _OrderExecutionState | None:
+        """
+        함수 이름: _find_state_by_order_identifier()
+        기능: exchange 또는 client order ID로 같은 Controller execution state를 찾는다.
+        인자: order_identifier -> Context/action이 보존한 order ID 또는 None
+        반환값: 일치하는 state 또는 None
+        작성 날짜: 2026/08/22
+        """
+        # exchange ID를 우선하되 제출 직후의 client-only state도 같은 aggregate로 찾는다.
+        if order_identifier is None:
+            return None
+        state = self._order_states_by_order_id.get(order_identifier)
+        if state is not None:
+            return state
+
+        return self._order_states_by_client_id.get(order_identifier)
+
+    def _find_active_state_for_intent(
+        self,
+        intent_id: str,
+    ) -> _OrderExecutionState | None:
+        """
+        함수 이름: _find_active_state_for_intent()
+        기능: 신규 제출을 막아야 하는 active·UNKNOWN·persistence state를 같은 intent에서 찾는다.
+        인자: intent_id -> STM idempotency key
+        반환값: unresolved state 또는 None
+        작성 날짜: 2026/08/22
+        """
+        # 가장 최근 attempt부터 검사해 이전 terminal attempt가 새 제출을 막지 않게 한다.
+        for state in reversed(tuple(self._order_states_by_client_id.values())):
+            if state.order.intent_id != intent_id:
+                continue
+            if (
+                state.persistence_pending
+                or state.awaiting_terminal_zero_confirmation
+                or state.order.status is None
+                or state.order.status is OrderStatus.UNKNOWN
+                or state.order.status in ACTIVE_ORDER_STATUSES
+            ):
+                return state
+
+        return None
+
+    def _find_latest_state_for_intent(
+        self,
+        intent_id: str,
+    ) -> _OrderExecutionState | None:
+        """
+        함수 이름: _find_latest_state_for_intent()
+        기능: 진단 trace와 budget failure에 사용할 가장 최근 intent state를 찾는다.
+        인자: intent_id -> 조회할 원 주문 의도 ID
+        반환값: 최근 state 또는 None
+        작성 날짜: 2026/08/22
+        """
+        # insertion order를 역순회해 budget failure와 trace를 마지막 attempt에 연결한다.
+        for state in reversed(tuple(self._order_states_by_client_id.values())):
+            if state.order.intent_id == intent_id:
+                return state
+
+        return None
+
+    def _enter_order_reconciliation(
+        self,
+        state: _OrderExecutionState | None,
+        failure_code: OrderExecutionFailureCode,
+        *,
+        message_id: str | None,
+    ) -> None:
+        """
+        함수 이름: _enter_order_reconciliation()
+        기능: unresolved exchange/Position/storage 사실을 rollback하지 않고 신규 action을 잠근다.
+        인자: state -> 관련 Order state 또는 생성 전이면 None
+            failure_code -> typed reconciliation 사유
+            message_id -> 실제 실패가 관찰된 Communication message ID 또는 policy lock이면 None
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        if not isinstance(failure_code, OrderExecutionFailureCode):
+            raise TypeError("failure_code must be an OrderExecutionFailureCode")
+        if message_id is not None and (
+            not isinstance(message_id, str) or not message_id.strip()
+        ):
+            raise ValueError("message_id must be a non-empty string or None")
+
+        # Context phase와 공개 session status를 같은 application lock 안에서 fail closed한다.
+        version_before = self._context.version
+        if self._context.initialized:
+            self._context.apply_runtime_patch(
+                patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
+            )
+        self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+        if state is not None:
+            self._scheduled_order_queries.pop(
+                state.order.client_order_id,
+                None,
+            )
+        if state is not None and message_id is not None:
+            self._append_order_trace(
+                state.order,
+                message_id,
+                version_before,
+                failure_code=failure_code,
+            )
+
+    def _record_order_finished_trace(
+        self,
+        event: TradingEvent,
+        context: TradingContextView,
+    ) -> None:
+        """
+        함수 이름: _record_order_finished_trace()
+        기능: concrete outcome이 실제 TradingSTM.order_finished에서 성공한 순간 메시지 14를 기록한다.
+        인자: event -> serial queue가 전달한 concrete order outcome
+            context -> order_finished가 사용한 최신 immutable Context view
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        if not isinstance(event, TradingEvent):
+            raise TypeError("event must be a TradingEvent")
+        if not isinstance(context, TradingContextView):
+            raise TypeError("context must be a TradingContextView")
+
+        # Phase 7 legacy 수동 outcome에는 Controller Order state가 없으므로 trace만 생략한다.
+        state = self._find_state_by_order_identifier(event.order_id)
+        if state is None:
+            return
+
+        self._append_order_trace(
+            state.order,
+            "14",
+            context.version,
+            command_event_id=event.event_id,
+        )  # 실제 adapter 호출과 version 검증을 통과한 outcome만 SUCCESS로 남긴다.
+
+    def _observe_processing_event(self, event: TradingEvent | None) -> None:
+        """
+        함수 이름: _observe_processing_event()
+        기능: serial processor가 실행 중인 원 event ID를 Case 2 action trace 수명 동안만 보존한다.
+        인자: event -> 현재 microstep event 또는 batch 종료를 뜻하는 None
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        if event is not None and not isinstance(event, TradingEvent):
+            raise TypeError("event must be a TradingEvent or None")
+
+        self._active_trace_event_id = (
+            None if event is None else event.event_id
+        )  # event processor의 finally callback이 다음 microstep 전에 반드시 비운다.
+
+    def _append_order_trace(
+        self,
+        order: Order,
+        message_id: str,
+        context_version_before: int,
+        *,
+        failure_code: OrderExecutionFailureCode | None = None,
+        command_event_id: str | None = None,
+    ) -> None:
+        """
+        함수 이름: _append_order_trace()
+        기능: 현재 Order identity와 Context version으로 안전한 Case 2 trace 한 건을 추가한다.
+        인자: order -> trace 상관관계 Order
+            message_id -> Communication Case 2 message ID
+            context_version_before -> operation 직전 Context version
+            failure_code -> 실패 trace의 typed code 또는 성공이면 None
+            command_event_id -> 명시적 원 event ID 또는 현재 processor event를 쓰면 None
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        self._append_order_trace_values(
+            message_id,
+            order.intent_id,
+            order.client_order_id,
+            order.exchange_order_id,
+            context_version_before,
+            failure_code=failure_code,
+            command_event_id=command_event_id,
+        )
+
+    def _append_order_trace_values(
+        self,
+        message_id: str,
+        intent_id: str,
+        client_order_id: str,
+        order_id: str | None,
+        context_version_before: int,
+        *,
+        failure_code: OrderExecutionFailureCode | None = None,
+        command_event_id: str | None = None,
+    ) -> None:
+        """
+        함수 이름: _append_order_trace_values()
+        기능: Order 생성 전 단계도 동일 schema의 상관관계 trace로 기록한다.
+        인자: message_id -> Communication message ID
+            intent_id -> 원 주문 의도 ID
+            client_order_id -> submission attempt별 client ID
+            order_id -> exchange order ID 또는 미확정이면 None
+            context_version_before -> operation 직전 Context version
+            failure_code -> 실패 trace typed code 또는 None
+            command_event_id -> 직접 주어진 원 event ID 또는 None
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 문서에 없는 message ID는 caller/receiver를 추측하지 않고 즉시 거부한다.
+        participants = _ORDER_TRACE_PARTICIPANTS.get(message_id)
+        if participants is None:
+            raise ValueError(f"unsupported order trace message ID: {message_id}")
+        result = (
+            OrderExecutionTraceResult.SUCCESS
+            if failure_code is None
+            else OrderExecutionTraceResult.FAILURE
+        )
+        self._order_trace.append(
+            OrderExecutionTraceEntry(
+                message_id=message_id,
+                caller=participants[0],
+                receiver=participants[1],
+                command_event_id=(
+                    command_event_id
+                    or self._active_trace_event_id
+                    or intent_id
+                ),
+                context_version_before=context_version_before,
+                context_version_after=self._context.version,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                order_id=order_id,
+                result=result,
+                failure_code=failure_code,
+            )
+        )  # credential와 raw payload는 trace schema에 필드 자체가 없다.
+
+    def _require_position(self) -> Position:
+        """
+        함수 이름: _require_position()
+        기능: Phase 8 주문 effect에서 주입 Position을 검증해 반환한다.
+        인자: 없음
+        반환값: authoritative Position
+        작성 날짜: 2026/08/22
+        """
+        # legacy Phase 7 조립과 실행 중 Phase 8 dependency 누락을 구분할 수 있는 fail-fast 경계다.
+        position = self._position
+        if position is None:
+            raise RuntimeError("order pipeline requires a Position")
+
+        return position
+
+    def _require_trade_history_controller(self) -> TradeHistoryController:
+        """
+        함수 이름: _require_trade_history_controller()
+        기능: terminal 기록에서 주입 TradeHistoryController를 검증해 반환한다.
+        인자: 없음
+        반환값: Phase 8 TradeHistoryController
+        작성 날짜: 2026/08/22
+        """
+        # history dependency 누락을 REST 제출 후 silent skip으로 숨기지 않는다.
+        controller = self._trade_history_controller
+        if controller is None:
+            raise RuntimeError(
+                "order pipeline requires a TradeHistoryController"
+            )
+
+        return controller
 
     def _enqueue_internal_action(self, action: QueueEvent) -> None:
         """

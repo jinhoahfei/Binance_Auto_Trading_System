@@ -5,10 +5,16 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from binance_auto_trader.domain.history import Performance, Trade
+from binance_auto_trader.domain.history import (
+    InvalidZeroCostBasisError,
+    OrderHistoryConflictError,
+    Performance,
+    RealizedResult,
+    Trade,
+)
 from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
-from tests.unit.history.factories import make_trade
+from tests.unit.history.factories import make_order_execution, make_trade
 
 
 CURRENT_TIME = datetime(2026, 8, 21, 3, 0, tzinfo=timezone.utc)
@@ -212,6 +218,104 @@ class PerformanceTests(unittest.TestCase):
 
         self.assertFalse(hasattr(performance, "__dict__"))
         self.assertIs(performance.get_performance(), performance)
+
+    def test_apply_new_trade_matches_full_rebuild_and_is_idempotent(self) -> None:
+        """
+        함수 이름: test_apply_new_trade_matches_full_rebuild_and_is_idempotent()
+        기능: 신규 Trade 증분 반영이 전체 복원과 같고 동일 order 재적용은 no-op인지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        buy_trade = make_trade(trade_id="buy", order_id="1")
+        sell_trade = make_trade(
+            trade_id="sell",
+            order_id="2",
+            side=OrderSide.SELL,
+        )
+        performance = Performance((buy_trade,), clock=fixed_clock)
+        expected_performance = Performance(
+            (buy_trade, sell_trade),
+            clock=fixed_clock,
+        )
+
+        # 새 Trade를 한 번 반영한 뒤 동일 객체 재적용으로 수치가 변하지 않아야 한다.
+        performance.apply_new_trade(sell_trade)
+        performance.apply_new_trade(sell_trade)
+
+        self.assertEqual(performance.realized_pnl, expected_performance.realized_pnl)
+        self.assertEqual(performance.total_fee, expected_performance.total_fee)
+        self.assertEqual(
+            performance.cumulative_return_rate,
+            expected_performance.cumulative_return_rate,
+        )
+        self.assertEqual(
+            performance.completed_sell_count,
+            expected_performance.completed_sell_count,
+        )
+
+    def test_apply_new_trade_rejects_same_order_with_different_content(self) -> None:
+        """
+        함수 이름: test_apply_new_trade_rejects_same_order_with_different_content()
+        기능: 이미 집계한 order ID를 다른 Trade 내용으로 덮어쓰지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        original_trade = make_trade(trade_id="original", order_id="81")
+        conflicting_trade = make_trade(trade_id="different", order_id="81")
+        performance = Performance((original_trade,), clock=fixed_clock)
+
+        with self.assertRaises(OrderHistoryConflictError):
+            performance.apply_new_trade(conflicting_trade)
+
+        self.assertEqual(performance.total_fee, original_trade.fee_quote_amount)
+
+    def test_calculate_realized_result_reproduces_d11_sell_formula(self) -> None:
+        """
+        함수 이름: test_calculate_realized_result_reproduces_d11_sell_formula()
+        기능: SELL amount·fee·allocated cost가 D-11 PnL과 8자리 수익률을 만드는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        _, summary = make_order_execution(side=OrderSide.SELL)
+        performance = Performance(clock=fixed_clock)
+
+        # Position mutation 전에 고정한 원가를 ADR-004 net proceeds 공식에 대입한다.
+        result = performance.calculate_realized_result(
+            summary,
+            Decimal("100.10"),
+        )
+
+        self.assertIsInstance(result, RealizedResult)
+        self.assertEqual(result.allocated_cost_basis, Decimal("100.10"))
+        self.assertEqual(result.realized_pnl, Decimal("9.79"))
+        self.assertEqual(
+            result.realized_return_rate,
+            Decimal("9.78021978"),
+        )
+
+    def test_calculate_realized_result_rejects_zero_cost_as_typed_failure(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_calculate_realized_result_rejects_zero_cost_as_typed_failure()
+        기능: SELL 원가 0을 수익률 0으로 숨기지 않고 reconciliation typed error로 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        _, summary = make_order_execution(side=OrderSide.SELL)
+        performance = Performance(clock=fixed_clock)
+
+        with self.assertRaises(InvalidZeroCostBasisError) as captured_error:
+            performance.calculate_realized_result(summary, Decimal("0"))
+
+        self.assertEqual(
+            captured_error.exception.code,
+            "INVALID_ZERO_COST_BASIS",
+        )
 
 
 if __name__ == "__main__":

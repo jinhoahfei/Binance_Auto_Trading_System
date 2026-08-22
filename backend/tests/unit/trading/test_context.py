@@ -333,6 +333,45 @@ class TradingContextMutationTests(unittest.TestCase):
         with self.assertRaises(TradingContextStateError):
             context.get_split_ratio()  # pending side 없이 매수 또는 매도 비율을 추측하지 않는다.
 
+    def test_terminal_failure_can_clear_order_while_preserving_intent(self) -> None:
+        """
+        함수 이름: test_terminal_failure_can_clear_order_while_preserving_intent()
+        기능: terminal zero-fill 뒤 같은 intent 재시도에 필요한 ID만 선택 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        context = create_context()
+        context.apply_runtime_patch(
+            patch(pending_intent_id="case-b-buy-intent")
+        )
+        context.update_pending_order(
+            PendingOrderSnapshot(
+                order_id="exchange-order-1",
+                strategy=StrategyType.CASE_B,
+                side=OrderSide.BUY,
+                attempt_kind=OrderAttemptKind.INITIAL,
+            )
+        )
+
+        # Terminal 결과는 활성 주문 필드를 지우되 재제출 correlation ID만 남긴다.
+        context.update_pending_order(
+            None,
+            preserve_intent_id=True,
+        )
+        runtime = context.runtime
+        self.assertIsNone(context.pending_order)
+        self.assertIsNone(runtime.pending_order_id)
+        self.assertIsNone(runtime.pending_order_side)
+        self.assertEqual("case-b-buy-intent", runtime.pending_intent_id)
+
+        # bool 대체값은 retry 경계의 의미를 모호하게 하므로 mutation 전에 거부한다.
+        with self.assertRaises(TypeError):
+            context.update_pending_order(
+                None,
+                preserve_intent_id=1,
+            )
+
     def test_lower_and_case_reset_actions_are_typed_versioned_mutations(self) -> None:
         """
         함수 이름: test_lower_and_case_reset_actions_are_typed_versioned_mutations()

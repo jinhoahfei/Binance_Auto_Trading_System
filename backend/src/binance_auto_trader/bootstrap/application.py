@@ -32,7 +32,7 @@ from binance_auto_trader.application.trade_history_controller import (
 from binance_auto_trader.domain.history import Performance, TradeHistory
 from binance_auto_trader.domain.market import MarketSnapshot
 from binance_auto_trader.domain.regime import RegimeSTM
-from binance_auto_trader.domain.trading import Account, AccountSnapshot
+from binance_auto_trader.domain.trading import Account, AccountSnapshot, Position
 
 
 class ExecutionMode(str, Enum):
@@ -613,13 +613,30 @@ def create_application_runtime(
         account_snapshot_callback=apply_account_stream_snapshot,
     )
 
-    # 거래 Controller를 먼저 만들어 Regime 선택의 유일한 commit port로 연결한다.
+    # Persistence 구현 또는 주입 port를 먼저 조립해 order outcome 전에 durable owner를 준비한다.
+    selected_history_repository: TradeHistoryRepositoryPort
+    if history_repository is not None:
+        selected_history_repository = history_repository
+    else:
+        selected_history_repository = TradeHistoryRepository(
+            history_path,
+            clock=clock,
+        )
+    trade_history_controller = TradeHistoryController(
+        selected_history_repository,
+        clock=clock,
+    )
+    position = Position()
+
+    # 거래 Controller가 Position과 history를 공유해 Phase 8 outcome commit 순서를 소유한다.
     trading_controller = TradingController(
         api_gateway,
         web_socket_gateway,
         account,
         market_snapshot,
         command_gate=selected_execution_mode is ExecutionMode.FAKE,
+        position=position,
+        trade_history_controller=trade_history_controller,
         clock=clock,
         application_lock=application_lock,
     )
@@ -635,20 +652,6 @@ def create_application_runtime(
         market_snapshot,
         regime_controller,
         kline_limit=kline_limit,
-    )
-
-    # Persistence 구현 또는 주입 port 중 정확히 하나로 history startup 경계를 조립한다.
-    selected_history_repository: TradeHistoryRepositoryPort
-    if history_repository is not None:
-        selected_history_repository = history_repository
-    else:
-        selected_history_repository = TradeHistoryRepository(
-            history_path,
-            clock=clock,
-        )
-    trade_history_controller = TradeHistoryController(
-        selected_history_repository,
-        clock=clock,
     )
 
     # 초기 state는 모든 외부 초기화가 끝나기 전까지 명시적으로 not-ready다.

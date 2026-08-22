@@ -729,30 +729,41 @@ class TradingContext:
     def update_pending_order(
         self,
         pending_order: PendingOrderSnapshot | None,
+        *,
+        preserve_intent_id: bool = False,
     ) -> None:
         """
         함수 이름: update_pending_order()
         기능: 주문 실행·reconciliation 결과와 runtime pending 필드를 원자적으로 맞춘다.
         인자: pending_order -> 최신 pending 주문 또는 terminal 확정 후 None
+            preserve_intent_id -> terminal 실패 뒤 같은 intent 재시도를 위해 ID를 남길지 여부
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # pending snapshot과 intent 보존 flag를 mutation 전에 정확한 타입으로 검증한다.
         if pending_order is not None and not isinstance(
             pending_order,
             PendingOrderSnapshot,
         ):
             raise TypeError("pending_order must be a PendingOrderSnapshot or None")
+        if type(preserve_intent_id) is not bool:
+            raise TypeError("preserve_intent_id must be a bool")
 
         # authoritative order snapshot과 Guard용 runtime 식별자를 하나의 lock에서 동기화한다.
         with self._lock:
             if pending_order is None:
+                preserved_intent_id = (
+                    self._runtime.pending_intent_id
+                    if preserve_intent_id
+                    else None
+                )
                 next_runtime = replace(
                     self._runtime,
                     pending_strategy=None,
                     pending_order_side=None,
                     pending_order_id=None,
                     pending_order_attempt_kind=None,
-                    pending_intent_id=None,
+                    pending_intent_id=preserved_intent_id,
                 )
             else:
                 next_runtime = replace(

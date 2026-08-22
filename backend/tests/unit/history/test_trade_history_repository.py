@@ -290,10 +290,10 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
     def test_valid_non_lf_record_loads_without_recovery(self) -> None:
         """
         함수 이름: test_valid_non_lf_record_loads_without_recovery()
-        기능: JSON과 Trade 검증이 성공한 non-LF 마지막 record는 손상 복구하지 않는지 검증한다.
+        기능: valid non-LF record를 보존하고 후속 append 때 LF 경계를 보완하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/21
+        작성 날짜: 2026/08/22
         """
         original_bytes = encode_record(make_trade_record())
         self.history_path.write_bytes(original_bytes)
@@ -303,6 +303,16 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
         self.assertEqual(len(loaded_trades), 1)
         self.assertEqual(self.history_path.read_bytes(), original_bytes)
         self.assertEqual(list(self.history_path.parent.glob("*.corrupt-*")), [])
+
+        # 후속 writer가 기존 valid record와 새 line을 연결하지 않도록 LF를 보완한다.
+        second_trade = make_trade(trade_id="trade-2", order_id="2")
+        self.repository.save_this_trade_by_order_id("2", second_trade)
+
+        self.assertEqual(
+            self.repository.get_trade_history(),
+            (loaded_trades[0], second_trade),
+        )
+        self.assertEqual(self.history_path.read_bytes().count(b"\n"), 2)
 
     def test_duplicate_json_key_is_fatal_even_without_lf(self) -> None:
         """
@@ -373,6 +383,123 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
         with patch.object(Path, "open", side_effect=PermissionError("denied")):
             with self.assertRaises(PermissionError):
                 self.repository.get_trade_history()
+
+    def test_save_appends_one_canonical_utf8_lf_record_and_fsyncs(self) -> None:
+        """
+        함수 이름: test_save_appends_one_canonical_utf8_lf_record_and_fsyncs()
+        기능: writer가 canonical schema 한 줄을 UTF-8 LF로 쓰고 flush 뒤 fsync하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        trade = make_trade(trade_id="거래-1", order_id="41")
+
+        # 실제 temporary file fsync를 감싸 호출 여부와 round-trip 결과를 함께 검증한다.
+        with patch.object(os, "fsync", wraps=os.fsync) as fsync_mock:
+            self.repository.save_this_trade_by_order_id(41, trade)
+
+        stored_bytes = self.history_path.read_bytes()
+        stored_record = json.loads(stored_bytes[:-1].decode("utf-8"))
+        self.assertTrue(stored_bytes.endswith(b"\n"))
+        self.assertNotIn(b"\r\n", stored_bytes)
+        self.assertFalse(stored_bytes.startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(fsync_mock.call_count, 1)
+        self.assertEqual(
+            tuple(stored_record),
+            (
+                "schema_version",
+                "record_type",
+                "trade_id",
+                "order_id",
+                "client_order_id",
+                "symbol",
+                "executed_at",
+                "side",
+                "regime_type",
+                "strategy",
+                "requested_quantity",
+                "executed_quantity",
+                "executed_amount",
+                "average_fill_price",
+                "market_price_at_decision",
+                "fee_amount",
+                "fee_asset",
+                "fee_quote_amount",
+                "allocated_cost_basis",
+                "realized_pnl",
+                "realized_return_rate",
+                "exit_reason",
+            ),
+        )
+        self.assertEqual(self.repository.get_trade_history(), (trade,))
+
+    def test_save_is_idempotent_across_repository_restart_and_rejects_conflict(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_save_is_idempotent_across_repository_restart_and_rejects_conflict()
+        기능: 새 instance도 동일 order의 같은 내용은 no-op, 다른 내용은 conflict로 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        trade = make_trade(order_id="51")
+        self.repository.save_this_trade_by_order_id("51", trade)
+        original_bytes = self.history_path.read_bytes()
+        restarted_repository = TradeHistoryRepository(self.history_path)
+
+        # 첫 save 전에 disk index를 lazy 복원해 중복 line과 자동 덮어쓰기를 모두 차단한다.
+        restarted_repository.save_this_trade_by_order_id("51", trade)
+        conflicting_trade = make_trade(trade_id="different", order_id="51")
+        with self.assertRaises(OrderHistoryConflictError):
+            restarted_repository.save_this_trade_by_order_id(
+                "51",
+                conflicting_trade,
+            )
+
+        self.assertEqual(self.history_path.read_bytes(), original_bytes)
+        self.assertEqual(
+            restarted_repository.loaded_order_ids,
+            frozenset({"51"}),
+        )
+
+    def test_fsync_failure_retry_reloads_same_order_without_duplicate_append(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_fsync_failure_retry_reloads_same_order_without_duplicate_append()
+        기능: fsync failure 뒤 같은 order 저장 재시도가 이미 쓴 line을 찾아 no-op하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        trade = make_trade(order_id="61")
+
+        # write 뒤 fsync만 실패시켜 다음 호출이 stale memory index를 사용하지 않게 한다.
+        with patch.object(os, "fsync", side_effect=OSError("fsync failed")):
+            with self.assertRaisesRegex(OSError, "fsync failed"):
+                self.repository.save_this_trade_by_order_id("61", trade)
+
+        self.repository.save_this_trade_by_order_id("61", trade)
+
+        self.assertEqual(self.history_path.read_bytes().count(b"\n"), 1)
+        self.assertEqual(self.repository.get_trade_history(), (trade,))
+
+    def test_save_rejects_order_id_mismatch_without_creating_file(self) -> None:
+        """
+        함수 이름: test_save_rejects_order_id_mismatch_without_creating_file()
+        기능: operation order ID와 Trade order ID가 다르면 파일 mutation 전에 실패하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        with self.assertRaisesRegex(ValueError, "must match"):
+            self.repository.save_this_trade_by_order_id(
+                "72",
+                make_trade(order_id="71"),
+            )
+
+        self.assertFalse(self.history_path.exists())  # invalid 요청은 파일도 만들지 않는다.
 
 
 if __name__ == "__main__":

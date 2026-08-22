@@ -172,5 +172,5 @@ Guard, retry 예산과 Action 순서는 `TradingController`가 소유하고 Gate
 - [x] 조회와 신규 제출의 횟수·간격이 구분되어 확정되었다.
 - [x] pending STOP의 query → cancel → query → fill → 잔여 매도 순서가 확정되었다.
 - [x] 저장 실패와 재시작 복구에서 중복 주문 금지가 확정되었다.
-- [ ] Phase 8에서 상태별 fault matrix와 deterministic scheduler test를 구현한다.
+- [x] Phase 8에서 상태별 fault matrix와 deterministic scheduler test를 구현했다. `test_order_fault_matrix.py`, `test_order_reconciliation_flow.py`, `test_order_observed_time_scheduling.py`에서 동일 주문 조회, `1·2·4·8초` 일정, terminal zero-fill 확인, 총 5회 제출 상한과 force-sell `3초` 재시도를 결정론적으로 검증한다.
 - [ ] Phase 9에서 testnet timeout·partial·disconnect fault injection을 통과한다.

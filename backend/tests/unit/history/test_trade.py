@@ -7,11 +7,18 @@ from decimal import Decimal
 
 from binance_auto_trader.domain.history import (
     FeeAssetConversionRequiredError,
+    RealizedResult,
+    Trade,
     trade_from_json_object,
+    trade_to_json_object,
 )
 from binance_auto_trader.domain.trading.states import OrderSide
 
-from tests.unit.history.factories import make_trade, make_trade_record
+from tests.unit.history.factories import (
+    make_order_execution,
+    make_trade,
+    make_trade_record,
+)
 
 
 class TradeTests(unittest.TestCase):
@@ -250,6 +257,81 @@ class TradeTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "USDT fee amount"):
             trade_from_json_object(record)
+
+    def test_writer_object_round_trips_with_canonical_plain_values(self) -> None:
+        """
+        함수 이름: test_writer_object_round_trips_with_canonical_plain_values()
+        기능: production serializer가 Decimal과 UTC를 canonical JSONL 값으로 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        trade = replace(
+            make_trade(),
+            market_price_at_decision=Decimal("100.12345678901234567890"),
+        )
+
+        # serializer와 strict parser를 왕복해 float나 offset 변환이 없는지 확인한다.
+        record = trade_to_json_object(trade)
+        restored_trade = trade_from_json_object(record)
+
+        self.assertEqual(restored_trade, trade)
+        self.assertEqual(
+            record["market_price_at_decision"],
+            "100.12345678901234567890",
+        )
+        self.assertTrue(str(record["executed_at"]).endswith("Z"))
+
+    def test_factory_builds_buy_from_order_intent_and_actual_fill(self) -> None:
+        """
+        함수 이름: test_factory_builds_buy_from_order_intent_and_actual_fill()
+        기능: BUY Trade factory가 요청 정보와 실제 fill 정보를 구분해 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        order, summary = make_order_execution(exchange_order_id="301")
+
+        trade = Trade.from_order_execution(order, summary)
+
+        self.assertEqual(trade.trade_id, "trade-301")
+        self.assertEqual(trade.order_id, "301")
+        self.assertEqual(trade.client_order_id, order.client_order_id)
+        self.assertEqual(trade.executed_quantity, summary.executed_quantity)
+        self.assertEqual(trade.executed_amount, summary.executed_amount)
+        self.assertEqual(trade.average_fill_price, summary.average_fill_price)
+        self.assertIsNone(trade.realized_pnl)
+        self.assertIsNone(trade.exit_reason)
+
+    def test_factory_builds_sell_with_realized_result_and_exit_reason(self) -> None:
+        """
+        함수 이름: test_factory_builds_sell_with_realized_result_and_exit_reason()
+        기능: SELL Trade factory가 계산된 원가·손익·수익률과 청산 사유를 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        order, summary = make_order_execution(
+            exchange_order_id="302",
+            side=OrderSide.SELL,
+        )
+        realized_result = RealizedResult(
+            allocated_cost_basis=Decimal("100.10"),
+            realized_pnl=Decimal("9.79"),
+            realized_return_rate=Decimal("9.78021978"),
+        )
+
+        # Trade constructor가 raw cost를 재계산하지 않고 검증된 realized 결과를 사용한다.
+        trade = Trade.from_order_execution(
+            order,
+            summary,
+            realized_result,
+        )
+
+        self.assertEqual(trade.allocated_cost_basis, Decimal("100.10"))
+        self.assertEqual(trade.realized_pnl, Decimal("9.79"))
+        self.assertEqual(trade.realized_return_rate, Decimal("9.78021978"))
+        self.assertEqual(trade.exit_reason, order.exit_reason)
 
 
 if __name__ == "__main__":

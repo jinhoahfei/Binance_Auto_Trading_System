@@ -5,6 +5,13 @@ from decimal import Decimal
 
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.history import Trade
+from binance_auto_trader.domain.trading.order import (
+    ExecutionSummary,
+    Fill,
+    Order,
+    OrderResult,
+    OrderStatus,
+)
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
     OrderSide,
@@ -179,3 +186,80 @@ def make_trade_record(trade: Trade | None = None) -> dict[str, object]:
             else selected_trade.exit_reason.value
         ),
     }
+
+
+def make_order_execution(
+    *,
+    exchange_order_id: str = "901",
+    side: OrderSide = OrderSide.BUY,
+    quantity: Decimal = Decimal("1"),
+    fill_price: Decimal | None = None,
+    fee_quote_amount: Decimal | None = None,
+    strategy: StrategyType = StrategyType.CASE_B,
+    regime_type: RegimeType = RegimeType.TYPE_0,
+    exit_reason: ExitReason | None = None,
+) -> tuple[Order, ExecutionSummary]:
+    """
+    함수 이름: make_order_execution()
+    기능: history Phase 8 test가 공유할 terminal Order와 실제 fill summary를 생성한다.
+    인자: exchange_order_id -> 양의 정수 형식 거래소 주문 ID
+        side -> BUY 또는 SELL 방향
+        quantity -> 요청·제출·체결 수량
+        fill_price -> 실제 fill 가격 override
+        fee_quote_amount -> USDT 수수료 override
+        strategy -> 주문 소유 전략
+        regime_type -> 주문 결정 시 적용 REGIME
+        exit_reason -> SELL 종료 사유 override
+    반환값: FILLED 결과를 적용한 Order와 누적 ExecutionSummary tuple
+    작성 날짜: 2026/08/22
+    """
+    selected_price = (
+        Decimal("110") if side is OrderSide.SELL else Decimal("100")
+    )
+    if fill_price is not None:
+        selected_price = fill_price
+    selected_fee = (
+        Decimal("0.11") if side is OrderSide.SELL else Decimal("0.10")
+    )
+    if fee_quote_amount is not None:
+        selected_fee = fee_quote_amount
+    selected_exit_reason = exit_reason
+    if side is OrderSide.SELL and selected_exit_reason is None:
+        selected_exit_reason = ExitReason.TAKE_PROFIT
+
+    # 로컬 intent와 하나의 실제 fill을 같은 client/exchange order identity로 연결한다.
+    client_order_id = f"client-{exchange_order_id}"
+    order = Order(
+        intent_id=f"intent-{exchange_order_id}",
+        client_order_id=client_order_id,
+        submission_attempt=0,
+        symbol="ETHUSDT",
+        side=side,
+        strategy=strategy,
+        regime_type=regime_type,
+        requested_quantity=quantity,
+        submitted_quantity=quantity,
+        market_price_at_decision=selected_price,
+        exit_reason=selected_exit_reason,
+    )
+    fill = Fill(
+        exchange_order_id=exchange_order_id,
+        trade_id=f"fill-{exchange_order_id}",
+        quantity=quantity,
+        price=selected_price,
+        fee_amount=selected_fee,
+        fee_asset="USDT",
+        fee_quote_amount=selected_fee,
+        executed_at=TEST_INSTANT,
+    )
+    result = OrderResult(
+        symbol="ETHUSDT",
+        client_order_id=client_order_id,
+        exchange_order_id=exchange_order_id,
+        status=OrderStatus.FILLED,
+        processed_at=TEST_INSTANT,
+        fills=(fill,),
+    )
+    order.apply_order_result(result)  # terminal aggregate의 실제 fill 근거를 Order에 반영한다.
+
+    return order, order.build_execution_summary()

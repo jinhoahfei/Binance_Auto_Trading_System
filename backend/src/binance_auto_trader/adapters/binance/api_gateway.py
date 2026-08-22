@@ -1,4 +1,4 @@
-"""공식 Binance Spot REST Kline과 account payload를 정규화한다."""
+"""Spot market/account payload와 Phase 8 fake 주문 결과를 정규화한다."""
 
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
@@ -10,6 +10,8 @@ from binance_auto_trader.domain.trading.account import (
     AssetBalance,
     SUPPORTED_VALUATION_ASSET,
 )
+from binance_auto_trader.domain.trading.order import Order, OrderResult
+from binance_auto_trader.domain.trading.states import OrderSide
 from binance_auto_trader.domain.market import (
     Interval,
     Kline,
@@ -32,7 +34,7 @@ _INTERVAL_MILLISECONDS_BY_INTERVAL = {
 class BinanceRESTClient(Protocol):
     """
     클래스 이름: BinanceRESTClient
-    기능: Binance Spot Kline과 account REST 호출을 주입할 client 계약을 정의한다.
+    기능: Spot Kline/account와 Phase 8 fake order 호출을 주입할 client 계약을 정의한다.
     작성 날짜: 2026/08/20
     """
 
@@ -61,6 +63,36 @@ class BinanceRESTClient(Protocol):
         인자: 없음
         반환값: JSON으로 해석된 Binance REST account payload
         작성 날짜: 2026/08/21
+        """
+        ...
+
+    def submit_order(self, *, order: Order) -> OrderResult:
+        """
+        함수 이름: submit_order()
+        기능: Phase 8 fake client에서 정규화된 주문 제출 결과를 반환한다.
+        인자: order -> 원래 의도와 제출 수량을 보존한 Order
+        반환값: 정규화된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        ...
+
+    def query_order_result(self, *, order: Order) -> OrderResult:
+        """
+        함수 이름: query_order_result()
+        기능: 새 주문 없이 같은 client 또는 exchange order ID의 최신 결과를 반환한다.
+        인자: order -> 조회 식별자를 소유한 기존 Order
+        반환값: 정규화된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        ...
+
+    def cancel_order(self, *, order: Order) -> OrderResult:
+        """
+        함수 이름: cancel_order()
+        기능: 같은 주문 ID를 취소하고 취소 시점까지의 fill이 포함된 결과를 반환한다.
+        인자: order -> 취소할 기존 Order
+        반환값: 정규화된 OrderResult
+        작성 날짜: 2026/08/22
         """
         ...
 
@@ -377,7 +409,7 @@ def _parse_account_snapshot(
 class APIGateway:
     """
     클래스 이름: APIGateway
-    기능: Binance Spot REST Kline과 account 응답을 canonical domain 타입으로 정규화한다.
+    기능: Spot Kline/account와 fake order 응답을 canonical domain 타입으로 정규화한다.
     작성 날짜: 2026/08/20
     """
 
@@ -394,23 +426,31 @@ class APIGateway:
         반환값: 없음
         작성 날짜: 2026/08/20
         """
+        # 주입 client가 Kline, account 또는 fake order 중 지원하는 operation을 하나 이상 갖는지 확인한다.
         provides_kline_operation = callable(
             getattr(rest_client, "get_klines", None)
         )
         provides_account_operation = callable(
             getattr(rest_client, "get_account", None)
         )
+        provides_order_operation = callable(
+            getattr(rest_client, "submit_order", None)
+        )
         if rest_client is None or not (
-            provides_kline_operation or provides_account_operation
+            provides_kline_operation
+            or provides_account_operation
+            or provides_order_operation
         ):
             raise TypeError(
-                "rest_client must provide get_klines or get_account"
+                "rest_client must provide a supported REST operation"
             )
 
+        # 명시 clock이 없으면 UTC 기본 clock을 선택하고 호출 가능한 dependency만 보존한다.
         selected_clock = _utc_now if clock is None else clock
         if not callable(selected_clock):
             raise TypeError("clock must be callable")
 
+        # 검증을 마친 REST port와 clock identity를 adapter 수명 동안 그대로 사용한다.
         self._rest_client = rest_client
         self._clock = selected_clock
 
@@ -491,3 +531,101 @@ class APIGateway:
             get_account(),
             normalized_asset,
         )
+
+    def submit_order(self, order: Order) -> OrderResult:
+        """
+        함수 이름: submit_order()
+        기능: Phase 8 fake REST port에 Order를 한 번 제출하고 정규화 결과만 반환한다.
+        인자: order -> 제출할 Order aggregate
+        반환값: client가 반환한 검증된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        # Phase 9 실제 Binance mapping 전에는 domain 계약을 이해하는 fake port만 허용한다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        submit_order = getattr(self._rest_client, "submit_order", None)
+        if not callable(submit_order):
+            raise TypeError("rest_client must provide submit_order")
+
+        # Adapter 밖으로 raw dict가 새지 않도록 결과 타입과 client ID 상관관계를 확인한다.
+        result = submit_order(order=order)
+        return self._validate_order_result(order, result)
+
+    def query_order_result(self, order: Order) -> OrderResult:
+        """
+        함수 이름: query_order_result()
+        기능: 같은 Order 식별자로 상태와 fill을 조회하며 신규 제출을 절대 수행하지 않는다.
+        인자: order -> 이미 제출된 Order aggregate
+        반환값: client가 반환한 검증된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        # 조회 대상이 새 Order로 바뀌지 않도록 기존 aggregate만 받는다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        query_order_result = getattr(
+            self._rest_client,
+            "query_order_result",
+            None,
+        )
+        if not callable(query_order_result):
+            raise TypeError("rest_client must provide query_order_result")
+
+        # 조회 결과도 제출과 동일한 normalized contract 및 식별자 검증을 거친다.
+        result = query_order_result(order=order)
+        return self._validate_order_result(order, result)
+
+    def cancel_order(self, order: Order) -> OrderResult:
+        """
+        함수 이름: cancel_order()
+        기능: 기존 Order를 취소하고 취소 응답의 실제 fill까지 정규화 결과로 보존한다.
+        인자: order -> 취소할 기존 Order aggregate
+        반환값: client가 반환한 검증된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        # cancel 역시 원 주문 식별자 이외의 새 제출 정보를 만들 수 없다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        cancel_order = getattr(self._rest_client, "cancel_order", None)
+        if not callable(cancel_order):
+            raise TypeError("rest_client must provide cancel_order")
+
+        # CANCELED 상태보다 응답에 포함된 실제 fill이 우선되도록 그대로 aggregate에 넘긴다.
+        result = cancel_order(order=order)
+        return self._validate_order_result(order, result)
+
+    def sell_all_position(self, order: Order) -> OrderResult:
+        """
+        함수 이름: sell_all_position()
+        기능: 전량 매도 Order를 일반 주문 제출 경계로 보내 동일 pipeline을 재사용한다.
+        인자: order -> 잔여 Position 전량을 요청한 SELL Order
+        반환값: 검증된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        # Force sell이 별도 회계·저장 경로로 갈라지지 않도록 SELL만 같은 submit으로 위임한다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        if order.side is not OrderSide.SELL:
+            raise ValueError("sell_all_position requires a SELL order")
+
+        return self.submit_order(order)  # 일반 SELL과 같은 ID·fill·history 계약을 공유한다.
+
+    @staticmethod
+    def _validate_order_result(
+        order: Order,
+        result: object,
+    ) -> OrderResult:
+        """
+        함수 이름: _validate_order_result()
+        기능: fake client 결과가 같은 client order ID의 normalized OrderResult인지 검증한다.
+        인자: order -> 호출에 사용한 원 Order
+            result -> fake client가 반환한 값
+        반환값: 검증된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        # Raw Binance payload나 다른 주문의 결과가 domain으로 침투하기 전에 차단한다.
+        if not isinstance(result, OrderResult):
+            raise TypeError("order REST operations must return OrderResult")
+        if result.client_order_id != order.client_order_id:
+            raise ValueError("order result client_order_id does not match Order")
+
+        return result  # 식별자가 일치한 immutable normalized 결과만 공개한다.
