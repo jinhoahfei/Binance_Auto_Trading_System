@@ -1,4 +1,4 @@
-"""Trade의 불변성과 ADR-004 JSONL v1 strict validation을 검증한다."""
+"""Trade의 불변성과 ADR-004 versioned JSONL strict validation을 검증한다."""
 
 import unittest
 from dataclasses import FrozenInstanceError, replace
@@ -65,7 +65,7 @@ class TradeTests(unittest.TestCase):
     def test_rejects_missing_and_extra_schema_fields(self) -> None:
         """
         함수 이름: test_rejects_missing_and_extra_schema_fields()
-        기능: JSONL v1 필수 key 누락과 알 수 없는 key를 모두 거부하는지 검증한다.
+        기능: versioned JSONL 필수 key 누락과 알 수 없는 key를 모두 거부하는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -90,7 +90,7 @@ class TradeTests(unittest.TestCase):
         """
         invalid_values = (
             ("schema_version", True),
-            ("schema_version", 2),
+            ("schema_version", 3),
             ("record_type", "position"),
         )
 
@@ -100,6 +100,33 @@ class TradeTests(unittest.TestCase):
                 record[field_name] = field_value
                 with self.assertRaises(ValueError):
                     trade_from_json_object(record)
+
+    def test_v1_and_v2_round_trip_without_changing_accounting_identity(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_v1_and_v2_round_trip_without_changing_accounting_identity()
+        기능: legacy v1과 current v2가 원래 version을 보존하며 서로 다른 Trade인지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        current_trade = make_trade()
+        legacy_trade = replace(current_trade, schema_version=1)
+
+        # 같은 execution fact라도 회계 의미가 다른 version은 equality에서 합쳐지지 않는다.
+        current_round_trip = trade_from_json_object(
+            trade_to_json_object(current_trade)
+        )
+        legacy_round_trip = trade_from_json_object(
+            trade_to_json_object(legacy_trade)
+        )
+
+        self.assertEqual(current_round_trip.schema_version, 2)
+        self.assertEqual(legacy_round_trip.schema_version, 1)
+        self.assertEqual(current_round_trip, current_trade)
+        self.assertEqual(legacy_round_trip, legacy_trade)
+        self.assertNotEqual(current_round_trip, legacy_round_trip)
 
     def test_rejects_non_plain_decimal_representations(self) -> None:
         """
@@ -294,6 +321,7 @@ class TradeTests(unittest.TestCase):
 
         trade = Trade.from_order_execution(order, summary)
 
+        self.assertEqual(trade.schema_version, 2)
         self.assertEqual(trade.trade_id, "trade-301")
         self.assertEqual(trade.order_id, "301")
         self.assertEqual(trade.client_order_id, order.client_order_id)

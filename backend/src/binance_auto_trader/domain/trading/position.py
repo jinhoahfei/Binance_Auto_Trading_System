@@ -18,6 +18,29 @@ SUPPORTED_POSITION_SYMBOL = "ETHUSDT"
 DECIMAL_CALCULATION_PRECISION = 34
 
 
+class LegacyFeeAccountingMigrationRequiredError(ValueError):
+    """
+    클래스 이름: LegacyFeeAccountingMigrationRequiredError
+    기능: 열린 Position이 legacy base-fee 회계에 의존해 자동 거래를 재개할 수 없음을 나타낸다.
+    작성 날짜: 2026/08/23
+    """
+
+    code = "HISTORY_ACCOUNTING_MIGRATION_REQUIRED"
+
+    def __init__(self) -> None:
+        """
+        함수 이름: __init__()
+        기능: history 원문이나 주문 식별자를 노출하지 않는 migration 오류를 생성한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        # 운영 오류에는 durable row 원문 대신 고정된 migration 분류만 포함한다.
+        super().__init__(
+            "open Position uses legacy base-fee accounting and requires migration"
+        )
+
+
 def _validate_decimal(
     value: object,
     field_name: str,
@@ -79,6 +102,32 @@ def _normalize_utc_datetime(value: object, field_name: str) -> datetime:
         raise ValueError(f"{field_name} must use UTC")
 
     return value.astimezone(timezone.utc)  # UTC identity를 snapshot 전반에서 통일한다.
+
+
+def _calculate_net_buy_quantity(
+    executed_quantity: Decimal,
+    fee_amount: Decimal,
+    fee_asset: str,
+) -> Decimal:
+    """
+    함수 이름: _calculate_net_buy_quantity()
+    기능: BUY gross 체결 수량에서 base-asset 수수료를 차감한 실제 취득 ETH를 계산한다.
+    인자: executed_quantity -> 거래소가 보고한 BUY gross 체결 수량
+        fee_amount -> 원래 수수료 자산 단위의 수수료
+        fee_asset -> ETH 또는 USDT 수수료 자산
+    반환값: Position에 더할 양수 net base 수량
+    작성 날짜: 2026/08/22
+    """
+    # USDT 수수료는 base 취득량을 바꾸지 않고 ETH 수수료만 실제 보유량에서 차감한다.
+    net_quantity = (
+        executed_quantity - fee_amount
+        if fee_asset == "ETH"
+        else executed_quantity
+    )
+    if net_quantity <= ZERO_DECIMAL:
+        raise ValueError("BUY base fee must be smaller than executed quantity")
+
+    return net_quantity
 
 
 class PositionStatus(str, Enum):
@@ -193,6 +242,7 @@ class Position:
     """
 
     __slots__ = (
+        "_legacy_base_fee_history_open",
         "_lock",
         "_state",
     )
@@ -209,6 +259,7 @@ class Position:
 
         # 최초 상태도 이후 mutation과 같은 immutable snapshot 계약을 사용한다.
         self._lock = RLock()
+        self._legacy_base_fee_history_open = False
         self._state = PositionStateSnapshot(
             symbol=symbol,
             owner=None,
@@ -308,6 +359,31 @@ class Position:
         """
         return self._state.exit_reason  # 부분·전량 SELL의 최신 사유를 보존한다.
 
+    @property
+    def requires_legacy_fee_accounting_migration(self) -> bool:
+        """
+        함수 이름: requires_legacy_fee_accounting_migration()
+        기능: 현재 열린 lot에 JSONL v1 base-fee BUY 회계가 남았는지 반환한다.
+        인자: 없음
+        반환값: 명시적 history migration이 필요하면 True
+        작성 날짜: 2026/08/23
+        """
+        with self._lock:
+            return self._legacy_base_fee_history_open  # startup owner가 network 재개 전에 읽는 고정 gate다.
+
+    def require_history_accounting_compatibility(self) -> None:
+        """
+        함수 이름: require_history_accounting_compatibility()
+        기능: 현재 열린 Position이 신규 fee 회계로 안전하게 거래 가능한지 검증한다.
+        인자: 없음
+        반환값: migration이 필요하지 않으면 없음
+        작성 날짜: 2026/08/23
+        """
+        # 이전 gross 수량으로 열린 lot은 account 여유 잔액과 무관하게 명시적 migration을 요구한다.
+        with self._lock:
+            if self._legacy_base_fee_history_open:
+                raise LegacyFeeAccountingMigrationRequiredError()
+
     def get_snapshot(self) -> PositionStateSnapshot:
         """
         함수 이름: get_snapshot()
@@ -395,6 +471,8 @@ class Position:
 
         # next snapshot을 완전히 만든 뒤 한 번만 교체해 모든 실패를 원자적 no-op으로 만든다.
         with self._lock:
+            if self._legacy_base_fee_history_open:
+                raise LegacyFeeAccountingMigrationRequiredError()
             if summary.symbol != self._state.symbol:
                 raise ValueError("Execution symbol does not match Position symbol")
             if summary.side is OrderSide.BUY:
@@ -405,6 +483,149 @@ class Position:
                 raise ValueError("Unsupported execution side")
 
             self._state = next_state  # 유효한 전체 snapshot 하나만 authoritative state로 발행한다.
+
+    def apply_historical_trade(self, trade: object) -> None:
+        """
+        함수 이름: apply_historical_trade()
+        기능: durable Trade의 version별 aggregate 회계를 사용해 재시작 Position을 복원한다.
+        인자: trade -> JSONL 검증을 통과한 canonical Trade
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Module import cycle을 만들지 않으면서도 structural object와 version을 함께 검증한다.
+        from binance_auto_trader.domain.history.trade import (
+            LEGACY_TRADE_SCHEMA_VERSION,
+            Trade,
+        )
+
+        if not isinstance(trade, Trade):
+            raise TypeError("trade must be a Trade")
+        if trade.symbol != self.symbol:
+            raise ValueError("historical Trade symbol does not match Position")
+
+        # History aggregate는 fill 재합성 없이 row version에 고정된 회계 공식을 적용한다.
+        with self._lock:
+            state = self._state
+            is_legacy_trade = (
+                trade.schema_version == LEGACY_TRADE_SCHEMA_VERSION
+            )
+            if self._legacy_base_fee_history_open and not is_legacy_trade:
+                raise LegacyFeeAccountingMigrationRequiredError()
+            if trade.side is OrderSide.BUY:
+                if state.owner is not None and state.owner is not trade.strategy:
+                    raise ValueError(
+                        "historical BUY strategy does not own the Position"
+                    )
+                with localcontext() as decimal_context:
+                    decimal_context.prec = DECIMAL_CALCULATION_PRECISION
+                    decimal_context.rounding = ROUND_HALF_EVEN
+                    acquired_quantity = (
+                        trade.executed_quantity
+                        if is_legacy_trade
+                        else _calculate_net_buy_quantity(
+                            trade.executed_quantity,
+                            trade.fee_amount,
+                            trade.fee_asset,
+                        )
+                    )
+                    acquisition_fee = (
+                        trade.fee_quote_amount
+                        if is_legacy_trade or trade.fee_asset != "ETH"
+                        else ZERO_DECIMAL
+                    )
+                    next_quantity = state.quantity + acquired_quantity
+                    next_cost_basis = (
+                        state.cost_basis
+                        + trade.executed_amount
+                        + acquisition_fee
+                    )
+                    next_average_entry_price = next_cost_basis / next_quantity
+                next_state = PositionStateSnapshot(
+                    symbol=state.symbol,
+                    owner=trade.strategy,
+                    quantity=next_quantity,
+                    average_entry_price=next_average_entry_price,
+                    cost_basis=next_cost_basis,
+                    entered_at=(
+                        state.entered_at
+                        if state.entered_at is not None
+                        else trade.executed_at
+                    ),
+                    status=PositionStatus.OPEN,
+                    exit_reason=None,
+                )
+                legacy_base_fee_buy = (
+                    is_legacy_trade
+                    and trade.fee_asset == "ETH"
+                    and trade.fee_amount > ZERO_DECIMAL
+                )
+                self._state = next_state
+                self._legacy_base_fee_history_open = (
+                    self._legacy_base_fee_history_open
+                    or legacy_base_fee_buy
+                )
+                return  # BUY durable aggregate 한 건을 정확히 한 번 복원했다.
+
+            # v2 SELL base fee는 미지원이며 v1은 기존 gross 회계 의미 그대로만 재생한다.
+            if (
+                trade.schema_version != LEGACY_TRADE_SCHEMA_VERSION
+                and trade.fee_asset == "ETH"
+                and trade.fee_amount > ZERO_DECIMAL
+            ):
+                raise ValueError(
+                    "historical SELL base fee requires asset-flow reconciliation"
+                )
+            if state.status is not PositionStatus.OPEN:
+                raise ValueError("historical SELL requires an open Position")
+            if state.owner is not trade.strategy:
+                raise ValueError("historical SELL strategy does not own Position")
+            if trade.executed_quantity > state.quantity:
+                raise ValueError("historical SELL exceeds Position quantity")
+            with localcontext() as decimal_context:
+                decimal_context.prec = DECIMAL_CALCULATION_PRECISION
+                decimal_context.rounding = ROUND_HALF_EVEN
+                allocated_cost_basis = (
+                    state.cost_basis
+                    if trade.executed_quantity == state.quantity
+                    else (
+                        state.cost_basis
+                        * trade.executed_quantity
+                        / state.quantity
+                    )
+                )
+                next_quantity = state.quantity - trade.executed_quantity
+                next_cost_basis = state.cost_basis - allocated_cost_basis
+            if next_quantity == ZERO_DECIMAL:
+                next_state = PositionStateSnapshot(
+                    symbol=state.symbol,
+                    owner=None,
+                    quantity=ZERO_DECIMAL,
+                    average_entry_price=ZERO_DECIMAL,
+                    cost_basis=ZERO_DECIMAL,
+                    entered_at=None,
+                    status=PositionStatus.CLOSED,
+                    exit_reason=trade.exit_reason,
+                )
+                self._state = next_state
+                self._legacy_base_fee_history_open = False
+                return  # 전량 SELL은 남은 원가를 반올림 없이 모두 제거한다.
+
+            # 부분 SELL은 이전 평균원가를 유지하는 average-cost 잔여 상태를 게시한다.
+            with localcontext() as decimal_context:
+                decimal_context.prec = DECIMAL_CALCULATION_PRECISION
+                decimal_context.rounding = ROUND_HALF_EVEN
+                next_average_entry_price = next_cost_basis / next_quantity
+            next_state = PositionStateSnapshot(
+                symbol=state.symbol,
+                owner=state.owner,
+                quantity=next_quantity,
+                average_entry_price=next_average_entry_price,
+                cost_basis=next_cost_basis,
+                entered_at=state.entered_at,
+                status=PositionStatus.OPEN,
+                exit_reason=trade.exit_reason,
+            )
+            self._state = next_state  # legacy migration flag는 부분 SELL 뒤 열린 lot과 함께 유지한다.
 
     def _build_buy_state(
         self,
@@ -424,15 +645,24 @@ class Position:
         if state.owner is not None and state.owner is not summary.strategy:
             raise ValueError("BUY strategy does not own the open Position")
 
-        # ADR-004에 따라 BUY quote 수수료를 취득원가에 포함해 새 평균가를 계산한다.
+        # ADR-004의 fee 포함 원가는 유지하되 base fee는 실제 취득 ETH 수량에서도 차감한다.
         with localcontext() as decimal_context:
             decimal_context.prec = DECIMAL_CALCULATION_PRECISION
             decimal_context.rounding = ROUND_HALF_EVEN
-            next_quantity = state.quantity + summary.executed_quantity
+            acquired_quantity = _calculate_net_buy_quantity(
+                summary.executed_quantity,
+                summary.fee_amount,
+                summary.fee_asset,
+            )
+            next_quantity = state.quantity + acquired_quantity
             next_cost_basis = (
                 state.cost_basis
                 + summary.executed_amount
-                + summary.fee_quote_amount
+                + (
+                    ZERO_DECIMAL
+                    if summary.fee_asset == "ETH"
+                    else summary.fee_quote_amount
+                )
             )
             next_average_entry_price = next_cost_basis / next_quantity
         entered_at = (
@@ -463,6 +693,10 @@ class Position:
         """
         # OPEN 상태, owner와 보유 수량을 확인한 뒤에만 SELL 원가를 배분한다.
         state = self._state
+        if summary.fee_asset == "ETH" and summary.fee_amount > ZERO_DECIMAL:
+            raise ValueError(
+                "SELL base fee requires asset-flow reconciliation"
+            )
         if state.status is not PositionStatus.OPEN:
             raise ValueError("Cannot apply SELL to a CLOSED Position")
         if state.owner is not summary.strategy:

@@ -2,8 +2,15 @@
 
 from .trade_history_repository import (
     HistoryCorruptedError,
+    PendingOrderJournalConflictError,
+    PendingOrderJournalCorruptedError,
     TradeHistoryRepository,
 )
 
 
-__all__ = ["HistoryCorruptedError", "TradeHistoryRepository"]
+__all__ = [
+    "HistoryCorruptedError",
+    "PendingOrderJournalConflictError",
+    "PendingOrderJournalCorruptedError",
+    "TradeHistoryRepository",
+]

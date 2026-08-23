@@ -318,10 +318,77 @@ class Account:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        self._apply_full_snapshot(
+            snapshot,
+            current_price,
+            replace_stream_state=False,
+        )  # 일반 startup 재호출은 이미 관찰한 stream source time을 되돌리지 않는다.
+
+    def apply_reconciliation_snapshot(
+        self,
+        snapshot: AccountSnapshot,
+        current_price: Decimal,
+    ) -> None:
+        """
+        함수 이름: apply_reconciliation_snapshot()
+        기능: stream 단절 뒤 REST 전체 잔액을 source watermark와 함께 authoritative하게 교체한다.
+        인자: snapshot -> 재연결 전에 조회한 REST 전체 계좌 snapshot
+            current_price -> 먼저 준비된 MarketSnapshot의 ETHUSDT 가격
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        self._apply_full_snapshot(
+            snapshot,
+            current_price,
+            replace_stream_state=True,
+        )  # 끊긴 stream의 더 큰 event time보다 현재 REST 전체 사실을 우선한다.
+
+    def apply_startup_reconciliation_snapshot(
+        self,
+        snapshot: AccountSnapshot,
+        current_price: Decimal,
+    ) -> bool:
+        """
+        함수 이름: apply_startup_reconciliation_snapshot()
+        기능: startup stream ACK 뒤의 두 번째 REST 전체 계좌를 최신 stream patch와 안전하게 병합한다.
+        인자: snapshot -> stream 시작 뒤 다시 조회한 REST 전체 계좌 snapshot
+            current_price -> 먼저 준비된 MarketSnapshot의 ETHUSDT 가격
+        반환값: 두 번째 전체 snapshot을 적용했으면 True, 더 최신 stream 상태면 False
+        작성 날짜: 2026/08/22
+        """
+        return self._apply_full_snapshot(
+            snapshot,
+            current_price,
+            replace_stream_state=True,
+            ignore_stale=True,
+        )  # 같거나 더 최신인 두 번째 REST 전체 사실만 startup 기준으로 교체한다.
+
+    def _apply_full_snapshot(
+        self,
+        snapshot: AccountSnapshot,
+        current_price: Decimal,
+        *,
+        replace_stream_state: bool,
+        ignore_stale: bool = False,
+    ) -> bool:
+        """
+        함수 이름: _apply_full_snapshot()
+        기능: 전체 account snapshot을 검증해 startup 또는 full reconciliation 정책으로 원자 적용한다.
+        인자: snapshot -> 적용할 REST 전체 계좌 snapshot
+            current_price -> 계좌 평가에 사용할 양수 ETHUSDT 가격
+            replace_stream_state -> 끊긴 stream source watermark를 교체할지 여부
+            ignore_stale -> 더 최신 stream 상태가 있으면 예외 대신 무시할지 여부
+        반환값: 전체 snapshot을 적용했으면 True, 동일·무시한 snapshot이면 False
+        작성 날짜: 2026/08/22
+        """
         if not isinstance(snapshot, AccountSnapshot):
             raise TypeError("snapshot must be an AccountSnapshot")
         if not snapshot.is_full_snapshot:
             raise ValueError("initial snapshot must be a full snapshot")
+        if type(replace_stream_state) is not bool:
+            raise TypeError("replace_stream_state must be a bool")
+        if type(ignore_stale) is not bool:
+            raise TypeError("ignore_stale must be a bool")
         _validate_non_negative_decimal(current_price, "current_price")
         if current_price == ZERO_DECIMAL:
             raise ValueError("current_price must be greater than zero")
@@ -333,12 +400,23 @@ class Account:
         )
 
         with self._lock:
-            current_updated_at = self._state.updated_at
+            current_state = self._state
+            current_updated_at = current_state.updated_at
             if (
                 current_updated_at is not None
                 and snapshot.updated_at < current_updated_at
             ):
-                raise ValueError("initial account snapshot is stale")
+                if ignore_stale:
+                    return False  # 첫 REST와 최신 stream patch의 합성 상태를 그대로 보존한다.
+                if not replace_stream_state:
+                    raise ValueError("initial account snapshot is stale")
+            if (
+                current_state.ready
+                and current_state.updated_at == snapshot.updated_at
+                and current_state.balances == snapshot.balances_by_asset
+                and current_state.current_price == current_price
+            ):
+                return False  # 동일 full 사실은 observer가 읽는 version을 불필요하게 올리지 않는다.
 
             self._state = _AccountState(
                 balances=MappingProxyType(next_balances),
@@ -348,6 +426,8 @@ class Account:
                 version=self._state.version + 1,
                 ready=True,
             )
+
+        return True
 
     def apply_stream_snapshot(self, snapshot: AccountSnapshot) -> bool:
         """

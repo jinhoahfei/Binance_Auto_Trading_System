@@ -17,6 +17,7 @@ from binance_auto_trader.domain.trading import (
     MixedFeeAssetError,
     Order,
     OrderResult,
+    OrderResultFailureKind,
     OrderResultConflictError,
     OrderSide,
     OrderStateTransitionError,
@@ -140,6 +141,57 @@ class OrderValueTests(unittest.TestCase):
     기능: Fill, OrderResult와 ExecutionSummary의 immutable typed 계약을 검증한다.
     작성 날짜: 2026/08/22
     """
+
+    def test_typed_failure_kind_requires_exact_fill_free_status(self) -> None:
+        """
+        함수 이름: test_typed_failure_kind_requires_exact_fill_free_status()
+        기능: submit rejection과 order-not-visible 사실이 올바른 zero-fill 상태에만 붙는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        # Controller가 failure_reason 문자열 대신 신뢰할 수 있는 두 정상 조합을 먼저 고정한다.
+        rejected = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id="client-order-1",
+            status=OrderStatus.REJECTED,
+            processed_at=TEST_TIME,
+            failure_reason="BINANCE_SUBMISSION_REJECTED_-1013",
+            failure_kind=OrderResultFailureKind.SUBMISSION_REJECTED,
+        )
+        not_visible = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id="client-order-1",
+            status=OrderStatus.UNKNOWN,
+            processed_at=TEST_TIME,
+            failure_reason="BINANCE_ORDER_NOT_VISIBLE_-2013",
+            failure_kind=OrderResultFailureKind.ORDER_NOT_VISIBLE,
+        )
+        self.assertIs(rejected.status, OrderStatus.REJECTED)
+        self.assertIs(
+            not_visible.failure_kind,
+            OrderResultFailureKind.ORDER_NOT_VISIBLE,
+        )
+
+        # 반대 status나 enum이 아닌 문자열은 terminal zero-fill 증거로 생성하지 못한다.
+        with self.assertRaises(ValueError):
+            OrderResult(
+                symbol="ETHUSDT",
+                client_order_id="client-order-1",
+                status=OrderStatus.UNKNOWN,
+                processed_at=TEST_TIME,
+                failure_reason="rejected",
+                failure_kind=OrderResultFailureKind.SUBMISSION_REJECTED,
+            )
+        with self.assertRaises(TypeError):
+            OrderResult(
+                symbol="ETHUSDT",
+                client_order_id="client-order-1",
+                status=OrderStatus.REJECTED,
+                processed_at=TEST_TIME,
+                failure_reason="rejected",
+                failure_kind="SUBMISSION_REJECTED",
+            )
 
     def test_fill_result_and_summary_are_frozen_slotted_values(self) -> None:
         """

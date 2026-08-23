@@ -1,19 +1,84 @@
-"""ADR-004 JSONL v1 거래 이력을 streaming 방식으로 복원한다."""
+"""ADR-004 JSONL v1/v2 거래 이력을 streaming 방식으로 복원하고 v2를 기록한다."""
 
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
 from threading import RLock
 from typing import BinaryIO
 
+from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.history import (
     FeeAssetConversionRequiredError,
     OrderHistoryConflictError,
     Trade,
     trade_from_json_object,
     trade_to_json_object,
+)
+from binance_auto_trader.domain.trading.order import (
+    Order,
+    PendingOrderRecoveryLifecycle,
+    PendingOrderRecoveryRecord,
+)
+from binance_auto_trader.domain.trading.states import (
+    ExitReason,
+    OrderSide,
+    StrategyType,
+)
+
+
+_PENDING_ORDER_LEGACY_SCHEMA_VERSION = 1
+_PENDING_ORDER_SCHEMA_VERSION = 2
+_SUPPORTED_PENDING_ORDER_SCHEMA_VERSIONS = frozenset(
+    {
+        _PENDING_ORDER_LEGACY_SCHEMA_VERSION,
+        _PENDING_ORDER_SCHEMA_VERSION,
+    }
+)
+_PENDING_ORDER_RECORD_TYPE = "pending_order_event"
+_PENDING_ORDER_UPSERT = "UPSERT"
+_PENDING_ORDER_TRANSITION = "TRANSITION"
+_PENDING_ORDER_REMOVE = "REMOVE"
+_PENDING_ORDER_LEGACY_UPSERT_KEYS = frozenset(
+    {"operation", "order", "record_type", "schema_version"}
+)
+_PENDING_ORDER_UPSERT_KEYS = frozenset(
+    {
+        "lifecycle",
+        "operation",
+        "order",
+        "record_type",
+        "schema_version",
+    }
+)
+_PENDING_ORDER_TRANSITION_KEYS = frozenset(
+    {
+        "client_order_id",
+        "lifecycle",
+        "operation",
+        "record_type",
+        "schema_version",
+    }
+)
+_PENDING_ORDER_REMOVE_KEYS = frozenset(
+    {"client_order_id", "operation", "record_type", "schema_version"}
+)
+_PENDING_ORDER_METADATA_KEYS = frozenset(
+    {
+        "client_order_id",
+        "exit_reason",
+        "intent_id",
+        "market_price_at_decision",
+        "regime_type",
+        "requested_quantity",
+        "side",
+        "strategy",
+        "submission_attempt",
+        "submitted_quantity",
+        "symbol",
+    }
 )
 
 
@@ -41,6 +106,58 @@ class HistoryCorruptedError(ValueError):
         super().__init__(
             f"history line {line_number} is corrupted: {reason}"
         )  # credential이나 원본 JSON은 예외 문자열에 포함하지 않는다.
+
+
+class PendingOrderJournalCorruptedError(ValueError):
+    """
+    클래스 이름: PendingOrderJournalCorruptedError
+    기능: 재시작 주문 sidecar에서 자동 해석할 수 없는 record 손상을 나타낸다.
+    작성 날짜: 2026/08/22
+    """
+
+    code = "PENDING_ORDER_JOURNAL_CORRUPTED"
+
+    def __init__(self, line_number: int, reason: str) -> None:
+        """
+        함수 이름: __init__()
+        기능: 손상 line과 credential을 포함하지 않는 원인 분류만 보존한다.
+        인자: line_number -> 1부터 시작하는 손상 sidecar line 번호
+            reason -> 손상 유형을 설명하는 안전한 문자열
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # raw response나 credential이 예외 경계를 넘어가지 않도록 안전한 분류만 저장한다.
+        self.line_number = line_number
+        self.reason = reason
+        super().__init__(
+            f"pending-order journal line {line_number} is corrupted: {reason}"
+        )  # 운영 log에는 sidecar 원문 대신 line과 오류 타입만 남긴다.
+
+
+class PendingOrderJournalConflictError(ValueError):
+    """
+    클래스 이름: PendingOrderJournalConflictError
+    기능: 하나의 client order ID가 서로 다른 제출 전 Order metadata에 연결되는 충돌을 나타낸다.
+    작성 날짜: 2026/08/23
+    """
+
+    code = "PENDING_ORDER_JOURNAL_CONFLICT"
+
+    def __init__(self, client_order_id: str) -> None:
+        """
+        함수 이름: __init__()
+        기능: 충돌한 client order ID만 보존하고 Order payload 원문은 노출하지 않는다.
+        인자: client_order_id -> 이미 다른 metadata에 연결된 application order ID
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        # Order payload나 credential 없이 멱등 identity만 안전한 진단 정보로 남긴다.
+        if not isinstance(client_order_id, str) or not client_order_id:
+            raise ValueError("client_order_id must be a non-empty string")
+        self.client_order_id = client_order_id
+        super().__init__(
+            "pending-order client ID is already bound to different metadata"
+        )  # 예외 문자열에는 충돌 payload와 client ID 자체를 포함하지 않는다.
 
 
 class _NonStandardJsonConstantError(ValueError):
@@ -152,7 +269,7 @@ def _trade_from_decoded_json(decoded_record: object) -> Trade:
     if not isinstance(decoded_record, Mapping):
         raise TypeError("trade record must decode to a JSON object")
 
-    return trade_from_json_object(decoded_record)  # exact JSONL v1 schema는 domain이 검증한다.
+    return trade_from_json_object(decoded_record)  # exact JSONL v1/v2 schema는 domain이 검증한다.
 
 
 def _fsync_parent_directory(file_path: Path) -> None:
@@ -195,10 +312,315 @@ def _normalize_order_id(order_id: object) -> str:
     return order_id  # 선행 0 없는 wire 표현은 그대로 canonical key가 된다.
 
 
+def _normalize_client_order_id(client_order_id: object) -> str:
+    """
+    함수 이름: _normalize_client_order_id()
+    기능: pending-order event key를 공백 없는 client order ID로 검증한다.
+    인자: client_order_id -> 검증할 client order ID
+    반환값: 검증을 마친 원래 문자열
+    작성 날짜: 2026/08/22
+    """
+    # bool이나 임의 객체가 문자열 변환을 통해 journal key로 섞이지 않게 한다.
+    if not isinstance(client_order_id, str):
+        raise TypeError("client_order_id must be a string")
+    if not client_order_id or client_order_id.strip() != client_order_id:
+        raise ValueError("client_order_id must be non-empty without outer whitespace")
+
+    return client_order_id  # Order 생성 검증과 동일한 원문 identity를 보존한다.
+
+
+def _pending_decimal_to_text(value: Decimal, field_name: str) -> str:
+    """
+    함수 이름: _pending_decimal_to_text()
+    기능: Order의 금융 Decimal을 exponent 없는 sidecar 문자열로 변환한다.
+    인자: value -> 직렬화할 canonical Decimal
+        field_name -> 검증 오류에 사용할 metadata 필드 이름
+    반환값: exponent 없는 Decimal 문자열
+    작성 날짜: 2026/08/22
+    """
+    # Order 밖에서 호출되더라도 float나 비유한 Decimal이 journal에 기록되지 않게 한다.
+    if not isinstance(value, Decimal):
+        raise TypeError(f"{field_name} must be a Decimal")
+    if not value.is_finite():
+        raise ValueError(f"{field_name} must be finite")
+
+    return format(value, "f")  # binary float를 거치지 않은 canonical 금융 문자열이다.
+
+
+def _pending_decimal_from_text(value: object, field_name: str) -> Decimal:
+    """
+    함수 이름: _pending_decimal_from_text()
+    기능: sidecar의 canonical Decimal 문자열을 정확한 Decimal로 복원한다.
+    인자: value -> JSON metadata에서 읽은 값
+        field_name -> 검증 오류에 사용할 metadata 필드 이름
+    반환값: canonical finite Decimal
+    작성 날짜: 2026/08/22
+    """
+    # JSON number와 exponent 표기는 runtime별 해석 차이를 만들 수 있어 문자열만 허용한다.
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a decimal string")
+    try:
+        decimal_value = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(f"{field_name} must be a decimal string") from error
+    if not decimal_value.is_finite() or format(decimal_value, "f") != value:
+        raise ValueError(f"{field_name} must use canonical decimal text")
+
+    return decimal_value  # Order constructor가 양수와 수량 관계를 추가로 검증한다.
+
+
+def _require_exact_pending_keys(
+    record: Mapping[str, object],
+    expected_keys: frozenset[str],
+    record_name: str,
+) -> None:
+    """
+    함수 이름: _require_exact_pending_keys()
+    기능: pending-order record가 credential 필드 없는 exact schema인지 검증한다.
+    인자: record -> 검증할 decoded JSON object
+        expected_keys -> 허용된 exact key 집합
+        record_name -> 안전한 schema 오류 이름
+    반환값: 없음
+    작성 날짜: 2026/08/22
+    """
+    # 알 수 없는 필드는 raw response나 credential 유입일 수 있으므로 무시하지 않는다.
+    if frozenset(record) != expected_keys:
+        raise ValueError(f"{record_name} must use the exact schema")
+
+
+def _pending_order_to_json_object(order: Order) -> dict[str, object]:
+    """
+    함수 이름: _pending_order_to_json_object()
+    기능: 제출 전 복구에 필요한 Order metadata만 JSON object로 변환한다.
+    인자: order -> 직렬화할 canonical Order
+    반환값: credential과 raw response가 없는 metadata object
+    작성 날짜: 2026/08/22
+    """
+    # mutable 체결 상태는 거래소 재조회 대상이므로 local intent metadata와 분리한다.
+    return {
+        "intent_id": order.intent_id,
+        "client_order_id": order.client_order_id,
+        "submission_attempt": order.submission_attempt,
+        "symbol": order.symbol,
+        "side": order.side.value,
+        "strategy": order.strategy.value,
+        "regime_type": order.regime_type.value,
+        "requested_quantity": _pending_decimal_to_text(
+            order.requested_quantity,
+            "requested_quantity",
+        ),
+        "submitted_quantity": _pending_decimal_to_text(
+            order.submitted_quantity,
+            "submitted_quantity",
+        ),
+        "market_price_at_decision": _pending_decimal_to_text(
+            order.market_price_at_decision,
+            "market_price_at_decision",
+        ),
+        "exit_reason": (
+            None if order.exit_reason is None else order.exit_reason.value
+        ),
+    }  # exact key 목록은 decode 시 다시 검증해 sidecar가 확장 저장소가 되지 않게 한다.
+
+
+def _pending_order_from_json_object(record: object) -> Order:
+    """
+    함수 이름: _pending_order_from_json_object()
+    기능: exact metadata object를 검증된 canonical Order로 복원한다.
+    인자: record -> UPSERT event의 decoded order 값
+    반환값: 제출 전 metadata만 가진 Order
+    작성 날짜: 2026/08/22
+    """
+    # list나 scalar가 mapping처럼 처리되지 않도록 outer shape부터 고정한다.
+    if not isinstance(record, Mapping):
+        raise TypeError("pending order metadata must be a JSON object")
+    _require_exact_pending_keys(
+        record,
+        _PENDING_ORDER_METADATA_KEYS,
+        "pending order metadata",
+    )
+
+    # enum constructor와 Order 불변식이 잘못된 wire 문자열을 fail closed한다.
+    exit_reason_value = record["exit_reason"]
+    exit_reason = (
+        None
+        if exit_reason_value is None
+        else ExitReason(exit_reason_value)
+    )
+    return Order(
+        intent_id=record["intent_id"],
+        client_order_id=record["client_order_id"],
+        submission_attempt=record["submission_attempt"],
+        symbol=record["symbol"],
+        side=OrderSide(record["side"]),
+        strategy=StrategyType(record["strategy"]),
+        regime_type=RegimeType(record["regime_type"]),
+        requested_quantity=_pending_decimal_from_text(
+            record["requested_quantity"],
+            "requested_quantity",
+        ),
+        submitted_quantity=_pending_decimal_from_text(
+            record["submitted_quantity"],
+            "submitted_quantity",
+        ),
+        market_price_at_decision=_pending_decimal_from_text(
+            record["market_price_at_decision"],
+            "market_price_at_decision",
+        ),
+        exit_reason=exit_reason,
+    )  # domain 생성 성공 자체가 startup 복구 가능한 metadata의 마지막 검증 경계다.
+
+
+def _build_pending_upsert_event(order: Order) -> dict[str, object]:
+    """
+    함수 이름: _build_pending_upsert_event()
+    기능: 한 Order metadata를 활성화하는 canonical UPSERT event를 만든다.
+    인자: order -> 활성 pending 상태로 저장할 Order
+    반환값: PREPARED lifecycle을 명시한 sidecar schema v2 UPSERT object
+    작성 날짜: 2026/08/23
+    """
+    # envelope에는 schema 식별자와 복구 operation 외의 운영 정보를 저장하지 않는다.
+    return {
+        "schema_version": _PENDING_ORDER_SCHEMA_VERSION,
+        "record_type": _PENDING_ORDER_RECORD_TYPE,
+        "operation": _PENDING_ORDER_UPSERT,
+        "lifecycle": PendingOrderRecoveryLifecycle.PREPARED.value,
+        "order": _pending_order_to_json_object(order),
+    }  # credential 없이 재시작 query에 필요한 metadata만 포함한다.
+
+
+def _build_pending_transition_event(
+    client_order_id: str,
+    lifecycle: PendingOrderRecoveryLifecycle,
+) -> dict[str, object]:
+    """
+    함수 이름: _build_pending_transition_event()
+    기능: active pending order의 durable lifecycle을 전진시키는 canonical event를 만든다.
+    인자: client_order_id -> lifecycle을 변경할 application order ID
+        lifecycle -> fsync할 다음 recovery lifecycle
+    반환값: sidecar schema v2 TRANSITION object
+    작성 날짜: 2026/08/23
+    """
+    if not isinstance(lifecycle, PendingOrderRecoveryLifecycle):
+        raise TypeError("lifecycle must be a PendingOrderRecoveryLifecycle")
+    if lifecycle is PendingOrderRecoveryLifecycle.PREPARED:
+        raise ValueError("pending-order transition must advance from PREPARED")
+
+    # 제출 응답 payload 대신 정규화 lifecycle과 client ID만 durable 증거로 남긴다.
+    return {
+        "schema_version": _PENDING_ORDER_SCHEMA_VERSION,
+        "record_type": _PENDING_ORDER_RECORD_TYPE,
+        "operation": _PENDING_ORDER_TRANSITION,
+        "client_order_id": _normalize_client_order_id(client_order_id),
+        "lifecycle": lifecycle.value,
+    }
+
+
+def _build_pending_remove_event(client_order_id: str) -> dict[str, object]:
+    """
+    함수 이름: _build_pending_remove_event()
+    기능: 한 활성 Order metadata를 제거하는 canonical REMOVE event를 만든다.
+    인자: client_order_id -> 비활성화할 pending order key
+    반환값: sidecar schema v2 REMOVE object
+    작성 날짜: 2026/08/23
+    """
+    # terminal 처리 뒤에는 식별자 하나만 tombstone으로 남겨 metadata 중복을 피한다.
+    return {
+        "schema_version": _PENDING_ORDER_SCHEMA_VERSION,
+        "record_type": _PENDING_ORDER_RECORD_TYPE,
+        "operation": _PENDING_ORDER_REMOVE,
+        "client_order_id": client_order_id,
+    }  # replay는 같은 REMOVE가 반복되어도 안전한 dict.pop으로 처리한다.
+
+
+def _pending_event_from_decoded_json(
+    decoded_record: object,
+) -> tuple[
+    str,
+    PendingOrderRecoveryRecord
+    | str
+    | tuple[str, PendingOrderRecoveryLifecycle],
+]:
+    """
+    함수 이름: _pending_event_from_decoded_json()
+    기능: decoded sidecar object를 검증된 UPSERT·TRANSITION·REMOVE payload로 변환한다.
+    인자: decoded_record -> strict JSON decoder가 반환한 값
+    반환값: operation과 검증된 recovery payload tuple
+    작성 날짜: 2026/08/23
+    """
+    # scalar나 array event는 envelope field를 조회하기 전에 명시적으로 거부한다.
+    if not isinstance(decoded_record, Mapping):
+        raise TypeError("pending-order event must be a JSON object")
+    schema_version = decoded_record.get("schema_version")
+    if type(schema_version) is not int or (
+        schema_version not in _SUPPORTED_PENDING_ORDER_SCHEMA_VERSIONS
+    ):
+        raise ValueError("pending-order schema_version is unsupported")
+    if decoded_record.get("record_type") != _PENDING_ORDER_RECORD_TYPE:
+        raise ValueError("pending-order record_type is unsupported")
+
+    # operation별 exact envelope를 적용해 숨은 raw response 필드도 즉시 차단한다.
+    operation = decoded_record.get("operation")
+    if operation == _PENDING_ORDER_UPSERT:
+        expected_keys = (
+            _PENDING_ORDER_LEGACY_UPSERT_KEYS
+            if schema_version == _PENDING_ORDER_LEGACY_SCHEMA_VERSION
+            else _PENDING_ORDER_UPSERT_KEYS
+        )
+        _require_exact_pending_keys(
+            decoded_record,
+            expected_keys,
+            "pending-order UPSERT event",
+        )
+        lifecycle = (
+            PendingOrderRecoveryLifecycle.PREPARED
+            if schema_version == _PENDING_ORDER_LEGACY_SCHEMA_VERSION
+            else PendingOrderRecoveryLifecycle(decoded_record["lifecycle"])
+        )
+        if lifecycle is not PendingOrderRecoveryLifecycle.PREPARED:
+            raise ValueError("pending-order UPSERT lifecycle must be PREPARED")
+        return operation, PendingOrderRecoveryRecord(
+            order=_pending_order_from_json_object(decoded_record["order"]),
+            lifecycle=lifecycle,
+        )
+    if operation == _PENDING_ORDER_TRANSITION:
+        if schema_version != _PENDING_ORDER_SCHEMA_VERSION:
+            raise ValueError(
+                "pending-order TRANSITION requires the current schema"
+            )
+        _require_exact_pending_keys(
+            decoded_record,
+            _PENDING_ORDER_TRANSITION_KEYS,
+            "pending-order TRANSITION event",
+        )
+        lifecycle = PendingOrderRecoveryLifecycle(
+            decoded_record["lifecycle"]
+        )
+        if lifecycle is PendingOrderRecoveryLifecycle.PREPARED:
+            raise ValueError(
+                "pending-order TRANSITION must advance from PREPARED"
+            )
+        return operation, (
+            _normalize_client_order_id(decoded_record["client_order_id"]),
+            lifecycle,
+        )
+    if operation == _PENDING_ORDER_REMOVE:
+        _require_exact_pending_keys(
+            decoded_record,
+            _PENDING_ORDER_REMOVE_KEYS,
+            "pending-order REMOVE event",
+        )
+        return operation, _normalize_client_order_id(
+            decoded_record["client_order_id"]
+        )
+
+    raise ValueError("pending-order operation is unsupported")  # 알 수 없는 event는 skip하지 않는다.
+
+
 class TradeHistoryRepository:
     """
     클래스 이름: TradeHistoryRepository
-    기능: local JSONL v1 streaming 복구와 RLock 기반 durable idempotent append를 관리한다.
+    기능: local JSONL v1/v2 streaming 복구와 v2 durable idempotent append를 관리한다.
     작성 날짜: 2026/08/22
     """
 
@@ -206,6 +628,10 @@ class TradeHistoryRepository:
         "_clock",
         "_index_loaded",
         "_lock",
+        "_pending_order_storage_path",
+        "_pending_order_lifecycles_by_client_id",
+        "_pending_orders_by_client_id",
+        "_pending_orders_loaded",
         "_storage_path",
         "_trades_by_order_id",
         "_uncertain_order_ids",
@@ -238,11 +664,20 @@ class TradeHistoryRepository:
 
         # disk index는 최초 load/save 시점에 만들고 생성자에서는 빈 비공개 상태로 둔다.
         self._storage_path = normalized_path
+        self._pending_order_storage_path = normalized_path.with_name(
+            f"{normalized_path.name}.pending-orders.jsonl"
+        )
         self._clock = selected_clock
         self._lock = RLock()
         self._trades_by_order_id: dict[str, Trade] = {}
         self._index_loaded = False  # 첫 save도 기존 파일 index를 먼저 확인하게 한다.
         self._uncertain_order_ids: set[str] = set()
+        self._pending_orders_by_client_id: dict[str, Order] = {}
+        self._pending_order_lifecycles_by_client_id: dict[
+            str,
+            PendingOrderRecoveryLifecycle,
+        ] = {}
+        self._pending_orders_loaded = False  # 첫 mutation도 disk event 전체를 먼저 replay한다.
 
     @property
     def storage_path(self) -> Path:
@@ -268,6 +703,198 @@ class TradeHistoryRepository:
             return frozenset(
                 self._trades_by_order_id
             )  # caller가 repository index를 변경하지 못하게 snapshot을 만든다.
+
+    @property
+    def pending_order_storage_path(self) -> Path:
+        """
+        함수 이름: pending_order_storage_path()
+        기능: 기존 history와 분리된 재시작 주문 sidecar 경로를 반환한다.
+        인자: 없음
+        반환값: pending-order JSONL Path
+        작성 날짜: 2026/08/22
+        """
+        return self._pending_order_storage_path  # 파생 Path identity만 공개하고 파일 내용은 감춘다.
+
+    @property
+    def supports_pending_order_recovery(self) -> bool:
+        """
+        함수 이름: supports_pending_order_recovery()
+        기능: concrete repository가 durable pending-order operation을 제공함을 알린다.
+        인자: 없음
+        반환값: 항상 True
+        작성 날짜: 2026/08/22
+        """
+        return True  # 실제 sidecar 구현이 있는 adapter만 capability를 선언한다.
+
+    def save_pending_order(self, order: Order) -> None:
+        """
+        함수 이름: save_pending_order()
+        기능: 외부 제출 전에 Order metadata UPSERT를 별도 sidecar에 durable append한다.
+        인자: order -> 제출 직전 intent와 client ID를 가진 canonical Order
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # credential이나 raw response를 구조적으로 가질 수 없는 Order만 public 경계에서 받는다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        order_snapshot = _pending_order_from_json_object(
+            _pending_order_to_json_object(order)
+        )  # caller가 이후 체결 상태를 mutate해도 journal index에는 제출 전 metadata만 남긴다.
+
+        with self._lock:
+            # 독립 process가 남긴 event를 먼저 replay한 뒤 현재 active key와 비교한다.
+            if not self._pending_orders_loaded:
+                self.get_pending_orders()
+            existing_order = self._pending_orders_by_client_id.get(
+                order_snapshot.client_order_id
+            )
+            if existing_order == order_snapshot:
+                return  # 동일 UPSERT 재시도는 sidecar를 불필요하게 늘리지 않는다.
+            if existing_order is not None:
+                raise PendingOrderJournalConflictError(
+                    order_snapshot.client_order_id
+                )  # 동일 idempotency key가 다른 제출 intent를 덮어쓰지 못하게 한다.
+
+            self._append_pending_order_event(
+                _build_pending_upsert_event(order_snapshot)
+            )
+            self._pending_orders_by_client_id[
+                order_snapshot.client_order_id
+            ] = order_snapshot  # fsync 성공 뒤에만 caller와 분리한 제출 전 관점을 index에 게시한다.
+            self._pending_order_lifecycles_by_client_id[
+                order_snapshot.client_order_id
+            ] = PendingOrderRecoveryLifecycle.PREPARED
+
+    def mark_pending_order_submission_rejected(
+        self,
+        client_order_id: str,
+    ) -> None:
+        """
+        함수 이름: mark_pending_order_submission_rejected()
+        기능: 공식 pre-matching 제출 거부 사실을 active sidecar lifecycle에 durable 기록한다.
+        인자: client_order_id -> 거부 응답과 같은 application order ID
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        normalized_client_order_id = _normalize_client_order_id(client_order_id)
+        with self._lock:
+            # TRANSITION은 반드시 먼저 fsync된 PREPARED metadata 하나를 대상으로 한다.
+            if not self._pending_orders_loaded:
+                self.get_pending_orders()
+            if normalized_client_order_id not in self._pending_orders_by_client_id:
+                raise ValueError(
+                    "submission rejection requires an active pending order"
+                )
+            current_lifecycle = (
+                self._pending_order_lifecycles_by_client_id[
+                    normalized_client_order_id
+                ]
+            )
+            if (
+                current_lifecycle
+                is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+            ):
+                return  # fsync 성공 뒤 같은 typed rejection을 다시 관찰해도 event를 늘리지 않는다.
+            if current_lifecycle is not PendingOrderRecoveryLifecycle.PREPARED:
+                raise ValueError("pending-order lifecycle transition is invalid")
+
+            next_lifecycle = (
+                PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+            )
+            self._append_pending_order_event(
+                _build_pending_transition_event(
+                    normalized_client_order_id,
+                    next_lifecycle,
+                )
+            )
+            self._pending_order_lifecycles_by_client_id[
+                normalized_client_order_id
+            ] = next_lifecycle  # file·directory fsync 뒤에만 in-memory lifecycle을 전진시킨다.
+
+    def delete_pending_order(self, client_order_id: str) -> None:
+        """
+        함수 이름: delete_pending_order()
+        기능: terminal 처리한 client order ID의 REMOVE tombstone을 durable append한다.
+        인자: client_order_id -> 제거할 active pending order key
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # sidecar 조회 전에 caller key를 canonical Order identity 규칙으로 검증한다.
+        normalized_client_order_id = _normalize_client_order_id(client_order_id)
+        with self._lock:
+            if not self._pending_orders_loaded:
+                self.get_pending_orders()
+            if normalized_client_order_id not in self._pending_orders_by_client_id:
+                return  # 이미 제거됐거나 저장되지 않은 ID의 REMOVE는 멱등 no-op이다.
+
+            self._append_pending_order_event(
+                _build_pending_remove_event(normalized_client_order_id)
+            )
+            del self._pending_orders_by_client_id[normalized_client_order_id]
+            del self._pending_order_lifecycles_by_client_id[
+                normalized_client_order_id
+            ]
+
+    def get_pending_orders(self) -> tuple[Order, ...]:
+        """
+        함수 이름: get_pending_orders()
+        기능: sidecar event 전체를 replay해 startup active Order tuple을 재생성한다.
+        인자: 없음
+        반환값: event 순서와 마지막 active 상태를 반영한 immutable Order tuple
+        작성 날짜: 2026/08/22
+        """
+        with self._lock:
+            # sidecar가 없으면 history 존재 여부와 무관한 빈 pending 상태로 초기화한다.
+            try:
+                pending_order_file = self._pending_order_storage_path.open("rb")
+            except FileNotFoundError:
+                self._pending_orders_by_client_id = {}
+                self._pending_order_lifecycles_by_client_id = {}
+                self._pending_orders_loaded = True
+                return ()  # 첫 startup은 기존 history JSONL을 pending source로 사용하지 않는다.
+
+            # 모든 event가 검증되기 전에는 이전 active index를 공개하지 않는다.
+            try:
+                with pending_order_file:
+                    loaded_orders, loaded_lifecycles = self._read_pending_order_file(
+                        pending_order_file
+                    )
+                self._confirm_pending_order_storage_durability()
+            except Exception:
+                self._pending_orders_loaded = False
+                raise
+
+            self._pending_orders_by_client_id = loaded_orders
+            self._pending_order_lifecycles_by_client_id = loaded_lifecycles
+            self._pending_orders_loaded = True
+            return tuple(loaded_orders.values())  # caller가 내부 replay index를 변경하지 못하게 한다.
+
+    def get_pending_order_recovery_records(
+        self,
+    ) -> tuple[PendingOrderRecoveryRecord, ...]:
+        """
+        함수 이름: get_pending_order_recovery_records()
+        기능: active Order와 마지막 durable lifecycle을 같은 replay snapshot으로 반환한다.
+        인자: 없음
+        반환값: sidecar 순서를 보존한 immutable recovery record tuple
+        작성 날짜: 2026/08/23
+        """
+        with self._lock:
+            # 재시작 검증과 다른 process의 durable tombstone도 관찰하도록 매번 disk를 replay한다.
+            self.get_pending_orders()
+
+            # 두 index는 같은 event replay에서 만들어져 client ID별 Order와 lifecycle이 일치한다.
+            return tuple(
+                PendingOrderRecoveryRecord(
+                    order=order,
+                    lifecycle=self._pending_order_lifecycles_by_client_id[
+                        client_order_id
+                    ],
+                )
+                for client_order_id, order in (
+                    self._pending_orders_by_client_id.items()
+                )
+            )
 
     def get_trade_history(self) -> tuple[Trade, ...]:
         """
@@ -359,6 +986,175 @@ class TradeHistoryRepository:
 
             self._trades_by_order_id[normalized_order_id] = trade  # fsync 성공 뒤에만 index를 게시한다.
             self._uncertain_order_ids.discard(normalized_order_id)
+
+    def _append_pending_order_event(
+        self,
+        event_record: Mapping[str, object],
+    ) -> None:
+        """
+        함수 이름: _append_pending_order_event()
+        기능: canonical sidecar event 한 줄을 write·file fsync·directory fsync한다.
+        인자: event_record -> UPSERT 또는 REMOVE exact-schema object
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 한 write 대상으로 canonical UTF-8 JSON과 LF를 먼저 완성한다.
+        encoded_record = json.dumps(
+            event_record,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        try:
+            with self._pending_order_storage_path.open("ab") as pending_file:
+                written_length = pending_file.write(encoded_record)
+                if written_length != len(encoded_record):
+                    raise OSError(
+                        "pending-order append wrote an incomplete record"
+                    )
+                pending_file.flush()  # 사용자 공간 buffer를 OS write 경계까지 내린다.
+                os.fsync(pending_file.fileno())
+            _fsync_parent_directory(self._pending_order_storage_path)
+        except Exception:
+            self._pending_orders_loaded = False
+            raise  # write 성공 여부가 불명인 실패는 다음 호출의 disk replay를 강제한다.
+
+    def _confirm_pending_order_storage_durability(self) -> None:
+        """
+        함수 이름: _confirm_pending_order_storage_durability()
+        기능: startup replay로 보이는 sidecar와 directory entry를 다시 durable sync한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 이전 process가 append 후 반환 전에 실패했어도 같은 event를 중복 추가하지 않는다.
+        with self._pending_order_storage_path.open("ab") as pending_file:
+            pending_file.flush()
+            os.fsync(pending_file.fileno())
+        _fsync_parent_directory(
+            self._pending_order_storage_path
+        )  # file 이름까지 재부팅 이후 보존되도록 directory도 동기화한다.
+
+    def _read_pending_order_file(
+        self,
+        pending_order_file: BinaryIO,
+    ) -> tuple[
+        dict[str, Order],
+        dict[str, PendingOrderRecoveryLifecycle],
+    ]:
+        """
+        함수 이름: _read_pending_order_file()
+        기능: sidecar를 streaming 검증하고 active client-ID Order index를 replay한다.
+        인자: pending_order_file -> 처음부터 읽을 open binary sidecar
+        반환값: 마지막 UPSERT·TRANSITION·REMOVE를 반영한 Order와 lifecycle dictionary
+        작성 날짜: 2026/08/23
+        """
+        # 완전한 replay 전까지 공개 index와 분리된 local dictionary만 변경한다.
+        loaded_orders: dict[str, Order] = {}
+        loaded_lifecycles: dict[str, PendingOrderRecoveryLifecycle] = {}
+        line_number = 0
+        while True:
+            raw_line = pending_order_file.readline()
+            if raw_line == b"":
+                break
+            line_number += 1
+
+            # writer가 항상 붙이는 LF가 없으면 crash tail로 보고 임의 복구하지 않는다.
+            if not raw_line.endswith(b"\n") or raw_line.endswith(b"\r\n"):
+                framing_error = ValueError(
+                    "pending-order JSONL record separator must be LF"
+                )
+                raise PendingOrderJournalCorruptedError(
+                    line_number,
+                    type(framing_error).__name__,
+                ) from None
+            record_bytes = raw_line[:-1]
+
+            # strict decode, exact schema, enum과 Order 불변식 중 하나라도 실패하면 startup을 중단한다.
+            try:
+                decoded_record = _decode_json_line(record_bytes)
+                operation, payload = _pending_event_from_decoded_json(
+                    decoded_record
+                )
+            except (
+                _DuplicateJsonKeyError,
+                _NonStandardJsonConstantError,
+                TypeError,
+                UnicodeDecodeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                raise PendingOrderJournalCorruptedError(
+                    line_number,
+                    type(error).__name__,
+                ) from None
+
+            # 동일 UPSERT만 하나의 key로 수렴시키고 metadata나 lifecycle 역행은 중단한다.
+            if operation == _PENDING_ORDER_UPSERT:
+                if not isinstance(payload, PendingOrderRecoveryRecord):
+                    raise AssertionError(
+                        "validated UPSERT payload must be a recovery record"
+                    )
+                order = payload.order
+                existing_order = loaded_orders.get(order.client_order_id)
+                if (
+                    existing_order is not None
+                    and existing_order != order
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        PendingOrderJournalConflictError.__name__,
+                    ) from None
+                existing_lifecycle = loaded_lifecycles.get(
+                    order.client_order_id
+                )
+                if (
+                    existing_lifecycle is not None
+                    and existing_lifecycle is not payload.lifecycle
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderLifecycleRegression",
+                    ) from None
+                loaded_orders[order.client_order_id] = order
+                loaded_lifecycles[order.client_order_id] = payload.lifecycle
+            elif operation == _PENDING_ORDER_TRANSITION:
+                if not isinstance(payload, tuple) or len(payload) != 2:
+                    raise AssertionError(
+                        "validated TRANSITION payload must contain ID and lifecycle"
+                    )
+                client_order_id, lifecycle = payload
+                if (
+                    not isinstance(client_order_id, str)
+                    or not isinstance(lifecycle, PendingOrderRecoveryLifecycle)
+                ):
+                    raise AssertionError(
+                        "validated TRANSITION payload has invalid types"
+                    )
+                if client_order_id not in loaded_orders:
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderTransitionWithoutPrepared",
+                    ) from None
+                current_lifecycle = loaded_lifecycles[client_order_id]
+                if current_lifecycle is lifecycle:
+                    continue  # 불확실 fsync 뒤 반복된 같은 transition은 멱등 수렴한다.
+                if current_lifecycle is not PendingOrderRecoveryLifecycle.PREPARED:
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderLifecycleRegression",
+                    ) from None
+                loaded_lifecycles[client_order_id] = lifecycle
+            else:
+                if not isinstance(payload, str):
+                    raise AssertionError("validated REMOVE payload must be a string")
+                loaded_orders.pop(payload, None)
+                loaded_lifecycles.pop(payload, None)
+
+        return (
+            loaded_orders,
+            loaded_lifecycles,
+        )  # event 전체가 검증된 경우에만 두 index를 함께 게시한다.
 
     def _build_append_payload(self, encoded_record: bytes) -> bytes:
         """

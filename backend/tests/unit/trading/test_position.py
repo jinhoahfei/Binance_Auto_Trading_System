@@ -17,11 +17,16 @@ from binance_auto_trader.domain.trading.context import (
     PositionSnapshot as TradingContextPositionSnapshot,
 )
 from binance_auto_trader.domain.trading.order import ExecutionSummary, Fill
+from binance_auto_trader.domain.trading.position import (
+    LegacyFeeAccountingMigrationRequiredError,
+)
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
     OrderSide,
     StrategyType,
 )
+
+from tests.unit.history.factories import make_trade
 
 
 FIRST_EXECUTED_AT = datetime(2026, 8, 22, 1, 0, tzinfo=timezone.utc)
@@ -34,6 +39,8 @@ def _execution_summary(
     quantity: str,
     price: str,
     fee_quote_amount: str = "0",
+    fee_amount: str | None = None,
+    fee_asset: str = "USDT",
     strategy: StrategyType = StrategyType.CASE_B,
     exit_reason: ExitReason | None = None,
     exchange_order_id: str = "1",
@@ -41,11 +48,13 @@ def _execution_summary(
 ) -> ExecutionSummary:
     """
     함수 이름: _execution_summary()
-    기능: 한 USDT fee fill과 정확히 일치하는 immutable execution fixture를 생성한다.
+    기능: 한 USDT 또는 ETH fee fill과 정확히 일치하는 immutable execution fixture를 생성한다.
     인자: side -> BUY 또는 SELL 방향
         quantity -> 실제 체결 수량 Decimal 문자열
         price -> 실제 fill 가격 Decimal 문자열
-        fee_quote_amount -> USDT 수수료 Decimal 문자열
+        fee_quote_amount -> quote 환산 수수료 Decimal 문자열
+        fee_amount -> 원래 fee asset 수수료 문자열 또는 None이면 quote 값
+        fee_asset -> USDT 또는 ETH 수수료 자산
         strategy -> 주문 의도를 소유한 Case 전략
         exit_reason -> SELL 청산 사유 또는 BUY이면 None
         exchange_order_id -> fill과 summary가 공유할 거래소 주문 ID
@@ -56,7 +65,9 @@ def _execution_summary(
     # 문자열 fixture를 float 경유 없이 Order DTO와 동일한 Decimal 값으로 변환한다.
     executed_quantity = Decimal(quantity)
     average_fill_price = Decimal(price)
-    fee_amount = Decimal(fee_quote_amount)
+    selected_fee_amount = Decimal(
+        fee_quote_amount if fee_amount is None else fee_amount
+    )
 
     # 실제 fill 하나에서 quantity, amount, average와 fee aggregate를 동일하게 만든다.
     fill = Fill(
@@ -64,9 +75,9 @@ def _execution_summary(
         trade_id=f"trade-{exchange_order_id}",
         quantity=executed_quantity,
         price=average_fill_price,
-        fee_amount=fee_amount,
-        fee_asset="USDT",
-        fee_quote_amount=fee_amount,
+        fee_amount=selected_fee_amount,
+        fee_asset=fee_asset,
+        fee_quote_amount=Decimal(fee_quote_amount),
         executed_at=executed_at,
     )
     executed_amount = executed_quantity * average_fill_price
@@ -84,9 +95,9 @@ def _execution_summary(
         executed_quantity=executed_quantity,
         executed_amount=executed_amount,
         average_fill_price=average_fill_price,
-        fee_amount=fee_amount,
-        fee_asset="USDT",
-        fee_quote_amount=fee_amount,
+        fee_amount=selected_fee_amount,
+        fee_asset=fee_asset,
+        fee_quote_amount=Decimal(fee_quote_amount),
         executed_at=executed_at,
         fills=(fill,),
     )
@@ -197,6 +208,197 @@ class PositionTests(unittest.TestCase):
         self.assertEqual(snapshot.entered_at, FIRST_EXECUTED_AT)
         self.assertIs(snapshot.status, PositionStatus.OPEN)
         self.assertIsNone(snapshot.exit_reason)
+
+    def test_buy_base_fee_uses_net_quantity_without_double_cost(self) -> None:
+        """
+        함수 이름: test_buy_base_fee_uses_net_quantity_without_double_cost()
+        기능: ETH 수수료 BUY가 net 보유량과 실제 quote debit 한 번만 원가에 반영되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        position = Position()
+
+        # 1 ETH gross BUY에서 0.001 ETH fee를 내면 0.999 ETH와 100 USDT 원가만 남는다.
+        position.apply_execution(
+            _execution_summary(
+                side=OrderSide.BUY,
+                quantity="1",
+                price="100",
+                fee_amount="0.001",
+                fee_asset="ETH",
+                fee_quote_amount="0.1",
+            )
+        )
+
+        snapshot = position.get_snapshot()
+        self.assertEqual(snapshot.quantity, Decimal("0.999"))
+        self.assertEqual(snapshot.cost_basis, Decimal("100"))
+        self.assertEqual(
+            snapshot.average_entry_price,
+            Decimal("100.1001001001001001001001001001001"),
+        )
+
+    def test_legacy_v1_base_fee_trade_preserves_gross_accounting_and_blocks_execution(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_legacy_v1_base_fee_trade_preserves_gross_accounting_and_blocks_execution()
+        기능: v1 ETH-fee BUY의 기존 수량·원가를 보존하고 열린 lot의 신규 execution을 차단한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        position = Position()
+        legacy_trade = make_trade(
+            schema_version=1,
+            executed_quantity=Decimal("1"),
+            executed_amount=Decimal("100"),
+            average_fill_price=Decimal("100"),
+            fee_amount=Decimal("0.001"),
+            fee_asset="ETH",
+            fee_quote_amount=Decimal("0.1"),
+        )
+
+        # v1은 문서화됐던 gross 수량과 quote 환산 fee 포함 원가를 바꾸지 않는다.
+        position.apply_historical_trade(legacy_trade)
+
+        snapshot = position.get_snapshot()
+        self.assertEqual(snapshot.quantity, Decimal("1"))
+        self.assertEqual(snapshot.cost_basis, Decimal("100.1"))
+        self.assertEqual(snapshot.average_entry_price, Decimal("100.1"))
+        self.assertTrue(position.requires_legacy_fee_accounting_migration)
+        with self.assertRaises(
+            LegacyFeeAccountingMigrationRequiredError
+        ) as captured_error:
+            position.require_history_accounting_compatibility()
+        self.assertEqual(
+            captured_error.exception.code,
+            "HISTORY_ACCOUNTING_MIGRATION_REQUIRED",
+        )
+
+        # Startup owner가 gate 검사를 빠뜨려도 새 fill이 legacy lot을 섞지 못한다.
+        with self.assertRaises(LegacyFeeAccountingMigrationRequiredError):
+            position.apply_execution(
+                _execution_summary(
+                    side=OrderSide.BUY,
+                    quantity="1",
+                    price="100",
+                )
+            )
+        self.assertEqual(position.get_snapshot(), snapshot)
+
+        # v2 history가 legacy lot을 닫아 migration 표식을 지우는 혼합 replay도 차단한다.
+        current_sell = make_trade(
+            schema_version=2,
+            trade_id="trade-2",
+            order_id="2",
+            side=OrderSide.SELL,
+        )
+        with self.assertRaises(LegacyFeeAccountingMigrationRequiredError):
+            position.apply_historical_trade(current_sell)
+        self.assertEqual(position.get_snapshot(), snapshot)
+
+    def test_v2_base_fee_trade_replays_with_net_asset_flow(self) -> None:
+        """
+        함수 이름: test_v2_base_fee_trade_replays_with_net_asset_flow()
+        기능: v2 ETH-fee BUY를 net 수량과 실제 quote debit 원가로 복원한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        position = Position()
+        current_trade = make_trade(
+            schema_version=2,
+            executed_quantity=Decimal("1"),
+            executed_amount=Decimal("100"),
+            average_fill_price=Decimal("100"),
+            fee_amount=Decimal("0.001"),
+            fee_asset="ETH",
+            fee_quote_amount=Decimal("0.1"),
+        )
+
+        position.apply_historical_trade(current_trade)
+
+        snapshot = position.get_snapshot()
+        self.assertEqual(snapshot.quantity, Decimal("0.999"))
+        self.assertEqual(snapshot.cost_basis, Decimal("100"))
+        self.assertEqual(
+            snapshot.average_entry_price,
+            Decimal("100.1001001001001001001001001001001"),
+        )
+        self.assertFalse(position.requires_legacy_fee_accounting_migration)
+        position.require_history_accounting_compatibility()  # v2 lot은 별도 migration 없이 거래 가능하다.
+
+    def test_closed_legacy_base_fee_cycle_clears_migration_gate(self) -> None:
+        """
+        함수 이름: test_closed_legacy_base_fee_cycle_clears_migration_gate()
+        기능: v1 base-fee lot이 기존 공식으로 전량 청산되면 이후 거래 gate가 남지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        position = Position()
+        legacy_buy = make_trade(schema_version=1)
+        legacy_sell = make_trade(
+            schema_version=1,
+            trade_id="trade-2",
+            order_id="2",
+            side=OrderSide.SELL,
+            executed_quantity=Decimal("2"),
+            executed_amount=Decimal("220"),
+            average_fill_price=Decimal("110"),
+            fee_amount=Decimal("0.002"),
+            fee_asset="ETH",
+            fee_quote_amount=Decimal("0.22"),
+            allocated_cost_basis=Decimal("200.20"),
+            realized_pnl=Decimal("19.58"),
+            realized_return_rate=Decimal("9.78021978"),
+            exit_reason=ExitReason.TAKE_PROFIT,
+        )
+
+        # 닫힌 legacy cycle은 과거 파생값을 보존하되 현재 주문 재개를 막지 않는다.
+        position.apply_historical_trade(legacy_buy)
+        position.apply_historical_trade(legacy_sell)
+
+        self.assertIs(position.status, PositionStatus.CLOSED)
+        self.assertFalse(position.requires_legacy_fee_accounting_migration)
+        position.require_history_accounting_compatibility()
+
+    def test_sell_base_fee_fails_closed_without_position_mutation(self) -> None:
+        """
+        함수 이름: test_sell_base_fee_fails_closed_without_position_mutation()
+        기능: 별도 base depletion 계약이 없는 ETH 수수료 SELL을 원자적으로 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        position = Position()
+        position.apply_execution(
+            _execution_summary(
+                side=OrderSide.BUY,
+                quantity="1",
+                price="100",
+            )
+        )
+        snapshot_before = position.get_snapshot()
+
+        # SELL base fee는 gross 매도량 외 추가 ETH depletion과 PnL 정책이 없어 reconciliation 대상이다.
+        with self.assertRaisesRegex(ValueError, "SELL base fee"):
+            position.apply_execution(
+                _execution_summary(
+                    side=OrderSide.SELL,
+                    quantity="0.5",
+                    price="110",
+                    fee_amount="0.001",
+                    fee_asset="ETH",
+                    fee_quote_amount="0.11",
+                    exit_reason=ExitReason.TAKE_PROFIT,
+                    exchange_order_id="901",
+                )
+            )
+
+        self.assertEqual(position.get_snapshot(), snapshot_before)
 
     def test_multiple_buys_recalculate_average_and_preserve_first_entry_time(self) -> None:
         """

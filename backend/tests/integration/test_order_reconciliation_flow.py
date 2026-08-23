@@ -28,11 +28,13 @@ from binance_auto_trader.domain.trading.action_requests import (
     patch,
 )
 from binance_auto_trader.domain.trading.context import PositionSnapshot
+from binance_auto_trader.domain.trading.events import TradingEventType
 from binance_auto_trader.domain.trading.order import (
     ExecutionSummary,
     Fill,
     Order,
     OrderResult,
+    OrderResultFailureKind,
     OrderStatus,
 )
 from binance_auto_trader.domain.trading.position import Position
@@ -106,6 +108,8 @@ class _OrderResponseKind(str, Enum):
     """
 
     UNKNOWN = "UNKNOWN"
+    SUBMISSION_REJECTED = "SUBMISSION_REJECTED"
+    ORDER_NOT_VISIBLE = "ORDER_NOT_VISIBLE"
     NEW = "NEW"
     FILLED = "FILLED"
     TERMINAL_ZERO_FILL = "TERMINAL_ZERO_FILL"
@@ -242,6 +246,24 @@ class ScriptedOrderRESTClient:
                 processed_at=self.clock(),
                 failure_reason="SCRIPTED_UNKNOWN",
             )
+        if response_kind is _OrderResponseKind.ORDER_NOT_VISIBLE:
+            return OrderResult(
+                symbol=order.symbol,
+                client_order_id=order.client_order_id,
+                status=OrderStatus.UNKNOWN,
+                processed_at=self.clock(),
+                failure_reason="SCRIPTED_ORDER_NOT_VISIBLE",
+                failure_kind=OrderResultFailureKind.ORDER_NOT_VISIBLE,
+            )
+        if response_kind is _OrderResponseKind.SUBMISSION_REJECTED:
+            return OrderResult(
+                symbol=order.symbol,
+                client_order_id=order.client_order_id,
+                status=OrderStatus.REJECTED,
+                processed_at=self.clock(),
+                failure_reason="SCRIPTED_SUBMISSION_REJECTED",
+                failure_kind=OrderResultFailureKind.SUBMISSION_REJECTED,
+            )
 
         # 같은 client ID의 submit/query/cancel은 하나의 exchange order ID를 계속 사용한다.
         exchange_order_id = self._exchange_order_ids.setdefault(
@@ -337,6 +359,7 @@ def _create_started_controller(
     client: ScriptedOrderRESTClient,
     clock: MutableUtcClock,
     *,
+    maximum_order_notional: Decimal | None = None,
     order_retry_jitter: Callable[[], Decimal] | None = None,
 ) -> tuple[
     TradingController,
@@ -349,6 +372,7 @@ def _create_started_controller(
     기능: ready account/market/stream과 Phase 8 Position/history를 가진 RUNNING Controller를 만든다.
     인자: client -> order response script와 account payload를 제공할 fake REST client
         clock -> Controller와 fake 결과가 공유할 deterministic clock
+        maximum_order_notional -> Order 생성 전 적용할 선택 quote 결정금액 상한
         order_retry_jitter -> ADR-002 delay에 적용할 결정론적 factor provider 또는 None
     반환값: Controller, Position, history Controller와 in-memory repository tuple
     작성 날짜: 2026/08/22
@@ -373,6 +397,7 @@ def _create_started_controller(
         command_gate=True,
         position=position,
         trade_history_controller=history_controller,
+        maximum_order_notional=maximum_order_notional,
         order_retry_jitter=order_retry_jitter,
         clock=clock,
     )
@@ -486,6 +511,106 @@ class OrderReconciliationFlowTests(unittest.TestCase):
     기능: timeout same-order recovery, query budget과 force-sell retry budget을 검증한다.
     작성 날짜: 2026/08/22
     """
+
+    def test_client_order_id_is_stable_within_session_and_unique_across_sessions(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_client_order_id_is_stable_within_session_and_unique_across_sessions()
+        기능: 같은 session retry ID는 결정론적이고 다음 session에서는 완료 ID를 재사용하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        first_clock = MutableUtcClock()
+        second_clock = MutableUtcClock()
+        first_controller, _, _, _ = _create_started_controller(
+            ScriptedOrderRESTClient(first_clock, submit_steps=()),
+            first_clock,
+        )
+        second_controller, _, _, _ = _create_started_controller(
+            ScriptedOrderRESTClient(second_clock, submit_steps=()),
+            second_clock,
+        )
+
+        # 같은 session·intent·attempt는 조회 상관관계를 위해 정확히 같은 ID를 재생성한다.
+        first_id = first_controller._create_client_order_id(
+            "stable-intent",
+            0,
+        )
+        repeated_first_id = first_controller._create_client_order_id(
+            "stable-intent",
+            0,
+        )
+        second_id = second_controller._create_client_order_id(
+            "stable-intent",
+            0,
+        )
+
+        self.assertEqual(first_id, repeated_first_id)
+        self.assertNotEqual(first_id, second_id)
+        self.assertTrue(first_id.startswith("bat-"))
+        self.assertLessEqual(len(first_id), 36)
+
+    def test_order_notional_ceiling_clamps_controller_buy_and_force_sell(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_order_notional_ceiling_clamps_controller_buy_and_force_sell()
+        기능: Testnet quote 상한이 Order 생성 전 BUY와 force SELL 승인 수량을 모두 제한하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        maximum_notional = Decimal("12.50")
+
+        # 큰 free USDT를 쓰는 정상 전략 BUY도 decision-price 금액이 cap을 넘지 않게 만든다.
+        buy_clock = MutableUtcClock()
+        buy_client = ScriptedOrderRESTClient(
+            buy_clock,
+            submit_steps=(_OrderResponseKind.FILLED,),
+        )
+        buy_controller, _, _, _ = _create_started_controller(
+            buy_client,
+            buy_clock,
+            maximum_order_notional=maximum_notional,
+        )
+        _submit_case_b_buy(buy_controller, intent_id="capped-testnet-buy")
+        capped_buy = buy_client.submitted_orders[0]
+        self.assertEqual(
+            capped_buy.requested_quantity,
+            capped_buy.submitted_quantity,
+        )
+        self.assertLessEqual(
+            capped_buy.requested_quantity
+            * capped_buy.market_price_at_decision,
+            maximum_notional,
+        )
+
+        # 큰 기존 Position의 force SELL도 cap까지만 한 번 제출하고 잔량은 retry에 남긴다.
+        sell_clock = MutableUtcClock()
+        sell_client = ScriptedOrderRESTClient(
+            sell_clock,
+            submit_steps=(_OrderResponseKind.FILLED,),
+        )
+        sell_controller, sell_position, _, _ = _create_started_controller(
+            sell_client,
+            sell_clock,
+            maximum_order_notional=maximum_notional,
+        )
+        _open_case_b_position(sell_controller, sell_position)
+        sell_controller.stop_trading(
+            command_id="capped-testnet-stop",
+            expected_version=sell_controller.context.version,
+        )
+        capped_sell = sell_client.submitted_orders[0]
+        self.assertIs(capped_sell.side, OrderSide.SELL)
+        self.assertLessEqual(
+            capped_sell.requested_quantity
+            * capped_sell.market_price_at_decision,
+            maximum_notional,
+        )
+        self.assertGreater(sell_position.quantity, Decimal("0"))
 
     def test_timeout_recovers_by_querying_the_same_client_order_id(self) -> None:
         """
@@ -617,6 +742,139 @@ class OrderReconciliationFlowTests(unittest.TestCase):
         self.assertEqual(controller.trigger_order_reconciliation(), ())
         self.assertEqual(len(client.submitted_orders), 1)
         self.assertEqual(len(client.queried_orders), 4)
+
+    def test_rejected_submit_and_four_absent_queries_confirm_zero_fill(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_rejected_submit_and_four_absent_queries_confirm_zero_fill()
+        기능: 명시적 제출 거부 뒤 네 번의 NO_SUCH_ORDER만 zero-fill 실패로 확정하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        clock = MutableUtcClock()
+        client = ScriptedOrderRESTClient(
+            clock,
+            submit_steps=(_OrderResponseKind.SUBMISSION_REJECTED,),
+            query_steps=(
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+            ),
+        )
+        controller, position, history_controller, repository = (
+            _create_started_controller(client, clock)
+        )
+        self.assertEqual(_submit_case_b_buy(controller), ())
+        submitted_order = client.submitted_orders[0]
+
+        # 누적 1·3·7초의 부재는 아직 확정하지 않고 네 번째 15초 관측만 실패 event를 만든다.
+        observed_outcomes: list[object] = []
+        for due_seconds in (1, 3, 7, 15):
+            clock.set(STARTED_AT + timedelta(seconds=due_seconds))
+            observed_outcomes.extend(
+                controller.trigger_order_reconciliation()
+            )
+
+        self.assertEqual(len(client.submitted_orders), 1)
+        self.assertEqual(len(client.queried_orders), 4)
+        self.assertTrue(
+            all(order is submitted_order for order in client.queried_orders)
+        )
+        self.assertEqual(len(observed_outcomes), 1)
+        self.assertIs(
+            observed_outcomes[0].event_type,
+            TradingEventType.CASE_B_BUY_FAILED,
+        )
+        self.assertEqual(position.quantity, Decimal("0"))
+        self.assertEqual(history_controller.trade_history.trades, ())
+        self.assertEqual(repository.saved_trades, [])
+        self.assertEqual(controller.pending_order_query_count, 0)
+        self.assertIs(controller.status, TradingSessionStatus.RUNNING)
+
+    def test_rejected_submit_mixed_unknown_queries_remain_locked(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_rejected_submit_mixed_unknown_queries_remain_locked()
+        기능: 네 조회 중 일반 UNKNOWN이 하나라도 있으면 부재를 추측 확정하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        clock = MutableUtcClock()
+        client = ScriptedOrderRESTClient(
+            clock,
+            submit_steps=(_OrderResponseKind.SUBMISSION_REJECTED,),
+            query_steps=(
+                _OrderResponseKind.UNKNOWN,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+            ),
+        )
+        controller, _, _, _ = _create_started_controller(client, clock)
+        self.assertEqual(_submit_case_b_buy(controller), ())
+
+        # 마지막 응답이 부재여도 앞선 transport UNKNOWN 때문에 zero-fill로 승격할 수 없다.
+        for due_seconds in (1, 3, 7, 15):
+            clock.set(STARTED_AT + timedelta(seconds=due_seconds))
+            self.assertEqual(controller.trigger_order_reconciliation(), ())
+
+        self.assertEqual(len(client.submitted_orders), 1)
+        self.assertEqual(len(client.queried_orders), 4)
+        self.assertEqual(controller.pending_order_query_count, 0)
+        self.assertIs(
+            controller.status,
+            TradingSessionStatus.RECONCILIATION_REQUIRED,
+        )
+
+    def test_unknown_submit_and_four_absent_queries_never_create_new_order(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_unknown_submit_and_four_absent_queries_never_create_new_order()
+        기능: Matching Engine 결과가 불명인 제출은 네 번의 부재 뒤에도 재제출하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        clock = MutableUtcClock()
+        client = ScriptedOrderRESTClient(
+            clock,
+            submit_steps=(_OrderResponseKind.UNKNOWN,),
+            query_steps=(
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+                _OrderResponseKind.ORDER_NOT_VISIBLE,
+            ),
+        )
+        controller, position, history_controller, repository = (
+            _create_started_controller(client, clock)
+        )
+        self.assertEqual(_submit_case_b_buy(controller), ())
+        submitted_order = client.submitted_orders[0]
+
+        # 최초 제출이 명시적 미도달 거부가 아니므로 연속 부재도 중복 주문 허가 근거가 아니다.
+        for due_seconds in (1, 3, 7, 15):
+            clock.set(STARTED_AT + timedelta(seconds=due_seconds))
+            self.assertEqual(controller.trigger_order_reconciliation(), ())
+
+        self.assertEqual(client.submitted_orders, [submitted_order])
+        self.assertEqual(len(client.queried_orders), 4)
+        self.assertTrue(
+            all(order is submitted_order for order in client.queried_orders)
+        )
+        self.assertEqual(position.quantity, Decimal("0"))
+        self.assertEqual(history_controller.trade_history.trades, ())
+        self.assertEqual(repository.saved_trades, [])
+        self.assertIs(
+            controller.status,
+            TradingSessionStatus.RECONCILIATION_REQUIRED,
+        )
 
     def test_same_order_query_applies_injected_minus_twenty_percent_jitter(
         self,

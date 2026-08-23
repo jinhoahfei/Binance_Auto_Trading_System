@@ -174,7 +174,7 @@ Operation 표는 UML 표기이므로 기존 다이어그램의 camelCase를 보�
 | `2.1` | `TradingController -> APIGateway` | `fetchAccountSnapshot(asset : String = "ETH") : AccountSnapshot` | 기준 자산 | 정규화된 계좌 snapshot | 최초 화면과 거래 context에 사용할 계좌 정보를 조회한다. | `2.1.1`의 Binance 응답을 잔액, ETH 보유량, 평가 정보로 정규화한다. |
 | `2.1.1` | `APIGateway -> Binance REST API` | `getAccount() : BinanceAccountResponse` | 없음 | Binance 계좌 응답 | Binance 계좌 정보 API를 호출한다. | 반환 응답은 `fetchAccountSnapshot(...)` 내부에서 소비하며 별도 메시지 답변을 추가하지 않는다. |
 | `2.2` | `TradingController -> WebSocketGateway` | `startAccountInfoStream() : Subscription` | 없음 | 계좌 stream 구독 handle | 최초 snapshot 이후의 잔액 변경을 받을 user-data stream을 시작한다. | Gateway가 `2.2.1`을 통해 구독을 만들고 이후 account event를 정규화한다. |
-| `2.2.1` | `WebSocketGateway -> Binance WebSocket` | `subscribeAccountInfo() : Subscription` | 없음 | 구독 handle | Binance account/user-data stream을 구독한다. | 구독 자체의 응답은 함수 반환값이다. 이후 비동기 event 처리는 해당 구독 callback의 책임이며 이 초기 구독 메시지에 reply 화살표를 추가하지 않는다. |
+| `2.2.1` | `WebSocketGateway -> Binance WebSocket` | `subscribeAccountInfo() : Subscription` | 없음 | 구독 handle | Binance account/user-data stream을 구독한다. | 구독 자체의 응답은 함수 반환값이다. 이후 비동기 event는 bounded 단일 FIFO dispatcher가 수신 loop와 분리해 처리한다. enqueue부터 callback 완료까지 `accountReady = false`이고 overflow·consumer failure·disconnect는 구독을 닫고 full reconciliation을 요구한다. 이 초기 구독 메시지에는 reply 화살표를 추가하지 않는다. |
 
 ### 4.3 거래 이력과 성과 로드
 
@@ -211,7 +211,7 @@ Operation 표는 UML 표기이므로 기존 다이어그램의 camelCase를 보�
 |---|---|---|---|---|---|---|
 | `7` | `User -> AppShellUI` | `startConfirmed() : void` | 없음 | `void` | 사용자가 시작 확인 팝업에서 거래 시작을 확정한다. | Boundary가 `7.1`로 확인 event를 전달한다. |
 | `7.1` | `AppShellUI -> UIStateController` | `startTrading() : void` | 없음 | `void` | 자동매매 시작 UI event를 전달한다. | UI 상태 전이 후 실제 trading 시작을 `7.1.1`에 위임한다. |
-| `7.1.1` | `UIStateController -> TradingController` | `startTrading(commandId : String, expectedVersion : int) : TradingSessionResult` | 멱등 command ID와 호출자가 관측한 Context version | session status, session ID, commit된 version과 STM trace | TradingController에 자동매매 시작을 요청한다. | Phase 7 concrete application Operation은 Controller가 selected REGIME, 지원 mapping, connection, Account/Position과 실행 mode gate를 먼저 검증한다. 미지원이면 Context를 초기화하지 않고 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. `fake` mode에서만 `command_enabled = true`이며, 성공 시 `7.1.1.1`과 `7.1.1.2`를 순서대로 정확히 한 번 실행한다. 같은 `commandId`와 payload는 최초 typed 결과를 재사용하고 `disabled`·`testnet`·`live`는 fail closed다. |
+| `7.1.1` | `UIStateController -> TradingController` | `startTrading(commandId : String, expectedVersion : int) : TradingSessionResult` | 멱등 command ID와 호출자가 관측한 Context version | session status, session ID, commit된 version과 STM trace | TradingController에 자동매매 시작을 요청한다. | Controller가 selected REGIME, 지원 mapping, connection, Account/Position과 실행 mode gate를 먼저 검증한다. 미지원이면 Context를 초기화하지 않고 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. `fake`는 명령을 허용하고, Phase 9 `testnet`은 고정 Testnet endpoint·startup reconciliation·별도 주문 opt-in·양수 max-notional 상한을 모두 만족할 때만 허용한다. `disabled`, read-only `testnet`, `live`는 fail closed다. 성공 시 `7.1.1.1`과 `7.1.1.2`를 순서대로 정확히 한 번 실행하며, 같은 `commandId`와 payload는 최초 typed 결과를 재사용한다. |
 | `7.1.1.1` | `TradingController -> TradingContext` | `initialize(account : Account, selectedRegime : RegimeType, position : PositionSnapshot, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void` | 계좌, 선택 REGIME, 현재 authoritative 포지션 snapshot, 분할 비율 | `void` | TradingSTM이 사용할 시작 context를 초기화한다. | Phase 7 canonical Start/Stop 모델은 기존 클래스인 `:TradingContext` lifeline을 이 위치에 포함한다. `positionOwner`, pending 주문 값, `tradingPhase`, `lowerEventId` 등 runtime 값을 일관된 시작값으로 만들고 계좌·포지션·설정 참조를 연결한다. |
 | `7.1.1.2` | `TradingController -> TradingSTM` | `run(context : TradingContextView) : TradingSTMResult` | 초기화된 TradingContext에서 만든 불변 view | 초기 trading action | TradingSTM을 실행한다. | 원본 그림의 번호는 `7.1.1.1`이다. Controller가 mutable Context를 snapshot으로 만든 뒤 넘긴다. STM은 시작 가능 조건과 초기 상태를 결정하고 반환 Action은 Controller가 소비한다. |
 
@@ -475,16 +475,25 @@ Operation
 - `updateSplitRatios(commandId : String, expectedVersion : int, scaleIn : Decimal, scaleOut : Decimal) : SplitRatioResult`
 - `startTrading(commandId : String, expectedVersion : int) : TradingSessionResult`
 - `stopTrading(commandId : String, expectedVersion : int) : TradingSessionResult`
+- `reconcileStartupState() : void`
+- `reconnectAccountStreamAfterReconciliation() : Subscription`
+- `observeOrderResult(result : OrderResult) : boolean`
 
 `fetchSelectedTradingLogic`은 `TYPE_0`을 정확히 109개 transition의 lower-BB
 registry에만 매핑하고 상단 BB 접촉은 `SAFE_TERMINATION`으로 완결한다.
 다른 타입은 `UNSUPPORTED_TRADING_LOGIC`, active session의 변경은
 `TRADING_ACTIVE`로 거부하며 기존 STM과 Context를 유지한다. selection은 start와
-분리되어 있고, Phase 7에서도 `fake` mode와 명시적인 start command를 통과해야만
-runtime을 시작한다. 위 camelCase Operation은 Python의
+분리되어 있고, `fake` 또는 안전 gate를 모두 통과한 Phase 9 `testnet` mode와 명시적인
+start command에서만 runtime을 시작한다. startup reconciliation은 durable history와
+pending sidecar를 exchange open/recent/same-ID 사실에 대조한다. numeric `orderId`는
+`(clientOrderId, orderId)` pair로만 durable identity가 되며 terminal fill 집계도 Trade와
+정확히 같아야 한다. history 저장과 sidecar REMOVE marker가 모두 해제되기 전에는 command를
+허용하지 않는다. stream 재연결은 첫 account snapshot 뒤 새 signed stream ACK를 먼저
+확보하고, 그 뒤 주문 snapshot/rebase와 두 번째 account snapshot을 완료한 조용한
+barrier에서만 command를 다시 허용한다. 위 camelCase Operation은 Python의
 `commit_regime_selection`, `update_split_ratios`, `start_trading`, `stop_trading`에
-각각 대응한다. Phase 8의 mutable `Position`이 도입되기 전에는
-`PositionSnapshot`이 start/stop Guard의 authoritative 수량을 제공한다.
+각각 대응한다. mutable `Position`이 authoritative 주문 체결 수량을 소유하고
+`PositionSnapshot`은 Context publication과 start/stop Guard에 그 값을 전달한다.
 
 ### 8.5 TradingSTM
 
@@ -564,6 +573,7 @@ Operation
 - `queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult`
 - `cancelOrder(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult`
 - `listOpenOrderResults(symbol : String) : List<OrderResult>`
+- `listRecentOrderResults(symbol : String, limit : int = 100) : List<OrderResult>`
 
 조회와 취소는 `orderId` 또는 `clientOrderId` 중 하나 이상을 요구한다. retry 횟수나
 전략 판단은 이 Gateway가 아니라 `TradingController`가 ADR-002에 따라 수행한다.
@@ -579,11 +589,18 @@ Attribute
 - `klineBuffer : Map<Interval, List<Kline>> = {} {not null}`
 - `klineSubscription : Subscription? = null`
 - `accountSubscription : Subscription? = null`
+- `accountReady : boolean = false {not null}`
 
 Operation
 
 - `startAllKlineBuffering(symbol : String, intervals : Set<Interval>) : Subscription`
 - `startAccountInfoStream() : Subscription`
+- `rebaseOrderResults(results : List<OrderResult>) : void`
+- `isAccountReady() : boolean`
+
+`accountReady`는 현재 세대의 transport가 연결되어 있고 bounded FIFO account dispatcher에
+queued 또는 실행 중인 callback이 없을 때만 참이다. REST reconciliation 결과를
+`rebaseOrderResults(...)`로 먼저 심은 뒤 queued stream event를 단조·멱등 병합한다.
 
 ### 8.10 MarketSnapshot
 
@@ -948,6 +965,7 @@ Operation
 - `getOrderByClientOrderId(symbol : String, clientOrderId : String) : BinanceOrderStatusResponse`
 - `cancelOrder(symbol : String, orderId : Long?, clientOrderId : String?) : BinanceOrderResponse`
 - `getOpenOrders(symbol : String) : List<BinanceOrderResponse>`
+- `getRecentOrders(symbol : String, limit : int) : List<BinanceOrderResponse>`
 - `sellAllPosition(symbol : String, quantity : Decimal) : BinanceOrderResponse`
 
 ### 9.2 Binance WebSocket
@@ -998,9 +1016,12 @@ Case B/C Context와 pending 필드를 정리하고 `TERMINATED`를 적용한 뒤
 session 평가와 runtime을 즉시 종료한다.
 
 상품은 Binance Spot `ETHUSDT` long-only다. Margin/Futures/short와 naked sell은 금지한다.
-`TYPE_0`의 registry coverage와 Phase 7 session orchestration이 준비되어도
-`command_enabled`는 실행 mode gate와 분리한다. Phase 7에서는 `fake`만 `true`이고
-`disabled`·`testnet`·`live`는 `false`다. `TYPE_1`~`TYPE_4`는
+`TYPE_0`의 registry coverage와 session orchestration이 준비되어도
+`command_enabled`는 실행 mode gate와 분리한다. `fake`는 `true`이고 Phase 9
+`testnet`은 고정 endpoint, startup reconciliation, 별도 주문 opt-in과 양수
+max-notional 상한뿐 아니라 현재 account stream의 connected·caught-up barrier를 모두
+만족할 때만 `true`다. `disabled`, read-only `testnet`과
+`live`는 `false`다. `TYPE_1`~`TYPE_4`는
 추천·표시·선택을 허용하되 start만 차단한다. 미지원 타입을 `TYPE_0`이나
 lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`로 거부하고 stop
 완료 뒤 새 session을 요구한다.
@@ -1008,9 +1029,18 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 ### 10.3 실행 모드
 
 `ExecutionMode`는 `disabled`, `fake`, `testnet`, `live` 네 값만 허용하며 default는
-`disabled`다. `live`는 ADR-003의 release 승인, 매 실행 확인, 세 가지 non-null Decimal
-한도와 reconciliation을 모두 통과해야 한다. 이 Phase에서는 credential이나 실제 주문을
-추가하지 않는다.
+`disabled`다. Phase 9의 `testnet` bootstrap은 공식 Spot Testnet endpoint만 고정해
+사용하고 credential 기반 read-only 실행과 주문 실행을 분리한다. 주문은 별도 opt-in과
+양수 max-notional 상한, startup reconciliation이 모두 있어야 하며, 상한은 decision
+price 기준 사전 추정치이므로 거래소 filter 검증을 대체하지 않는다. `live`는 ADR-003의
+release 승인, 매 실행 확인, 세 가지 non-null Decimal 한도와 reconciliation을 모두
+통과해야 하지만 Phase 13 전에는 구현 경로와 관계없이 비활성이다.
+
+Testnet account stream 재연결은 첫 full account REST snapshot을 적용한 뒤 signed stream
+subscribe ACK를 먼저 확보한다. 그 ACK 아래에서 open/recent/same-ID 주문을 조회·적용하고
+stream accumulator를 rebase한 뒤 두 번째 full account snapshot을 적용한다. barrier 중
+event backlog가 생기거나 설명되지 않은 app-prefix 주문/fill, provenance 누락, balance
+불일치가 발견되면 subscription을 닫고 command를 계속 차단한다.
 
 ### 10.4 변경 Operation 추적성
 
@@ -1028,6 +1058,8 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 | D-08 / `8.1.1.2p`·Case 2 `8` | `TradingController -> APIGateway` | `queryOrderResult(symbol, orderId?, clientOrderId?) : OrderResult` | 같은 주문의 사실 정규화, retry schedule은 Controller 책임 |
 | D-08 / `8.1.1.2p.1` | `TradingController -> APIGateway` | `cancelOrder(symbol, orderId?, clientOrderId?) : OrderResult` | 취소 요청만 수행, 결과 재조회 필수 |
 | D-08 / startup 복구 | `TradingController -> APIGateway` | `listOpenOrderResults(symbol) : List<OrderResult>` | 앱 주문의 open 상태 정규화, 전략 판단 금지 |
+| D-08 / startup 복구 | `TradingController -> APIGateway` | `listRecentOrderResults(symbol, limit) : List<OrderResult>` | 앱 client ID prefix의 최근 주문·누적 fill을 정규화해 durable history 이후 누락 execution과 Testnet reset provenance를 대조 |
+| D-08 / stream 재연결 | `TradingController -> WebSocketGateway/APIGateway` | `reconnectAccountStreamAfterReconciliation() : Subscription` | 첫 account REST 뒤 stream ACK를 먼저 얻고 open/recent/same-ID → rebase → 두 번째 account REST를 수행한다. numeric ID collision은 Order/Position 적용 전에 막고 terminal fill은 durable pair+summary와 exact match한다. pending REMOVE·backlog·disconnect·검증 실패에서는 gate 유지 |
 | D-04 / Case 2 `14`, `8.1.1.3` | `TradingController -> TradingSTM` | `orderFinished(event, context) : TradingSTMResult` | concrete normalized outcome만 허용, `handle`로 위임 |
 | D-07 / `1.4` | `MarketDataController -> RegimeController` | `calculate4HIndicators(snapshot) : IndicatorSnapshot` | ADR-004의 확정봉·Decimal·golden formula 사용 |
 | D-10~D-13 / Case 2 `13`, Case 3·4 | `TradingController/UIStateController -> TradeHistoryController` | 기존 `recordOrderExecution`, `getTradeDetails`, `exportCSV` | JSONL/Performance/KST/CSV 정책을 조정, 새 업무 클래스 불필요 |
@@ -1035,7 +1067,7 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 
 ### 10.5 기존 클래스 우선 검토 결과
 
-- 주문 취소와 open order 조회는 `APIGateway`의 Binance REST 캡슐화 책임에 응집되므로
+- 주문 취소와 open/recent order 조회는 `APIGateway`의 Binance REST 캡슐화 책임에 응집되므로
   이 클래스에 추가했다.
 - Regime evaluation Action dispatcher는 `RegimeController`, Trading event loop와 retry
   scheduler는 `TradingController`의 private 구현이다.
@@ -1053,7 +1085,9 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 - [x] Case 2 `14`와 클래스 8.5의 concrete order outcome signature가 일치한다.
 - [x] stop의 무포지션·보유·pending branch와 완료 조건이 명시되었다.
 - [x] 기존 27개 클래스에 Operation을 우선 배치하고 새 strategy class를 만들지 않았다.
-- [x] 실제 주문, credential과 live 활성화는 포함하지 않았다.
+- [x] Phase 9 Testnet 주문 adapter는 별도 이중 opt-in·상한 아래 포함했고 credential 값과
+  live 활성화는 포함하지 않았다.
 - [x] Phase 6에서 `TYPE_0`의 109개 lower-BB registry와 G-07 안전 종료를
   `READY`로 고정했고 `TYPE_1`~`TYPE_4`는 typed failure로 거부했다.
-- [x] Registry `READY`와 Phase 7의 fake-only `command_enabled` mode gate를 분리했다.
+- [x] Registry `READY`와 실행 mode·account stream readiness를 결합한
+  `command_enabled` gate를 분리했다.

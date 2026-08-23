@@ -133,6 +133,56 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
             frozenset({"101", "102"}),
         )
 
+    def test_mixed_versions_load_and_same_order_cross_version_conflicts(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_mixed_versions_load_and_same_order_cross_version_conflicts()
+        기능: v1·v2 혼합 파일을 읽되 같은 order의 version 변경은 충돌로 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        legacy_trade = make_trade(
+            schema_version=1,
+            trade_id="legacy-trade",
+            order_id="111",
+        )
+        current_trade = make_trade(
+            schema_version=2,
+            trade_id="current-trade",
+            order_id="112",
+        )
+        mixed_history = b"\n".join(
+            (
+                encode_record(make_trade_record(legacy_trade)),
+                encode_record(make_trade_record(current_trade)),
+            )
+        ) + b"\n"
+        self.history_path.write_bytes(mixed_history)
+
+        loaded_trades = self.repository.get_trade_history()
+
+        self.assertEqual(
+            tuple(trade.schema_version for trade in loaded_trades),
+            (1, 2),
+        )
+
+        # 같은 order fact를 version만 바꿔도 회계 identity가 달라 자동 병합할 수 없다.
+        conflicting_current_trade = make_trade(
+            schema_version=2,
+            trade_id="legacy-trade",
+            order_id="111",
+        )
+        self.history_path.write_bytes(
+            encode_record(make_trade_record(legacy_trade))
+            + b"\n"
+            + encode_record(make_trade_record(conflicting_current_trade))
+            + b"\n"
+        )
+        with self.assertRaises(OrderHistoryConflictError):
+            self.repository.get_trade_history()
+
     def test_same_content_duplicate_is_no_op_and_conflict_is_fatal(self) -> None:
         """
         함수 이름: test_same_content_duplicate_is_no_op_and_conflict_is_fatal()
@@ -324,8 +374,8 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
         """
         original_record = encode_record(make_trade_record())
         duplicate_key_bytes = original_record.replace(
-            b'{"schema_version":1,',
-            b'{"schema_version":1,"schema_version":1,',
+            b'{"schema_version":2,',
+            b'{"schema_version":2,"schema_version":2,',
             1,
         )
         self.history_path.write_bytes(duplicate_key_bytes)
@@ -404,6 +454,7 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
         self.assertNotIn(b"\r\n", stored_bytes)
         self.assertFalse(stored_bytes.startswith(b"\xef\xbb\xbf"))
         self.assertEqual(fsync_mock.call_count, 1)
+        self.assertEqual(stored_record["schema_version"], 2)
         self.assertEqual(
             tuple(stored_record),
             (

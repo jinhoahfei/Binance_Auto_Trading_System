@@ -8,7 +8,11 @@ from threading import RLock
 from typing import Protocol
 
 from binance_auto_trader.domain.history import Performance, Trade, TradeHistory
-from binance_auto_trader.domain.trading.order import ExecutionSummary, Order
+from binance_auto_trader.domain.trading.order import (
+    ExecutionSummary,
+    Order,
+    PendingOrderRecoveryRecord,
+)
 from binance_auto_trader.domain.trading.states import OrderSide
 
 
@@ -93,6 +97,7 @@ class TradeHistoryController:
         "_repository",
         "_state",
         "_state_lock",
+        "_supports_pending_order_recovery",
     )
 
     def __init__(
@@ -121,6 +126,16 @@ class TradeHistoryController:
         self._clock = clock
         self._operation_lock = RLock()
         self._pending_publications: dict[str, _PendingPublication] = {}
+        pending_order_operation_names = (
+            "delete_pending_order",
+            "get_pending_order_recovery_records",
+            "mark_pending_order_submission_rejected",
+            "save_pending_order",
+        )
+        self._supports_pending_order_recovery = all(
+            callable(getattr(repository, operation_name, None))
+            for operation_name in pending_order_operation_names
+        )  # 기존 history-only fake는 optional capability 없이도 계속 조립할 수 있다.
         self._state_lock = RLock()
         self._state = _TradeHistoryLoadState(
             trade_history=TradeHistory(),
@@ -164,6 +179,145 @@ class TradeHistoryController:
             return frozenset(
                 self._pending_publications
             )  # caller가 retry 대기 index를 변경하지 못하게 복사한다.
+
+    @property
+    def supports_pending_order_recovery(self) -> bool:
+        """
+        함수 이름: supports_pending_order_recovery()
+        기능: 조립된 repository가 세 pending-order recovery operation을 모두 제공하는지 알린다.
+        인자: 없음
+        반환값: durable pending-order 복구 지원 여부
+        작성 날짜: 2026/08/22
+        """
+        return self._supports_pending_order_recovery  # startup caller가 fake와 concrete를 명시적으로 구분한다.
+
+    def save_pending_order(self, order: Order) -> None:
+        """
+        함수 이름: save_pending_order()
+        기능: Binance 제출 전에 Order intent metadata의 durable UPSERT를 repository에 위임한다.
+        인자: order -> 제출 직전 canonical Order
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 동형 임의 객체가 persistence 경계에 credential 필드를 실어 보내지 못하게 한다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        with self._operation_lock:
+            save_pending_order = getattr(
+                self._repository,
+                "save_pending_order",
+                None,
+            )
+            if not callable(save_pending_order):
+                raise NotImplementedError(
+                    "repository does not support pending-order recovery"
+                )
+            save_pending_order(order)  # repository fsync 반환이 외부 제출 허용의 durable 경계다.
+
+    def delete_pending_order(self, client_order_id: str) -> None:
+        """
+        함수 이름: delete_pending_order()
+        기능: terminal 처리 뒤 client order ID의 durable REMOVE를 repository에 위임한다.
+        인자: client_order_id -> 제거할 active pending order 식별자
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 잘못된 ID는 capability 조회보다 먼저 거부해 fake와 concrete가 같은 입력 계약을 갖게 한다.
+        if not isinstance(client_order_id, str):
+            raise TypeError("client_order_id must be a string")
+        if not client_order_id or client_order_id.strip() != client_order_id:
+            raise ValueError(
+                "client_order_id must be non-empty without outer whitespace"
+            )
+        with self._operation_lock:
+            delete_pending_order = getattr(
+                self._repository,
+                "delete_pending_order",
+                None,
+            )
+            if not callable(delete_pending_order):
+                raise NotImplementedError(
+                    "repository does not support pending-order recovery"
+                )
+            delete_pending_order(client_order_id)  # durable tombstone 뒤에만 local 복구 근거가 사라진다.
+
+    def mark_pending_order_submission_rejected(
+        self,
+        client_order_id: str,
+    ) -> None:
+        """
+        함수 이름: mark_pending_order_submission_rejected()
+        기능: typed pre-matching 제출 거부 lifecycle의 durable transition을 repository에 위임한다.
+        인자: client_order_id -> 제출 거부가 확인된 application order ID
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        if not isinstance(client_order_id, str):
+            raise TypeError("client_order_id must be a string")
+        if not client_order_id or client_order_id.strip() != client_order_id:
+            raise ValueError(
+                "client_order_id must be non-empty without outer whitespace"
+            )
+
+        with self._operation_lock:
+            transition_operation = getattr(
+                self._repository,
+                "mark_pending_order_submission_rejected",
+                None,
+            )
+            if not callable(transition_operation):
+                raise NotImplementedError(
+                    "repository does not support pending-order lifecycle recovery"
+                )
+            transition_operation(client_order_id)  # fsync 반환 뒤에만 Controller가 거부 사실을 사용한다.
+
+    def get_pending_orders(self) -> tuple[Order, ...]:
+        """
+        함수 이름: get_pending_orders()
+        기능: startup reconciliation에 사용할 active Order tuple을 repository에서 복원한다.
+        인자: 없음
+        반환값: 검증된 canonical Order tuple
+        작성 날짜: 2026/08/22
+        """
+        records = self.get_pending_order_recovery_records()
+
+        return tuple(record.order for record in records)
+
+    def get_pending_order_recovery_records(
+        self,
+    ) -> tuple[PendingOrderRecoveryRecord, ...]:
+        """
+        함수 이름: get_pending_order_recovery_records()
+        기능: startup reconciliation에 사용할 Order와 durable lifecycle snapshot을 복원한다.
+        인자: 없음
+        반환값: 검증된 immutable PendingOrderRecoveryRecord tuple
+        작성 날짜: 2026/08/23
+        """
+        with self._operation_lock:
+            # history-only fake는 PREPARED로 추측하지 않고 명시적인 capability 오류를 낸다.
+            get_recovery_records = getattr(
+                self._repository,
+                "get_pending_order_recovery_records",
+                None,
+            )
+            if not callable(get_recovery_records):
+                raise NotImplementedError(
+                    "repository does not support pending-order lifecycle recovery"
+                )
+            recovery_records = get_recovery_records()
+            if not isinstance(recovery_records, tuple):
+                raise TypeError(
+                    "repository pending-order records must be a tuple"
+                )
+            if any(
+                not isinstance(record, PendingOrderRecoveryRecord)
+                for record in recovery_records
+            ):
+                raise TypeError(
+                    "repository pending-order records must use canonical values"
+                )
+
+            return recovery_records  # Order와 lifecycle이 같은 replay에서 나온 snapshot을 보존한다.
 
     def load_trade_history(self) -> TradeHistory:
         """

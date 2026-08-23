@@ -10,10 +10,12 @@ from .regime_controller import (
 )
 from .trade_history_controller import TradeHistoryController
 from .trading_controller import (
+    AccountStreamRecoveryBlockedError,
     OrderExecutionFailureCode,
     OrderExecutionTraceEntry,
     OrderExecutionTraceResult,
     SplitRatioResult,
+    StartupOrderReconciliationError,
     TradingController,
     TradingLogicSelectionResult,
     TradingSessionError,
@@ -25,6 +27,7 @@ from .trading_controller import (
 
 
 __all__ = [
+    "AccountStreamRecoveryBlockedError",
     "MarketDataController",
     "OrderExecutionFailureCode",
     "OrderExecutionTraceEntry",
@@ -34,6 +37,7 @@ __all__ = [
     "RegimeEvaluationFailureCode",
     "RegimeEvaluationTrace",
     "SplitRatioResult",
+    "StartupOrderReconciliationError",
     "TradeHistoryController",
     "TradingController",
     "TradingLogicSelectionResult",

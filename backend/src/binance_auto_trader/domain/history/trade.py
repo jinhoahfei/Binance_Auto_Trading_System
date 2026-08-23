@@ -11,7 +11,15 @@ from ..trading.order import ExecutionSummary, Order
 from ..trading.states import ExitReason, OrderSide, StrategyType
 
 
-TRADE_SCHEMA_VERSION = 1
+# 기존 durable row의 회계 의미와 신규 자산 흐름 회계를 version으로 명확히 분리한다.
+LEGACY_TRADE_SCHEMA_VERSION = 1
+TRADE_SCHEMA_VERSION = 2
+SUPPORTED_TRADE_SCHEMA_VERSIONS = frozenset(
+    {
+        LEGACY_TRADE_SCHEMA_VERSION,
+        TRADE_SCHEMA_VERSION,
+    }
+)
 TRADE_RECORD_TYPE = "trade"
 _DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?$")
 _ORDER_ID_PATTERN = re.compile(r"^[1-9][0-9]*$")
@@ -295,6 +303,7 @@ class Trade:
     realized_pnl: Decimal | None = None
     realized_return_rate: Decimal | None = None
     exit_reason: ExitReason | None = None
+    schema_version: int = TRADE_SCHEMA_VERSION
 
     @classmethod
     def from_order_execution(
@@ -309,7 +318,7 @@ class Trade:
         인자: order -> 요청 정보와 전략 의미를 보존한 terminal Order
             summary -> 같은 주문의 누적 fill을 집계한 ExecutionSummary
             realized_result -> SELL인 경우 계산을 마친 RealizedResult
-        반환값: JSONL v1 불변식을 만족하는 Trade
+        반환값: 현재 JSONL schema 불변식을 만족하는 Trade
         작성 날짜: 2026/08/22
         """
         # factory 입력은 canonical mutable Order와 immutable aggregate summary로 제한한다.
@@ -390,6 +399,13 @@ class Trade:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        # bool을 정수로 받지 않고 지원하는 회계 schema version만 durable Trade에 허용한다.
+        if (
+            type(self.schema_version) is not int
+            or self.schema_version not in SUPPORTED_TRADE_SCHEMA_VERSIONS
+        ):
+            raise ValueError("schema_version must be supported integer 1 or 2")
+
         # durable identity 세 필드와 exchange order의 양의 정수 wire 형식을 먼저 검증한다.
         _validate_non_empty_text(self.trade_id, "trade_id")
         _validate_non_empty_text(self.order_id, "order_id")
@@ -545,7 +561,7 @@ class Trade:
 def trade_from_json_object(record: object) -> Trade:
     """
     함수 이름: trade_from_json_object()
-    기능: ADR-004 JSONL v1 object의 exact schema와 값을 검증해 Trade로 변환한다.
+    기능: ADR-004 JSONL v1 또는 v2 object의 exact schema와 값을 검증해 Trade로 변환한다.
     인자: record -> JSON decoder가 반환한 단일 record
     반환값: 검증된 불변 Trade
     작성 날짜: 2026/08/21
@@ -554,16 +570,15 @@ def trade_from_json_object(record: object) -> Trade:
     if not isinstance(record, Mapping):
         raise TypeError("trade record must be a JSON object")
     if set(record.keys()) != _TRADE_RECORD_FIELDS:
-        raise ValueError("trade record must contain exactly the JSONL v1 fields")
+        raise ValueError("trade record must contain exactly the JSONL fields")
 
-    # bool을 integer version으로 오인하지 않고 v1 trade discriminator를 확인한다.
+    # bool을 integer version으로 오인하지 않고 지원하는 회계 version인지 확인한다.
     schema_version = record["schema_version"]
     if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, int)
-        or schema_version != TRADE_SCHEMA_VERSION
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_TRADE_SCHEMA_VERSIONS
     ):
-        raise ValueError("schema_version must be integer 1")
+        raise ValueError("schema_version must be supported integer 1 or 2")
     if record["record_type"] != TRADE_RECORD_TYPE:
         raise ValueError("record_type must be trade")
 
@@ -628,13 +643,14 @@ def trade_from_json_object(record: object) -> Trade:
             "realized_return_rate",
         ),
         exit_reason=_parse_optional_exit_reason(record["exit_reason"]),
+        schema_version=schema_version,
     )
 
 
 def trade_to_json_object(trade: Trade) -> dict[str, object]:
     """
     함수 이름: trade_to_json_object()
-    기능: Trade를 ADR-004 key 순서와 plain Decimal string을 가진 JSONL v1 object로 만든다.
+    기능: Trade를 ADR-004 key 순서와 plain Decimal string을 가진 versioned JSONL object로 만든다.
     인자: trade -> 직렬화할 canonical Trade
     반환값: JSON encoder에 전달할 JSON-compatible dictionary
     작성 날짜: 2026/08/22
@@ -658,7 +674,7 @@ def trade_to_json_object(trade: Trade) -> dict[str, object]:
     # UTC timestamp와 enum을 wire 값으로 바꾸고 schema의 canonical key 순서를 유지한다.
     executed_at_text = trade.executed_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return {
-        "schema_version": TRADE_SCHEMA_VERSION,
+        "schema_version": trade.schema_version,
         "record_type": TRADE_RECORD_TYPE,
         "trade_id": trade.trade_id,
         "order_id": trade.order_id,

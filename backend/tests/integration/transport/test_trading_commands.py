@@ -429,8 +429,8 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
         self.assertEqual(1, self.event_stream.last_sequence)
         self.assertEqual(1, self.runtime.trading_controller.context.version)  # 실패 start는 initialize를 호출하지 않는다.
 
-        # 재연결 뒤 같은 command ID를 재전송해 retryable 503이 캐시에 고정되지 않았음을 검증한다.
-        self.runtime.trading_controller.load_account()
+        # Full REST·stream-gap reconciliation 뒤 같은 command ID로 retryable cache 경계를 검증한다.
+        self.runtime.trading_controller.reconnect_account_stream_after_reconciliation()
         retry_status, retry_payload, _ = self._send_command(
             "POST",
             "/v1/trading/start",

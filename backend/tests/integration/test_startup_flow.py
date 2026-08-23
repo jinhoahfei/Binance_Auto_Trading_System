@@ -20,6 +20,7 @@ from binance_auto_trader.bootstrap import (
     create_application_runtime,
     start_application,
 )
+from binance_auto_trader.bootstrap.application import _FAKE_ORDER_CAPABILITY
 from binance_auto_trader.domain.history import Trade
 from binance_auto_trader.domain.regime import RegimeEvaluationTrigger
 from binance_auto_trader.domain.trading import Account
@@ -33,11 +34,18 @@ from tests.unit.market.test_indicator_snapshot import (
 REST_UPDATED_AT_MILLISECONDS = 1_787_270_400_000
 
 
-def _account_rest_payload() -> dict[str, object]:
+def _account_rest_payload(
+    *,
+    eth_free: str = "1.00000000",
+    eth_locked: str = "0.20000000",
+    update_time_milliseconds: int = REST_UPDATED_AT_MILLISECONDS,
+) -> dict[str, object]:
     """
     함수 이름: _account_rest_payload()
     기능: startup Account 전체 적용에 사용할 공식 Spot REST payload를 만든다.
-    인자: 없음
+    인자: eth_free -> ETH free 잔액 문자열
+        eth_locked -> ETH locked 잔액 문자열
+        update_time_milliseconds -> REST account source timestamp
     반환값: updateTime과 ETH·USDT 잔액이 있는 account payload
     작성 날짜: 2026/08/21
     """
@@ -49,13 +57,13 @@ def _account_rest_payload() -> dict[str, object]:
         "canTrade": True,
         "canWithdraw": True,
         "canDeposit": True,
-        "updateTime": REST_UPDATED_AT_MILLISECONDS,
+        "updateTime": update_time_milliseconds,
         "accountType": "SPOT",
         "balances": [
             {
                 "asset": "ETH",
-                "free": "1.00000000",
-                "locked": "0.20000000",
+                "free": eth_free,
+                "locked": eth_locked,
             },
             {
                 "asset": "USDT",
@@ -185,6 +193,42 @@ class _StartupRestClient:
             raise self.account_error
 
         return _account_rest_payload()
+
+    def list_open_order_results(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[object, ...]:
+        """
+        함수 이름: list_open_order_results()
+        기능: startup fake 계좌에 앱 소유 미결 주문이 없음을 반환한다.
+        인자: symbol -> 조회할 Spot 상품
+        반환값: 비어 있는 normalized 주문 결과 tuple
+        작성 날짜: 2026/08/23
+        """
+        if symbol != "ETHUSDT":
+            raise AssertionError("unexpected open-order symbol")
+
+        return ()  # Fake startup fixture에는 복구할 외부 주문이 없다.
+
+    def list_recent_order_results(
+        self,
+        *,
+        symbol: str,
+        limit: int,
+    ) -> tuple[object, ...]:
+        """
+        함수 이름: list_recent_order_results()
+        기능: startup fake 계좌에 앱 소유 최근 체결이 없음을 반환한다.
+        인자: symbol -> 조회할 Spot 상품
+            limit -> 조회할 최대 주문 수
+        반환값: 비어 있는 normalized 주문 결과 tuple
+        작성 날짜: 2026/08/23
+        """
+        if symbol != "ETHUSDT" or limit != 100:
+            raise AssertionError("unexpected recent-order request")
+
+        return ()  # Reconnect full reconciliation의 빈 exchange 사실을 명시한다.
 
     def _observe_ready(self) -> None:
         """
@@ -479,6 +523,7 @@ def _create_test_runtime(
         web_socket_client,
         history_repository=history_repository,
         execution_mode="fake",
+        _fake_order_capability=_FAKE_ORDER_CAPABILITY,
         account_update_observer=account_update_observer,
         clock=lambda: SNAPSHOT_UPDATED_AT,
     )
@@ -503,7 +548,7 @@ class ApplicationStartupFlowTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_startup_runs_exact_order_and_publishes_ready_only_at_end()
-        기능: market→REGIME→account→history/performance 순서와 최종 READY만 공개함을 검증한다.
+        기능: market→account stream→history→gap REST 순서와 최종 READY만 공개함을 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -531,7 +576,13 @@ class ApplicationStartupFlowTests(unittest.TestCase):
 
         self.assertEqual(
             operation_trace,
-            ["market", "account", "account_stream", "history"],
+            [
+                "market",
+                "account",
+                "account_stream",
+                "history",
+                "account",
+            ],
         )
         self.assertTrue(readiness_observations)
         self.assertTrue(all(not value for value in readiness_observations))
@@ -588,8 +639,87 @@ class ApplicationStartupFlowTests(unittest.TestCase):
         self.assertIs(second_state, ready_state)
         self.assertEqual(
             operation_trace,
-            ["market", "account", "account_stream", "history"],
+            [
+                "market",
+                "account",
+                "account_stream",
+                "history",
+                "account",
+            ],
         )
+
+    def test_startup_second_account_snapshot_closes_stream_start_gap(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_startup_second_account_snapshot_closes_stream_start_gap()
+        기능: stream ACK 전후 잔고 변경을 두 번째 REST와 이후 최신 patch 순서로 반영하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        operation_trace: list[str] = []
+        runtime, rest_client, web_socket_client, _ = _create_test_runtime(
+            operation_trace
+        )
+        market_behavior = _MarketStartupBehavior(
+            runtime,
+            operation_trace,
+        )
+        original_get_account = rest_client.get_account
+        account_call_count = 0
+
+        def get_account_with_gap_event() -> object:
+            """
+            함수 이름: get_account_with_gap_event()
+            기능: 두 번째 REST 직전에 stream patch를 발생시키고 더 최신 full payload를 반환한다.
+            인자: 없음
+            반환값: 호출 순서에 따른 첫 또는 두 번째 account payload
+            작성 날짜: 2026/08/22
+            """
+            nonlocal account_call_count
+            account_call_count += 1
+            original_payload = original_get_account()
+            if account_call_count == 1:
+                return original_payload
+
+            # 구독 시작 뒤 REST #2 전에 도착한 patch보다 새 full snapshot의 source time이 더 최신이다.
+            web_socket_client.emit_account_event(
+                _account_stream_payload(
+                    "0.80000000",
+                    "0.10000000",
+                    REST_UPDATED_AT_MILLISECONDS + 1_000,
+                )
+            )
+            return _account_rest_payload(
+                eth_free="0.70000000",
+                eth_locked="0.10000000",
+                update_time_milliseconds=(
+                    REST_UPDATED_AT_MILLISECONDS + 2_000
+                ),
+            )
+
+        rest_client.get_account = get_account_with_gap_event
+        with patch.object(
+            MarketDataController,
+            "initialize_market_data",
+            autospec=True,
+            side_effect=market_behavior,
+        ):
+            start_application(runtime)
+
+        self.assertEqual(account_call_count, 2)
+        self.assertEqual(runtime.account.get_holdings("ETH"), Decimal("0.80000000"))
+
+        # READY 뒤의 더 최신 stream patch는 REST #2보다 앞선 상태로 되돌아가지 않고 정상 적용된다.
+        web_socket_client.emit_account_event(
+            _account_stream_payload(
+                "0.60000000",
+                "0.10000000",
+                REST_UPDATED_AT_MILLISECONDS + 3_000,
+            )
+        )
+        self.assertEqual(runtime.account.get_holdings("ETH"), Decimal("0.70000000"))
 
     def test_market_exception_returns_typed_failure_without_ready(self) -> None:
         """

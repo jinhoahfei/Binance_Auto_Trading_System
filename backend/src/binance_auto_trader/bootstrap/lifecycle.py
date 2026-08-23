@@ -293,7 +293,7 @@ def _start_account(runtime: ApplicationRuntime) -> None:
 def _start_history_and_performance(runtime: ApplicationRuntime) -> None:
     """
     함수 이름: _start_history_and_performance()
-    기능: Communication 3의 repository 복원과 TradeHistory·Performance publish를 수행한다.
+    기능: Communication 3의 history publish 뒤 주문·Position startup 재조정까지 수행한다.
     인자: runtime -> history repository와 Controller가 조립된 runtime
     반환값: history와 performance가 함께 publish되면 없음
     작성 날짜: 2026/08/21
@@ -319,7 +319,44 @@ def _start_history_and_performance(runtime: ApplicationRuntime) -> None:
             cause=error,
         )
 
-    # Message 3의 version은 history publication을 포함할 다음 application version이다.
+    # History가 authoritative local 기준으로 publish된 뒤에만 Binance 주문과 Position을 대조한다.
+    try:
+        runtime.trading_controller.reconcile_startup_state()
+    except Exception as error:
+        failure = _create_failure(
+            StartupStage.RECONCILIATION,
+            StartupFailureCode.ORDER_RECONCILIATION_FAILED,
+            "Order and position startup reconciliation failed.",
+        )
+        _raise_stage_failure(
+            runtime,
+            message_id="3",
+            receiver="TradingController",
+            related_id=runtime.market_snapshot.symbol,
+            state_version_before=publication_version_before,
+            state_version_after=runtime.state.version,
+            failure=failure,
+            cause=error,
+        )
+
+    # Controller가 정상 반환해도 full reconciliation 완료 flag를 별도로 확인해 fail closed한다.
+    if not runtime.trading_controller.startup_reconciliation_complete:
+        failure = _create_failure(
+            StartupStage.RECONCILIATION,
+            StartupFailureCode.ORDER_RECONCILIATION_NOT_READY,
+            "Order and position startup reconciliation is not ready.",
+        )
+        _raise_stage_failure(
+            runtime,
+            message_id="3",
+            receiver="TradingController",
+            related_id=runtime.market_snapshot.symbol,
+            state_version_before=publication_version_before,
+            state_version_after=runtime.state.version,
+            failure=failure,
+        )
+
+    # Message 3은 local history와 exchange reconciliation이 모두 끝난 startup version을 기록한다.
     _record_startup_trace(
         runtime,
         message_id="3",
@@ -425,7 +462,7 @@ def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
 def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     """
     함수 이름: close_application()
-    기능: 현재 bootstrap이 소유한 account subscription을 닫고 lifecycle을 멱등 종료한다.
+    기능: account recovery worker와 subscription을 순서대로 회수하고 lifecycle을 멱등 종료한다.
     인자: runtime -> 종료할 application runtime
     반환값: CLOSED ApplicationStateSnapshot
     작성 날짜: 2026/08/21
@@ -433,6 +470,11 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     # factory가 조립한 runtime 외 객체는 자원 cleanup 전에 거부한다.
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
+
+    # Worker stop/join은 application lock 밖에서 수행해 진행 중 Controller 복구와 교착하지 않는다.
+    recovery_worker = runtime._account_stream_recovery_worker
+    if recovery_worker is not None:
+        recovery_worker.close()
 
     with runtime.application_lock:
         # CLOSED publication은 멱등 반환하고 다른 상태만 소유 자원을 정리한다.

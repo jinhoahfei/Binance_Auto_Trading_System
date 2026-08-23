@@ -119,17 +119,19 @@ current_price = 110
 
 - encoding은 UTF-8, BOM 없음, 줄바꿈은 LF다.
 - 한 줄은 하나의 완결된 JSON object이며 `record_type="trade"`다.
-- 모든 record는 `schema_version=1`을 가진다.
+- 기존 record는 `schema_version=1`, Phase 9 이후 신규 record는 `schema_version=2`를
+  가진다. reader는 두 version을 함께 읽고 writer는 새 execution을 v2로만 기록한다.
 - 가격·수량·금액·수익률은 exponent 없는 JSON string이다. JSON number로 금융 수치를
   저장하지 않는다.
 - timestamp는 UTC RFC 3339 형식이며 `Z`를 사용한다.
 
-schema version 1의 필수 key와 순서는 의미에 영향을 주지 않지만 writer는 아래 순서를
-사용한다.
+schema version 1과 2는 같은 필수 key를 사용한다. key 순서는 의미에 영향을 주지 않지만
+writer는 아래 순서를 사용한다. 회계 의미는 `schema_version`으로 구분하므로 version은
+canonical Trade equality와 order ID 충돌 판정에도 포함한다.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "record_type": "trade",
   "trade_id": "trade-01",
   "order_id": "123456",
@@ -166,7 +168,35 @@ schema version 1의 필수 key와 순서는 의미에 영향을 주지 않지만
 - Decimal string은 `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`를 만족해야 하며 `NaN`,
   `Infinity`, exponent와 locale separator를 허용하지 않는다.
 
-### 2.2 Idempotency와 crash 복구
+### 2.2 Fee 회계 version과 migration
+
+v1은 Phase 8에서 확정한 기존 의미를 보존한다. BUY는 fee asset과 무관하게 gross
+`executed_quantity`를 Position에 더하고 `executed_amount + fee_quote_amount`를 원가에
+더한다. 기존 v1 row를 단순 재시작만으로 v2 공식으로 다시 해석하지 않는다.
+
+v2는 아래 3.1의 실제 자산 흐름 공식을 사용한다. USDT-fee row는 v1과 v2의 결과가 같고,
+ETH-fee BUY만 net 수량과 실제 quote debit 기준으로 달라진다. `Trade.from_order_execution`
+및 JSONL writer의 신규 record는 v2이며, reader와 Repository는 v1/v2 혼합 파일의 원래
+version을 그대로 보존한다. 동일 order ID의 row가 version만 다르더라도 서로 다른
+canonical 내용이므로 `ORDER_HISTORY_CONFLICT`로 거부한다.
+
+현재 열린 Position lot에 양수 ETH 수수료의 v1 BUY가 하나라도 남아 있으면 그 수량은
+legacy gross 회계에 의존한다. Account에 별도 ETH가 있어 단순 잔액 비교를 통과하더라도
+자동 거래를 재개하지 않고 `HISTORY_ACCOUNTING_MIGRATION_REQUIRED`로 fail closed한다.
+같은 열린 lot에 v2 row가 뒤따르더라도 v2가 legacy 수량을 닫아 migration 표식을 지우도록
+허용하지 않고 history replay 시점에 동일 오류로 중단한다.
+해당 lot이 v1 공식에 따라 이미 전량 SELL되어 닫혔다면 과거 SELL의 저장된
+`allocated_cost_basis`, `realized_pnl`, `realized_return_rate`를 바꾸지 않고 이후 v2
+거래를 허용한다.
+
+열린 legacy lot의 자동 migration은 이 ADR에서 수행하지 않는다. 부분 SELL이 뒤따른
+history는 BUY version만 바꾸면 이후 SELL 파생값이 달라지므로, migration 도구는 해당
+lot의 모든 SELL 원가·손익·수익률을 순서대로 다시 계산하고 같은 directory의 temporary
+file을 flush/fsync한 뒤 atomic rename과 directory fsync를 완료해야 한다. v2 순수량보다
+SELL 수량이 크거나 SELL base fee가 있으면 자동 변환하지 않고 수동 reconciliation을
+요구한다.
+
+### 2.3 Idempotency와 crash 복구
 
 - `order_id`는 trade record의 idempotency key다. 같은 order ID와 동일 canonical
   내용의 append는 no-op이다.
@@ -189,13 +219,32 @@ schema version 1의 필수 key와 순서는 의미에 영향을 주지 않지만
 
 ### 3.1 Average-cost Position
 
-BUY 체결의 Position cost basis에는 quote 체결 금액과 quote 환산 BUY 수수료를 포함한다.
+v2 BUY 체결의 Position cost basis와 수량은 실제 자산 흐름을 기준으로 한다. quote asset으로
+수수료를 낸 경우에는 기존과 같이 수수료를 취득원가에 더한다. base asset인 ETH로
+수수료를 낸 경우에는 거래소의 `executed_quantity`와 Trade 기록은 gross 체결 사실로
+보존하되, Position에는 `executed_quantity - fee_amount`만 더한다. 이때 ETH 수수료의
+`fee_quote_amount`는 별도의 quote 출금이 아니므로 cost basis에 다시 더하지 않는다.
 
 ```text
-new_cost_basis = old_cost_basis + buy_executed_amount + buy_fee_quote
-new_quantity = old_quantity + buy_executed_quantity
+if buy_fee_asset == quote_asset:
+    acquired_quantity = buy_executed_quantity
+    acquisition_cost = buy_executed_amount + buy_fee_quote
+else if buy_fee_asset == base_asset:
+    acquired_quantity = buy_executed_quantity - buy_fee_amount
+    acquisition_cost = buy_executed_amount
+
+new_cost_basis = old_cost_basis + acquisition_cost
+new_quantity = old_quantity + acquired_quantity
 average_entry_price = new_cost_basis / new_quantity
 ```
+
+`acquired_quantity <= 0`은 정상 체결로 보지 않고 reconciliation을 요구한다. SELL에서
+base asset 수수료가 발생하면 gross 매도량 외의 추가 base depletion과 realized PnL
+공식이 함께 필요하므로 Phase 9에서는 자동 반영하지 않고 fail closed한다. 현재
+ETHUSDT의 일반적인 SELL quote-asset 수수료만 아래 공식을 적용한다.
+
+v1 history replay에는 2.2의 legacy gross 수량·fee 포함 원가 공식을 적용하며, 이 분기는
+신규 execution이나 v2 row에 사용하지 않는다.
 
 SELL 직전의 수량을 `quantity_before`라 할 때 매도량의 원가는 다음과 같다.
 

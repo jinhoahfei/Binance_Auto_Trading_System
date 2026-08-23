@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from binance_auto_trader.domain.common import RegimeType
-from binance_auto_trader.domain.history import Trade
+from binance_auto_trader.domain.history import TRADE_SCHEMA_VERSION, Trade
 from binance_auto_trader.domain.trading.order import (
     ExecutionSummary,
     Fill,
@@ -24,6 +24,7 @@ TEST_INSTANT = datetime(2026, 8, 20, 15, 0, tzinfo=timezone.utc)
 
 def make_trade(
     *,
+    schema_version: int = TRADE_SCHEMA_VERSION,
     trade_id: str = "trade-1",
     order_id: str = "1",
     executed_at: datetime = TEST_INSTANT,
@@ -43,7 +44,8 @@ def make_trade(
     """
     함수 이름: make_trade()
     기능: BUY 또는 D-11 첫 SELL을 기본값으로 사용하는 검증된 Trade를 생성한다.
-    인자: trade_id -> 거래 식별자
+    인자: schema_version -> Trade fee 회계 schema version
+        trade_id -> 거래 식별자
         order_id -> Binance order 식별자 문자열
         executed_at -> UTC 체결 시각
         side -> 매수 또는 매도 방향
@@ -108,6 +110,7 @@ def make_trade(
         selected_exit_reason = exit_reason
 
     return Trade(
+        schema_version=schema_version,
         trade_id=trade_id,
         order_id=order_id,
         client_order_id=f"client-{order_id}",
@@ -134,9 +137,9 @@ def make_trade(
 def make_trade_record(trade: Trade | None = None) -> dict[str, object]:
     """
     함수 이름: make_trade_record()
-    기능: Trade를 ADR-004 exact JSONL v1 object로 직렬화한 test record를 만든다.
+    기능: Trade를 ADR-004 exact versioned JSONL object로 직렬화한 test record를 만든다.
     인자: trade -> 직렬화할 Trade이며 생략 시 기본 BUY를 사용한다.
-    반환값: JSON encoder에 전달할 schema v1 dictionary
+    반환값: JSON encoder에 전달할 versioned schema dictionary
     작성 날짜: 2026/08/21
     """
     selected_trade = make_trade() if trade is None else trade
@@ -155,7 +158,7 @@ def make_trade_record(trade: Trade | None = None) -> dict[str, object]:
         "%Y-%m-%dT%H:%M:%S.%fZ"
     )
     return {
-        "schema_version": 1,
+        "schema_version": selected_trade.schema_version,
         "record_type": "trade",
         "trade_id": selected_trade.trade_id,
         "order_id": selected_trade.order_id,

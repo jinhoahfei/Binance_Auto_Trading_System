@@ -40,6 +40,28 @@ class OrderStatus(str, Enum):
     EXPIRED_IN_MATCH = "EXPIRED_IN_MATCH"
 
 
+class OrderResultFailureKind(str, Enum):
+    """
+    클래스 이름: OrderResultFailureKind
+    기능: Controller가 문자열 parsing 없이 사용할 거래소 실패 사실의 정규화 종류를 정의한다.
+    작성 날짜: 2026/08/23
+    """
+
+    SUBMISSION_REJECTED = "SUBMISSION_REJECTED"
+    ORDER_NOT_VISIBLE = "ORDER_NOT_VISIBLE"
+
+
+class PendingOrderRecoveryLifecycle(str, Enum):
+    """
+    클래스 이름: PendingOrderRecoveryLifecycle
+    기능: durable sidecar가 증명한 제출 전·명시적 제출 거부 lifecycle을 구분한다.
+    작성 날짜: 2026/08/23
+    """
+
+    PREPARED = "PREPARED"
+    SUBMISSION_REJECTED_CONFIRMED = "SUBMISSION_REJECTED_CONFIRMED"
+
+
 # 상태 집합은 Controller가 신규 제출과 reconciliation branch를 문자열 추측 없이 판정하게 한다.
 ACTIVE_ORDER_STATUSES = frozenset(
     {
@@ -355,7 +377,7 @@ class Fill:
 class OrderResult:
     """
     클래스 이름: OrderResult
-    기능: fake 또는 향후 Binance Gateway가 반환할 주문 상태와 fill을 불변 정규화한다.
+    기능: fake 또는 실제 Binance Gateway가 반환할 주문 상태와 fill을 불변 정규화한다.
     작성 날짜: 2026/08/22
     """
 
@@ -366,6 +388,7 @@ class OrderResult:
     exchange_order_id: str | None = None
     fills: tuple[Fill, ...] = ()
     failure_reason: str | None = None
+    failure_kind: OrderResultFailureKind | None = None
     retry_after: timedelta | None = None
 
     def __post_init__(self) -> None:
@@ -400,6 +423,27 @@ class OrderResult:
         # 실패 설명은 공백 보정으로 다른 결과를 같게 만들지 않고 원문 식별성을 지킨다.
         if self.failure_reason is not None:
             _validate_non_empty_text(self.failure_reason, "failure_reason")
+        if self.failure_kind is not None and not isinstance(
+            self.failure_kind,
+            OrderResultFailureKind,
+        ):
+            raise TypeError(
+                "failure_kind must be an OrderResultFailureKind or None"
+            )
+
+        # 두 typed 실패는 fill 없는 정확한 상태 조합에만 붙여 잘못된 zero-fill 확정을 막는다.
+        if self.failure_kind is OrderResultFailureKind.SUBMISSION_REJECTED and (
+            self.status is not OrderStatus.REJECTED or self.fills
+        ):
+            raise ValueError(
+                "SUBMISSION_REJECTED requires a fill-free REJECTED result"
+            )
+        if self.failure_kind is OrderResultFailureKind.ORDER_NOT_VISIBLE and (
+            self.status is not OrderStatus.UNKNOWN or self.fills
+        ):
+            raise ValueError(
+                "ORDER_NOT_VISIBLE requires a fill-free UNKNOWN result"
+            )
         if self.retry_after is not None:
             if not isinstance(self.retry_after, timedelta):
                 raise TypeError("retry_after must be a timedelta or None")
@@ -967,3 +1011,30 @@ class Order:
                 )
 
         return fills
+
+
+@dataclass(frozen=True, slots=True)
+class PendingOrderRecoveryRecord:
+    """
+    클래스 이름: PendingOrderRecoveryRecord
+    기능: 재시작 same-ID 조회에 필요한 Order metadata와 durable lifecycle을 함께 보존한다.
+    작성 날짜: 2026/08/23
+    """
+
+    order: Order
+    lifecycle: PendingOrderRecoveryLifecycle
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: recovery record가 canonical Order와 지원 lifecycle만 포함하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        if not isinstance(self.order, Order):
+            raise TypeError("order must be an Order")
+        if not isinstance(self.lifecycle, PendingOrderRecoveryLifecycle):
+            raise TypeError(
+                "lifecycle must be a PendingOrderRecoveryLifecycle"
+            )

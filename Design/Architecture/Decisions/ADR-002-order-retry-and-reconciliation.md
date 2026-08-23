@@ -18,7 +18,9 @@
 ## 2. 공통 용어와 불변식
 
 - `intent_id`: 한 번의 전략 결정 또는 강제 청산 의도를 식별한다.
-- `client_order_id`: `intent_id`와 제출 attempt를 결합한 거래소 idempotency key다.
+- `client_order_id`: application session UUID, `intent_id`와 제출 attempt를 결합한
+  거래소 idempotency key다. 같은 session·intent·attempt에서는 결정론적으로 같고,
+  새 session에서는 완료된 Binance ID를 재사용하지 않는다.
 - `exchange_order_id`: 거래소가 주문을 수락한 뒤 부여한 ID다.
 - `submission_attempt`: 실제 신규 주문 제출 횟수다.
 - `reconciliation_attempt`: 같은 주문을 조회하거나 취소 결과를 확인한 횟수다.
@@ -36,6 +38,8 @@
 6. `UNKNOWN`, active 주문, 저장 실패에서는 같은 거래 의도를 새로 제출하지 않는다.
 7. retry와 reconciliation은 Controller scheduler가 수행하며 재귀 호출이나 busy loop를
    사용하지 않는다.
+8. Matching Engine의 `-2010`은 `Duplicate order sent.`를 포함할 수 있으므로 일반
+   4xx rejection으로 terminal 확정하지 않고 `UNKNOWN`으로 같은 ID만 조회한다.
 
 ## 3. 조회와 제출 retry 예산
 
@@ -131,15 +135,59 @@ cancel timeout 또는 상태 불명 상태에서는 force-sell을 동시에 제�
 backend startup은 trading start를 받기 전에 다음 reconciliation을 완료해야 한다.
 
 1. JSONL 이력과 마지막 정상 order ID를 읽는다.
-2. `APIGateway.listOpenOrderResults(symbol)`로 앱이 생성한 open order를 조회한다.
-3. 앱의 client order ID prefix에 해당하는 최근 execution을 조회해 이력 이후 fill을 찾는다.
-4. 각 주문을 같은 ID로 조회하고 누락 fill을 Position/History에 idempotent하게 반영한다.
-5. open order와 Position이 모두 설명되면 session을 `IDLE`로 연다.
-6. 설명할 수 없는 주문·fill·잔액 차이가 있으면 `RECONCILIATION_REQUIRED`를 유지하고
+2. 외부 POST 전에 file과 parent directory까지 fsync한 pending-order sidecar의
+   `PREPARED` 항목을 읽는다. legacy sidecar v1의 UPSERT도 `PREPARED`로 해석한다.
+3. `APIGateway.listOpenOrderResults(symbol)`로 앱이 생성한 open order를 조회한다.
+4. 앱의 client order ID prefix에 해당하는 최근 execution을 조회해 이력 이후 fill을 찾는다.
+5. 각 pending 주문은 신규 submit 없이 `1·2·4·8초` 뒤 같은 ID로 조회하고 누락 fill을
+   Position/History에 idempotent하게 반영한다. 단, Testnet reset이 과거 숫자
+   `orderId`를 다른 client ID에 재사용한 충돌은 Position 반영과 sidecar 삭제 전에
+   차단한다.
+6. `PREPARED`는 거래소가 POST를 수락한 직후 응답 전에 process가 종료된 상태도 포함한다.
+   따라서 네 번 모두 `-2013`이어도 미제출로 추측하거나 sidecar를 삭제하지 않고
+   `RECONCILIATION_REQUIRED`를 유지한다.
+7. 최초 submit이 Matching Engine 이전의 typed rejection으로 확정되면 sidecar v2를
+   `SUBMISSION_REJECTED_CONFIRMED`로 전이하고 file과 parent directory를 fsync한 뒤에만
+   메모리 상태를 확정한다. 이 상태에서만 같은 ID 조회가 네 번 모두 정확한 `-2013`이고
+   transport/`UNKNOWN` 관찰이 한 번도 없을 때 미제출을 확정해 sidecar를 제거한다.
+8. history commit 뒤 sidecar REMOVE만 실패한 항목은 같은 client ID를 다시 조회해
+   terminal status, `(clientOrderId, orderId)` pair, metadata와 누적 execution summary가
+   durable Trade 한 건과 정확히 같을 때만 sidecar를 제거한다. 누적 summary는 수량·금액,
+   평균가, fee asset·원 금액·quote 환산액과 마지막 fill 시각을 포함한다.
+9. history 저장과 sidecar REMOVE 내구성은 서로 다른 marker로 추적한다. reconnect는 실제
+   sidecar를 다시 읽고 REMOVE fsync가 끝나지 않았으면 signed stream을 유지하더라도
+   외부 command gate를 열지 않는다.
+10. open order와 Position이 모두 설명되면 session을 `IDLE`로 연다.
+11. 설명할 수 없는 주문·fill·잔액 차이가 있으면 `RECONCILIATION_REQUIRED`를 유지하고
    운영자에게 order ID와 차이를 표시한다.
 
 복구가 끝나기 전에는 market event를 STM에 전달할 수 있어도 외부 주문 Action은 실행하지
 않는다.
+
+### 6.3 account stream 재연결 barrier
+
+account user-data stream이 비정상 종료되면 transport 연결 여부와 별개로 신규 주문 gate를
+즉시 닫고 다음 순서를 한 번의 reconciliation barrier로 수행한다.
+
+1. 첫 full account REST snapshot을 적용하고 local overlay를 비운다.
+2. 새 signed user-data stream의 subscribe ACK를 받은 뒤에만 exchange open/recent 주문과
+   모든 local unresolved 주문의 same-ID 결과를 조회한다.
+3. 설명되지 않은 app-prefix open/fill, durable BUY provenance 누락과
+   `Position.quantity > account base balance`를 차단한다. numeric order ID collision은
+   same-ID result를 Order/Position에 적용하기 전 검사하고, terminal fill은 durable
+   `(client ID, exchange ID)`와 execution summary가 정확히 같아야 한다.
+4. ACK 이후의 두 번째 full account REST snapshot을 적용해 구독 전 account gap을 닫고
+   Position과 balance를 다시 비교한다.
+5. 수신 loop는 account event를 bounded 단일 FIFO dispatcher에 넣는다. enqueue 순간부터
+   callback 완료까지 `account_ready = false`이며, barrier 중 event가 하나라도 대기하면
+   현재 구독을 닫고 reconciliation을 다시 수행한다.
+6. queue overflow, consumer/worker failure, disconnect, REST/rebase 검증 실패는 모두 새
+   subscription을 닫고 `RECONCILIATION_REQUIRED`를 유지한다. 조용한 barrier가 완결되고
+   현재 subscription이 connected·caught-up일 때만 command gate를 다시 연다.
+
+이 순서는 마지막 주문 REST 조회 전에 stream을 먼저 여므로 subscribe ACK 직전의 체결은
+REST에서, ACK 이후의 체결은 stream backlog 또는 REST 결과에서 관찰된다. callback을
+application lock 아래 억지로 실행하거나 backlog가 남은 상태를 ready로 추측하지 않는다.
 
 ## 7. 기존 클래스 Operation 결정
 
@@ -160,6 +208,11 @@ cancelOrder(
 ) : OrderResult
 
 listOpenOrderResults(symbol : String) : List<OrderResult>
+
+listRecentOrderResults(
+    symbol : String,
+    limit : int = 100
+) : List<OrderResult>
 ```
 
 조회와 취소는 `orderId` 또는 `clientOrderId` 중 정확히 하나 이상을 요구한다. 전략
@@ -173,4 +226,12 @@ Guard, retry 예산과 Action 순서는 `TradingController`가 소유하고 Gate
 - [x] pending STOP의 query → cancel → query → fill → 잔여 매도 순서가 확정되었다.
 - [x] 저장 실패와 재시작 복구에서 중복 주문 금지가 확정되었다.
 - [x] Phase 8에서 상태별 fault matrix와 deterministic scheduler test를 구현했다. `test_order_fault_matrix.py`, `test_order_reconciliation_flow.py`, `test_order_observed_time_scheduling.py`에서 동일 주문 조회, `1·2·4·8초` 일정, terminal zero-fill 확인, 총 5회 제출 상한과 force-sell `3초` 재시도를 결정론적으로 검증한다.
-- [ ] Phase 9에서 testnet timeout·partial·disconnect fault injection을 통과한다.
+- [x] Phase 9에서 accepted-response timeout, 누적 partial fill, duplicate와 disconnect를
+  in-memory transport로 결정론적으로 주입한 opt-in suite 2개를 통과했다. 이 검증은
+  외부 Binance credential이나 network 실행 증거가 아니다.
+- [x] Phase 9에서 pending sidecar, same-ID startup query, history-commit/REMOVE crash,
+  confirmed-rejection 전이, session별 client ID 고유성, subscribe-ACK 이후 주문 snapshot과
+  두 account REST snapshot, 설명되지 않은 최근 fill, dispatcher barrier와 Testnet reset
+  provenance를 local integration test로 검증했다.
+- [ ] 실제 Testnet credential로 read-only parity, 소액 BUY/force-sell lifecycle과 process
+  재시작 복구를 통과한다.

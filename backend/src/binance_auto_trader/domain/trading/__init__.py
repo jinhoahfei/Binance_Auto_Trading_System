@@ -70,10 +70,18 @@ from .order import (
     Order,
     OrderResult,
     OrderResultConflictError,
+    OrderResultFailureKind,
     OrderStateTransitionError,
     OrderStatus,
+    PendingOrderRecoveryLifecycle,
+    PendingOrderRecoveryRecord,
 )
-from .position import Position, PositionStateSnapshot, PositionStatus
+from .position import (
+    LegacyFeeAccountingMigrationRequiredError,
+    Position,
+    PositionStateSnapshot,
+    PositionStatus,
+)
 from .results import TradingSTMResult
 from .states import (
     CaseBPositionState,
@@ -118,18 +126,22 @@ __all__ = [
     "ForceSellAll",
     "ForceSellOutcomePayload",
     "MarketEvaluationSnapshot",
+    "LegacyFeeAccountingMigrationRequiredError",
     "MixedFeeAssetError",
     "OpenLowerEvent",
     "Order",
     "OrderAttemptKind",
     "OrderResult",
     "OrderResultConflictError",
+    "OrderResultFailureKind",
     "OrderSide",
     "OrderStateTransitionError",
     "OrderStatus",
     "OwnershipState",
     "PatchRuntimeContext",
     "PendingOrderSnapshot",
+    "PendingOrderRecoveryLifecycle",
+    "PendingOrderRecoveryRecord",
     "Position",
     "PositionSnapshot",
     "PositionStateSnapshot",

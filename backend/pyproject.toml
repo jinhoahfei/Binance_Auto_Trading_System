@@ -7,7 +7,9 @@ name = "binance-auto-trader-backend"
 version = "0.1.0"
 description = "Integrated RegimeSTM and TradingSTM backend for Binance Auto"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "websocket-client>=1.8,<2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

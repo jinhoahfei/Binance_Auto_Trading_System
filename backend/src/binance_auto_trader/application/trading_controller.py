@@ -6,13 +6,17 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_EVEN, localcontext
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 import hashlib
 from threading import RLock
+from time import sleep
 from uuid import uuid4
 
-from binance_auto_trader.adapters.binance.api_gateway import APIGateway
+from binance_auto_trader.adapters.binance.api_gateway import (
+    APP_CLIENT_ORDER_ID_PREFIX,
+    APIGateway,
+)
 from binance_auto_trader.adapters.binance.websocket_gateway import (
     Subscription,
     WebSocketGateway,
@@ -21,6 +25,7 @@ from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
 from binance_auto_trader.domain.common import RegimeType
+from binance_auto_trader.domain.history import Trade
 from binance_auto_trader.domain.market import MarketSnapshot
 from binance_auto_trader.domain.trading.account import (
     Account,
@@ -75,10 +80,15 @@ from binance_auto_trader.domain.trading.order import (
     Fill,
     Order,
     OrderResult,
+    OrderResultFailureKind,
     OrderStatus,
+    PendingOrderRecoveryLifecycle,
     TERMINAL_ORDER_STATUSES,
 )
-from binance_auto_trader.domain.trading.position import Position
+from binance_auto_trader.domain.trading.position import (
+    LegacyFeeAccountingMigrationRequiredError,
+    Position,
+)
 from binance_auto_trader.domain.trading.results import TradingSTMResult
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
@@ -125,6 +135,85 @@ _PUBLIC_ORDER_OUTCOME_TYPES = frozenset(
         TradingEventType.CASE_C_SELL_FAILED,
     }
 )
+
+
+def _order_result_exactly_confirms_trade(
+    result: OrderResult,
+    trade: Trade,
+) -> bool:
+    """
+    함수 이름: _order_result_exactly_confirms_trade()
+    기능: 거래소 결과가 durable Trade의 복합 identity와 terminal 체결 집계를 정확히 재현하는지 확인한다.
+    인자: result -> open/recent/same-ID REST에서 정규화한 주문 결과
+        trade -> 비교할 durable terminal Trade
+    반환값: 복합 identity, terminal 상태와 전체 체결 집계가 모두 같으면 True
+    작성 날짜: 2026/08/23
+    """
+    if not isinstance(result, OrderResult) or not isinstance(trade, Trade):
+        raise TypeError("result and trade must use canonical domain types")
+
+    # Testnet reset 뒤 숫자 order ID만 재사용된 주문은 durable execution으로 인정하지 않는다.
+    if (
+        result.client_order_id != trade.client_order_id
+        or result.exchange_order_id != trade.order_id
+        or result.symbol != trade.symbol
+        or result.status not in TERMINAL_ORDER_STATUSES
+        or not result.fills
+    ):
+        return False
+
+    # Durable schema의 단일 fee asset과 같은 Decimal128 정책으로 누적 fill을 다시 집계한다.
+    fee_assets = frozenset(fill_value.fee_asset for fill_value in result.fills)
+    if len(fee_assets) != 1:
+        return False
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decimal_context.rounding = ROUND_HALF_EVEN
+        executed_quantity = sum(
+            (fill_value.quantity for fill_value in result.fills),
+            start=Decimal("0"),
+        )
+        executed_amount = sum(
+            (fill_value.executed_amount for fill_value in result.fills),
+            start=Decimal("0"),
+        )
+        average_fill_price = executed_amount / executed_quantity
+        fee_amount = sum(
+            (fill_value.fee_amount for fill_value in result.fills),
+            start=Decimal("0"),
+        )
+        fee_quote_amount = sum(
+            (fill_value.fee_quote_amount for fill_value in result.fills),
+            start=Decimal("0"),
+        )
+    executed_at = max(
+        fill_value.executed_at for fill_value in result.fills
+    )  # Durable Trade의 시각도 마지막 누적 fill 시각이다.
+
+    return (
+        executed_quantity == trade.executed_quantity
+        and executed_amount == trade.executed_amount
+        and average_fill_price == trade.average_fill_price
+        and fee_amount == trade.fee_amount
+        and next(iter(fee_assets)) == trade.fee_asset
+        and fee_quote_amount == trade.fee_quote_amount
+        and executed_at == trade.executed_at
+    )  # Pair identity만이 아니라 회계에 쓰인 terminal execution 전체를 대조한다.
+
+
+def _wait_for_order_retry_delay(delay: timedelta) -> None:
+    """
+    함수 이름: _wait_for_order_retry_delay()
+    기능: 재시작 same-order 조회 전에 양수 bounded 대기 시간을 blocking 방식으로 기다린다.
+    인자: delay -> jitter와 상한 적용을 마친 대기 시간
+    반환값: 없음
+    작성 날짜: 2026/08/23
+    """
+    # Startup command gate가 닫힌 동안에만 사용하며 잘못된 지연을 즉시 거부한다.
+    if not isinstance(delay, timedelta) or delay <= timedelta(0):
+        raise ValueError("delay must be a positive timedelta")
+
+    sleep(delay.total_seconds())  # ADR-002 최대 8초 단위라 장시간 무제한 대기는 만들지 않는다.
 
 # Communication Case 2의 caller/receiver를 message ID별 불변 trace 계약으로 고정한다.
 _ORDER_TRACE_PARTICIPANTS = {
@@ -251,6 +340,26 @@ class TradingSessionError(RuntimeError):
         self.expected_version = expected_version
 
 
+class StartupOrderReconciliationError(RuntimeError):
+    """
+    클래스 이름: StartupOrderReconciliationError
+    기능: 재시작 시 local history·pending journal과 Binance 사실의 불일치를 안전하게 알린다.
+    작성 날짜: 2026/08/22
+    """
+
+    code = "STARTUP_ORDER_RECONCILIATION_FAILED"
+
+
+class AccountStreamRecoveryBlockedError(StartupOrderReconciliationError):
+    """
+    클래스 이름: AccountStreamRecoveryBlockedError
+    기능: 재접속 반복으로 개선되지 않는 account stream 불변식·provenance 충돌을 알린다.
+    작성 날짜: 2026/08/23
+    """
+
+    code = "ACCOUNT_STREAM_RECOVERY_BLOCKED"
+
+
 class OrderExecutionFailureCode(str, Enum):
     """
     클래스 이름: OrderExecutionFailureCode
@@ -266,6 +375,8 @@ class OrderExecutionFailureCode(str, Enum):
     POSITION_UPDATE_FAILED = "POSITION_UPDATE_FAILED"
     HISTORY_PERSISTENCE_FAILED = "HISTORY_PERSISTENCE_FAILED"
     PENDING_ORDER_NOT_FOUND = "PENDING_ORDER_NOT_FOUND"
+    SYMBOL_FILTER_REJECTED = "SYMBOL_FILTER_REJECTED"
+    STREAM_RECONCILIATION_REQUIRED = "STREAM_RECONCILIATION_REQUIRED"
 
 
 class OrderExecutionTraceResult(str, Enum):
@@ -457,8 +568,12 @@ class _OrderExecutionState:
     terminal_summary: ExecutionSummary | None = None
     pending_outcome: TradingEvent | None = None
     persistence_pending: bool = False
+    # Trade history 저장과 별개인 pending sidecar REMOVE durability를 독립적으로 보존한다.
+    pending_recovery_pending: bool = False
     stop_followup_started: bool = False
     awaiting_terminal_zero_confirmation: bool = False
+    submission_rejection_confirmable: bool = False
+    order_not_visible_observations: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -647,7 +762,10 @@ class TradingController:
         position_snapshot: PositionSnapshot | None = None,
         position: Position | None = None,
         trade_history_controller: TradeHistoryController | None = None,
+        pending_order_recovery_enabled: bool = False,
+        maximum_order_notional: Decimal | None = None,
         order_retry_jitter: Callable[[], Decimal] | None = None,
+        order_retry_waiter: Callable[[timedelta], object] | None = None,
         clock: Callable[[], datetime] | None = None,
         application_lock: RLock | None = None,
     ) -> None:
@@ -663,7 +781,10 @@ class TradingController:
             position_snapshot -> 시작 전에 reconciliation된 포지션
             position -> 실제 fill과 average cost를 소유할 Phase 8 Position 또는 None
             trade_history_controller -> terminal execution을 durable 기록할 Controller 또는 None
+            pending_order_recovery_enabled -> testnet 제출 전 sidecar journal 활성 여부
+            maximum_order_notional -> Order 생성 전에 적용할 선택 quote 결정금액 상한
             order_retry_jitter -> 각 일반 주문 대기에 적용할 0.8~1.2 Decimal provider 또는 None
+            order_retry_waiter -> startup same-order 조회 지연을 수행할 callable 또는 None
             clock -> event와 scheduler가 공유할 UTC clock 또는 None
             application_lock -> transport publication과 공유할 application RLock 또는 None
         반환값: 없음
@@ -692,8 +813,20 @@ class TradingController:
             raise TypeError(
                 "trade_history_controller must be a TradeHistoryController or None"
             )
+        if type(pending_order_recovery_enabled) is not bool:
+            raise TypeError("pending_order_recovery_enabled must be a bool")
+        if maximum_order_notional is not None and (
+            not isinstance(maximum_order_notional, Decimal)
+            or not maximum_order_notional.is_finite()
+            or maximum_order_notional <= Decimal("0")
+        ):
+            raise ValueError(
+                "maximum_order_notional must be a positive finite Decimal or None"
+            )
         if order_retry_jitter is not None and not callable(order_retry_jitter):
             raise TypeError("order_retry_jitter must be callable or None")
+        if order_retry_waiter is not None and not callable(order_retry_waiter):
+            raise TypeError("order_retry_waiter must be callable or None")
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
         if application_lock is not None and not hasattr(
@@ -712,9 +845,16 @@ class TradingController:
         self._context = context or TradingContext(clock=self._clock)
         self._position = position
         self._trade_history_controller = trade_history_controller
+        self._pending_order_recovery_enabled = (
+            pending_order_recovery_enabled
+        )
+        self._maximum_order_notional = maximum_order_notional
         self._order_retry_jitter = (
             order_retry_jitter or _unit_order_retry_jitter_factor
         )  # Phase 8 fake는 factor 1.0, 실거래는 동일 경계에 난수 provider를 주입한다.
+        self._order_retry_waiter = (
+            order_retry_waiter or _wait_for_order_retry_delay
+        )  # 실제 startup은 backoff를 기다리고 test는 no-op waiter로 시간만 검증한다.
 
         # Phase 8 Position이 주입되면 시작 Guard와 Context도 같은 authoritative 수량을 사용한다.
         if position is not None:
@@ -772,6 +912,9 @@ class TradingController:
         self._order_trace: list[OrderExecutionTraceEntry] = []
         self._active_trace_event_id: str | None = None
         self._account_free_overlays: dict[str, _AccountFreeOverlay] = {}
+        self._stream_reconciliation_required = False
+        self._startup_reconciliation_complete = False
+        self._startup_reconciliation_blocked = False
 
     @property
     def account(self) -> Account:
@@ -794,6 +937,18 @@ class TradingController:
         작성 날짜: 2026/08/21
         """
         return self._account_subscription
+
+    @property
+    def startup_reconciliation_complete(self) -> bool:
+        """
+        함수 이름: startup_reconciliation_complete()
+        기능: history·pending order·거래소 상태의 startup 재조정 완료 여부를 반환한다.
+        인자: 없음
+        반환값: startup full reconciliation을 성공했으면 True
+        작성 날짜: 2026/08/22
+        """
+        with self._session_lock:
+            return self._startup_reconciliation_complete  # READY 판정과 같은 lock의 값을 공개한다.
 
     @property
     def position(self) -> Position | None:
@@ -874,10 +1029,28 @@ class TradingController:
     def command_enabled(self) -> bool:
         """
         함수 이름: command_enabled()
-        기능: bootstrap이 주입한 fake mode gate를 fail closed로 평가한다.
+        기능: bootstrap mode gate와 account stream 재조정 상태를 fail closed로 평가한다.
         인자: 없음
         반환값: 거래 command가 허용되면 True
         작성 날짜: 2026/08/21
+        """
+        return (
+            self._mode_command_enabled
+            and self._web_socket_gateway.account_ready
+            and not self._stream_reconciliation_required
+            and not self._startup_reconciliation_blocked
+            and self._status
+            is not TradingSessionStatus.RECONCILIATION_REQUIRED
+        )  # 연결 backlog뿐 아니라 order/history reconciliation lifecycle도 command를 잠근다.
+
+    @property
+    def _mode_command_enabled(self) -> bool:
+        """
+        함수 이름: _mode_command_enabled()
+        기능: bootstrap이 주입한 execution mode gate만 strict bool 규칙으로 평가한다.
+        인자: 없음
+        반환값: 선택 mode 자체가 거래 command를 허용하면 True
+        작성 날짜: 2026/08/23
         """
         # 주입 callable의 예외와 truthy 비-bool 결과를 모두 명시적 비활성으로 처리한다.
         gate = self._command_gate
@@ -1690,6 +1863,965 @@ class TradingController:
 
         return self._account
 
+    def observe_order_result(self, result: OrderResult) -> bool:
+        """
+        함수 이름: observe_order_result()
+        기능: User Data Stream 주문 결과를 같은 Order state에 멱등 반영하고 outcome을 queue에 넣는다.
+        인자: result -> WebSocketGateway가 정규화한 executionReport 결과
+        반환값: 현재 Controller 주문에 결과를 적용했으면 True
+        작성 날짜: 2026/08/22
+        """
+        # Raw payload나 다른 domain 객체는 session state 조회 전에 거부한다.
+        if not isinstance(result, OrderResult):
+            raise TypeError("result must be an OrderResult")
+
+        with self._session_lock:
+            # Client ID를 우선 사용하고 exchange ID는 cancel replace 상관관계 보조로만 사용한다.
+            state = self._order_states_by_client_id.get(result.client_order_id)
+            if state is None and result.exchange_order_id is not None:
+                state = self._order_states_by_order_id.get(
+                    result.exchange_order_id
+                )
+            if state is None:
+                if result.client_order_id.startswith("bat-"):
+                    self._stream_reconciliation_required = True
+                return False  # 알 수 없는 앱 주문은 새 aggregate를 추측하지 않고 REST 재조정을 요구한다.
+            if not self._context.initialized:
+                self._stream_reconciliation_required = True
+                return False  # startup 중 event는 history를 읽은 뒤 REST authoritative query로 복구한다.
+
+            # 같은 application lock에서 Order, Position, history와 internal outcome 순서를 보존한다.
+            initial_result = state.order.status is None
+            outcomes = self._handle_order_result(
+                state,
+                result,
+                initial=initial_result,
+            )
+            if outcomes:
+                self._enqueue_order_outcomes(outcomes)
+
+            return True  # 중복 fill은 Order key가 제거해도 관찰한 same-order 결과에는 True를 반환한다.
+
+    def mark_account_stream_reconciliation_required(self, reason: str) -> None:
+        """
+        함수 이름: mark_account_stream_reconciliation_required()
+        기능: account stream 종료 시 신규 주문을 잠그고 full REST 재조정을 요구한다.
+        인자: reason -> Gateway가 만든 credential 없는 typed 종료 사유
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Callback은 raw close frame이나 예외 문자열 대신 공백 없는 안전한 사유만 받는다.
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be a non-empty string")
+
+        with self._session_lock:
+            self._stream_reconciliation_required = True
+            self._account_subscription = None
+            if self._is_active_locked():
+                self._enter_order_reconciliation(
+                    None,
+                    OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
+                    message_id=None,
+                )  # 실행 중 disconnect는 Context와 공개 status도 동시에 잠근다.
+
+    def reconcile_startup_state(self) -> None:
+        """
+        함수 이름: reconcile_startup_state()
+        기능: history Position, 제출 전 journal, open/recent Binance 주문을 재시작 시 재조정한다.
+        인자: 없음
+        반환값: 설명 가능한 local·exchange 상태가 모두 복원되면 없음
+        작성 날짜: 2026/08/22
+        """
+        with self._session_lock:
+            # Startup operation은 history와 full account가 준비된 뒤 정확히 한 번만 수행한다.
+            if self._startup_reconciliation_complete:
+                return  # 성공한 lifecycle의 중복 호출은 외부 조회나 Position 적용을 반복하지 않는다.
+            if not self._account.ready:
+                raise StartupOrderReconciliationError(
+                    "full account snapshot is required before reconciliation"
+                )
+            if not self._web_socket_gateway.account_ready:
+                raise StartupOrderReconciliationError(
+                    "account stream must be connected and caught up during reconciliation"
+                )
+
+            # Signed stream ACK 뒤 REST 전체 계좌를 한 번 더 읽어 첫 snapshot과 구독 사이 공백을 닫는다.
+            try:
+                startup_account_snapshot = (
+                    self._api_gateway.fetch_account_snapshot(
+                        SUPPORTED_VALUATION_ASSET
+                    )
+                )
+                current_price = self._market_snapshot.get_current_eth_price()
+                self._account.apply_startup_reconciliation_snapshot(
+                    startup_account_snapshot,
+                    current_price,
+                )
+                self._account_free_overlays.clear()
+            except Exception as error:
+                raise StartupOrderReconciliationError(
+                    "startup account stream gap reconciliation failed"
+                ) from error
+            if not self._web_socket_gateway.account_ready:
+                raise StartupOrderReconciliationError(
+                    "account stream was not caught up during account reconciliation"
+                )
+
+            history_controller = self._require_trade_history_controller()
+            history_trades = history_controller.trade_history.trades
+
+            # Durable Trade를 시간순으로 재생해 process memory의 Position을 먼저 복원한다.
+            self._restore_position_from_history(history_trades)
+            history_trades_by_order_id = {
+                trade.order_id: trade for trade in history_trades
+            }
+            history_trades_by_identity = {
+                (trade.client_order_id, trade.order_id): trade
+                for trade in history_trades
+            }
+            history_trades_by_client_id: dict[str, list[Trade]] = {}
+            for trade in history_trades:
+                history_trades_by_client_id.setdefault(
+                    trade.client_order_id,
+                    [],
+                ).append(trade)
+            if (
+                self._pending_order_recovery_enabled
+                and not history_controller.supports_pending_order_recovery
+            ):
+                raise StartupOrderReconciliationError(
+                    "testnet runtime requires pending-order recovery storage"
+                )
+            pending_records = (
+                history_controller.get_pending_order_recovery_records()
+                if self._pending_order_recovery_enabled
+                else ()
+            )
+            pending_orders = tuple(
+                record.order for record in pending_records
+            )
+            pending_by_client_id = {
+                order.client_order_id: order for order in pending_orders
+            }
+            if len(pending_by_client_id) != len(pending_orders):
+                raise StartupOrderReconciliationError(
+                    "pending order journal contains duplicate client IDs"
+                )
+
+            # Exchange 조회 결과는 앱 prefix 주문만 local durable identity와 대조한다.
+            open_results = self._api_gateway.list_open_order_results(
+                _TRADING_SYMBOL
+            )
+            recent_results = self._api_gateway.list_recent_order_results(
+                _TRADING_SYMBOL,
+                limit=100,
+            )
+            authoritative_order_results = [
+                *open_results,
+                *recent_results,
+            ]  # REST가 확인한 fill을 새 stream 세대의 누적 기준으로 함께 보존한다.
+
+            # Testnet reset이 재사용한 숫자 ID는 client ID가 다른 durable 주문과 결합하지 않는다.
+            for result in authoritative_order_results:
+                exchange_order_id = result.exchange_order_id
+                if exchange_order_id is None:
+                    continue
+                durable_trade = history_trades_by_order_id.get(
+                    exchange_order_id
+                )
+                if (
+                    durable_trade is not None
+                    and durable_trade.client_order_id
+                    != result.client_order_id
+                ):
+                    raise StartupOrderReconciliationError(
+                        "Binance reused a durable exchange order ID"
+                    )
+            unexplained_open_results = tuple(
+                result
+                for result in open_results
+                if result.client_order_id.startswith(
+                    APP_CLIENT_ORDER_ID_PREFIX
+                )
+                and result.client_order_id not in pending_by_client_id
+            )
+            if unexplained_open_results:
+                raise StartupOrderReconciliationError(
+                    "Binance has an app-owned open order without a durable journal"
+                )
+
+            # Fill이 있는 최근 앱 주문은 history 또는 pending journal 중 하나로 설명돼야 한다.
+            for result in recent_results:
+                if not result.client_order_id.startswith(
+                    APP_CLIENT_ORDER_ID_PREFIX
+                ):
+                    continue
+                if not result.fills:
+                    continue
+                durable_trade = (
+                    history_trades_by_identity.get(
+                        (
+                            result.client_order_id,
+                            result.exchange_order_id,
+                        )
+                    )
+                    if result.exchange_order_id is not None
+                    else None
+                )
+                if durable_trade is not None:
+                    if not _order_result_exactly_confirms_trade(
+                        result,
+                        durable_trade,
+                    ):
+                        raise StartupOrderReconciliationError(
+                            "Binance execution conflicts with durable history"
+                        )
+                    continue  # 같은 pair와 terminal execution이 모두 맞는 history만 설명 근거다.
+                if result.client_order_id not in pending_by_client_id:
+                    raise StartupOrderReconciliationError(
+                        "Binance has an unexplained app-owned execution"
+                    )
+
+            # Journal 각 항목은 신규 submit 없이 같은 client ID의 authoritative 상태만 조회한다.
+            self._startup_reconciliation_blocked = False
+            for recovery_record in pending_records:
+                order = recovery_record.order
+                result = self._query_pending_order_during_startup(
+                    order,
+                    submission_rejection_confirmed=(
+                        recovery_record.lifecycle
+                        is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+                    ),
+                )
+                matching_history_trades = history_trades_by_client_id.get(
+                    order.client_order_id,
+                    [],
+                )
+                if result is None:
+                    if matching_history_trades:
+                        raise StartupOrderReconciliationError(
+                            "durable submission rejection conflicts with history"
+                        )
+                    history_controller.delete_pending_order(
+                        order.client_order_id
+                    )
+                    continue  # 네 번의 부재로 재확인한 durable 거부는 신규 제출 없이 정리한다.
+                authoritative_order_results.append(result)
+                if matching_history_trades:
+                    self._confirm_pending_order_already_in_history(
+                        order,
+                        result,
+                        matching_history_trades,
+                    )
+                    history_controller.delete_pending_order(
+                        order.client_order_id
+                    )
+                    continue  # 같은 exchange execution의 history commit 뒤 남은 REMOVE만 정리한다.
+                self._recover_pending_order(
+                    order,
+                    result,
+                    history_trades_by_order_id,
+                )
+
+            # Active/partial 주문은 설명 가능해도 terminal history가 없으므로 이번 process를 READY로 열지 않는다.
+            if self._startup_reconciliation_blocked:
+                raise StartupOrderReconciliationError(
+                    "an app-owned order is still active after startup query"
+                )
+
+            # Callback publication 전에 REST 누적 fill을 Gateway에 심어 첫 executionReport gap 오탐을 막는다.
+            try:
+                self._web_socket_gateway.rebase_order_results(
+                    authoritative_order_results
+                )
+            except Exception as error:
+                raise StartupOrderReconciliationError(
+                    "startup order stream rebase failed"
+                ) from error
+
+            position = self._require_position()
+            self._validate_testnet_position_provenance(
+                authoritative_order_results
+            )
+
+            # App Position은 account의 현재 ETH 총량보다 클 수 없으며 reset 차이도 자동 보정하지 않는다.
+            if position.quantity > self._account.get_holdings(_BASE_ASSET):
+                raise StartupOrderReconciliationError(
+                    "restored Position exceeds the Binance ETH balance"
+                )
+            if not self._web_socket_gateway.account_ready:
+                raise StartupOrderReconciliationError(
+                    "account stream was not caught up during reconciliation"
+                )
+            self._publish_restored_position_snapshot(position)
+            # Startup 중 관찰한 event는 위 REST open/recent/query 사실이 대체했으므로 gate를 해제한다.
+            self._stream_reconciliation_required = False
+            self._startup_reconciliation_complete = True
+
+    def _query_pending_order_during_startup(
+        self,
+        order: Order,
+        *,
+        submission_rejection_confirmed: bool,
+    ) -> OrderResult | None:
+        """
+        함수 이름: _query_pending_order_during_startup()
+        기능: durable lifecycle 주문을 1·2·4·8초 뒤 같은 ID로 조회해 존재 또는 안전한 거부를 확정한다.
+        인자: order -> 신규 제출 없이 조회할 durable pending Order
+            submission_rejection_confirmed -> fsync된 pre-matching 거부 사실 여부
+        반환값: 확인한 concrete OrderResult 또는 거부와 4회 부재가 결합되면 None
+        작성 날짜: 2026/08/23
+        """
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        if type(submission_rejection_confirmed) is not bool:
+            raise TypeError("submission_rejection_confirmed must be a bool")
+
+        # Binance의 비동기 Memory=>Database 지연을 고려해 첫 조회도 1초 backoff 뒤 수행한다.
+        absent_observation_count = 0
+        last_error: BaseException | None = None
+        for base_delay in _ORDER_RECONCILIATION_DELAYS:
+            selected_delay = self._jittered_order_retry_delay(base_delay)
+            try:
+                self._order_retry_waiter(selected_delay)
+                result = self._api_gateway.query_order_result(order)
+            except Exception as error:
+                last_error = error
+                continue  # 한 transport 실패를 주문 부재로 바꾸지 않고 남은 same-ID 예산을 사용한다.
+
+            if result.status is not OrderStatus.UNKNOWN:
+                return result  # concrete active 또는 terminal 사실은 기존 recovery pipeline에 넘긴다.
+            if result.failure_kind is OrderResultFailureKind.ORDER_NOT_VISIBLE:
+                absent_observation_count += 1
+
+        # Durable pre-matching 거부와 네 번의 정확한 부재가 모두 있으면 exchange 미생성을 확정한다.
+        if (
+            submission_rejection_confirmed
+            and absent_observation_count == len(_ORDER_RECONCILIATION_DELAYS)
+            and last_error is None
+        ):
+            return None
+
+        # PREPARED는 POST 수락 직후 crash도 포함하므로 네 번의 부재만으로 미제출을 단정하지 않는다.
+        failure_message = (
+            "same-order startup query remained not visible"
+            if absent_observation_count == len(_ORDER_RECONCILIATION_DELAYS)
+            else "same-order startup query remained unknown"
+        )
+        startup_error = StartupOrderReconciliationError(failure_message)
+        if last_error is not None:
+            raise startup_error from last_error
+
+        raise startup_error
+
+    def _confirm_pending_order_already_in_history(
+        self,
+        order: Order,
+        result: OrderResult,
+        matching_trades: list[Trade],
+    ) -> None:
+        """
+        함수 이름: _confirm_pending_order_already_in_history()
+        기능: history commit 뒤 남은 journal이 정확히 같은 exchange execution인지 확인한다.
+        인자: order -> pending journal에서 복원한 원 주문 의도
+            result -> 같은 client ID로 조회한 현재 거래소 결과
+            matching_trades -> 같은 client ID를 가진 durable Trade 목록
+        반환값: 동일 terminal execution이면 없음
+        작성 날짜: 2026/08/23
+        """
+        # 과거 ID 재사용이나 손상으로 여러 durable row가 상관되면 임의 하나를 선택하지 않는다.
+        if len(matching_trades) != 1:
+            raise StartupOrderReconciliationError(
+                "pending client order ID matches multiple durable trades"
+            )
+        durable_trade = matching_trades[0]
+        if (
+            result.exchange_order_id != durable_trade.order_id
+            or result.status not in TERMINAL_ORDER_STATUSES
+        ):
+            raise StartupOrderReconciliationError(
+                "pending journal conflicts with durable exchange identity"
+            )
+
+        # 같은 pair라도 reset 전후 누적 fill이 다르면 stale REMOVE 실패로 간주하지 않는다.
+        if not _order_result_exactly_confirms_trade(result, durable_trade):
+            raise StartupOrderReconciliationError(
+                "pending journal execution conflicts with durable trade"
+            )
+
+        # Journal intent와 durable 전략 의미가 같아도 실제 누적 fill까지 일치해야 REMOVE 실패로 본다.
+        if (
+            order.symbol != durable_trade.symbol
+            or order.side is not durable_trade.side
+            or order.strategy is not durable_trade.strategy
+            or order.regime_type is not durable_trade.regime_type
+            or order.requested_quantity != durable_trade.requested_quantity
+            or order.exit_reason is not durable_trade.exit_reason
+        ):
+            raise StartupOrderReconciliationError(
+                "pending journal metadata conflicts with durable trade"
+            )
+        try:
+            order.apply_order_result(result)
+            summary = order.build_execution_summary()
+        except Exception as error:
+            raise StartupOrderReconciliationError(
+                "pending journal result cannot confirm durable trade"
+            ) from error
+        if (
+            summary.executed_quantity != durable_trade.executed_quantity
+            or summary.executed_amount != durable_trade.executed_amount
+            or summary.average_fill_price != durable_trade.average_fill_price
+            or summary.fee_amount != durable_trade.fee_amount
+            or summary.fee_asset != durable_trade.fee_asset
+            or summary.fee_quote_amount != durable_trade.fee_quote_amount
+            or summary.executed_at != durable_trade.executed_at
+        ):
+            raise StartupOrderReconciliationError(
+                "pending journal execution conflicts with durable trade"
+            )
+
+    def _restore_position_from_history(
+        self,
+        trades: tuple[Trade, ...],
+    ) -> None:
+        """
+        함수 이름: _restore_position_from_history()
+        기능: 검증된 durable Trade tuple을 새 Position에 순서대로 재생한다.
+        인자: trades -> TradeHistoryController가 publish한 immutable 거래 tuple
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Position 재생은 빈 process state에서만 허용해 같은 fill의 이중 적용을 차단한다.
+        if not isinstance(trades, tuple) or any(
+            not isinstance(trade, Trade) for trade in trades
+        ):
+            raise TypeError("trades must be a tuple of Trade values")
+        position = self._require_position()
+        if position.quantity != Decimal("0"):
+            raise StartupOrderReconciliationError(
+                "startup Position must be empty before history replay"
+            )
+
+        # Trade JSONL 원본 순서가 average-cost 적용 순서이므로 재정렬하지 않는다.
+        try:
+            for trade in trades:
+                position.apply_historical_trade(trade)
+            position.require_history_accounting_compatibility()
+        except LegacyFeeAccountingMigrationRequiredError:
+            raise  # 열린 v1 base-fee lot은 일반 복원 오류로 지우지 않고 운영 migration code를 보존한다.
+        except Exception as error:
+            raise StartupOrderReconciliationError(
+                "durable history cannot reconstruct Position"
+            ) from error
+
+    def _recover_pending_order(
+        self,
+        order: Order,
+        result: OrderResult,
+        history_trades_by_order_id: dict[str, Trade],
+    ) -> None:
+        """
+        함수 이름: _recover_pending_order()
+        기능: 같은 client ID query 결과의 누락 fill을 Position·history에 멱등 복구한다.
+        인자: order -> 제출 전 durable journal에서 복원한 Order
+            result -> Binance REST가 반환한 같은 주문의 최신 결과
+            history_trades_by_order_id -> exchange order ID별 durable Trade index
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Journal Order와 query 결과 상관관계를 aggregate 적용 전에 다시 검증한다.
+        if not isinstance(order, Order) or not isinstance(result, OrderResult):
+            raise TypeError("order and result must use canonical domain types")
+        if result.client_order_id != order.client_order_id:
+            raise StartupOrderReconciliationError(
+                "startup query returned a different client order ID"
+            )
+        exchange_order_id = result.exchange_order_id
+        if (
+            exchange_order_id is not None
+            and exchange_order_id in history_trades_by_order_id
+        ):
+            raise StartupOrderReconciliationError(
+                "startup query reused a durable exchange order ID"
+            )  # Position 적용과 journal 삭제 전에 Testnet reset의 숫자 ID 충돌을 차단한다.
+        state = _OrderExecutionState(
+            order=order,
+            force_sell=False,
+            pending_recovery_pending=True,
+        )  # 이 state는 durable pending record에서 왔으므로 REMOVE 성공 전까지 해제할 수 없다.
+        try:
+            order.apply_order_result(result)
+        except Exception as error:
+            raise StartupOrderReconciliationError(
+                "startup order result conflicts with durable intent"
+            ) from error
+
+        # Query가 확인한 실제 fill은 history 저장 여부와 무관하게 Position에 먼저 한 번 적용한다.
+        if order.fills:
+            try:
+                summary = order.build_execution_summary(
+                    require_terminal=order.is_terminal
+                )
+                position = self._require_position()
+                if order.side is OrderSide.SELL:
+                    state.allocated_cost_basis = position.get_cost_basis(
+                        summary.executed_quantity
+                    )
+                position.apply_execution(summary)
+                order.mark_fills_applied(order.fills)
+                if order.is_terminal:
+                    state.terminal_summary = summary
+            except Exception as error:
+                raise StartupOrderReconciliationError(
+                    "startup fill cannot be applied to Position"
+                ) from error
+
+        # Terminal 주문은 누락 history를 저장한 뒤 journal을 제거하고 active index에 남기지 않는다.
+        history_controller = self._require_trade_history_controller()
+        if order.is_terminal:
+            exchange_order_id = order.exchange_order_id
+            if exchange_order_id is None:
+                raise StartupOrderReconciliationError(
+                    "terminal startup order is missing exchange order ID"
+                )
+            if order.fills:
+                summary = state.terminal_summary
+                if summary is None:
+                    raise StartupOrderReconciliationError(
+                        "terminal startup execution is missing its summary"
+                    )
+                durable_trade = history_controller.record_order_execution(
+                    order,
+                    summary,
+                    (
+                        state.allocated_cost_basis
+                        if order.side is OrderSide.SELL
+                        else None
+                    ),
+                )
+                history_trades_by_order_id[
+                    exchange_order_id
+                ] = durable_trade  # 다음 pending record도 같은 숫자 ID를 재사용하지 못하게 한다.
+            history_controller.delete_pending_order(order.client_order_id)
+            return
+
+        # 설명 가능한 active/partial 주문은 복원하되 새 session과 신규 submit을 계속 차단한다.
+        self._order_states_by_client_id[order.client_order_id] = state
+        if order.exchange_order_id is not None:
+            self._order_states_by_order_id[order.exchange_order_id] = state
+        self._startup_reconciliation_blocked = True
+
+    def _publish_restored_position_snapshot(self, position: Position) -> None:
+        """
+        함수 이름: _publish_restored_position_snapshot()
+        기능: startup Position state를 아직 초기화 전인 Context의 start prerequisite로 복사한다.
+        인자: position -> history와 pending fill 재생을 마친 authoritative Position
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Context를 초기화하지 않고 이후 start Guard가 읽는 immutable snapshot만 교체한다.
+        position_state = position.get_snapshot()
+        self._position_snapshot = PositionSnapshot(
+            quantity=position_state.quantity,
+            entry_price=(
+                position_state.average_entry_price
+                if position_state.quantity > Decimal("0")
+                else None
+            ),
+        )  # 선택 REGIME 없이 startup 중 owner를 추측해 Context에 쓰지 않는다.
+
+    def _validate_testnet_position_provenance(
+        self,
+        authoritative_results: list[OrderResult],
+    ) -> None:
+        """
+        함수 이름: _validate_testnet_position_provenance()
+        기능: 열린 local Position의 최신 BUY가 현재 Testnet order history에 남아 있는지 검증한다.
+        인자: authoritative_results -> open/recent/same-ID REST reconciliation 결과
+        반환값: provenance가 설명되거나 testnet recovery가 아니면 없음
+        작성 날짜: 2026/08/22
+        """
+        if not isinstance(authoritative_results, list) or any(
+            not isinstance(result, OrderResult)
+            for result in authoritative_results
+        ):
+            raise TypeError(
+                "authoritative_results must be a list of OrderResult values"
+            )
+
+        # Pending-order 내구성을 강제하는 Testnet runtime의 열린 Position에만 reset 검사를 적용한다.
+        position = self._require_position()
+        if (
+            not self._pending_order_recovery_enabled
+            or position.quantity == Decimal("0")
+        ):
+            return
+        durable_trades = self._require_trade_history_controller().trade_history.trades
+        latest_buy_trade = next(
+            (
+                trade
+                for trade in reversed(durable_trades)
+                if trade.side is OrderSide.BUY
+            ),
+            None,
+        )
+        if (
+            latest_buy_trade is None
+            or not any(
+                _order_result_exactly_confirms_trade(
+                    result,
+                    latest_buy_trade,
+                )
+                for result in authoritative_results
+            )
+        ):
+            raise StartupOrderReconciliationError(
+                "testnet reset or open-position order provenance is missing"
+            )
+
+    def reconnect_account_stream_after_reconciliation(self) -> Subscription:
+        """
+        함수 이름: reconnect_account_stream_after_reconciliation()
+        기능: disconnect 뒤 account·open order를 REST 재조정하고 새 user stream 세대를 연다.
+        인자: 없음
+        반환값: full reconciliation 뒤 시작한 새 account subscription
+        작성 날짜: 2026/08/22
+        """
+        with self._session_lock:
+            # Reconnect operation 전체에서 command gate를 닫고 REST full snapshot부터 다시 적용한다.
+            self._stream_reconciliation_required = True
+            account_snapshot = self._api_gateway.fetch_account_snapshot(
+                SUPPORTED_VALUATION_ASSET
+            )
+            try:
+                current_price = self._market_snapshot.get_current_eth_price()
+                self._account.apply_reconciliation_snapshot(
+                    account_snapshot,
+                    current_price,
+                )
+            except Exception as error:
+                raise AccountStreamRecoveryBlockedError(
+                    "account stream recovery account invariant failed"
+                ) from error
+            self._account_free_overlays.clear()
+
+            # 첫 full account 직후 signed stream ACK를 열어 이후 order REST의 체결 공백을 닫는다.
+            subscription = self._web_socket_gateway.start_account_info_stream()
+            try:
+                # Exchange open order가 현재 memory의 app-owned state로 모두 설명되는지 먼저 확인한다.
+                open_results = self._api_gateway.list_open_order_results(
+                    _TRADING_SYMBOL
+                )
+                open_app_order_results = tuple(
+                    result
+                    for result in open_results
+                    if result.client_order_id.startswith(
+                        APP_CLIENT_ORDER_ID_PREFIX
+                    )
+                )
+                recent_app_order_results = tuple(
+                    result
+                    for result in self._api_gateway.list_recent_order_results(
+                        _TRADING_SYMBOL,
+                        limit=100,
+                    )
+                    if result.client_order_id.startswith(
+                        APP_CLIENT_ORDER_ID_PREFIX
+                    )
+                )
+                authoritative_order_results = [
+                    *open_app_order_results,
+                    *recent_app_order_results,
+                ]  # 완료된 durable BUY도 recent app order에서 provenance 기준으로 유지한다.
+                known_client_order_ids = set(self._order_states_by_client_id)
+                if any(
+                    result.client_order_id not in known_client_order_ids
+                    or (
+                        self._order_states_by_client_id[
+                            result.client_order_id
+                        ].order.exchange_order_id
+                        not in (None, result.exchange_order_id)
+                    )
+                    for result in open_app_order_results
+                ):
+                    raise AccountStreamRecoveryBlockedError(
+                        "stream reconnect found an unexplained open order"
+                    )
+
+                # 단절 중 다른 process가 만든 app-prefix 체결도 local Position/history 없이 통과시키지 않는다.
+                history_controller = self._require_trade_history_controller()
+                durable_trades = history_controller.trade_history.trades
+                durable_trades_by_identity = {
+                    (trade.client_order_id, trade.order_id): trade
+                    for trade in durable_trades
+                }
+                durable_trades_by_order_id = {
+                    trade.order_id: trade for trade in durable_trades
+                }
+                for result in authoritative_order_results:
+                    exchange_order_id = result.exchange_order_id
+                    if exchange_order_id is None:
+                        continue
+                    durable_trade = durable_trades_by_order_id.get(
+                        exchange_order_id
+                    )
+                    if (
+                        durable_trade is not None
+                        and durable_trade.client_order_id
+                        != result.client_order_id
+                    ):
+                        raise AccountStreamRecoveryBlockedError(
+                            "stream reconnect found a reused exchange order ID"
+                        )
+                if self._pending_order_recovery_enabled:
+                    pending_records = (
+                        history_controller.get_pending_order_recovery_records()
+                    )
+                    pending_client_order_ids = {
+                        record.order.client_order_id
+                        for record in pending_records
+                    }
+                    for state in self._order_states_by_client_id.values():
+                        state.pending_recovery_pending = (
+                            state.order.client_order_id
+                            in pending_client_order_ids
+                        )  # Sidecar replay를 in-memory marker보다 우선해 REMOVE 실패를 다시 복구한다.
+                for result in recent_app_order_results:
+                    if not result.fills:
+                        continue
+                    current_state = self._order_states_by_client_id.get(
+                        result.client_order_id
+                    )
+                    state_explains_result = (
+                        current_state is not None
+                        and (
+                            current_state.order.status is None
+                            or current_state.order.status
+                            is OrderStatus.UNKNOWN
+                            or current_state.order.status
+                            in ACTIVE_ORDER_STATUSES
+                            or current_state.persistence_pending
+                            or current_state.pending_recovery_pending
+                        )
+                        and (
+                            current_state.order.exchange_order_id is None
+                            or current_state.order.exchange_order_id
+                            == result.exchange_order_id
+                        )
+                    )
+                    durable_trade = (
+                        durable_trades_by_identity.get(
+                            (
+                                result.client_order_id,
+                                result.exchange_order_id,
+                            )
+                        )
+                        if result.exchange_order_id is not None
+                        else None
+                    )
+                    history_explains_result = (
+                        durable_trade is not None
+                        and _order_result_exactly_confirms_trade(
+                            result,
+                            durable_trade,
+                        )
+                    )
+                    if not state_explains_result and not history_explains_result:
+                        raise AccountStreamRecoveryBlockedError(
+                            "stream reconnect found an unexplained recent execution"
+                        )
+
+                # 현재 process가 소유한 unresolved 주문은 모두 같은 ID query로 최신 fill을 보강한다.
+                outcomes: list[TradingEvent] = []
+                for state in tuple(self._order_states_by_client_id.values()):
+                    order = state.order
+                    order_is_unresolved = (
+                        order.status is None
+                        or order.status is OrderStatus.UNKNOWN
+                        or order.status in ACTIVE_ORDER_STATUSES
+                        or state.persistence_pending
+                        or state.pending_recovery_pending
+                    )
+                    if not order_is_unresolved:
+                        continue
+                    if not self._context.initialized:
+                        raise AccountStreamRecoveryBlockedError(
+                            "recovered startup order requires process restart"
+                        )
+                    result = self._api_gateway.query_order_result(order)
+                    if result.status is OrderStatus.UNKNOWN:
+                        raise StartupOrderReconciliationError(
+                            "stream reconnect order query remained unknown"
+                        )
+                    if result.exchange_order_id is not None:
+                        durable_trade = durable_trades_by_order_id.get(
+                            result.exchange_order_id
+                        )
+                        if (
+                            durable_trade is not None
+                            and durable_trade.client_order_id
+                            != result.client_order_id
+                        ):
+                            raise AccountStreamRecoveryBlockedError(
+                                "stream query reused a durable exchange order ID"
+                            )
+                    authoritative_order_results.append(result)
+                    try:
+                        outcomes.extend(
+                            self._handle_order_result(
+                                state,
+                                result,
+                                initial=order.status is None,
+                            )
+                        )
+                    except Exception as error:
+                        raise AccountStreamRecoveryBlockedError(
+                            "account stream recovery order invariant failed"
+                        ) from error
+                if outcomes:
+                    try:
+                        self._enqueue_order_outcomes(outcomes)
+                    except Exception as error:
+                        raise AccountStreamRecoveryBlockedError(
+                            "account stream recovery outcome invariant failed"
+                        ) from error
+
+                # Terminal fill은 memory state만으로 설명하지 않고 새 durable snapshot과 정확히 대조한다.
+                refreshed_durable_trades = (
+                    history_controller.trade_history.trades
+                )
+                refreshed_trades_by_identity = {
+                    (trade.client_order_id, trade.order_id): trade
+                    for trade in refreshed_durable_trades
+                }
+                for result in authoritative_order_results:
+                    if (
+                        not result.fills
+                        or result.status not in TERMINAL_ORDER_STATUSES
+                    ):
+                        continue
+                    durable_trade = (
+                        refreshed_trades_by_identity.get(
+                            (
+                                result.client_order_id,
+                                result.exchange_order_id,
+                            )
+                        )
+                        if result.exchange_order_id is not None
+                        else None
+                    )
+                    if (
+                        durable_trade is None
+                        or not _order_result_exactly_confirms_trade(
+                            result,
+                            durable_trade,
+                        )
+                    ):
+                        raise AccountStreamRecoveryBlockedError(
+                            "terminal execution is not exact durable history"
+                        )
+
+                # Reset 뒤 새 allowance를 과거 Position으로 오인하지 않도록 ACK 아래에서 provenance를 확인한다.
+                try:
+                    self._validate_testnet_position_provenance(
+                        authoritative_order_results
+                    )
+                except Exception as error:
+                    raise AccountStreamRecoveryBlockedError(
+                        "account stream recovery position provenance failed"
+                    ) from error
+
+                # REST 잔고보다 큰 local Position은 reset 또는 외부 거래 충돌이므로 재시도로 보정하지 않는다.
+                try:
+                    position = self._require_position()
+                    position_exceeds_balance = (
+                        position.quantity
+                        > self._account.get_holdings(_BASE_ASSET)
+                    )
+                except Exception as error:
+                    raise AccountStreamRecoveryBlockedError(
+                        "account stream recovery Position invariant failed"
+                    ) from error
+                if position_exceeds_balance:
+                    raise AccountStreamRecoveryBlockedError(
+                        "account stream recovery Position exceeds Binance balance"
+                    )
+
+                # ACK 뒤 조회한 REST fill 기준을 stream 누적기에 병합해 gap 체결을 검증한다.
+                try:
+                    self._web_socket_gateway.rebase_order_results(
+                        authoritative_order_results
+                    )
+                except Exception as error:
+                    raise AccountStreamRecoveryBlockedError(
+                        "account stream recovery order rebase conflict"
+                    ) from error
+
+                # 첫 REST와 signed stream ACK 사이의 balance gap은 두 번째 full snapshot으로 닫는다.
+                post_subscribe_snapshot = (
+                    self._api_gateway.fetch_account_snapshot(
+                        SUPPORTED_VALUATION_ASSET
+                    )
+                )
+                try:
+                    self._account.apply_startup_reconciliation_snapshot(
+                        post_subscribe_snapshot,
+                        current_price,
+                    )
+                except Exception as error:
+                    raise AccountStreamRecoveryBlockedError(
+                        "account stream recovery gap snapshot invariant failed"
+                    ) from error
+                self._account_free_overlays.clear()  # 두 번째 full account가 재연결 중 fill 보정을 대체한다.
+                if position.quantity > self._account.get_holdings(_BASE_ASSET):
+                    raise AccountStreamRecoveryBlockedError(
+                        "account stream recovery gap Position exceeds Binance balance"
+                    )  # ACK 공백에서 감소한 잔고도 command gate를 다시 열기 전에 확인한다.
+                if not self._web_socket_gateway.account_ready:
+                    raise StartupOrderReconciliationError(
+                        "account stream was not caught up during reconnect gap reconciliation"
+                    )
+
+                pending_recovery_records_remain = False
+                if self._pending_order_recovery_enabled:
+                    pending_recovery_records_remain = bool(
+                        history_controller.get_pending_order_recovery_records()
+                    )  # 실제 sidecar가 비어야 memory marker 손상도 gate를 열 수 없다.
+                unresolved_state_remains = pending_recovery_records_remain or any(
+                    state.order.status is None
+                    or state.order.status is OrderStatus.UNKNOWN
+                    or state.order.status in ACTIVE_ORDER_STATUSES
+                    or state.persistence_pending
+                    or state.pending_recovery_pending
+                    for state in self._order_states_by_client_id.values()
+                )
+                if (
+                    self._status is TradingSessionStatus.RECONCILIATION_REQUIRED
+                    and not unresolved_state_remains
+                    and self._context.initialized
+                ):
+                    try:
+                        self._context.apply_runtime_patch(
+                            patch(trading_phase=TradingPhase.IDLE)
+                        )
+                        self._status = TradingSessionStatus.RUNNING
+                    except Exception as error:
+                        raise AccountStreamRecoveryBlockedError(
+                            "account stream recovery Context rebase conflict"
+                        ) from error
+            except Exception:
+                # ACK 이후 어느 REST·order·rebase 단계가 실패해도 새 handle을 닫고 gate를 유지한다.
+                subscription.close()
+                self._account_subscription = None
+                raise
+
+            # Context rebase까지 성공한 뒤에만 새 handle을 publish하고 command gate를 다시 연다.
+            self._account_subscription = subscription
+            self._stream_reconciliation_required = unresolved_state_remains
+
+            return subscription  # Unresolved 주문은 새 stream을 유지하되 다음 reconciliation까지 gate를 잠근다.
+
     def _validate_start_prerequisites(self) -> None:
         """
         함수 이름: _validate_start_prerequisites()
@@ -1705,10 +2837,22 @@ class TradingController:
                 "Trading session is already active",
                 current_version=self._context.version,
             )
-        if not self.command_enabled:
+        if self._stream_reconciliation_required:
+            raise TradingSessionError(
+                TradingSessionFailureCode.CONNECTION_NOT_READY,
+                "Account stream requires full REST reconciliation",
+                current_version=self._context.version,
+            )
+        if self._startup_reconciliation_blocked:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "A recovered active order blocks a new trading session",
+                current_version=self._context.version,
+            )
+        if not self._mode_command_enabled:
             raise TradingSessionError(
                 TradingSessionFailureCode.COMMAND_DISABLED,
-                "Trading commands are disabled outside fake mode",
+                "Trading commands are disabled by the selected execution mode",
                 current_version=self._context.version,
             )
         if self._selected_regime is None:
@@ -1751,10 +2895,10 @@ class TradingController:
                 "Account must be ready before trading starts",
                 current_version=self._context.version,
             )
-        if not self._web_socket_gateway.account_connected:
+        if not self._web_socket_gateway.account_ready:
             raise TradingSessionError(
                 TradingSessionFailureCode.CONNECTION_NOT_READY,
-                "Account stream must be connected before trading starts",
+                "Account stream must be connected and caught up before trading starts",
                 current_version=self._context.version,
             )
 
@@ -1899,16 +3043,19 @@ class TradingController:
     def _order_pipeline_enabled(self) -> bool:
         """
         함수 이름: _order_pipeline_enabled()
-        기능: fake mode와 Position·history owner가 모두 준비된 경우에만 주문 effect를 허용한다.
+        기능: 허용 mode와 Position·history owner가 모두 준비된 경우에만 주문 effect를 허용한다.
         인자: 없음
         반환값: Phase 8 pipeline 실행 가능 여부
         작성 날짜: 2026/08/22
         """
         return (
-            self.command_enabled
+            self._mode_command_enabled
+            and self._web_socket_gateway.account_ready
+            and not self._stream_reconciliation_required
+            and not self._startup_reconciliation_blocked
             and self._position is not None
             and self._trade_history_controller is not None
-        )  # dependency가 하나라도 없으면 기존 수동 adapter 경계로 fail closed한다.
+        )  # 공개 command lifecycle lock과 별개로 기존 주문의 내부 reconciliation만 계속 허용한다.
 
     def _prepare_order_patch_trace(
         self,
@@ -2184,7 +3331,7 @@ class TradingController:
             )
             return ()  # 수량 0에서는 Gateway를 단 한 번도 호출하지 않는다.
 
-        # 수량 확정 뒤 선택 REGIME과 Order aggregate를 한 submission state로 등록한다.
+        # 수량 확정 뒤 선택 REGIME과 filter 전 Order aggregate를 먼저 완성한다.
         selected_regime = self._selected_regime
         if selected_regime is None:
             raise RuntimeError("an active order requires a selected REGIME")
@@ -2201,16 +3348,83 @@ class TradingController:
             market_price_at_decision=market_price,
             exit_reason=action.exit_reason,
         )
+        # 최신 exchangeInfo filter는 요청 수량을 보존한 채 제출 수량만 내림 조정한다.
+        try:
+            order = self._api_gateway.prepare_order(order)
+        except Exception:
+            self._append_order_trace_values(
+                "5",
+                action.idempotency_key,
+                provisional_client_id,
+                None,
+                context_version,
+                failure_code=OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+            )
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+                message_id=None,
+            )
+            return ()  # filter 위반 수량은 거래소 REST 경계에 도달하지 않는다.
+
+        # Filter 적용을 마친 정확한 Order를 한 submission state와 durable recovery 근거로 묶는다.
         state = _OrderExecutionState(
             order=order,
             force_sell=force_sell,
         )
+        history_controller = self._require_trade_history_controller()
+        if self._pending_order_recovery_enabled:
+            try:
+                history_controller.save_pending_order(order)
+            except Exception:
+                self._append_order_trace(
+                    order,
+                    "5",
+                    context_version,
+                    failure_code=(
+                        OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED
+                    ),
+                )
+                self._enter_order_reconciliation(
+                    state,
+                    OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
+                    message_id=None,
+                )
+                return ()  # 제출 전 journal이 durable하지 않으면 신규 POST를 절대 보내지 않는다.
+            state.pending_recovery_pending = True  # UPSERT fsync 성공 사실을 history 저장과 별도로 추적한다.
+
         self._order_states_by_client_id[order.client_order_id] = state
         self._submission_attempts_by_intent[action.idempotency_key] = (
             submission_count + 1
         )
         self._append_order_trace(order, "5", context_version)
         self._publish_pending_order(state)  # Gateway 호출 전부터 client ID를 in-flight 복구 근거로 게시한다.
+
+        # Filter·journal 도중 stream이 끊기거나 callback backlog가 생기면 POST 직전에 중단한다.
+        if not self._web_socket_gateway.account_ready:
+            self._stream_reconciliation_required = True
+            self._append_order_trace(
+                order,
+                "6",
+                self._context.version,
+                failure_code=(
+                    OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED
+                ),
+            )
+            self._append_order_trace(
+                order,
+                "6.1",
+                self._context.version,
+                failure_code=(
+                    OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED
+                ),
+            )
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
+                message_id=None,
+            )
+            return ()  # Durable PREPARED journal을 유지해 재시작에도 미확정 주문을 숨기지 않는다.
 
         # 메시지 6/6.1은 실제 Gateway 결과를 관찰한 뒤 성공·실패를 같은 식별자로 기록한다.
         gateway_version = self._context.version
@@ -2283,18 +3497,59 @@ class TradingController:
                 free_quote = self._get_effective_free_balance(_QUOTE_ASSET)
                 maximum_quantity = free_quote / market_price
                 if quantity_override is not None:
-                    return min(quantity_override, maximum_quantity)
-                return free_quote * split_ratio / market_price
+                    natural_quantity = min(
+                        quantity_override,
+                        maximum_quantity,
+                    )
+                else:
+                    natural_quantity = (
+                        free_quote * split_ratio / market_price
+                    )
+            else:
+                # SELL은 authoritative Position과 확인된 fill의 free ETH 중 작은 값만 사용한다.
+                position = self._require_position()
+                free_base = self._get_effective_free_balance(_BASE_ASSET)
+                maximum_sell_quantity = min(position.quantity, free_base)
+                if quantity_override is not None:
+                    natural_quantity = min(
+                        quantity_override,
+                        maximum_sell_quantity,
+                    )
+                elif force_sell:
+                    natural_quantity = maximum_sell_quantity
+                else:
+                    natural_quantity = maximum_sell_quantity * split_ratio
 
-            # SELL은 authoritative Position과 확인된 fill을 반영한 free ETH 중 작은 값만 제출한다.
-            position = self._require_position()
-            free_base = self._get_effective_free_balance(_BASE_ASSET)
-            maximum_sell_quantity = min(position.quantity, free_base)
-            if quantity_override is not None:
-                return min(quantity_override, maximum_sell_quantity)
-            if force_sell:
-                return maximum_sell_quantity
-            return maximum_sell_quantity * split_ratio
+        return self._apply_order_notional_ceiling(
+            natural_quantity,
+            market_price,
+        )  # Testnet cap도 Order/journal identity를 만들기 전에 승인 수량에 포함한다.
+
+    def _apply_order_notional_ceiling(
+        self,
+        quantity: Decimal,
+        market_price: Decimal,
+    ) -> Decimal:
+        """
+        함수 이름: _apply_order_notional_ceiling()
+        기능: 선택 quote 상한을 decision price 기준 BUY·SELL base 수량에 보수적으로 적용한다.
+        인자: quantity -> Account·Position·split으로 계산한 자연 주문 수량
+            market_price -> 수량 상한을 quote 금액으로 환산할 결정 시점 가격
+        반환값: 설정 상한 이하로 내림 제한한 base 수량
+        작성 날짜: 2026/08/23
+        """
+        # Factory가 Testnet order mode에만 주입하므로 None에서는 기존 fake 계산을 그대로 보존한다.
+        maximum_notional = self._maximum_order_notional
+        if maximum_notional is None:
+            return quantity
+
+        # 양수 값의 나눗셈을 ROUND_DOWN해 유한 Decimal 정밀도 때문에 estimate가 cap을 넘지 않게 한다.
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_DOWN
+            maximum_quantity = maximum_notional / market_price
+
+        return min(quantity, maximum_quantity)  # REST prepare의 동일 cap 검사는 방어 계층으로 남긴다.
 
     def _get_effective_free_balance(self, asset: str) -> Decimal:
         """
@@ -2371,18 +3626,25 @@ class TradingController:
                     self._account_free_overlays[asset] = overlay
                 overlay.adjustment += adjustment
 
-    @staticmethod
-    def _create_client_order_id(intent_id: str, submission_attempt: int) -> str:
+    def _create_client_order_id(
+        self,
+        intent_id: str,
+        submission_attempt: int,
+    ) -> str:
         """
         함수 이름: _create_client_order_id()
-        기능: 같은 intent와 submission attempt에서 결정론적이고 짧은 client order ID를 만든다.
+        기능: 같은 session·intent·attempt에서 결정론적이고 process 재시작 간 고유한 ID를 만든다.
         인자: intent_id -> STM이 보존하는 원 주문 의도 ID
             submission_attempt -> 0부터 증가하는 제출 시도 번호
-        반환값: fake/향후 Binance adapter가 사용할 client order ID
-        작성 날짜: 2026/08/22
+        반환값: fake/Binance adapter가 사용할 client order ID
+        작성 날짜: 2026/08/23
         """
-        # 원 intent 문자열을 그대로 외부에 노출하지 않고 안정된 SHA-256 prefix로 상관시킨다.
-        digest = hashlib.sha256(intent_id.encode("utf-8")).hexdigest()[:20]
+        # Session UUID를 hash 입력에 넣어 완료된 Binance client ID를 새 session이 재사용하지 않게 한다.
+        session_id = self._session_id
+        if session_id is None:
+            raise RuntimeError("client order ID requires an active session ID")
+        digest_input = f"{session_id}\x00{intent_id}".encode("utf-8")
+        digest = hashlib.sha256(digest_input).hexdigest()[:24]
         return f"bat-{digest}-{submission_attempt}"
 
     def _handle_order_result(
@@ -2415,6 +3677,45 @@ class TradingController:
         order = state.order
         message_id = "7" if initial else "9"
         version_before = self._context.version
+
+        # Testnet reset의 숫자 order ID 재사용은 새 client execution을 Position에 적용하기 전에 막는다.
+        if result.exchange_order_id is not None:
+            durable_trades = (
+                self._require_trade_history_controller().trade_history.trades
+            )
+            durable_trade = next(
+                (
+                    trade
+                    for trade in durable_trades
+                    if trade.order_id == result.exchange_order_id
+                ),
+                None,
+            )
+            if (
+                durable_trade is not None
+                and durable_trade.client_order_id
+                != result.client_order_id
+            ):
+                self._enter_order_reconciliation(
+                    state,
+                    OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                    message_id=message_id,
+                )
+                return ()  # Pair 충돌 상태와 durable sidecar를 남겨 신규 submit/retry를 차단한다.
+            if (
+                durable_trade is not None
+                and result.status in TERMINAL_ORDER_STATUSES
+                and not _order_result_exactly_confirms_trade(
+                    result,
+                    durable_trade,
+                )
+            ):
+                self._enter_order_reconciliation(
+                    state,
+                    OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                    message_id=message_id,
+                )
+                return ()  # 같은 pair의 변조된 terminal fill도 Position delta 전에 차단한다.
         try:
             if initial:
                 order.apply_order_result(result)
@@ -2428,6 +3729,31 @@ class TradingController:
             )
             return ()
         self._append_order_trace(order, message_id, version_before)
+
+        # 공식적으로 거부된 최초 submit만 이후 네 번의 NO_SUCH_ORDER로 zero-fill 확정할 수 있다.
+        if (
+            initial
+            and result.status is OrderStatus.REJECTED
+            and not result.fills
+            and result.failure_kind
+            is OrderResultFailureKind.SUBMISSION_REJECTED
+        ):
+            if self._pending_order_recovery_enabled:
+                try:
+                    history_controller = (
+                        self._require_trade_history_controller()
+                    )
+                    history_controller.mark_pending_order_submission_rejected(
+                        order.client_order_id,
+                    )
+                except Exception:
+                    self._enter_order_reconciliation(
+                        state,
+                        OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
+                        message_id=None,
+                    )
+                    return ()  # 거부 사실 fsync 실패 시 PREPARED를 유지해 재시작도 fail closed한다.
+            state.submission_rejection_confirmable = True
 
         # exchange ID를 처음 확인한 순간부터 client와 exchange 두 index가 같은 state를 가리킨다.
         if order.exchange_order_id is not None:
@@ -2469,6 +3795,10 @@ class TradingController:
                     scheduled_from=schedule_from,
                 )
                 return ()  # 조회 확인 전에는 실패 event나 새 client ID를 만들지 않는다.
+
+            # 조회로 terminal zero-fill을 확인한 뒤에만 제출 전 recovery journal을 제거한다.
+            if not self._delete_pending_order_recovery(state):
+                return ()
 
             # 일반 retry는 직전 요청 수량을 보존해 residual SELL에 split ratio를 다시 적용하지 않는다.
             if not state.force_sell and not state.stop_after_reconciliation:
@@ -2794,8 +4124,12 @@ class TradingController:
         반환값: 다음 microstep에 전달할 concrete outcome tuple
         작성 날짜: 2026/08/22
         """
-        # durable 성공한 주문의 save/query marker와 Context pending identity를 먼저 해제한다.
+        # History durable 성공 뒤 recovery journal 삭제까지 끝나야 외부 성공을 게시할 수 있다.
         order = state.order
+        if not self._delete_pending_order_recovery(state):
+            return ()
+
+        # 두 durable 경계가 끝난 주문의 save/query marker와 Context pending identity를 해제한다.
         state.persistence_pending = False
         if order.exchange_order_id is not None:
             self._persistence_states_by_order_id.pop(order.exchange_order_id, None)
@@ -2852,6 +4186,39 @@ class TradingController:
         state.pending_outcome = outcome
 
         return (outcome,)
+
+    def _delete_pending_order_recovery(
+        self,
+        state: _OrderExecutionState,
+    ) -> bool:
+        """
+        함수 이름: _delete_pending_order_recovery()
+        기능: terminal 확인과 history 저장 뒤 제출 전 recovery journal 항목을 멱등 제거한다.
+        인자: state -> 제거할 client order ID와 failure state를 가진 실행 상태
+        반환값: journal 제거 또는 미지원 fake port이면 True, 실패하면 False
+        작성 날짜: 2026/08/22
+        """
+        # Fake repository는 sidecar 계약이 없으므로 기존 결정론적 pipeline을 그대로 유지한다.
+        history_controller = self._require_trade_history_controller()
+        if not self._pending_order_recovery_enabled:
+            return True
+
+        # 삭제 실패 시 exchange와 history 사실을 되돌리지 않고 재시작 재조정 대상으로 잠근다.
+        try:
+            history_controller.delete_pending_order(
+                state.order.client_order_id
+            )
+        except Exception:
+            state.pending_recovery_pending = True
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
+                message_id=None,
+            )
+            return False
+
+        state.pending_recovery_pending = False
+        return True  # 멱등 REMOVE event가 durable해진 뒤에만 terminal outcome을 허용한다.
 
     def _create_order_outcome_event(
         self,
@@ -3092,6 +4459,34 @@ class TradingController:
                     message_id,
                     gateway_version,
                 )
+
+        # 명시적 submit rejection 뒤 모든 조회가 NO_SUCH_ORDER였는지 별도 typed count로 보존한다.
+        if (
+            state.submission_rejection_confirmable
+            and result.status is OrderStatus.UNKNOWN
+            and result.failure_kind is OrderResultFailureKind.ORDER_NOT_VISIBLE
+        ):
+            state.order_not_visible_observations += 1
+
+        # 네 번 모두 NO_SUCH_ORDER인 경우에만 terminal zero-fill 증거로 승격한다.
+        if (
+            state.submission_rejection_confirmable
+            and state.reconciliation_attempts
+            == len(_ORDER_RECONCILIATION_DELAYS)
+            and state.order_not_visible_observations
+            == len(_ORDER_RECONCILIATION_DELAYS)
+            and result.status is OrderStatus.UNKNOWN
+            and result.failure_kind is OrderResultFailureKind.ORDER_NOT_VISIBLE
+        ):
+            result = OrderResult(
+                symbol=order.symbol,
+                client_order_id=order.client_order_id,
+                exchange_order_id=order.exchange_order_id,
+                status=OrderStatus.REJECTED,
+                processed_at=result.processed_at,
+                failure_reason="SUBMISSION_REJECTION_CONFIRMED_ABSENT",
+                failure_kind=OrderResultFailureKind.SUBMISSION_REJECTED,
+            )  # 문자열 오류가 아니라 typed submit·query 사실 조합으로만 terminal을 만든다.
 
         return self._handle_order_result(
             state,
@@ -3427,6 +4822,7 @@ class TradingController:
                 continue
             if (
                 state.persistence_pending
+                or state.pending_recovery_pending
                 or state.awaiting_terminal_zero_confirmation
                 or state.order.status is None
                 or state.order.status is OrderStatus.UNKNOWN

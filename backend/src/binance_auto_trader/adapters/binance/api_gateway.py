@@ -1,4 +1,4 @@
-"""Spot market/account payload와 Phase 8 fake 주문 결과를 정규화한다."""
+"""Spot market/account payload와 fake·testnet 주문 결과를 정규화한다."""
 
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
@@ -22,6 +22,7 @@ from binance_auto_trader.domain.market import (
 MINIMUM_KLINE_LIMIT = 1
 MAXIMUM_KLINE_LIMIT = 1000
 DEFAULT_KLINE_LIMIT = 500
+APP_CLIENT_ORDER_ID_PREFIX = "bat-"
 _UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _INTERVAL_MILLISECONDS_BY_INTERVAL = {
     Interval.ONE_MINUTE: 60_000,
@@ -34,7 +35,7 @@ _INTERVAL_MILLISECONDS_BY_INTERVAL = {
 class BinanceRESTClient(Protocol):
     """
     클래스 이름: BinanceRESTClient
-    기능: Spot Kline/account와 Phase 8 fake order 호출을 주입할 client 계약을 정의한다.
+    기능: Spot Kline/account와 fake·testnet order 호출을 주입할 client 계약을 정의한다.
     작성 날짜: 2026/08/20
     """
 
@@ -92,6 +93,42 @@ class BinanceRESTClient(Protocol):
         기능: 같은 주문 ID를 취소하고 취소 시점까지의 fill이 포함된 결과를 반환한다.
         인자: order -> 취소할 기존 Order
         반환값: 정규화된 OrderResult
+        작성 날짜: 2026/08/22
+        """
+        ...
+
+    def prepare_order(self, *, order: Order) -> Order:
+        """
+        함수 이름: prepare_order()
+        기능: 최신 symbol filter로 제출 수량을 내림 정규화한 Order를 반환한다.
+        인자: order -> filter 전 요청 수량을 보존한 Order
+        반환값: 요청 수량과 identity를 유지한 제출용 Order
+        작성 날짜: 2026/08/22
+        """
+        ...
+
+    def list_open_order_results(self, *, symbol: str) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_open_order_results()
+        기능: 상품의 현재 미결 주문을 정규화된 결과 tuple로 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 현재 미결 OrderResult tuple
+        작성 날짜: 2026/08/22
+        """
+        ...
+
+    def list_recent_order_results(
+        self,
+        *,
+        symbol: str,
+        limit: int = 100,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_recent_order_results()
+        기능: 재시작 재조정에 사용할 최근 주문 결과를 시간순으로 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+            limit -> 반환할 최근 주문 최대 개수
+        반환값: 최근 OrderResult tuple
         작성 날짜: 2026/08/22
         """
         ...
@@ -409,7 +446,7 @@ def _parse_account_snapshot(
 class APIGateway:
     """
     클래스 이름: APIGateway
-    기능: Spot Kline/account와 fake order 응답을 canonical domain 타입으로 정규화한다.
+    기능: Spot Kline/account와 fake·testnet order 응답을 canonical domain 타입으로 제한한다.
     작성 날짜: 2026/08/20
     """
 
@@ -535,12 +572,12 @@ class APIGateway:
     def submit_order(self, order: Order) -> OrderResult:
         """
         함수 이름: submit_order()
-        기능: Phase 8 fake REST port에 Order를 한 번 제출하고 정규화 결과만 반환한다.
+        기능: 주입 REST port에 Order를 한 번 제출하고 정규화 결과만 반환한다.
         인자: order -> 제출할 Order aggregate
         반환값: client가 반환한 검증된 OrderResult
         작성 날짜: 2026/08/22
         """
-        # Phase 9 실제 Binance mapping 전에는 domain 계약을 이해하는 fake port만 허용한다.
+        # Fake와 실제 adapter 모두 raw payload가 아닌 동일 domain Order 계약만 받는다.
         if not isinstance(order, Order):
             raise TypeError("order must be an Order")
         submit_order = getattr(self._rest_client, "submit_order", None)
@@ -550,6 +587,55 @@ class APIGateway:
         # Adapter 밖으로 raw dict가 새지 않도록 결과 타입과 client ID 상관관계를 확인한다.
         result = submit_order(order=order)
         return self._validate_order_result(order, result)
+
+    def prepare_order(self, order: Order) -> Order:
+        """
+        함수 이름: prepare_order()
+        기능: 실제 client의 symbol filter를 적용하되 fake client에서는 원 Order를 보존한다.
+        인자: order -> filter 전 요청 수량을 가진 Order
+        반환값: identity와 원 요청량을 보존한 제출용 Order
+        작성 날짜: 2026/08/22
+        """
+        # 실제 Binance client의 filter operation은 선택적으로 호출해 기존 fake를 보존한다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        prepare_order = getattr(self._rest_client, "prepare_order", None)
+        if not callable(prepare_order):
+            return order  # Phase 8 fake fixture에는 거래소 filter가 없으므로 원 identity를 유지한다.
+
+        # Client가 같은 mutable Order를 반환해도 원 identity와 수량 상한을 검증하도록 먼저 복사한다.
+        immutable_identity = (
+            "intent_id",
+            "client_order_id",
+            "submission_attempt",
+            "symbol",
+            "side",
+            "strategy",
+            "regime_type",
+            "requested_quantity",
+            "market_price_at_decision",
+            "exit_reason",
+        )
+        original_identity = tuple(
+            getattr(order, field_name) for field_name in immutable_identity
+        )
+        original_submitted_quantity = order.submitted_quantity
+        prepared_order = prepare_order(order=order)
+        if not isinstance(prepared_order, Order):
+            raise TypeError("prepare_order must return an Order")
+        if any(
+            getattr(prepared_order, field_name) != original_value
+            for field_name, original_value in zip(
+                immutable_identity,
+                original_identity,
+                strict=True,
+            )
+        ):
+            raise ValueError("prepared Order changed immutable order intent")
+        if prepared_order.submitted_quantity > original_submitted_quantity:
+            raise ValueError("prepared Order increased submitted quantity")
+
+        return prepared_order  # Order domain 검증을 통과한 내림 수량만 Controller에 공개한다.
 
     def query_order_result(self, order: Order) -> OrderResult:
         """
@@ -608,6 +694,98 @@ class APIGateway:
             raise ValueError("sell_all_position requires a SELL order")
 
         return self.submit_order(order)  # 일반 SELL과 같은 ID·fill·history 계약을 공유한다.
+
+    def list_open_order_results(
+        self,
+        symbol: str,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_open_order_results()
+        기능: 재시작 시 상품의 미결 주문을 raw payload 없이 정규화해 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 정규화된 현재 미결 OrderResult tuple
+        작성 날짜: 2026/08/22
+        """
+        # 실제 client의 조회 operation과 상품 값을 외부 I/O 전에 검증한다.
+        normalized_symbol = _normalize_symbol(symbol)
+        list_open_order_results = getattr(
+            self._rest_client,
+            "list_open_order_results",
+            None,
+        )
+        if not callable(list_open_order_results):
+            return ()  # 복구 port가 없는 fake runtime에는 거래소 미결 주문도 존재하지 않는다.
+
+        # Collection 전체를 한 번 검증해 부분적으로 잘못된 결과를 공개하지 않는다.
+        results = list_open_order_results(symbol=normalized_symbol)
+        return self._validate_order_result_collection(
+            normalized_symbol,
+            results,
+            "open order",
+        )
+
+    def list_recent_order_results(
+        self,
+        symbol: str,
+        limit: int = 100,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_recent_order_results()
+        기능: 재시작 누락 체결 탐지에 사용할 최근 주문 결과를 정규화해 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+            limit -> 반환할 최근 주문 최대 개수
+        반환값: 정규화된 최근 OrderResult tuple
+        작성 날짜: 2026/08/22
+        """
+        # bool을 정수 limit로 받지 않고 공식 allOrders 범위 안의 값만 허용한다.
+        normalized_symbol = _normalize_symbol(symbol)
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("limit must be an integer")
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        list_recent_order_results = getattr(
+            self._rest_client,
+            "list_recent_order_results",
+            None,
+        )
+        if not callable(list_recent_order_results):
+            return ()  # fake port에는 외부 recent execution source가 없다.
+
+        # Recent 결과도 open-order 조회와 같은 normalized collection guard를 통과시킨다.
+        results = list_recent_order_results(
+            symbol=normalized_symbol,
+            limit=limit,
+        )
+        return self._validate_order_result_collection(
+            normalized_symbol,
+            results,
+            "recent order",
+        )
+
+    @staticmethod
+    def _validate_order_result_collection(
+        symbol: str,
+        results: object,
+        field_name: str,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: _validate_order_result_collection()
+        기능: 복수 주문 조회가 같은 상품의 immutable OrderResult tuple인지 검증한다.
+        인자: symbol -> 요청한 canonical 상품
+            results -> client가 반환한 collection
+            field_name -> 안전한 오류 문구에 사용할 논리 이름
+        반환값: 검증된 OrderResult tuple
+        작성 날짜: 2026/08/22
+        """
+        # Generator 재평가와 mutable list 유출을 막기 위해 client 계약을 tuple로 고정한다.
+        if not isinstance(results, tuple):
+            raise TypeError(f"{field_name} results must be a tuple")
+        if any(not isinstance(result, OrderResult) for result in results):
+            raise TypeError(f"{field_name} results must contain OrderResult")
+        if any(result.symbol != symbol for result in results):
+            raise ValueError(f"{field_name} result symbol does not match request")
+
+        return results  # 모든 원소 검증이 끝난 뒤에만 동일 immutable tuple을 공개한다.
 
     @staticmethod
     def _validate_order_result(

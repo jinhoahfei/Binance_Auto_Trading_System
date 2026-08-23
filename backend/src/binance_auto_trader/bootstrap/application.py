@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 import os
-from threading import RLock
+from threading import Event, Lock, RLock, Thread, current_thread
 from uuid import uuid4
 
 from binance_auto_trader.adapters.binance import (
@@ -18,6 +19,7 @@ from binance_auto_trader.adapters.binance import (
 )
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
 from binance_auto_trader.application import (
+    AccountStreamRecoveryBlockedError,
     MarketDataController,
     RegimeController,
     TradeHistoryController,
@@ -32,7 +34,17 @@ from binance_auto_trader.application.trade_history_controller import (
 from binance_auto_trader.domain.history import Performance, TradeHistory
 from binance_auto_trader.domain.market import MarketSnapshot
 from binance_auto_trader.domain.regime import RegimeSTM
-from binance_auto_trader.domain.trading import Account, AccountSnapshot, Position
+from binance_auto_trader.domain.trading import (
+    Account,
+    AccountSnapshot,
+    OrderResult,
+    Position,
+)
+
+
+# Generic dependency-injection factory가 mode 문자열만으로 외부 주문 권한을 만들지 못하게 한다.
+_FAKE_ORDER_CAPABILITY = object()
+_TESTNET_ORDER_CAPABILITY = object()
 
 
 class ExecutionMode(str, Enum):
@@ -74,6 +86,7 @@ class StartupStage(str, Enum):
     REGIME = "REGIME"
     ACCOUNT = "ACCOUNT"
     HISTORY = "HISTORY"
+    RECONCILIATION = "RECONCILIATION"
 
 
 class StartupFailureCode(str, Enum):
@@ -91,6 +104,8 @@ class StartupFailureCode(str, Enum):
     ACCOUNT_INITIALIZATION_FAILED = "ACCOUNT_INITIALIZATION_FAILED"
     ACCOUNT_NOT_READY = "ACCOUNT_NOT_READY"
     HISTORY_INITIALIZATION_FAILED = "HISTORY_INITIALIZATION_FAILED"
+    ORDER_RECONCILIATION_FAILED = "ORDER_RECONCILIATION_FAILED"
+    ORDER_RECONCILIATION_NOT_READY = "ORDER_RECONCILIATION_NOT_READY"
 
 
 class StartupTraceResult(str, Enum):
@@ -348,6 +363,171 @@ class _ApplicationStateStore:
     state: ApplicationStateSnapshot
 
 
+class _AccountStreamRecoveryWorker:
+    """
+    클래스 이름: _AccountStreamRecoveryWorker
+    기능: transient 단절만 제한 재시도하고 결정적 blocker는 잠그는 단일 daemon 복구 worker다.
+    작성 날짜: 2026/08/22
+    """
+
+    _BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
+
+    def __init__(
+        self,
+        recovery_operation: Callable[[], object],
+        recovery_allowed: Callable[[], bool],
+        *,
+        retry_waiter: Callable[[float], bool] | None = None,
+    ) -> None:
+        """
+        함수 이름: __init__()
+        기능: 복구 Operation, readiness Guard와 중단 가능한 backoff 대기를 보존한다.
+        인자: recovery_operation -> application lock 밖에서 실행할 full reconciliation Operation
+            recovery_allowed -> READY와 startup reconciliation 완료 여부를 반환할 Guard
+            retry_waiter -> 지연을 기다리고 종료 요청 여부를 반환할 optional 대기 함수
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 외부 I/O를 시작하기 전에 두 callback 형식을 검증해 background 실패를 방지한다.
+        if not callable(recovery_operation):
+            raise TypeError("recovery_operation must be callable")
+        if not callable(recovery_allowed):
+            raise TypeError("recovery_allowed must be callable")
+        if retry_waiter is not None and not callable(retry_waiter):
+            raise TypeError("retry_waiter must be callable")
+
+        # Worker 상태 lock은 application RLock과 분리해 callback과 종료의 lock 순서를 단순화한다.
+        self._recovery_operation = recovery_operation
+        self._recovery_allowed = recovery_allowed
+        self._state_lock = Lock()
+        self._stop_event = Event()
+        self._retry_waiter = (
+            self._stop_event.wait
+            if retry_waiter is None
+            else retry_waiter
+        )
+        self._active_thread: Thread | None = None
+        self._rerun_requested = False
+        self._deterministic_recovery_blocked = False
+        self._closed = False
+
+    def request_recovery(self) -> bool:
+        """
+        함수 이름: request_recovery()
+        기능: 허용된 새 요청을 단일 daemon 실행 또는 실행 중 후속 latch 하나로 보존한다.
+        인자: 없음
+        반환값: 요청을 수락했으면 True, 중복·종료·결정적 차단 상태이면 False
+        작성 날짜: 2026/08/22
+        """
+        # 실행 중 새 disconnect는 하나의 후속 full reconciliation latch로 병합한다.
+        with self._state_lock:
+            if self._closed or self._deterministic_recovery_blocked:
+                return False
+            if self._active_thread is not None:
+                if self._rerun_requested:
+                    return False
+
+                self._rerun_requested = True
+                return True  # 여러 active 요청은 후속 실행 하나까지만 예약한다.
+
+            recovery_thread = Thread(
+                target=self._run,
+                name="binance-account-stream-recovery",
+                daemon=True,
+            )
+            self._active_thread = recovery_thread
+            try:
+                recovery_thread.start()
+            except Exception:
+                self._active_thread = None
+                raise
+
+            return True  # Callback에는 REST/WS 실행 대신 thread 시작만 남긴다.
+
+    def close(self) -> None:
+        """
+        함수 이름: close()
+        기능: 새 복구 요청을 영구 차단하고 대기 중 worker를 깨운 뒤 현재 실행을 회수한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # 중단 신호와 현재 thread identity를 같은 worker lock 아래에서 원자적으로 읽는다.
+        with self._state_lock:
+            self._closed = True
+            self._rerun_requested = False
+            self._stop_event.set()
+            active_thread = self._active_thread
+
+        # REST/WS Operation이나 application RLock을 막지 않도록 worker lock 밖에서 join한다.
+        if (
+            active_thread is not None
+            and active_thread is not current_thread()
+        ):
+            active_thread.join()
+
+    def _run(self) -> None:
+        """
+        함수 이름: _run()
+        기능: full reconciliation을 실행해 transient 실패만 최대 8초 간격으로 재시도한다.
+        인자: 없음
+        반환값: 성공, readiness 상실 또는 종료 요청 시 없음
+        작성 날짜: 2026/08/22
+        """
+        retry_index = 0
+
+        try:
+            while not self._stop_event.is_set():
+                # READY와 startup reconciliation을 잃은 runtime에서는 외부 복구를 시작하지 않는다.
+                try:
+                    recovery_allowed = self._recovery_allowed()
+                except Exception:
+                    return  # Readiness Guard 자체 실패도 외부 I/O 허용으로 fallback하지 않는다.
+                if recovery_allowed is not True:
+                    return
+
+                # 실제 Controller Operation은 worker/application lock을 보유하지 않은 채 호출한다.
+                try:
+                    self._recovery_operation()
+                except AccountStreamRecoveryBlockedError:
+                    # 동일 runtime에서 개선될 수 없는 blocker는 latch와 후속 자동 시도를 영구 차단한다.
+                    with self._state_lock:
+                        self._deterministic_recovery_blocked = True
+                        self._rerun_requested = False
+                        self._active_thread = None
+                    return
+                except Exception:
+                    retry_delay = self._BACKOFF_SECONDS[retry_index]
+                    retry_index = min(
+                        retry_index + 1,
+                        len(self._BACKOFF_SECONDS) - 1,
+                    )
+                    if self._retry_waiter(retry_delay):
+                        return  # Runtime close가 backoff를 즉시 깨우면 추가 요청을 보내지 않는다.
+                    continue
+
+                # 성공과 pending rerun 소비를 원자화해 완료 직전 disconnect를 유실하지 않는다.
+                with self._state_lock:
+                    if self._closed:
+                        self._rerun_requested = False
+                        self._active_thread = None
+                        return
+                    if self._rerun_requested:
+                        self._rerun_requested = False
+                        retry_index = 0
+                        continue
+
+                    self._active_thread = None
+                    return
+        finally:
+            # 예외적 종료에서도 현재 thread identity만 해제하고 close 시 pending latch를 제거한다.
+            with self._state_lock:
+                if self._active_thread is current_thread():
+                    self._active_thread = None
+                if self._closed:
+                    self._rerun_requested = False
+
+
 @dataclass(frozen=True, slots=True)
 class ApplicationRuntime:
     """
@@ -369,6 +549,10 @@ class ApplicationRuntime:
     trading_controller: TradingController
     trade_history_repository: TradeHistoryRepositoryPort
     trade_history_controller: TradeHistoryController
+    _account_stream_recovery_worker: _AccountStreamRecoveryWorker | None = field(
+        repr=False,
+        compare=False,
+    )
     _state_store: _ApplicationStateStore = field(
         repr=False,
         compare=False,
@@ -396,6 +580,16 @@ class ApplicationRuntime:
             raise ValueError("TradingController must share the runtime Account")
         if not isinstance(self._state_store, _ApplicationStateStore):
             raise TypeError("_state_store must be an application state store")
+        if (
+            self._account_stream_recovery_worker is not None
+            and not isinstance(
+                self._account_stream_recovery_worker,
+                _AccountStreamRecoveryWorker,
+            )
+        ):
+            raise TypeError(
+                "_account_stream_recovery_worker must be a recovery worker or None"
+            )
 
     @property
     def lock(self) -> RLock:
@@ -550,6 +744,10 @@ def create_application_runtime(
     history_path: str | os.PathLike[str] | None = None,
     history_repository: TradeHistoryRepositoryPort | None = None,
     execution_mode: object = None,
+    allow_testnet_orders: bool = False,
+    testnet_maximum_order_notional: Decimal | None = None,
+    _fake_order_capability: object | None = None,
+    _testnet_order_capability: object | None = None,
     account_update_observer: Callable[[Account], object] | None = None,
     clock: Callable[[], datetime] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
@@ -562,6 +760,10 @@ def create_application_runtime(
         history_path -> local JSONL storage 경로 또는 None
         history_repository -> 주입할 TradeHistory repository port 또는 None
         execution_mode -> fail-closed parser에 전달할 외부 mode 값
+        allow_testnet_orders -> testnet mode 주문을 명시적으로 허용하는 별도 opt-in
+        testnet_maximum_order_notional -> 주문 허용 testnet에 필수인 decision-notional 상한
+        _fake_order_capability -> 검증된 in-process fake 조립기만 전달하는 내부 권한 표식
+        _testnet_order_capability -> 고정 endpoint Testnet 조립기만 전달하는 내부 권한 표식
         account_update_observer -> 실제 Account 변경 뒤 호출할 optional observer
         clock -> market, gateway, repository와 performance가 공유할 optional UTC clock
         kline_limit -> 각 market interval에서 조회할 Kline 개수
@@ -581,13 +783,77 @@ def create_application_runtime(
         raise TypeError("account_update_observer must be callable")
     if clock is not None and not callable(clock):
         raise TypeError("clock must be callable")
+    if type(allow_testnet_orders) is not bool:
+        raise TypeError("allow_testnet_orders must be a bool")
+    if testnet_maximum_order_notional is not None and (
+        not isinstance(testnet_maximum_order_notional, Decimal)
+        or not testnet_maximum_order_notional.is_finite()
+        or testnet_maximum_order_notional <= Decimal("0")
+    ):
+        raise ValueError(
+            "testnet_maximum_order_notional must be a positive finite Decimal or None"
+        )
 
     # Application lock과 entity를 만들며 실행 mode도 gate 조립 전에 canonicalize한다.
     application_lock = RLock()
     selected_execution_mode = parse_execution_mode(execution_mode)
+    requested_fake_order_gate = (
+        selected_execution_mode is ExecutionMode.FAKE
+    )
+    requested_testnet_order_gate = (
+        selected_execution_mode is ExecutionMode.TESTNET
+        and allow_testnet_orders
+    )
+    if (
+        requested_fake_order_gate
+        and _fake_order_capability is not _FAKE_ORDER_CAPABILITY
+    ):
+        raise ValueError(
+            "fake orders require the dedicated in-process fake bootstrap"
+        )
+    if (
+        _fake_order_capability is not None
+        and _fake_order_capability is not _FAKE_ORDER_CAPABILITY
+    ):
+        raise ValueError("invalid fake order capability")
+    if (
+        requested_testnet_order_gate
+        and _testnet_order_capability is not _TESTNET_ORDER_CAPABILITY
+    ):
+        raise ValueError(
+            "testnet orders require the dedicated fixed-endpoint bootstrap"
+        )
+    if (
+        _testnet_order_capability is not None
+        and _testnet_order_capability is not _TESTNET_ORDER_CAPABILITY
+    ):
+        raise ValueError("invalid testnet order capability")
+    testnet_order_gate = (
+        requested_testnet_order_gate
+        and _testnet_order_capability is _TESTNET_ORDER_CAPABILITY
+    )
+    fake_order_gate = (
+        requested_fake_order_gate
+        and _fake_order_capability is _FAKE_ORDER_CAPABILITY
+    )
+    if testnet_order_gate and testnet_maximum_order_notional is None:
+        raise ValueError(
+            "enabled testnet orders require testnet_maximum_order_notional"
+        )
+    if not testnet_order_gate and testnet_maximum_order_notional is not None:
+        raise ValueError(
+            "testnet_maximum_order_notional requires enabled testnet orders"
+        )
     market_snapshot = MarketSnapshot(clock=clock)
     account = Account()
     regime_stm = RegimeSTM()
+    initial_state = ApplicationStateSnapshot(
+        status=ApplicationStatus.CREATED,
+        version=0,
+        failure=None,
+        startup_trace=(),
+    )
+    application_state_store = _ApplicationStateStore(initial_state)
 
     # Gateway는 외부 client를 캡슐화하고 Account callback만 application lock에 연결한다.
     api_gateway = APIGateway(rest_client, clock=clock)
@@ -608,9 +874,54 @@ def create_application_runtime(
 
             return account_changed
 
+    # WebSocket callback은 생성 뒤 할당될 Controller와 recovery worker를 안전하게 참조한다.
+    trading_controller: TradingController
+    account_stream_recovery_worker: _AccountStreamRecoveryWorker | None = None
+
+    def apply_order_stream_result(result: OrderResult) -> bool:
+        """
+        함수 이름: apply_order_stream_result()
+        기능: 정규화 주문 결과를 TradingController의 same-order pipeline에 전달한다.
+        인자: result -> WebSocketGateway가 만든 OrderResult
+        반환값: 현재 주문 state가 결과를 수락했으면 True
+        작성 날짜: 2026/08/22
+        """
+        # Account와 order callback이 동일 entity graph를 동시에 변경하지 않게 직렬화한다.
+        with application_lock:
+            return trading_controller.observe_order_result(result)
+
+    def require_stream_reconciliation(reason: str) -> None:
+        """
+        함수 이름: require_stream_reconciliation()
+        기능: account stream 종료 사유를 Controller의 fail-closed reconciliation gate에 전달한다.
+        인자: reason -> WebSocketGateway가 만든 credential 없는 종료 사유
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        # Callback은 먼저 동일 application lock에서 command gate를 즉시 fail closed한다.
+        with application_lock:
+            trading_controller.mark_account_stream_reconciliation_required(
+                reason
+            )
+            recovery_can_start = (
+                selected_execution_mode is ExecutionMode.TESTNET
+                and application_state_store.state.status
+                is ApplicationStatus.READY
+                and trading_controller.startup_reconciliation_complete
+            )
+
+        # Blocking REST/WS는 callback thread에서 실행하지 않고 runtime worker에만 요청한다.
+        if (
+            recovery_can_start
+            and account_stream_recovery_worker is not None
+        ):
+            account_stream_recovery_worker.request_recovery()
+
     web_socket_gateway = WebSocketGateway(
         web_socket_client,
         account_snapshot_callback=apply_account_stream_snapshot,
+        order_result_callback=apply_order_stream_result,
+        reconciliation_required_callback=require_stream_reconciliation,
     )
 
     # Persistence 구현 또는 주입 port를 먼저 조립해 order outcome 전에 durable owner를 준비한다.
@@ -634,12 +945,54 @@ def create_application_runtime(
         web_socket_gateway,
         account,
         market_snapshot,
-        command_gate=selected_execution_mode is ExecutionMode.FAKE,
+        command_gate=(
+            fake_order_gate
+            or testnet_order_gate
+        ),  # live mode는 allow flag와 무관하게 Phase 13 전까지 항상 잠긴다.
         position=position,
         trade_history_controller=trade_history_controller,
         clock=clock,
         application_lock=application_lock,
+        # 실제 전송이 가능한 testnet 경로만 제출 전 복구 저널을 강제한다.
+        pending_order_recovery_enabled=(
+            selected_execution_mode is ExecutionMode.TESTNET
+        ),
+        maximum_order_notional=testnet_maximum_order_notional,
     )
+
+    def account_stream_recovery_allowed() -> bool:
+        """
+        함수 이름: account_stream_recovery_allowed()
+        기능: worker 재시도 직전에 testnet runtime의 READY와 startup reconciliation을 재검사한다.
+        인자: 없음
+        반환값: 자동 account stream 복구가 계속 허용되면 True
+        작성 날짜: 2026/08/22
+        """
+        # Lifecycle publication과 Controller readiness를 같은 application RLock에서 읽는다.
+        with application_lock:
+            return (
+                selected_execution_mode is ExecutionMode.TESTNET
+                and application_state_store.state.status
+                is ApplicationStatus.READY
+                and trading_controller.startup_reconciliation_complete
+            )
+
+    def recover_account_stream() -> object:
+        """
+        함수 이름: recover_account_stream()
+        기능: worker thread에서 Controller의 full REST reconciliation과 새 구독을 실행한다.
+        인자: 없음
+        반환값: 새 account stream subscription
+        작성 날짜: 2026/08/22
+        """
+        return trading_controller.reconnect_account_stream_after_reconciliation()
+
+    # 실제 authenticated stream을 사용하는 testnet에만 자동 복구 owner를 조립한다.
+    if selected_execution_mode is ExecutionMode.TESTNET:
+        account_stream_recovery_worker = _AccountStreamRecoveryWorker(
+            recover_account_stream,
+            account_stream_recovery_allowed,
+        )
     regime_controller = RegimeController(
         regime_stm,
         market_snapshot,
@@ -654,13 +1007,7 @@ def create_application_runtime(
         kline_limit=kline_limit,
     )
 
-    # 초기 state는 모든 외부 초기화가 끝나기 전까지 명시적으로 not-ready다.
-    initial_state = ApplicationStateSnapshot(
-        status=ApplicationStatus.CREATED,
-        version=0,
-        failure=None,
-        startup_trace=(),
-    )
+    # Startup command와 runtime은 앞서 만든 not-ready state store identity를 공유한다.
     startup_command_id = f"startup-{uuid4().hex}"
 
     return ApplicationRuntime(
@@ -677,5 +1024,6 @@ def create_application_runtime(
         trading_controller=trading_controller,
         trade_history_repository=selected_history_repository,
         trade_history_controller=trade_history_controller,
-        _state_store=_ApplicationStateStore(initial_state),
+        _account_stream_recovery_worker=account_stream_recovery_worker,
+        _state_store=application_state_store,
     )
