@@ -5,6 +5,19 @@ from datetime import date
 from enum import Enum
 
 
+class HistoryPeriod(str, Enum):
+    """
+    클래스 이름: HistoryPeriod
+    기능: 거래 상세 조회의 오늘·최근 7일·최근 30일·전체 기간 preset을 구분한다.
+    작성 날짜: 2026/08/23
+    """
+
+    TODAY = "TODAY"
+    LAST_7_DAYS = "LAST_7_DAYS"
+    LAST_30_DAYS = "LAST_30_DAYS"
+    ALL = "ALL"
+
+
 class TradeSide(str, Enum):
     """
     클래스 이름: TradeSide

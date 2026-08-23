@@ -132,6 +132,39 @@ export interface TradeHistoryQuery {
 }
 
 /**
+ * D-12 범위를 유지해 거래 내역 상세 상단에 표시할 account-day/전체-history 요약이다.
+ */
+export interface TradeHistorySummary {
+    readonly dailyReturn: {
+        readonly value: string;
+        readonly tone: 'positive' | 'negative' | 'neutral';
+    };
+    readonly sellPerformance: {
+        readonly winRate: string;
+        readonly completedCount: string;
+        readonly averageRealizedReturn: string;
+        readonly totalRealizedPnl: string;
+        readonly tone: 'positive' | 'negative' | 'neutral';
+    };
+    readonly position: {
+        readonly quantity: string;
+    };
+    readonly fees: {
+        readonly amount: string;
+        readonly totalExecutedAmount: string;
+        readonly averageSlippage: string;
+    };
+}
+
+/**
+ * 하나의 상세 조회에서 필터된 거래 행과 filter-independent 요약을 함께 전달하는 UI 계약이다.
+ */
+export interface TradeHistoryDetails {
+    readonly records: ReadonlyArray<TradeRecord>;
+    readonly summary: TradeHistorySummary;
+}
+
+/**
  * 사용자가 차트에 저장한 단일 선의 직렬화 가능한 표현이다.
  * 시각과 가격이 정규 좌표이며 x_ratio는 이전 fixture와의 호환에만 사용한다.
  */

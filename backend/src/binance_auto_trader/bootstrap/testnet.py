@@ -16,6 +16,8 @@ from binance_auto_trader.bootstrap.application import (
     _TESTNET_ORDER_CAPABILITY,
     create_application_runtime,
 )
+from binance_auto_trader.domain.history import Performance, Trade
+from binance_auto_trader.domain.trading import Account
 from binance_auto_trader.domain.trading.order import Order, OrderResult
 
 
@@ -398,6 +400,9 @@ def _load_testnet_client_types() -> tuple[type[object], type[object]]:
 
 
 def create_testnet_application_runtime(
+    account_update_observer: Callable[[Account], object] | None = None,
+    trade_history_update_observer: Callable[[Trade, Performance], object]
+    | None = None,
     *,
     history_path: str | os.PathLike[str],
     environment: Mapping[str, str] | None = None,
@@ -407,13 +412,27 @@ def create_testnet_application_runtime(
     """
     함수 이름: create_testnet_application_runtime()
     기능: 고정 Spot Testnet client와 execution_mode testnet runtime을 opt-in 설정으로 조립한다.
-    인자: history_path -> test run별 local JSONL history 경로
+    인자: account_update_observer -> 실제 Account 변경 뒤 호출할 optional observer
+        trade_history_update_observer -> durable Trade와 전체 Performance 게시 후 호출할 observer
+        history_path -> test run별 local JSONL history 경로
         environment -> 주입 환경 mapping 또는 실제 os.environ이면 None
         clock -> runtime 전체가 공유할 optional UTC clock
         kline_limit -> interval별 REST 초기 조회 개수
     반환값: live endpoint와 분리된 ApplicationRuntime
     작성 날짜: 2026/08/22
     """
+    # Transport가 주입하는 observer를 client 생성 전에 검증해 잘못된 조립을 fail fast한다.
+    if account_update_observer is not None and not callable(
+        account_update_observer
+    ):
+        raise TypeError("account_update_observer must be callable")
+    if trade_history_update_observer is not None and not callable(
+        trade_history_update_observer
+    ):
+        raise TypeError(
+            "trade_history_update_observer must be callable"
+        )  # Durable publication 후에 실행할 호출 경계만 허용한다.
+
     # 모든 설정을 client 생성 전에 검증해 잘못된 opt-in에서 객체나 network가 만들어지지 않게 한다.
     configuration = load_testnet_configuration(environment)
     rest_client_type, web_socket_client_type = _load_testnet_client_types()
@@ -444,6 +463,8 @@ def create_testnet_application_runtime(
             if configuration.allow_testnet_orders
             else None
         ),
+        account_update_observer=account_update_observer,
+        trade_history_update_observer=trade_history_update_observer,
         clock=clock,
         kline_limit=kline_limit,
     )  # live mode와 base URL 환경변수를 전달할 surface를 의도적으로 제공하지 않는다.

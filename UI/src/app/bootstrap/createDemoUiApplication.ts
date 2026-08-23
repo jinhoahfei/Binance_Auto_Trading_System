@@ -29,6 +29,7 @@ export interface DemoUiApplication extends UiApplicationRuntime {
 export function create_demo_ui_application(): DemoUiApplication {
     const command_adapter = new FakeUiCommandAdapter();
     command_adapter.trade_history = DEMO_HISTORY_TRADE_RECORDS;
+    command_adapter.trade_history_summary = TRADE_HISTORY_SUMMARY_FIXTURE;
     command_adapter.exported_receipt = {
         file_path: `/Users/demo/Exports/${DEMO_CSV_FILE_NAME}`,
         exported_row_count: DEMO_HISTORY_TRADE_RECORDS.length,

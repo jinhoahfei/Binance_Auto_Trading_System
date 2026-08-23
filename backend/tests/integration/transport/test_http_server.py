@@ -636,6 +636,27 @@ class LoopbackHttpServerTests(unittest.TestCase):
                 "Access-Control-Request-Method": "GET",
             },
         )
+        trade_preflight_status, trade_preflight_payload, _ = _request_json(
+            self.server,
+            self.token,
+            "OPTIONS",
+            "/v1/trades?period=today&side=all",
+            extra_headers={
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization, X-Request-Id",
+            },
+        )
+        malformed_trade_preflight_status, malformed_trade_preflight_payload, _ = (
+            _request_json(
+                self.server,
+                self.token,
+                "OPTIONS",
+                "/v1/trades?period=today&period=all",
+                extra_headers={
+                    "Access-Control-Request-Method": "GET",
+                },
+            )
+        )
 
         self.assertEqual(put_status, 405)
         self.assertEqual(put_payload["error"]["code"], "METHOD_NOT_ALLOWED")
@@ -656,27 +677,42 @@ class LoopbackHttpServerTests(unittest.TestCase):
             query_preflight_payload["error"]["code"],
             "MALFORMED_REQUEST",
         )
+        self.assertEqual(trade_preflight_status, 204)
+        self.assertIsNone(trade_preflight_payload)
+        self.assertEqual(malformed_trade_preflight_status, 400)
+        self.assertEqual(
+            malformed_trade_preflight_payload["error"]["code"],
+            "MALFORMED_REQUEST",
+        )
 
-    def test_top_level_composition_shares_account_event_stream(self) -> None:
+    def test_top_level_composition_shares_application_event_stream(self) -> None:
         """
-        함수 이름: test_top_level_composition_shares_account_event_stream()
-        기능: runtime factory observer와 server가 같은 stream에 Account.version event를 발행하는지 검증한다.
+        함수 이름: test_top_level_composition_shares_application_event_stream()
+        기능: Account와 Trade history observer가 server의 같은 sequence stream을 공유하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/21
+        작성 날짜: 2026/08/23
         """
-        captured_observers = []
+        captured_account_observers = []
+        captured_trade_history_observers = []
         runtime = _prepare_runtime(ready=True)
 
-        def runtime_factory(account_observer: object) -> SimpleNamespace:
+        def runtime_factory(
+            account_observer: object,
+            trade_history_observer: object,
+        ) -> SimpleNamespace:
             """
             함수 이름: runtime_factory()
-            기능: transport가 만든 account observer를 캡처하고 ready runtime을 반환한다.
-            인자: account_observer -> bootstrap factory에 주입할 callback
+            기능: transport가 만든 두 observer를 캡처하고 ready runtime을 반환한다.
+            인자: account_observer -> bootstrap factory에 주입할 Account callback
+                trade_history_observer -> bootstrap factory에 주입할 history callback
             반환값: ready runtime test double
-            작성 날짜: 2026/08/21
+            작성 날짜: 2026/08/23
             """
-            captured_observers.append(account_observer)
+            captured_account_observers.append(account_observer)
+            captured_trade_history_observers.append(
+                trade_history_observer
+            )  # 두 observer를 동일 factory에 주입한다.
             return runtime
 
         transport_application = create_loopback_transport_application(
@@ -687,19 +723,45 @@ class LoopbackHttpServerTests(unittest.TestCase):
             close_runtime=lambda current_runtime: current_runtime,
         )
         account = runtime.trading_controller.account
-        published_event = captured_observers[0](account)
+        published_account_event = captured_account_observers[0](account)
+        trade = runtime.trade_history_controller.trade_history.trades[0]
+        performance = runtime.trade_history_controller.performance
+        published_history_events = captured_trade_history_observers[0](
+            trade,
+            performance,
+        )
 
         try:
             self.assertIs(
                 transport_application.server.event_stream,
                 transport_application.event_stream,
             )
-            self.assertEqual(published_event.event_type, "ACCOUNT_UPDATED")
-            self.assertEqual(published_event.aggregate_version, account.version)
             self.assertEqual(
-                published_event.payload["account"]["version"],
+                published_account_event.event_type,
+                "ACCOUNT_UPDATED",
+            )
+            self.assertEqual(
+                published_account_event.aggregate_version,
                 account.version,
             )
+            self.assertEqual(
+                published_account_event.payload["account"]["version"],
+                account.version,
+            )
+            self.assertEqual(
+                tuple(
+                    event.event_type
+                    for event in published_history_events
+                ),
+                ("ORDER_EXECUTED", "PERFORMANCE_UPDATED"),
+            )
+            self.assertEqual(
+                tuple(
+                    event.sequence
+                    for event in published_history_events
+                ),
+                (2, 3),
+            )  # Account 뒤에 history event 두 개가 gap 없이 연속된다.
         finally:
             transport_application.stop()
 
@@ -725,15 +787,20 @@ class LoopbackCompositionFailureTests(unittest.TestCase):
         captured_observers = []
         closed_runtimes = []
 
-        def runtime_factory(account_observer: object) -> SimpleNamespace:
+        def runtime_factory(
+            account_observer: object,
+            trade_history_observer: object,
+        ) -> SimpleNamespace:
             """
             함수 이름: runtime_factory()
             기능: failure test가 event stream closure를 확인할 observer를 캡처한다.
             인자: account_observer -> transport가 만든 account callback
+                trade_history_observer -> transport가 만든 history callback
             반환값: ready runtime test double
             작성 날짜: 2026/08/21
             """
             captured_observers.append(account_observer)
+            self.assertTrue(callable(trade_history_observer))  # 실패 정리 대상 stream을 함께 공유한다.
             return runtime
 
         with patch(
@@ -766,15 +833,20 @@ class LoopbackCompositionFailureTests(unittest.TestCase):
         captured_observers = []
         closed_runtimes = []
 
-        def runtime_factory(account_observer: object) -> SimpleNamespace:
+        def runtime_factory(
+            account_observer: object,
+            trade_history_observer: object,
+        ) -> SimpleNamespace:
             """
             함수 이름: runtime_factory()
             기능: ready 사후조건 failure가 정리할 shared observer와 runtime을 제공한다.
             인자: account_observer -> transport가 만든 account callback
+                trade_history_observer -> transport가 만든 history callback
             반환값: not-ready runtime test double
             작성 날짜: 2026/08/21
             """
             captured_observers.append(account_observer)
+            self.assertTrue(callable(trade_history_observer))  # readiness 실패에서도 두 callback을 열지 않는다.
             return runtime
 
         with self.assertRaisesRegex(RuntimeError, "ready application"):

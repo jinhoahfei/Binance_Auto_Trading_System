@@ -95,15 +95,21 @@ class TransportProcessRunnerTests(unittest.TestCase):
             os.close(close_read_fd)
             captured_observers = []
 
-            def runtime_factory(account_observer: object) -> SimpleNamespace:
+            def runtime_factory(
+                account_observer: object,
+                trade_history_observer: object,
+            ) -> SimpleNamespace:
                 """
                 함수 이름: runtime_factory()
                 기능: process가 만든 shared event observer를 받아 ready runtime을 반환한다.
                 인자: account_observer -> transport-owned account callback
+                    trade_history_observer -> transport-owned history callback
                 반환값: ready runtime test double
                 작성 날짜: 2026/08/21
                 """
                 captured_observers.append(account_observer)
+                if not callable(trade_history_observer):
+                    raise TypeError("trade history observer must be callable")
                 return runtime
 
             def close_runtime(current_runtime: object) -> None:
@@ -210,15 +216,21 @@ class TransportProcessRunnerTests(unittest.TestCase):
         os.write(token_write_fd, token.encode("ascii"))
         os.close(token_write_fd)
 
-        def runtime_factory(account_observer: object) -> SimpleNamespace:
+        def runtime_factory(
+            account_observer: object,
+            trade_history_observer: object,
+        ) -> SimpleNamespace:
             """
             함수 이름: runtime_factory()
             기능: not-ready failure가 shared stream 정리를 확인할 observer를 캡처한다.
             인자: account_observer -> transport-owned account callback
+                trade_history_observer -> transport-owned history callback
             반환값: not-ready runtime test double
             작성 날짜: 2026/08/21
             """
             captured_observers.append(account_observer)
+            if not callable(trade_history_observer):
+                raise TypeError("trade history observer must be callable")
             return runtime
 
         def close_runtime(current_runtime: object) -> None:
@@ -268,15 +280,21 @@ class TransportProcessRunnerTests(unittest.TestCase):
         os.close(token_write_fd)
         os.close(ready_read_fd)
 
-        def runtime_factory(account_observer: object) -> SimpleNamespace:
+        def runtime_factory(
+            account_observer: object,
+            trade_history_observer: object,
+        ) -> SimpleNamespace:
             """
             함수 이름: runtime_factory()
             기능: ready pipe failure 뒤 closure를 검사할 shared observer를 캡처한다.
             인자: account_observer -> transport-owned account callback
+                trade_history_observer -> transport-owned history callback
             반환값: ready runtime test double
             작성 날짜: 2026/08/21
             """
             captured_observers.append(account_observer)
+            if not callable(trade_history_observer):
+                raise TypeError("trade history observer must be callable")
             return runtime
 
         with self.assertRaises(BrokenPipeError):

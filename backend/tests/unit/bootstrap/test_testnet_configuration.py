@@ -5,7 +5,7 @@ import importlib
 from pathlib import Path
 import socket
 from tempfile import TemporaryDirectory
-from unittest.mock import patch, sentinel
+from unittest.mock import Mock, patch, sentinel
 import unittest
 import urllib.request
 
@@ -356,8 +356,12 @@ class TestnetConfigurationTests(unittest.TestCase):
                 testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV: "12.50",
             }
         )
+        account_update_observer = Mock(name="account_update_observer")
+        trade_history_update_observer = Mock(
+            name="trade_history_update_observer"
+        )
 
-        # dedicated client class에는 credential만 주고 endpoint override surface를 만들지 않는다.
+        # Transport runtime factory와 동일하게 두 observer를 위치 인자로 주입한다.
         with patch.object(
             testnet_module,
             "_load_testnet_client_types",
@@ -368,6 +372,8 @@ class TestnetConfigurationTests(unittest.TestCase):
             return_value=sentinel.runtime,
         ) as runtime_factory:
             runtime = testnet_module.create_testnet_application_runtime(
+                account_update_observer,
+                trade_history_update_observer,
                 history_path=Path("test-history.jsonl"),
                 environment=environment,
                 kline_limit=17,
@@ -406,6 +412,16 @@ class TestnetConfigurationTests(unittest.TestCase):
         self.assertIsNotNone(
             runtime_keywords["_testnet_order_capability"]
         )  # 실제 opaque identity는 production module 밖의 값 비교로 노출하지 않는다.
+
+        # 두 observer는 Testnet 조립기에서 교체되지 않고 generic runtime에 그대로 전달된다.
+        self.assertIs(
+            runtime_keywords["account_update_observer"],
+            account_update_observer,
+        )
+        self.assertIs(
+            runtime_keywords["trade_history_update_observer"],
+            trade_history_update_observer,
+        )  # Testnet 조립기가 observer identity를 generic runtime에 그대로 전달한다.
         self.assertEqual(runtime_keywords["kline_limit"], 17)
 
         fixed_endpoints = (
@@ -416,6 +432,49 @@ class TestnetConfigurationTests(unittest.TestCase):
         self.assertTrue(
             all("testnet.binance.vision" in endpoint for endpoint in fixed_endpoints)
         )  # production hostname은 조립 module의 endpoint 상수에 존재하지 않는다.
+
+    def test_runtime_rejects_non_callable_observers_before_client_creation(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_runtime_rejects_non_callable_observers_before_client_creation()
+        기능: Testnet 조립기가 잘못된 observer를 client 생성 전에 generic runtime과 같은 오류로 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        invalid_observer_cases = (
+            (
+                object(),
+                None,
+                "account_update_observer must be callable",
+            ),
+            (
+                None,
+                object(),
+                "trade_history_update_observer must be callable",
+            ),
+        )
+
+        # 각 observer 경계는 고정 endpoint client type을 로드하기 전에 독립적으로 검증한다.
+        for (
+            account_update_observer,
+            trade_history_update_observer,
+            expected_message,
+        ) in invalid_observer_cases:
+            with self.subTest(expected_message=expected_message), patch.object(
+                testnet_module,
+                "_load_testnet_client_types",
+            ) as client_type_loader:
+                with self.assertRaisesRegex(TypeError, expected_message):
+                    testnet_module.create_testnet_application_runtime(
+                        account_update_observer,
+                        trade_history_update_observer,
+                        history_path=Path("unused-history.jsonl"),
+                        environment=_read_only_environment(),
+                    )
+
+                client_type_loader.assert_not_called()  # 잘못된 callback은 client 생성 경계에 도달하지 않는다.
 
 
 if __name__ == "__main__":

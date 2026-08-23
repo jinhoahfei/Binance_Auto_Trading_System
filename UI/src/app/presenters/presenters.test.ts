@@ -119,10 +119,33 @@ describe('application presenters', () => {
             description: 'history unavailable',
             actionLabel: '다시 시도',
         });
-        expect(history_props.filtersDisabled).toBe(true);
+        expect(history_props.filtersDisabled).toBe(false);
 
         history_props.onStartTrading?.();
         expect(intents).toEqual([{ type: 'REFRESH_TRADE_HISTORY' }]);
+    });
+
+    it('거래 내역 loading을 오래된 행이나 empty CTA 없이 실제 busy props로 투영한다', () => {
+        const view_model = create_demo_view_model();
+        const loading_view_model: AppViewModel = {
+            ...view_model,
+            trade_history: {
+                ...view_model.trade_history,
+                status: 'loading',
+                is_loading: true,
+            },
+        };
+        const { controller } = create_recording_controller(loading_view_model);
+        const history_props = present_trade_history_props(loading_view_model, controller);
+
+        expect(history_props.description).toBe('오늘 · ETH/KRW · 전체 · 조회 중');
+        expect(history_props.rows).toEqual([]);
+        expect(history_props.isLoading).toBe(true);
+        expect(history_props.filtersDisabled).toBe(true);
+        expect(history_props.emptyState).toMatchObject({
+            title: '거래 내역을 불러오는 중입니다',
+        });
+        expect(history_props.onStartTrading).toBeUndefined();
     });
 
     it('drawing hover·context-menu·delete intent를 facade 계약으로 모두 변환한다', () => {

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from threading import Event, Thread
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from binance_auto_trader.application import TradingController
 from binance_auto_trader.bootstrap import (
@@ -207,18 +207,25 @@ class ApplicationFactoryTests(unittest.TestCase):
         """
         # 주입 repository와 fake mode client로 identity 검사용 runtime을 조립한다.
         history_repository = _StubHistoryRepository()
+        trade_history_observer = Mock()
         runtime = create_application_runtime(
             _StubRestClient(),
             _StubWebSocketClient(),
             history_repository=history_repository,
             execution_mode="fake",
             _fake_order_capability=_FAKE_ORDER_CAPABILITY,
+            trade_history_update_observer=trade_history_observer,
             clock=lambda: FIXED_TIME,
         )
 
         # Runtime 공개 field와 기존 Controller의 내부 owner가 한 identity인지 확인한다.
         self.assertIs(runtime.lock, runtime.application_lock)
         self.assertIs(runtime.trading_controller.account, runtime.account)
+        self.assertIs(runtime.trade_history_controller.account, runtime.account)
+        self.assertIs(
+            runtime.trade_history_controller._trade_update_observer,
+            trade_history_observer,
+        )
         self.assertIs(runtime.trade_history_repository, history_repository)
         self.assertIs(
             runtime.market_data_controller._market_snapshot,
@@ -277,6 +284,18 @@ class ApplicationFactoryTests(unittest.TestCase):
                 web_socket_client,
                 history_path="history.jsonl",
                 history_repository=repository,
+            )
+
+        # Trade event publication 경계는 callable이 아닌 값을 runtime에 보존하지 않는다.
+        with self.assertRaisesRegex(
+            TypeError,
+            "trade_history_update_observer must be callable",
+        ):
+            create_application_runtime(
+                rest_client,
+                web_socket_client,
+                history_repository=repository,
+                trade_history_update_observer=object(),  # type: ignore[arg-type]
             )
 
     def test_testnet_orders_require_separate_opt_in_and_live_stays_locked(

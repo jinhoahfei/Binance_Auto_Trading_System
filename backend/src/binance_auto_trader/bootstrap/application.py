@@ -31,7 +31,7 @@ from binance_auto_trader.application.market_data_controller import (
 from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryRepositoryPort,
 )
-from binance_auto_trader.domain.history import Performance, TradeHistory
+from binance_auto_trader.domain.history import Performance, Trade, TradeHistory
 from binance_auto_trader.domain.market import MarketSnapshot
 from binance_auto_trader.domain.regime import RegimeSTM
 from binance_auto_trader.domain.trading import (
@@ -578,6 +578,10 @@ class ApplicationRuntime:
         # Controller와 runtime은 authoritative Account 및 state store identity를 공유해야 한다.
         if self.trading_controller.account is not self.account:
             raise ValueError("TradingController must share the runtime Account")
+        if self.trade_history_controller.account is not self.account:
+            raise ValueError(
+                "TradeHistoryController must share the runtime Account"
+            )  # 상세 요약과 trading snapshot이 같은 Account owner를 보아야 한다.
         if not isinstance(self._state_store, _ApplicationStateStore):
             raise TypeError("_state_store must be an application state store")
         if (
@@ -749,6 +753,8 @@ def create_application_runtime(
     _fake_order_capability: object | None = None,
     _testnet_order_capability: object | None = None,
     account_update_observer: Callable[[Account], object] | None = None,
+    trade_history_update_observer: Callable[[Trade, Performance], object]
+    | None = None,
     clock: Callable[[], datetime] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
 ) -> ApplicationRuntime:
@@ -765,6 +771,7 @@ def create_application_runtime(
         _fake_order_capability -> 검증된 in-process fake 조립기만 전달하는 내부 권한 표식
         _testnet_order_capability -> 고정 endpoint Testnet 조립기만 전달하는 내부 권한 표식
         account_update_observer -> 실제 Account 변경 뒤 호출할 optional observer
+        trade_history_update_observer -> durable Trade와 전체 Performance 게시 후 호출할 observer
         clock -> market, gateway, repository와 performance가 공유할 optional UTC clock
         kline_limit -> 각 market interval에서 조회할 Kline 개수
     반환값: 동일 객체 identity와 단일 RLock을 보존하는 ApplicationRuntime
@@ -781,6 +788,12 @@ def create_application_runtime(
         account_update_observer
     ):
         raise TypeError("account_update_observer must be callable")
+    if trade_history_update_observer is not None and not callable(
+        trade_history_update_observer
+    ):
+        raise TypeError(
+            "trade_history_update_observer must be callable"
+        )  # Durable publication 후에 실행할 호출 경계만 허용한다.
     if clock is not None and not callable(clock):
         raise TypeError("clock must be callable")
     if type(allow_testnet_orders) is not bool:
@@ -936,7 +949,9 @@ def create_application_runtime(
     trade_history_controller = TradeHistoryController(
         selected_history_repository,
         clock=clock,
-    )
+        account=account,
+        trade_update_observer=trade_history_update_observer,
+    )  # 상세 조회와 실시간 event가 runtime의 같은 Account·history를 본다.
     position = Position()
 
     # 거래 Controller가 Position과 history를 공유해 Phase 8 outcome commit 순서를 소유한다.

@@ -491,6 +491,7 @@ def _create_test_runtime(
     operation_trace: list[str],
     readiness_observations: list[bool] | None = None,
     account_update_observer: Callable[[Account], object] | None = None,
+    trade_history_update_observer: Callable[[object, object], object] | None = None,
 ) -> tuple[
     ApplicationRuntime,
     _StartupRestClient,
@@ -503,6 +504,7 @@ def _create_test_runtime(
     인자: operation_trace -> startup 단계 순서를 기록할 목록
         readiness_observations -> 단계 중 runtime.ready 관측 목록 또는 None
         account_update_observer -> 실제 Account 변경 관측 callback 또는 None
+        trade_history_update_observer -> durable Trade와 Performance 관측 callback 또는 None
     반환값: runtime과 제어 가능한 세 fake boundary tuple
     작성 날짜: 2026/08/21
     """
@@ -525,6 +527,7 @@ def _create_test_runtime(
         execution_mode="fake",
         _fake_order_capability=_FAKE_ORDER_CAPABILITY,
         account_update_observer=account_update_observer,
+        trade_history_update_observer=trade_history_update_observer,
         clock=lambda: SNAPSHOT_UPDATED_AT,
     )
 

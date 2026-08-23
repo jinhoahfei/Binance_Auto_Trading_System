@@ -1,28 +1,39 @@
-"""Phase 8 execution 기록의 순서, durable 경계와 dirty 저장 재시도를 검증한다."""
+"""Phase 8 durable 기록과 Phase 10 상세 조회·실시간 observer 계약을 검증한다."""
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from dataclasses import FrozenInstanceError
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from unittest.mock import patch
 
 import binance_auto_trader.application.trade_history_controller as controller_module
 from binance_auto_trader.application.trade_history_controller import (
+    TradeDetailsResult,
     TradeHistoryController,
     TradeHistoryPersistencePendingError,
 )
 from binance_auto_trader.domain.history import (
+    HistoryPeriod,
     OrderHistoryConflictError,
     Performance,
     Trade,
     TradeHistory,
+    TradeHistoryQuery,
+    TradeSide,
+)
+from binance_auto_trader.domain.trading.account import (
+    Account,
+    AccountSnapshot,
+    AssetBalance,
 )
 from binance_auto_trader.domain.trading.states import OrderSide
 
-from tests.unit.history.factories import make_order_execution
+from tests.unit.history.factories import make_order_execution, make_trade
 
 
 CURRENT_TIME = datetime(2026, 8, 22, 3, 0, tzinfo=timezone.utc)
+KST_MIDNIGHT_TIME = datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc)
 
 
 def fixed_clock() -> datetime:
@@ -34,6 +45,76 @@ def fixed_clock() -> datetime:
     작성 날짜: 2026/08/22
     """
     return CURRENT_TIME
+
+
+def kst_midnight_clock() -> datetime:
+    """
+    함수 이름: kst_midnight_clock()
+    기능: UTC 15시와 Asia/Seoul 자정이 일치하는 Phase 10 경계 시각을 반환한다.
+    인자: 없음
+    반환값: KST 2026-08-22 00:00:00에 해당하는 UTC datetime
+    작성 날짜: 2026/08/23
+    """
+    return KST_MIDNIGHT_TIME  # query preset의 오늘 날짜를 KST 자정에 고정한다.
+
+
+def naive_clock() -> datetime:
+    """
+    함수 이름: naive_clock()
+    기능: timezone이 없는 잘못된 controller clock 결과를 제공한다.
+    인자: 없음
+    반환값: naive datetime
+    작성 날짜: 2026/08/23
+    """
+    return datetime(2026, 8, 22, 3, 0)  # UTC 여부를 판별할 수 없는 입력을 의도적으로 만든다.
+
+
+def make_ready_account() -> Account:
+    """
+    함수 이름: make_ready_account()
+    기능: Phase 10 상세 조회에서 authoritative ETH free+locked 보유량을 제공한다.
+    인자: 없음
+    반환값: version 1의 준비된 Account
+    작성 날짜: 2026/08/23
+    """
+    account = Account()
+    account.apply_initial_snapshot(
+        AccountSnapshot(
+            balances=(
+                AssetBalance(
+                    asset="ETH",
+                    free=Decimal("2.50"),
+                    locked=Decimal("0.25"),
+                ),
+            ),
+            updated_at=CURRENT_TIME,
+            is_full_snapshot=True,
+        ),
+        Decimal("3000"),
+    )  # 보유량 2.75와 Account version 1을 한 번의 full snapshot으로 만든다.
+    return account
+
+
+def make_period_trade(
+    order_id: str,
+    days_ago: int,
+    side: OrderSide,
+) -> Trade:
+    """
+    함수 이름: make_period_trade()
+    기능: 고정 KST 정오를 기준으로 지정 일수 전의 BUY 또는 SELL Trade를 만든다.
+    인자: order_id -> 유일한 거래소 주문 ID
+        days_ago -> CURRENT_TIME에서 뺄 calendar day 수
+        side -> 생성할 거래 방향
+    반환값: 기간 조합 검증용 Trade
+    작성 날짜: 2026/08/23
+    """
+    return make_trade(
+        trade_id=f"period-{order_id}",
+        order_id=order_id,
+        executed_at=CURRENT_TIME - timedelta(days=days_ago),
+        side=side,
+    )  # UTC 정오 간격은 KST calendar day 간격도 그대로 유지한다.
 
 
 class RecordingRepository:
@@ -292,6 +373,810 @@ class TradeHistoryControllerPhase8Tests(unittest.TestCase):
         self.assertIsNone(trade.realized_pnl)
         self.assertIsNone(trade.realized_return_rate)
         self.assertEqual(controller.performance.total_fee, Decimal("0.10"))
+
+
+class TradeHistoryControllerPhase10Tests(unittest.TestCase):
+    """
+    클래스 이름: TradeHistoryControllerPhase10Tests
+    기능: 상세 조회 기간·side 결합, D-12 요약과 durable update observer를 테스트한다.
+    작성 날짜: 2026/08/23
+    """
+
+    def test_get_trade_details_supports_all_twelve_filter_combinations(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_get_trade_details_supports_all_twelve_filter_combinations()
+        기능: 오늘·7일·30일·전체와 ALL·BUY·SELL의 12개 결합 결과를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        period_trades = (
+            make_period_trade("701", 0, OrderSide.BUY),
+            make_period_trade("702", 0, OrderSide.SELL),
+            make_period_trade("703", 6, OrderSide.BUY),
+            make_period_trade("704", 6, OrderSide.SELL),
+            make_period_trade("705", 7, OrderSide.BUY),
+            make_period_trade("706", 29, OrderSide.SELL),
+            make_period_trade("707", 30, OrderSide.BUY),
+            make_period_trade("708", 365, OrderSide.SELL),
+        )
+        repository = RecordingRepository()
+        repository.trades_by_order_id.update(
+            {trade.order_id: trade for trade in period_trades}
+        )
+        account = make_ready_account()
+        controller = TradeHistoryController(
+            repository,
+            clock=fixed_clock,
+            account=account,
+        )
+        controller.load_trade_history()
+
+        # 각 expected tuple을 명시해 기간 경계와 side 결합 중 하나라도 누락되면 드러내게 한다.
+        expected_order_ids = {
+            (HistoryPeriod.TODAY, TradeSide.ALL): ("701", "702"),
+            (HistoryPeriod.TODAY, TradeSide.BUY): ("701",),
+            (HistoryPeriod.TODAY, TradeSide.SELL): ("702",),
+            (HistoryPeriod.LAST_7_DAYS, TradeSide.ALL): (
+                "701",
+                "702",
+                "703",
+                "704",
+            ),
+            (HistoryPeriod.LAST_7_DAYS, TradeSide.BUY): ("701", "703"),
+            (HistoryPeriod.LAST_7_DAYS, TradeSide.SELL): ("702", "704"),
+            (HistoryPeriod.LAST_30_DAYS, TradeSide.ALL): (
+                "701",
+                "702",
+                "703",
+                "704",
+                "705",
+                "706",
+            ),
+            (HistoryPeriod.LAST_30_DAYS, TradeSide.BUY): (
+                "701",
+                "703",
+                "705",
+            ),
+            (HistoryPeriod.LAST_30_DAYS, TradeSide.SELL): (
+                "702",
+                "704",
+                "706",
+            ),
+            (HistoryPeriod.ALL, TradeSide.ALL): (
+                "701",
+                "702",
+                "703",
+                "704",
+                "705",
+                "706",
+                "707",
+                "708",
+            ),
+            (HistoryPeriod.ALL, TradeSide.BUY): (
+                "701",
+                "703",
+                "705",
+                "707",
+            ),
+            (HistoryPeriod.ALL, TradeSide.SELL): (
+                "702",
+                "704",
+                "706",
+                "708",
+            ),
+        }
+        expected_start_dates = {
+            HistoryPeriod.TODAY: date(2026, 8, 22),
+            HistoryPeriod.LAST_7_DAYS: date(2026, 8, 16),
+            HistoryPeriod.LAST_30_DAYS: date(2026, 7, 24),
+            HistoryPeriod.ALL: date.min,
+        }
+
+        self.assertEqual(len(expected_order_ids), 12)
+        for (period, side), expected_ids in expected_order_ids.items():
+            with self.subTest(period=period, side=side):
+                details = controller.get_trade_details(period, side)
+
+                self.assertIsInstance(details, TradeDetailsResult)
+                self.assertEqual(
+                    tuple(row.order_id for row in details.rows),
+                    expected_ids,
+                )
+                self.assertIs(details.trades, details.rows)
+                self.assertEqual(details.query.start_date, expected_start_dates[period])
+                self.assertEqual(details.query.end_date, date(2026, 8, 22))
+                self.assertIs(details.query.side, side)
+                self.assertEqual(details.holdings_asset, "ETH")
+                self.assertEqual(details.holdings, Decimal("2.75"))
+                self.assertEqual(details.account_version, 1)
+                self.assertIs(details.performance, controller.performance)
+
+        self.assertIs(controller.account, account)
+
+    def test_trade_details_result_is_frozen(self) -> None:
+        """
+        함수 이름: test_trade_details_result_is_frozen()
+        기능: 조회 결과 field와 Trade tuple을 caller가 교체할 수 없는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        controller = TradeHistoryController(
+            RecordingRepository(),
+            clock=fixed_clock,
+            account=make_ready_account(),
+        )
+        details = controller.get_trade_details()
+
+        # frozen dataclass의 공개 field 대입과 tuple 행 변경을 모두 허용하지 않는다.
+        with self.assertRaises(FrozenInstanceError):
+            details.holdings = Decimal("0")
+        with self.assertRaises(TypeError):
+            details.rows[0] = make_period_trade("799", 0, OrderSide.BUY)
+
+    def test_today_query_uses_exact_kst_midnight_boundary(self) -> None:
+        """
+        함수 이름: test_today_query_uses_exact_kst_midnight_boundary()
+        기능: UTC 15시 직전과 정확한 시각을 서로 다른 KST 날짜로 조회하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        before_midnight = make_trade(
+            trade_id="before-kst-midnight",
+            order_id="801",
+            executed_at=KST_MIDNIGHT_TIME - timedelta(seconds=1),
+        )
+        at_midnight = make_trade(
+            trade_id="at-kst-midnight",
+            order_id="802",
+            executed_at=KST_MIDNIGHT_TIME,
+            side=OrderSide.SELL,
+        )
+        after_today = make_trade(
+            trade_id="after-kst-today",
+            order_id="803",
+            executed_at=KST_MIDNIGHT_TIME + timedelta(days=1),
+        )
+        repository = RecordingRepository()
+        repository.trades_by_order_id.update(
+            {
+                trade.order_id: trade
+                for trade in (before_midnight, at_midnight, after_today)
+            }
+        )
+        controller = TradeHistoryController(
+            repository,
+            clock=kst_midnight_clock,
+        )
+        controller.load_trade_history()
+
+        # TODAY의 양끝 포함 query는 현재 KST 날짜의 정확한 자정 거래만 선택한다.
+        details = controller.get_trade_details(
+            HistoryPeriod.TODAY,
+            TradeSide.ALL,
+        )
+
+        self.assertEqual(details.query.start_date, date(2026, 8, 22))
+        self.assertEqual(details.query.end_date, date(2026, 8, 22))
+        self.assertEqual(details.rows, (at_midnight,))
+
+    def test_initial_details_retries_when_clock_crosses_kst_midnight(self) -> None:
+        """
+        함수 이름: test_initial_details_retries_when_clock_crosses_kst_midnight()
+        기능: 최초 상세 결합 중 KST 자정이 지나면 query와 당일 Performance를 새 날짜로 다시 만든다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        before_midnight = KST_MIDNIGHT_TIME - timedelta(microseconds=1)
+        at_midnight = make_trade(
+            trade_id="crossed-kst-midnight",
+            order_id="804",
+            executed_at=KST_MIDNIGHT_TIME,
+        )
+        repository = RecordingRepository()
+        repository.trades_by_order_id[at_midnight.order_id] = at_midnight
+        clock_results = iter(
+            (
+                before_midnight,
+                before_midnight,
+                before_midnight,
+                KST_MIDNIGHT_TIME,
+                KST_MIDNIGHT_TIME,
+                KST_MIDNIGHT_TIME,
+                KST_MIDNIGHT_TIME,
+                KST_MIDNIGHT_TIME,
+                KST_MIDNIGHT_TIME,
+            )
+        )
+
+        def crossing_clock() -> datetime:
+            """
+            함수 이름: crossing_clock()
+            기능: 초기화와 첫 query 뒤 Performance 조회부터 KST 새 날짜를 반환한다.
+            인자: 없음
+            반환값: 호출 순서에 따른 timezone-aware UTC datetime
+            작성 날짜: 2026/08/23
+            """
+            return next(clock_results)  # controller가 자정 전후 snapshot을 섞는 경쟁을 재현한다.
+
+        controller = TradeHistoryController(repository, clock=crossing_clock)
+        controller.load_trade_history()
+
+        # 첫 시도는 이전 날짜 query이지만 반환 결과는 두 번째 새 날짜 결합만 게시해야 한다.
+        details = controller.get_trade_details()
+
+        self.assertEqual(details.query.start_date, date(2026, 8, 22))
+        self.assertEqual(details.query.end_date, date(2026, 8, 22))
+        self.assertEqual(details.rows, (at_midnight,))
+        self.assertEqual(
+            details.performance.daily_fee,
+            at_midnight.fee_quote_amount,
+        )
+
+    def test_cached_details_retries_when_find_crosses_kst_midnight(self) -> None:
+        """
+        함수 이름: test_cached_details_retries_when_find_crosses_kst_midnight()
+        기능: summary cache hit의 history find 중 KST 자정이 지나면 새 날짜로 재조회한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        current_clock_time = [KST_MIDNIGHT_TIME - timedelta(microseconds=1)]
+
+        def crossing_clock() -> datetime:
+            """
+            함수 이름: crossing_clock()
+            기능: history find test가 제어하는 timezone-aware UTC 시각을 반환한다.
+            인자: 없음
+            반환값: current_clock_time의 단일 UTC datetime
+            작성 날짜: 2026/08/23
+            """
+            return current_clock_time[0]  # 첫 find가 종료된 직후에만 KST 날짜를 넘긴다.
+
+        at_midnight = make_trade(
+            trade_id="cached-crossed-kst-midnight",
+            order_id="806",
+            executed_at=KST_MIDNIGHT_TIME,
+        )
+        repository = RecordingRepository()
+        repository.trades_by_order_id[at_midnight.order_id] = at_midnight
+        controller = TradeHistoryController(repository, clock=crossing_clock)
+        controller.load_trade_history()
+        warmed_details = controller.get_trade_details()
+        original_find = TradeHistory.find
+        find_call_count = [0]
+
+        def crossing_find(
+            history: TradeHistory,
+            query: TradeHistoryQuery,
+        ) -> tuple[Trade, ...]:
+            """
+            함수 이름: crossing_find()
+            기능: cache hit 조회의 첫 find 직후 clock을 다음 KST 날짜로 전진시킨다.
+            인자: history -> 조회할 TradeHistory
+                query -> controller가 생성한 TradeHistoryQuery
+            반환값: 전달된 query에 맞는 Trade tuple
+            작성 날짜: 2026/08/23
+            """
+            rows = original_find(history, query)
+            find_call_count[0] += 1
+            if find_call_count[0] == 1:
+                current_clock_time[0] = KST_MIDNIGHT_TIME
+            return rows  # 첫 결과는 전날 query이므로 controller가 폐기해야 한다.
+
+        # Warm cache의 요약을 재사용하려던 첫 시도는 자정 경계 검증에서 폐기한다.
+        with patch.object(
+            TradeHistory,
+            "find",
+            autospec=True,
+            side_effect=crossing_find,
+        ):
+            refreshed_details = controller.get_trade_details()
+
+        self.assertEqual(warmed_details.rows, ())
+        self.assertEqual(find_call_count[0], 2)
+        self.assertEqual(refreshed_details.query.start_date, date(2026, 8, 22))
+        self.assertEqual(refreshed_details.query.end_date, date(2026, 8, 22))
+        self.assertEqual(refreshed_details.rows, (at_midnight,))
+
+    def test_cached_details_refresh_account_holdings_after_version_change(self) -> None:
+        """
+        함수 이름: test_cached_details_refresh_account_holdings_after_version_change()
+        기능: 필터 독립 summary cache가 Account version 변경 뒤 이전 ETH 보유량을 반환하지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        account = make_ready_account()
+        controller = TradeHistoryController(
+            RecordingRepository(),
+            clock=fixed_clock,
+            account=account,
+        )
+        initial_details = controller.get_trade_details()
+        account.apply_stream_snapshot(
+            AccountSnapshot(
+                balances=(
+                    AssetBalance(
+                        asset="ETH",
+                        free=Decimal("4.00"),
+                        locked=Decimal("0.50"),
+                    ),
+                ),
+                updated_at=CURRENT_TIME + timedelta(seconds=1),
+                is_full_snapshot=False,
+            )
+        )  # 실제 Account stream처럼 보유량과 version을 함께 한 단계 전진시킨다.
+
+        # 같은 날짜의 후속 filter도 Account provenance가 바뀌었으면 summary를 새로 결합해야 한다.
+        refreshed_details = controller.get_trade_details(
+            HistoryPeriod.LAST_7_DAYS,
+            TradeSide.BUY,
+        )
+
+        self.assertEqual(initial_details.holdings, Decimal("2.75"))
+        self.assertEqual(initial_details.account_version, 1)
+        self.assertEqual(refreshed_details.holdings, Decimal("4.50"))
+        self.assertEqual(refreshed_details.account_version, 2)
+
+    def test_cached_details_refresh_daily_performance_after_kst_rollover(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_cached_details_refresh_daily_performance_after_kst_rollover()
+        기능: KST 날짜가 바뀐 후 TODAY 행과 daily Performance가 모두 새 account day를 사용한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        current_clock_time = [CURRENT_TIME]
+
+        def advancing_clock() -> datetime:
+            """
+            함수 이름: advancing_clock()
+            기능: test가 제어하는 현재 timezone-aware UTC 시각을 반환한다.
+            인자: 없음
+            반환값: current_clock_time의 단일 UTC datetime
+            작성 날짜: 2026/08/23
+            """
+            return current_clock_time[0]  # 상세 cache 전후의 KST 날짜를 test가 명시적으로 바꾼다.
+
+        trade = make_trade(
+            trade_id="previous-kst-day",
+            order_id="805",
+            executed_at=CURRENT_TIME,
+        )
+        repository = RecordingRepository()
+        repository.trades_by_order_id[trade.order_id] = trade
+        controller = TradeHistoryController(repository, clock=advancing_clock)
+        controller.load_trade_history()
+        previous_day_details = controller.get_trade_details()
+        previous_day_fee = previous_day_details.performance.daily_fee
+
+        # Cache를 만든 뒤 clock만 다음 KST 날짜로 이동해 자정 event가 없는 경로를 재현한다.
+        current_clock_time[0] = CURRENT_TIME + timedelta(days=1)
+        next_day_details = controller.get_trade_details()
+
+        self.assertEqual(previous_day_details.rows, (trade,))
+        self.assertEqual(
+            previous_day_fee,
+            trade.fee_quote_amount,
+        )
+        self.assertEqual(next_day_details.query.start_date, date(2026, 8, 23))
+        self.assertEqual(next_day_details.query.end_date, date(2026, 8, 23))
+        self.assertEqual(next_day_details.rows, ())
+        self.assertEqual(next_day_details.performance.daily_fee, Decimal("0"))
+
+    def test_empty_default_query_preserves_account_and_zero_summary(self) -> None:
+        """
+        함수 이름: test_empty_default_query_preserves_account_and_zero_summary()
+        기능: TODAY+ALL 기본 조회의 empty 행과 authoritative Account 및 0 성과를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        controller = TradeHistoryController(
+            RecordingRepository(),
+            clock=fixed_clock,
+            account=make_ready_account(),
+        )
+
+        details = controller.get_trade_details()
+
+        self.assertEqual(details.rows, ())
+        self.assertEqual(details.query.start_date, date(2026, 8, 22))
+        self.assertEqual(details.query.end_date, date(2026, 8, 22))
+        self.assertIs(details.query.side, TradeSide.ALL)
+        self.assertEqual(details.holdings, Decimal("2.75"))
+        self.assertEqual(details.account_version, 1)
+        self.assertEqual(details.performance.completed_sell_count, 0)
+        self.assertEqual(details.performance.realized_pnl, Decimal("0"))
+        self.assertEqual(details.performance.total_fee, Decimal("0"))
+
+    def test_filtered_rows_do_not_filter_d12_performance_summary(self) -> None:
+        """
+        함수 이름: test_filtered_rows_do_not_filter_d12_performance_summary()
+        기능: TODAY+BUY 행에서 제외된 과거 SELL도 전체 Performance 집계에는 남는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        today_buy = make_period_trade("901", 0, OrderSide.BUY)
+        previous_sell = make_period_trade("902", 1, OrderSide.SELL)
+        repository = RecordingRepository()
+        repository.trades_by_order_id.update(
+            {
+                today_buy.order_id: today_buy,
+                previous_sell.order_id: previous_sell,
+            }
+        )
+        controller = TradeHistoryController(
+            repository,
+            clock=fixed_clock,
+            account=make_ready_account(),
+        )
+        controller.load_trade_history()
+
+        # 행은 결합 filter로 제한하지만 summary는 published history 전체의 D-12 범위를 사용한다.
+        details = controller.get_trade_details(
+            HistoryPeriod.TODAY,
+            TradeSide.BUY,
+        )
+
+        self.assertEqual(details.rows, (today_buy,))
+        self.assertEqual(details.performance.completed_sell_count, 1)
+        self.assertEqual(details.performance.realized_pnl, Decimal("9.79"))
+        self.assertEqual(details.performance.total_fee, Decimal("0.31"))
+        self.assertEqual(details.performance.daily_fee, Decimal("0.20"))
+
+    def test_details_reads_find_then_account_then_performance(self) -> None:
+        """
+        함수 이름: test_details_reads_find_then_account_then_performance()
+        기능: Communication 1.1.2.2~1.1.2.4의 domain 호출 순서를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        repository = RecordingRepository()
+        controller = TradeHistoryController(
+            repository,
+            clock=fixed_clock,
+            account=make_ready_account(),
+        )
+        trace: list[str] = []
+        original_find = TradeHistory.find
+        original_get_holdings = Account.get_holdings
+        original_get_performance = Performance.get_performance
+
+        def find(history: TradeHistory, query: object) -> tuple[Trade, ...]:
+            """
+            함수 이름: find()
+            기능: history 조회 호출을 기록하고 실제 filter 결과를 반환한다.
+            인자: history -> 조회할 TradeHistory
+                query -> controller가 만든 실제 TradeHistoryQuery
+            반환값: 실제 필터 Trade tuple
+            작성 날짜: 2026/08/23
+            """
+            trace.append("1.1.2.2")
+            return original_find(history, query)
+
+        def get_holdings(account: Account, asset: str = "ETH") -> Decimal:
+            """
+            함수 이름: get_holdings()
+            기능: Account 보유량 호출을 기록하고 실제 ETH 수량을 반환한다.
+            인자: account -> authoritative Account
+                asset -> 조회 자산 이름
+            반환값: 실제 free+locked 보유량
+            작성 날짜: 2026/08/23
+            """
+            trace.append("1.1.2.3")
+            return original_get_holdings(account, asset)
+
+        def get_performance(performance: Performance) -> Performance:
+            """
+            함수 이름: get_performance()
+            기능: 전체 성과 호출을 기록하고 실제 Performance를 반환한다.
+            인자: performance -> published Performance
+            반환값: account day가 갱신된 실제 Performance
+            작성 날짜: 2026/08/23
+            """
+            trace.append("1.1.2.4")
+            return original_get_performance(performance)
+
+        # 세 canonical operation을 감싸 상세 조회의 실제 호출 순서를 관찰한다.
+        with patch.object(
+            TradeHistory,
+            "find",
+            autospec=True,
+            side_effect=find,
+        ), patch.object(
+            Account,
+            "get_holdings",
+            autospec=True,
+            side_effect=get_holdings,
+        ), patch.object(
+            Performance,
+            "get_performance",
+            autospec=True,
+            side_effect=get_performance,
+        ):
+            controller.get_trade_details()
+
+        self.assertEqual(trace, ["1.1.2.2", "1.1.2.3", "1.1.2.4"])
+
+    def test_successful_record_notifies_after_publication_and_isolates_failure(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_successful_record_notifies_after_publication_and_isolates_failure()
+        기능: record 성공 observer가 게시 후 한 번 호출되고 예외가 durable 결과를 바꾸지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        repository = RecordingRepository()
+        observations: list[
+            tuple[Trade, Performance, tuple[Trade, ...], frozenset[str]]
+        ] = []
+
+        def failing_observer(trade: Trade, performance: Performance) -> None:
+            """
+            함수 이름: failing_observer()
+            기능: publication 상태를 기록한 뒤 transport event 실패를 모사한다.
+            인자: trade -> observer에 전달된 Trade
+                performance -> 같은 candidate의 Performance
+            반환값: 없음
+            작성 날짜: 2026/08/23
+            """
+            observations.append(
+                (
+                    trade,
+                    performance,
+                    controller.trade_history.trades,
+                    controller.dirty_order_ids,
+                )
+            )
+            raise RuntimeError("controlled observer failure")
+
+        controller = TradeHistoryController(
+            repository,
+            clock=fixed_clock,
+            trade_update_observer=failing_observer,
+        )
+        order, summary = make_order_execution(exchange_order_id="1001")
+
+        # observer 예외가 밖으로 새면 caller가 durable 주문을 재처리할 수 있으므로 성공으로 끝나야 한다.
+        recorded_trade = controller.record_order_execution(order, summary)
+
+        self.assertEqual(len(observations), 1)
+        observed_trade, observed_performance, observed_rows, observed_dirty = (
+            observations[0]
+        )
+        self.assertIs(observed_trade, recorded_trade)
+        self.assertIs(observed_performance, controller.performance)
+        self.assertEqual(observed_rows, (recorded_trade,))
+        self.assertEqual(observed_dirty, frozenset())
+        self.assertEqual(repository.trades_by_order_id, {"1001": recorded_trade})
+        self.assertEqual(controller.dirty_order_ids, frozenset())
+        with self.assertRaises(KeyError):
+            controller.retry_pending_persistence("1001")
+
+    def test_successful_record_refreshes_performance_when_save_crosses_midnight(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_successful_record_refreshes_performance_when_save_crosses_midnight()
+        기능: durable save 중 KST 자정이 지나면 observer가 새 날짜의 daily Performance만 받는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        current_clock_time = [KST_MIDNIGHT_TIME - timedelta(seconds=1)]
+
+        def publication_clock() -> datetime:
+            """
+            함수 이름: publication_clock()
+            기능: repository durable write 전후로 test가 제어하는 UTC 시각을 반환한다.
+            인자: 없음
+            반환값: 현재 publication UTC datetime
+            작성 날짜: 2026/08/23
+            """
+            return current_clock_time[0]  # Candidate와 observer publication의 날짜를 분리한다.
+
+        repository = RecordingRepository()
+        repository.after_durable_write = lambda: current_clock_time.__setitem__(
+            0,
+            KST_MIDNIGHT_TIME,
+        )
+        observed_daily_fees: list[Decimal] = []
+        controller = TradeHistoryController(
+            repository,
+            clock=publication_clock,
+            trade_update_observer=lambda _trade, performance: (
+                observed_daily_fees.append(performance.daily_fee)
+            ),
+        )
+        order, summary = make_order_execution(exchange_order_id="1004")
+
+        controller.record_order_execution(order, summary)
+
+        self.assertEqual(observed_daily_fees, [Decimal("0")])
+        self.assertEqual(controller.performance.daily_fee, Decimal("0"))
+
+    def test_retry_notifies_once_only_after_dirty_publication_succeeds(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_retry_notifies_once_only_after_dirty_publication_succeeds()
+        기능: 저장 실패는 알리지 않고 save-only retry 성공과 dirty 해제 뒤 정확히 한 번 알리는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        repository = RecordingRepository(save_failures=1)
+        observations: list[
+            tuple[Trade, Performance, tuple[Trade, ...], frozenset[str]]
+        ] = []
+
+        def observer(trade: Trade, performance: Performance) -> None:
+            """
+            함수 이름: observer()
+            기능: retry observer가 보는 published history와 dirty 상태를 기록한다.
+            인자: trade -> retry에서 게시한 기존 Trade
+                performance -> 기존 candidate의 Performance
+            반환값: 없음
+            작성 날짜: 2026/08/23
+            """
+            observations.append(
+                (
+                    trade,
+                    performance,
+                    controller.trade_history.trades,
+                    controller.dirty_order_ids,
+                )
+            )
+
+        controller = TradeHistoryController(
+            repository,
+            clock=fixed_clock,
+            trade_update_observer=observer,
+        )
+        order, summary = make_order_execution(exchange_order_id="1002")
+
+        # 최초 save 오류는 unpublished candidate를 알리지 않고 dirty retry 근거만 남긴다.
+        with self.assertRaises(OSError):
+            controller.record_order_execution(order, summary)
+        self.assertEqual(observations, [])
+        self.assertEqual(controller.dirty_order_ids, frozenset({"1002"}))
+
+        retried_trade = controller.retry_pending_persistence("1002")
+
+        self.assertEqual(len(observations), 1)
+        observed_trade, observed_performance, observed_rows, observed_dirty = (
+            observations[0]
+        )
+        self.assertIs(observed_trade, retried_trade)
+        self.assertIs(observed_performance, controller.performance)
+        self.assertEqual(observed_rows, (retried_trade,))
+        self.assertEqual(observed_dirty, frozenset())
+        self.assertEqual(controller.dirty_order_ids, frozenset())
+        with self.assertRaises(KeyError):
+            controller.retry_pending_persistence("1002")
+        self.assertEqual(len(observations), 1)  # 중복 retry 거부는 observer도 다시 호출하지 않는다.
+
+    def test_retry_refreshes_performance_when_persistence_crosses_midnight(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_retry_refreshes_performance_when_persistence_crosses_midnight()
+        기능: 지연된 save-only retry가 새 KST 날짜의 daily Performance를 observer에 게시한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        current_clock_time = [KST_MIDNIGHT_TIME - timedelta(seconds=1)]
+
+        def retry_clock() -> datetime:
+            """
+            함수 이름: retry_clock()
+            기능: 최초 candidate와 retry publication 사이의 UTC 시각을 test가 제어하게 한다.
+            인자: 없음
+            반환값: 현재 retry UTC datetime
+            작성 날짜: 2026/08/23
+            """
+            return current_clock_time[0]  # 실패 candidate를 다음 KST account day까지 보류한다.
+
+        repository = RecordingRepository(save_failures=1)
+        repository.after_durable_write = lambda: current_clock_time.__setitem__(
+            0,
+            KST_MIDNIGHT_TIME,
+        )
+        observed_daily_fees: list[Decimal] = []
+        controller = TradeHistoryController(
+            repository,
+            clock=retry_clock,
+            trade_update_observer=lambda _trade, performance: (
+                observed_daily_fees.append(performance.daily_fee)
+            ),
+        )
+        order, summary = make_order_execution(exchange_order_id="1005")
+
+        with self.assertRaises(OSError):
+            controller.record_order_execution(order, summary)
+        controller.retry_pending_persistence("1005")
+
+        self.assertEqual(observed_daily_fees, [Decimal("0")])
+        self.assertEqual(controller.performance.daily_fee, Decimal("0"))
+
+    def test_idempotent_same_order_does_not_publish_duplicate_event(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_idempotent_same_order_does_not_publish_duplicate_event()
+        기능: 같은 terminal order 재처리가 저장·state·observer를 한 번만 게시하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        repository = RecordingRepository()
+        observations: list[tuple[Trade, Performance]] = []
+
+        def observer(trade: Trade, performance: Performance) -> None:
+            """
+            함수 이름: observer()
+            기능: durable publication마다 전달된 Trade와 Performance를 기록한다.
+            인자: trade -> 방금 게시된 canonical Trade
+                performance -> 같은 publication의 전체 Performance
+            반환값: 없음
+            작성 날짜: 2026/08/23
+            """
+            observations.append((trade, performance))
+
+        controller = TradeHistoryController(
+            repository,
+            clock=fixed_clock,
+            trade_update_observer=observer,
+        )
+        order, summary = make_order_execution(exchange_order_id="1003")
+
+        # 같은 immutable execution을 두 번 전달해 두 번째 호출의 전체 no-op 경계를 검증한다.
+        first_trade = controller.record_order_execution(order, summary)
+        second_trade = controller.record_order_execution(order, summary)
+
+        self.assertIs(second_trade, first_trade)
+        self.assertEqual(controller.trade_history.trades, (first_trade,))
+        self.assertEqual(repository.save_call_count, 1)
+        self.assertEqual(observations, [(first_trade, controller.performance)])
+
+    def test_details_reject_noncanonical_filters_and_clock(self) -> None:
+        """
+        함수 이름: test_details_reject_noncanonical_filters_and_clock()
+        기능: 문자열 filter와 naive clock 결과를 application query 경계에서 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        controller = TradeHistoryController(
+            RecordingRepository(),
+            clock=fixed_clock,
+        )
+
+        # Transport parsing을 우회한 문자열과 timezone 없는 시각은 묵시적으로 보정하지 않는다.
+        with self.assertRaises(TypeError):
+            controller.get_trade_details("TODAY", TradeSide.ALL)
+        with self.assertRaises(TypeError):
+            controller.get_trade_details(HistoryPeriod.TODAY, "ALL")
+
+        with self.assertRaisesRegex(ValueError, "timezone-aware UTC"):
+            TradeHistoryController(
+                RecordingRepository(),
+                clock=naive_clock,
+            )
 
 
 if __name__ == "__main__":

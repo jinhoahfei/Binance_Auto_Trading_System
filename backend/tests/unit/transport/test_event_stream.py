@@ -109,6 +109,36 @@ class BackendEventStreamTests(unittest.TestCase):
         self.assertEqual(event_stream.last_sequence, 2)
         self.assertNotEqual(first_event.event_id, second_event.event_id)
 
+    def test_publish_many_rejects_later_invalid_event_without_partial_commit(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_publish_many_rejects_later_invalid_event_without_partial_commit()
+        기능: batch 후반 envelope 오류가 앞 event의 sequence와 replay 공개를 남기지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        event_stream = BackendEventStream(
+            session_id=TEST_SESSION_ID,
+            clock=_ControlledClock(INITIAL_TIME),
+        )
+
+        # 첫 event는 정상이지만 두 번째 type을 비정규 값으로 만들어 commit 전 검증 실패를 유도한다.
+        with self.assertRaisesRegex(
+            ValueError,
+            "event_type must use canonical uppercase text",
+        ):
+            event_stream.publish_many(
+                (
+                    ("ORDER_EXECUTED", {"order_id": "100"}),
+                    ("performance-updated", {"daily_fee": "0.1"}),
+                )
+            )
+
+        self.assertEqual(event_stream.last_sequence, 0)
+        self.assertEqual(event_stream.replay_after(0).events, ())
+
     def test_count_retention_replays_or_requires_gap_resync(self) -> None:
         """
         함수 이름: test_count_retention_replays_or_requires_gap_resync()

@@ -25,6 +25,7 @@ export const DEFAULT_EMPTY_TRADE_HISTORY: EmptyTradeHistoryViewModel = {
 
 export interface TradeTableProps {
   rows: ReadonlyArray<TradeRowViewModel>;
+  isLoading?: boolean;
   emptyState?: EmptyTradeHistoryViewModel;
   onStartTrading?: () => void;
 }
@@ -50,18 +51,19 @@ function get_result_tone_class(value: string) {
 
 /**
  * 함수 이름: TradeTable()
- * 기능: 체결 거래의 열 의미를 유지하는 스크롤 표를 표시하고 결과가 없으면 빈 상태를 표시한다.
- * 인자: props -> 거래 행, 빈 상태 문구와 자동매매 시작 의도 처리 함수
+ * 기능: 체결 거래 표와 조회 loading, empty 또는 failed 상태를 같은 table layout 안에 표시한다.
+ * 인자: props -> 거래 행, loading 여부, 상태 문구와 optional action 처리 함수
  * 반환값: 거래 내역 표 카드
- * 작성 날짜: 2026/08/12
+ * 작성 날짜: 2026/08/23
  */
 export function TradeTable({
   rows,
+  isLoading = false,
   emptyState = DEFAULT_EMPTY_TRADE_HISTORY,
   onStartTrading,
 }: TradeTableProps) {
   return (
-    <section aria-label="거래 내역 표" className={styles.card}>
+    <section aria-busy={isLoading} aria-label="거래 내역 표" className={styles.card}>
       <div className={styles.scrollArea} tabIndex={0}>
         <table className={styles.table}>
           <colgroup>
@@ -90,7 +92,7 @@ export function TradeTable({
             {rows.length === 0 ? (
               <tr className={styles.emptyRow}>
                 <td colSpan={column_labels.length}>
-                  <div className={styles.emptyContent}>
+                  <div aria-live="polite" className={styles.emptyContent}>
                     <strong>{emptyState.title}</strong>
                     <p>{emptyState.description}</p>
                     <p>{emptyState.suggestion}</p>

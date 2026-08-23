@@ -13,6 +13,8 @@ export type {
     TradingLogicStartGuard,
     TradingLogicSupportStatus,
     TradeHistoryQuery,
+    TradeHistoryDetails,
+    TradeHistorySummary,
     TradeRecord,
     TradeSide,
     TradeSideFilter,
@@ -20,6 +22,7 @@ export type {
 } from './uiContracts';
 export { DEFAULT_TRADING_LOGIC_COVERAGE } from './uiContracts';
 export {
+    BACKEND_MAX_TRADE_PAGE_SIZE,
     BACKEND_SCHEMA_VERSION,
 } from './backendContracts.generated';
 export type {
@@ -33,10 +36,13 @@ export type {
     BackendExecutionMode,
     BackendFailureEnvelope,
     BackendHealth,
+    BackendHistoryPeriod,
     BackendHttpEnvelope,
     BackendIndicatorSnapshot,
     BackendMarketSnapshot,
+    BackendOrderExecutedPayload,
     BackendPerformanceSnapshot,
+    BackendPerformanceUpdatedPayload,
     BackendRegimeSnapshot,
     BackendRegimeType,
     BackendResyncRequired,
@@ -46,6 +52,10 @@ export type {
     BackendStrategyType,
     BackendSwingSnapshot,
     BackendTradeSide,
+    BackendTradeSideFilter,
+    BackendTradeDetails,
+    BackendTradeDetailsQuery,
+    BackendTradeDetailsSummary,
     BackendTradeSnapshot,
     BackendTradingLogicCoverage,
     BackendTradingLogicStartGuard,

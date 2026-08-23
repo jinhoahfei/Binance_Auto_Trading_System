@@ -1003,14 +1003,16 @@ function format_rate(decimal_text: string | null): string {
 }
 
 /**
- * 함수 이름: map_performance_summary()
- * 기능: Performance가 실제 제공하는 값만 history summary에 투영한다.
+ * 함수 이름: map_trade_history_summary()
+ * 기능: Performance와 authoritative ETH 보유량을 D-12 history summary에 투영한다.
  * 인자: performance -> validated backend Performance
+ *      holdings -> Account 또는 상세 조회가 제공한 ETH Decimal 문자열, 없으면 unavailable
  * 반환값: 계산되지 않은 체결총액/slippage가 unavailable인 summary
- * 작성 날짜: 2026/08/21
+ * 작성 날짜: 2026/08/23
  */
-function map_performance_summary(
+export function map_trade_history_summary(
     performance: BackendPerformanceSnapshot,
+    holdings: string | null = null,
 ): UiServerOwnedSnapshot['trade_history_summary'] {
     const result_tone = decimal_tone(performance.realized_pnl);
 
@@ -1027,7 +1029,9 @@ function map_performance_summary(
             tone: result_tone,
         },
         position: {
-            quantity: '-',
+            quantity: holdings === null
+                ? '-'
+                : `${format_decimal_text(holdings)} ETH`,
         },
         fees: {
             amount: format_quote_amount(performance.daily_fee, 'USDT'),
@@ -1035,6 +1039,21 @@ function map_performance_summary(
             averageSlippage: '-',
         },
     };
+}
+
+/**
+ * 함수 이름: get_account_eth_holdings()
+ * 기능: validated Account에서 D-12 현재 ETH 보유량을 찾아 Decimal 문자열로 반환한다.
+ * 인자: account -> validated backend Account
+ * 반환값: ETH total Decimal 또는 balance가 없을 때 Account 계약의 0
+ * 작성 날짜: 2026/08/23
+ */
+function get_account_eth_holdings(account: BackendAccountSnapshot): string {
+    const eth_balance = account.balances.find((balance) => {
+        return balance.asset === SUPPORTED_BASE_ASSET;
+    });
+
+    return eth_balance?.total ?? '0';
 }
 
 /**
@@ -1054,7 +1073,10 @@ export function map_backend_snapshot(
     const logic_coverage = validate_trading_logic_coverage(snapshot.trading.logic_coverage);
     const recent_trades = snapshot.recent_trades.map(map_trade_record);
     const account_asset = map_account_asset(snapshot.account);
-    const trade_history_summary = map_performance_summary(snapshot.performance);
+    const trade_history_summary = map_trade_history_summary(
+        snapshot.performance,
+        get_account_eth_holdings(snapshot.account),
+    );
     const trading_presentation = map_trading_status_presentation(trading.status);
     const account_strategy = {
         appliedState: trading.status,
@@ -1078,7 +1100,6 @@ export function map_backend_snapshot(
         logic_coverage,
         command_enabled: trading.command_enabled,
         recent_trades,
-        history_records: recent_trades,
         account_strategy,
         account_asset,
         trade_history_summary,
@@ -1099,7 +1120,6 @@ export function map_backend_snapshot(
             logic_coverage: server_snapshot.logic_coverage,
             command_enabled: server_snapshot.command_enabled,
             recent_trades: server_snapshot.recent_trades,
-            history_records: server_snapshot.history_records,
             account_strategy: server_snapshot.account_strategy,
             account_asset: server_snapshot.account_asset,
             trade_history_summary: server_snapshot.trade_history_summary,
@@ -1130,10 +1150,27 @@ export function map_backend_event_to_intents(
             return [];
         case 'ACCOUNT_UPDATED': {
             const account = validate_account_snapshot(payload.account);
-            return [{
-                type: 'ACCOUNT_ASSETS_UPDATED',
-                asset: map_account_asset(account),
-            }];
+            if (event.aggregate_version !== account.version) {
+                throw new BackendContractError(
+                    'MALFORMED_BACKEND_PAYLOAD',
+                    'Account event aggregate version does not match its payload',
+                );
+            }
+            const holdings = get_account_eth_holdings(account);
+
+            // 같은 account version에서 dashboard 자산과 상세 ETH 보유량을 함께 갱신한다.
+            return [
+                {
+                    type: 'ACCOUNT_ASSETS_UPDATED',
+                    asset: map_account_asset(account),
+                },
+                {
+                    type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
+                    position: {
+                        quantity: `${format_decimal_text(holdings)} ETH`,
+                    },
+                },
+            ];
         }
         case 'REGIME_RECOMMENDED': {
             const regime_value = payload.regime ?? payload.recommended;
@@ -1230,7 +1267,7 @@ export function map_backend_event_to_intents(
             const performance = validate_performance_snapshot(
                 payload.performance ?? payload,
             );
-            const summary = map_performance_summary(performance);
+            const summary = map_trade_history_summary(performance);
             return [{
                 type: 'TRADE_HISTORY_PERFORMANCE_UPDATED',
                 daily_return: summary.dailyReturn,

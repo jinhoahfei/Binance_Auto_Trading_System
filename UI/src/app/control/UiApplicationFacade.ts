@@ -117,6 +117,7 @@ export interface UiApplicationFacadeOptions {
     readonly logic_coverage?: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled?: boolean;
     readonly recent_trades?: ReadonlyArray<TradeRecord>;
+    // Demo/Storybook/test fixture만 상세 행을 seed하며 live mapper는 이 값을 전달하지 않는다.
     readonly history_records?: ReadonlyArray<TradeRecord>;
     readonly scale_in_percentage?: number;
     readonly scale_out_percentage?: number;
@@ -141,7 +142,6 @@ export interface UiServerOwnedSnapshot {
     readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled: boolean;
     readonly recent_trades: ReadonlyArray<TradeRecord>;
-    readonly history_records: ReadonlyArray<TradeRecord>;
     readonly scale_in_percentage: number;
     readonly scale_out_percentage: number;
     readonly account_strategy: StrategySummaryViewModel;
@@ -262,6 +262,10 @@ export type UiApplicationIntent =
     }
     | {
         readonly type: 'TRADE_HISTORY_BUY_HOLDINGS_UPDATED';
+        readonly position: TradeHistorySummaryViewModel['position'];
+    }
+    | {
+        readonly type: 'TRADE_HISTORY_HOLDINGS_UPDATED';
         readonly position: TradeHistorySummaryViewModel['position'];
     }
     | {
@@ -530,6 +534,7 @@ export class UiApplicationFacade {
     private is_started = false;
     private notification_batch_depth = 0;
     private notification_is_pending = false;
+    private trade_history_summary_revision = 0;
 
     /**
      * 함수 이름: UiApplicationFacade.constructor()
@@ -539,6 +544,33 @@ export class UiApplicationFacade {
      * 작성 날짜: 2026/08/12
      */
     constructor(command_port: UiCommandPort, options: UiApplicationFacadeOptions) {
+        const trade_history_summary_actor = createActor(create_trade_history_summary_machine({
+            ...(options.trade_history_summary === undefined
+                ? {}
+                : { summary: options.trade_history_summary }),
+        }));
+        const trade_history_actor = createActor(create_trade_history_machine(command_port, {
+            ...(options.trading_symbol === undefined
+                ? {}
+                : { symbol: options.trading_symbol }),
+            ...(options.history_records === undefined
+                ? {}
+                : { records: options.history_records }),
+            get_summary_revision: () => this.trade_history_summary_revision,
+            on_details_loaded: (summary, request_summary_revision) => {
+                if (request_summary_revision !== this.trade_history_summary_revision) {
+                    // Query 시작 뒤 account/performance event가 왔으면 오래된 composite summary를 폐기한다.
+                    return;
+                }
+
+                // 상세 query의 composite summary를 동일 facade가 소유한 summary region에 적용한다.
+                trade_history_summary_actor.send({
+                    type: 'TRADE_HISTORY_SUMMARY_SYNCHRONIZED',
+                    summary,
+                });
+            },
+        }));
+
         this.actors = {
             shell: createActor(create_ui_shell_machine()),
             account_summary: createActor(create_account_summary_machine({
@@ -592,19 +624,8 @@ export class UiApplicationFacade {
                     ? {}
                     : { scale_out_percentage: options.scale_out_percentage }),
             })),
-            trade_history: createActor(create_trade_history_machine(command_port, {
-                ...(options.trading_symbol === undefined
-                    ? {}
-                    : { symbol: options.trading_symbol }),
-                ...(options.history_records === undefined
-                    ? {}
-                    : { records: options.history_records }),
-            })),
-            trade_history_summary: createActor(create_trade_history_summary_machine({
-                ...(options.trade_history_summary === undefined
-                    ? {}
-                    : { summary: options.trade_history_summary }),
-            })),
+            trade_history: trade_history_actor,
+            trade_history_summary: trade_history_summary_actor,
             trading: createActor(create_trading_command_machine(command_port, {
                 ...(options.logic_coverage === undefined
                     ? {}
@@ -929,9 +950,14 @@ export class UiApplicationFacade {
                 });
                 break;
             case 'BUY_ORDER_EXECUTED':
-            case 'SELL_ORDER_EXECUTED':
+            case 'SELL_ORDER_EXECUTED': {
                 this.actors.recent_orders.send(intent);
+                if (this.actors.shell.getSnapshot().context.route === 'trade_history') {
+                    // Active 상세 화면은 같은 현재 filter query를 다시 읽어 recent/table 일관성을 맞춘다.
+                    this.actors.trade_history.send({ type: 'ORDER_EXECUTION_RECEIVED' });
+                }
                 break;
+            }
             case 'SCALE_IN_CHANGED':
                 this.actors.split_order.send({
                     type: 'SCALE_IN_LEVEL_CHANGED',
@@ -950,6 +976,7 @@ export class UiApplicationFacade {
                 break;
             case 'BACK_TO_DASHBOARD':
                 this.actors.shell.send({ type: 'BACK_TO_MAIN_SCREEN' });
+                this.actors.trade_history.send({ type: 'LEAVE_TRADE_HISTORY' });
                 break;
             case 'REFRESH_TRADE_HISTORY':
                 this.actors.trade_history.send({ type: 'REFRESH_TRADE_HISTORY' });
@@ -961,12 +988,14 @@ export class UiApplicationFacade {
                 this.dispatch_history_side(intent.side);
                 break;
             case 'TRADE_HISTORY_PROFIT_RATE_UPDATED':
+                this.advance_trade_history_summary_revision();
                 this.actors.trade_history_summary.send({
                     type: 'PROFIT_RATE_UPDATED',
                     daily_return: intent.daily_return,
                 });
                 break;
             case 'TRADE_HISTORY_SELL_SUMMARY_UPDATED':
+                this.advance_trade_history_summary_revision();
                 this.actors.trade_history_summary.send({
                     type: 'SELL_ORDER_EXECUTED',
                     sell_performance: intent.sell_performance,
@@ -974,18 +1003,28 @@ export class UiApplicationFacade {
                 });
                 break;
             case 'TRADE_HISTORY_BUY_HOLDINGS_UPDATED':
+                this.advance_trade_history_summary_revision();
                 this.actors.trade_history_summary.send({
                     type: 'BUY_ORDER_EXECUTED',
                     position: intent.position,
                 });
                 break;
+            case 'TRADE_HISTORY_HOLDINGS_UPDATED':
+                this.advance_trade_history_summary_revision();
+                this.actors.trade_history_summary.send({
+                    type: 'HOLDINGS_SNAPSHOT_UPDATED',
+                    position: intent.position,
+                });
+                break;
             case 'TRADE_HISTORY_DAILY_FEE_UPDATED':
+                this.advance_trade_history_summary_revision();
                 this.actors.trade_history_summary.send({
                     type: 'DAILY_TRADING_FEE_CHANGED',
                     fees: intent.fees,
                 });
                 break;
             case 'TRADE_HISTORY_PERFORMANCE_UPDATED':
+                this.advance_trade_history_summary_revision();
                 this.actors.trade_history_summary.send({
                     type: 'PERFORMANCE_SNAPSHOT_UPDATED',
                     daily_return: intent.daily_return,
@@ -1163,6 +1202,17 @@ export class UiApplicationFacade {
     }
 
     /**
+     * 함수 이름: advance_trade_history_summary_revision()
+     * 기능: account/performance authoritative update가 이전 HTTP summary보다 최신임을 표시한다.
+     * 인자: 없음
+     * 반환값: 없음
+     * 작성 날짜: 2026/08/23
+     */
+    private advance_trade_history_summary_revision(): void {
+        this.trade_history_summary_revision += 1;
+    }
+
+    /**
      * 함수 이름: synchronize_server_owned_snapshot()
      * 기능: 한 coherent backend snapshot의 actor별 값을 중간 publish 없이 원자적으로 교체한다.
      * 인자: synchronized_snapshot -> mapper가 검증하고 UI 표시 계약으로 변환한 전체 snapshot
@@ -1185,6 +1235,9 @@ export class UiApplicationFacade {
         this.notification_batch_depth += 1;
 
         try {
+            // Full resync summary를 진행 중 상세 HTTP 결과보다 먼저 authoritative revision으로 만든다.
+            this.advance_trade_history_summary_revision();
+
             // UI-local route와 chart 설정은 건드리지 않고 server-owned context만 교체한다.
             this.actors.account_summary.send({
                 type: 'ACCOUNT_SUMMARY_SYNCHRONIZED',
@@ -1204,10 +1257,15 @@ export class UiApplicationFacade {
                 trades: synchronized_snapshot.recent_trades,
                 indicators: synchronized_snapshot.regime_metrics,
             });
+            const history_is_active = this.actors.shell.getSnapshot().context.route
+                === 'trade_history';
+
+            // recent_trades는 현재 period/side filter 결과가 아니므로 table cache에 복사하지 않는다.
             this.actors.trade_history.send({
-                type: 'TRADE_HISTORY_SNAPSHOT_SYNCHRONIZED',
+                type: history_is_active
+                    ? 'TRADE_HISTORY_RESYNCHRONIZED'
+                    : 'INVALIDATE_TRADE_HISTORY_CACHE',
                 symbol: synchronized_snapshot.trading_symbol,
-                records: synchronized_snapshot.history_records,
             });
             this.actors.trade_history_summary.send({
                 type: 'TRADE_HISTORY_SUMMARY_SYNCHRONIZED',

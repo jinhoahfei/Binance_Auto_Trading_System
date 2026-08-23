@@ -26,17 +26,20 @@ TEST_UI_ORIGIN = "http://127.0.0.1:5173"
 
 def _create_runtime(
     account_update_observer: Callable[[Account], object],
+    trade_history_update_observer: Callable[[object, object], object],
 ) -> ApplicationRuntime:
     """
     함수 이름: _create_runtime()
     기능: 실제 process transport와 같은 event stream observer를 공유하는 fake runtime을 만든다.
     인자: account_update_observer -> transport가 소유하는 Account 변경 observer
+        trade_history_update_observer -> transport가 소유하는 Trade·Performance observer
     반환값: fake Binance 경계와 조립된 application runtime
     작성 날짜: 2026/08/21
     """
     runtime, _, _, _ = _create_test_runtime(
         [],
         account_update_observer=account_update_observer,
+        trade_history_update_observer=trade_history_update_observer,
     )
     return runtime
 

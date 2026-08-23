@@ -2,8 +2,10 @@ import type {
     CsvExportOptions,
     CsvExportReceipt,
     RegimeType,
+    TradeHistoryDetails,
     TradeHistoryQuery,
     TradeRecord,
+    TradeHistorySummary,
 } from '../contracts';
 import type { TradingCommandReceipt, UiCommandPort } from '../ports';
 import { TRADE_RECORD_FIXTURES } from './fixtures';
@@ -35,6 +37,22 @@ export interface FakeCommandRecord {
 export class FakeUiCommandAdapter implements UiCommandPort {
     readonly command_records: Array<FakeCommandRecord> = [];
     trade_history: ReadonlyArray<TradeRecord> = TRADE_RECORD_FIXTURES;
+    trade_history_summary: TradeHistorySummary = {
+        dailyReturn: { value: '0.00%', tone: 'neutral' },
+        sellPerformance: {
+            winRate: '--%',
+            completedCount: '0 / 0',
+            averageRealizedReturn: '0.00%',
+            totalRealizedPnl: '0 USDT',
+            tone: 'neutral',
+        },
+        position: { quantity: '0 ETH' },
+        fees: {
+            amount: '0 USDT',
+            totalExecutedAmount: '-',
+            averageSlippage: '-',
+        },
+    };
     selected_directory: string | null = '/Users/demo/Exports';
     exported_receipt: CsvExportReceipt = {
         file_path: '/Users/demo/Exports/binance_trades_2026-08-12.csv',
@@ -139,11 +157,15 @@ export class FakeUiCommandAdapter implements UiCommandPort {
     /**
      * 함수 이름: load_trade_history()
      * 기능: 결정적 거래 내역을 조회하고 전달받은 필터에 맞게 반환한다.
-     * 인자: query -> 기간 및 거래 방향 필터
-     * 반환값: 필터가 적용된 거래 내역 Promise
-     * 작성 날짜: 2026/08/12
+     * 인자: query -> 기간 및 거래 방향 필터, signal -> optional 호출 수명주기 취소 신호
+     * 반환값: 필터가 적용된 거래 행과 D-12 고정 범위 요약 Promise
+     * 작성 날짜: 2026/08/23
      */
-    async load_trade_history(query: TradeHistoryQuery): Promise<ReadonlyArray<TradeRecord>> {
+    async load_trade_history(
+        query: TradeHistoryQuery,
+        signal?: AbortSignal,
+    ): Promise<TradeHistoryDetails> {
+        void signal; // 즉시 완료하는 fake는 신호를 소비하지 않지만 production과 같은 port shape를 유지한다.
         this.record_command('load_trade_history', query);
         this.throw_queued_failure('load_trade_history');
 
@@ -165,12 +187,18 @@ export class FakeUiCommandAdapter implements UiCommandPort {
         );
         const period_start_time = latest_day_start - ((period_in_days - 1) * 86_400_000);
 
-        return this.trade_history.filter((trade_record) => {
+        const filtered_records = this.trade_history.filter((trade_record) => {
             const is_matching_side = query.side === 'all' || trade_record.side === query.side;
             const is_in_period = new Date(trade_record.occurred_at).getTime() >= period_start_time;
 
             return is_matching_side && is_in_period;
         });
+
+        // Fake도 production port와 같은 composite 계약을 반환해 actor test가 다른 경로를 사용하지 않게 한다.
+        return {
+            records: filtered_records,
+            summary: this.trade_history_summary,
+        };
     }
 
     /**

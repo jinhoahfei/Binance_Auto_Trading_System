@@ -187,6 +187,38 @@ function request_headers(init: RequestInit | undefined): Record<string, string> 
 }
 
 /**
+ * 함수 이름: create_abortable_fetch_mock()
+ * 기능: 전달된 composite signal을 기록하고 그 신호가 중단될 때 AbortError로 종료한다.
+ * 인자: received_signals -> fetch별 signal 기록 배열
+ * 반환값: 실제 네트워크 응답 없이 abort를 관찰하는 fetch test double
+ * 작성 날짜: 2026/08/23
+ */
+function create_abortable_fetch_mock(
+    received_signals: Array<AbortSignal>,
+): typeof fetch {
+    return vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (signal === undefined || signal === null) {
+            throw new TypeError('Backend request signal is required');
+        }
+
+        received_signals.push(signal);
+        return new Promise<Response>((_resolve, reject) => {
+            const reject_aborted_request = () => {
+                reject(new DOMException('Backend request aborted', 'AbortError'));
+            };
+
+            // 이미 중단된 signal과 이후 중단되는 signal을 같은 fetch 실패 경로로 수렴시킨다.
+            if (signal.aborted) {
+                reject_aborted_request();
+                return;
+            }
+            signal.addEventListener('abort', reject_aborted_request, { once: true });
+        });
+    }) as unknown as typeof fetch;
+}
+
+/**
  * 함수 이름: create_callbacks()
  * 기능: event/resync/reconnect/failure 호출을 관찰할 기본 mock callbacks를 만든다.
  * 인자: 없음
@@ -202,7 +234,252 @@ function create_callbacks(): BackendUiAdapterCallbacks {
     };
 }
 
+/**
+ * 함수 이름: create_trade_details_fixture()
+ * 기능: generated primitive를 결합한 `/v1/trades` 정상 data fixture를 만든다.
+ * 인자: 없음
+ * 반환값: today/all query의 strict composite 상세 응답
+ * 작성 날짜: 2026/08/23
+ */
+function create_trade_details_fixture() {
+    const snapshot = create_backend_snapshot_fixture();
+
+    return {
+        query: {
+            period: 'today',
+            side: 'all',
+            start_date: '2026-08-23',
+            end_date: '2026-08-23',
+        },
+        rows: snapshot.recent_trades,
+        row_count: snapshot.recent_trades.length,
+        summary: {
+            holdings_asset: 'ETH',
+            holdings: '1.75',
+            account_version: snapshot.account.version,
+            performance: snapshot.performance,
+        },
+    };
+}
+
 describe('BackendUiAdapter HTTP contract', () => {
+    it('test_show_trade_details_adapter_contract: combined query와 generated composite 응답을 UI details로 변환한다', async () => {
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(
+                request_headers(init)['X-Request-Id']!,
+                create_trade_details_fixture(),
+            );
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await expect(adapter.load_trade_history({
+            period: 'today',
+            side: 'all',
+        })).resolves.toMatchObject({
+            records: [expect.objectContaining({
+                id: create_backend_snapshot_fixture().recent_trades[0]?.trade_id,
+                quote_asset: 'USDT',
+            })],
+            summary: {
+                position: { quantity: '1.75 ETH' },
+                dailyReturn: expect.any(Object),
+                sellPerformance: expect.any(Object),
+                fees: expect.any(Object),
+            },
+        });
+        expect(fetch_mock.mock.calls[0]?.[0]).toBe(
+            'http://127.0.0.1:42123/v1/trades?period=today&side=all',
+        );
+        expect(fetch_mock.mock.calls[0]?.[1]?.method).toBe('GET');
+    });
+
+    it('test_trade_history_filter_adapter_contract: all query의 concrete LocalDate range를 허용한다', async () => {
+        const trade_details = create_trade_details_fixture();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(request_headers(init)['X-Request-Id']!, {
+                ...trade_details,
+                query: {
+                    period: 'all',
+                    side: 'sell',
+                    start_date: '0001-01-01',
+                    end_date: '2026-08-23',
+                },
+            });
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await expect(adapter.load_trade_history({
+            period: 'all',
+            side: 'sell',
+        })).resolves.toHaveProperty('records');
+    });
+
+    it('trade-history caller signal을 내부 timeout/stop signal과 합성하고 HTTP read를 중단한다', async () => {
+        const received_signals: Array<AbortSignal> = [];
+        const caller_abort_controller = new AbortController();
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: create_abortable_fetch_mock(received_signals),
+            create_uuid: create_uuid_factory(),
+        });
+
+        const request_promise = adapter.load_trade_history({
+            period: 'today',
+            side: 'all',
+        }, caller_abort_controller.signal);
+        expect(received_signals).toHaveLength(1);
+        expect(received_signals[0]).not.toBe(caller_abort_controller.signal);
+
+        caller_abort_controller.abort();
+
+        await expect(request_promise).rejects.toMatchObject({
+            code: 'BACKEND_REQUEST_CANCELLED',
+            retryable: false,
+        });
+        expect(received_signals[0]?.aborted).toBe(true);
+    });
+
+    it('adapter stop이 caller signal과 독립적으로 진행 중 trade-history read를 중단한다', async () => {
+        const received_signals: Array<AbortSignal> = [];
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: create_abortable_fetch_mock(received_signals),
+            create_uuid: create_uuid_factory(),
+        });
+
+        const request_promise = adapter.load_trade_history({
+            period: 'today',
+            side: 'all',
+        });
+        expect(received_signals).toHaveLength(1);
+
+        adapter.stop();
+
+        await expect(request_promise).rejects.toMatchObject({
+            code: 'ADAPTER_STOPPED',
+            retryable: false,
+        });
+        expect(received_signals[0]?.aborted).toBe(true);
+    });
+
+    it('caller 취소가 없으면 기존 timeout이 진행 중 trade-history read를 중단한다', async () => {
+        vi.useFakeTimers();
+        try {
+            const received_signals: Array<AbortSignal> = [];
+            const adapter = new BackendUiAdapter(create_descriptor(), {
+                fetch: create_abortable_fetch_mock(received_signals),
+                create_uuid: create_uuid_factory(),
+                request_timeout_ms: 50,
+            });
+            const request_promise = adapter.load_trade_history({
+                period: 'today',
+                side: 'all',
+            });
+            const rejection_assertion = expect(request_promise).rejects.toMatchObject({
+                code: 'BACKEND_REQUEST_TIMEOUT',
+                retryable: true,
+            });
+
+            await vi.advanceTimersByTimeAsync(50);
+
+            await rejection_assertion;
+            expect(received_signals[0]?.aborted).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([
+        {
+            label: 'echoed period 불일치',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                details.query.period = 'last7days';
+            },
+        },
+        {
+            label: 'preset inclusive date 범위 불일치',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                details.query.start_date = '2026-08-22';
+            },
+        },
+        {
+            label: 'row_count 불일치',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                details.row_count = 0;
+            },
+        },
+        {
+            label: '1000행 page 상한 초과',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                details.rows = Array.from(
+                    { length: 1_001 },
+                    () => details.rows[0]!,
+                );
+                details.row_count = details.rows.length;
+            },
+        },
+        {
+            label: 'ETH 외 holdings asset',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                details.summary.holdings_asset = 'BTC';
+            },
+        },
+        {
+            label: '음수 holdings',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                details.summary.holdings = '-0.1';
+            },
+        },
+        {
+            label: '음수 account version',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                details.summary.account_version = -1;
+            },
+        },
+        {
+            label: 'summary unknown key',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                Object.assign(details.summary, { future_value: 'unexpected' });
+            },
+        },
+        {
+            label: 'performance unknown key',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                Object.assign(details.summary.performance, {
+                    future_value: 'unexpected',
+                });
+            },
+        },
+        {
+            label: 'trade row unknown key',
+            mutate: (details: ReturnType<typeof create_trade_details_fixture>) => {
+                Object.assign(details.rows[0]!, { future_value: 'unexpected' });
+            },
+        },
+    ])('trade details strict validator가 $label payload를 fail closed한다', async ({ mutate }) => {
+        const trade_details = create_trade_details_fixture();
+        mutate(trade_details);
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(
+                request_headers(init)['X-Request-Id']!,
+                trade_details,
+            );
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await expect(adapter.load_trade_history({
+            period: 'today',
+            side: 'all',
+        })).rejects.toMatchObject({ code: 'MALFORMED_BACKEND_PAYLOAD' });
+    });
+
     it('Bearer/X-Request-Id와 command Idempotency-Key를 보내고 typed failure를 보존한다', async () => {
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

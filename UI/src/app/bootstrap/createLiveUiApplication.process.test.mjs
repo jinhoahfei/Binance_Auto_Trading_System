@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { createElement, StrictMode } from 'react';
 import { describe, expect, it } from 'vitest';
 
@@ -252,6 +253,17 @@ describe('Phase 5 actual process live read', () => {
             expect(document.body).not.toHaveTextContent('KRW');
             expect(document.body).not.toHaveTextContent(session_token);
             expect(integrated_trace).toEqual(['1', '2', '3', '4', '5']);
+
+            // Case 3의 production adapter가 실제 Python `/v1/trades` empty 결과까지 렌더링해야 한다.
+            const user = userEvent.setup();
+            await user.click(screen.getByRole('button', { name: '전체 보기' }));
+            expect(await screen.findByRole('heading', {
+                level: 1,
+                name: '거래 내역 상세',
+            })).toBeInTheDocument();
+            await waitFor(() => {
+                expect(screen.getByText('거래 내역이 없습니다')).toBeInTheDocument();
+            });
         } finally {
             rendered?.unmount();
             await stop_child_process(child_process);

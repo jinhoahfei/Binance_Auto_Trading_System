@@ -39,9 +39,10 @@ pnpm storybook
 
 화면 Boundary는 API, 파일 시스템과 주문 계산을 직접 호출하지 않습니다.
 `BackendUiAdapter`는 HTTP/WebSocket wire 변환, token, timeout, sequence와
-snapshot-first full resync만 담당하고 업무 guard를 만들지 않습니다. Phase 5에서
-주문·REGIME 적용·상세 이력·CSV·shutdown command는 backend의 typed unavailable 결과로
-닫혀 있습니다. demo와 Storybook은 계속 deterministic `FakeUiCommandAdapter`를 사용합니다.
+snapshot-first full resync만 담당하고 업무 guard를 만들지 않습니다. REGIME·start/stop/split
+명령과 Phase 10 상세 이력 query/event는 실제 backend에 연결되어 있습니다. CSV filesystem과
+shutdown command는 해당 owner Phase 전까지 backend의 typed unavailable 결과로 닫혀 있습니다.
+demo와 Storybook은 계속 deterministic `FakeUiCommandAdapter`를 사용합니다.
 
 공개 시장 데이터의 조회·정규화·병합·재연결은 `features/price-chart/data`와 `hooks`에 격리되어 있으며 API key를 사용하지 않습니다. backend market event와 결과 parity가 확보되기 전까지 이 표시용 차트를 유지하며 trading 판단에는 사용하지 않습니다.
 

@@ -1,19 +1,43 @@
-"""Repository, TradeHistory와 Performance startup 복원을 조정한다."""
+"""Trade history 복원·상세 조회·durable execution publication을 조정한다."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from threading import RLock
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
-from binance_auto_trader.domain.history import Performance, Trade, TradeHistory
+from binance_auto_trader.domain.history import (
+    HistoryPeriod,
+    Performance,
+    Trade,
+    TradeHistory,
+    TradeHistoryQuery,
+    TradeSide,
+)
+from binance_auto_trader.domain.trading.account import Account
 from binance_auto_trader.domain.trading.order import (
     ExecutionSummary,
     Order,
     PendingOrderRecoveryRecord,
 )
 from binance_auto_trader.domain.trading.states import OrderSide
+
+
+_HOLDINGS_ASSET = "ETH"
+_KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
+
+
+def _utc_now() -> datetime:
+    """
+    함수 이름: _utc_now()
+    기능: 거래 상세 기간과 Performance account day를 결정할 현재 UTC 시각을 반환한다.
+    인자: 없음
+    반환값: timezone-aware 현재 UTC datetime
+    작성 날짜: 2026/08/23
+    """
+    return datetime.now(timezone.utc)  # 기간 preset의 기준 시각은 항상 UTC clock에서 시작한다.
 
 
 class TradeHistoryPersistencePendingError(RuntimeError):
@@ -60,6 +84,79 @@ class TradeHistoryRepositoryPort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class TradeDetailsResult:
+    """
+    클래스 이름: TradeDetailsResult
+    기능: 적용 query, 필터 행, ETH 보유량 provenance와 전체 Performance를 불변으로 묶는다.
+    작성 날짜: 2026/08/23
+    """
+
+    query: TradeHistoryQuery
+    rows: tuple[Trade, ...]
+    holdings_asset: str
+    holdings: Decimal
+    account_version: int
+    performance: Performance
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 상세 결과가 canonical query·행·Account provenance와 Performance만 담는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        # Transport가 duck typing 결과를 직렬화하지 않도록 domain 객체와 tuple을 고정한다.
+        if not isinstance(self.query, TradeHistoryQuery):
+            raise TypeError("query must be a TradeHistoryQuery")
+        if not isinstance(self.rows, tuple):
+            raise TypeError("rows must be a tuple")
+        if any(not isinstance(row, Trade) for row in self.rows):
+            raise TypeError("rows must contain only Trade values")
+        if not isinstance(self.performance, Performance):
+            raise TypeError("performance must be a Performance")
+
+        # Account에서 읽은 ETH 보유량과 이를 식별할 단조 version의 값 범위를 검증한다.
+        if self.holdings_asset != _HOLDINGS_ASSET:
+            raise ValueError("holdings_asset must be ETH")
+        if not isinstance(self.holdings, Decimal):
+            raise TypeError("holdings must be a Decimal")
+        if not self.holdings.is_finite():
+            raise ValueError("holdings must be finite")
+        if self.holdings < Decimal("0"):
+            raise ValueError("holdings must not be negative")
+        if type(self.account_version) is not int:
+            raise TypeError("account_version must be an int")
+        if self.account_version < 0:
+            raise ValueError("account_version must not be negative")
+
+    @property
+    def trades(self) -> tuple[Trade, ...]:
+        """
+        함수 이름: trades()
+        기능: Communication Diagram의 TradeDetailsResult.trades 이름으로 필터 행을 반환한다.
+        인자: 없음
+        반환값: rows와 동일한 immutable Trade tuple
+        작성 날짜: 2026/08/23
+        """
+        return self.rows  # transport의 rows와 Diagram의 trades가 같은 결과를 공유한다.
+
+
+@dataclass(frozen=True, slots=True)
+class _TradeDetailsSummaryState:
+    """
+    클래스 이름: _TradeDetailsSummaryState
+    기능: 최초 상세 조회와 같은 Account version·KST 날짜의 filter가 재사용할 summary를 보존한다.
+    작성 날짜: 2026/08/23
+    """
+
+    holdings: Decimal
+    account_version: int
+    performance: Performance
+    kst_date: date
+
+
+@dataclass(frozen=True, slots=True)
 class _TradeHistoryLoadState:
     """
     클래스 이름: _TradeHistoryLoadState
@@ -86,46 +183,65 @@ class _PendingPublication:
 class TradeHistoryController:
     """
     클래스 이름: TradeHistoryController
-    기능: startup 복원과 terminal execution의 durable 저장 및 원자 publication을 조정한다.
-    작성 날짜: 2026/08/22
+    기능: startup 복원, 상세 조회와 terminal execution의 durable 저장 및 publication을 조정한다.
+    작성 날짜: 2026/08/23
     """
 
     __slots__ = (
+        "_account",
         "_clock",
+        "_details_summary_state",
         "_operation_lock",
         "_pending_publications",
         "_repository",
         "_state",
         "_state_lock",
         "_supports_pending_order_recovery",
+        "_trade_update_observer",
     )
 
     def __init__(
         self,
         repository: TradeHistoryRepositoryPort,
         clock: Callable[[], datetime] | None = None,
+        *,
+        account: Account | None = None,
+        trade_update_observer: Callable[[Trade, Performance], object]
+        | None = None,
     ) -> None:
         """
         함수 이름: __init__()
-        기능: repository와 Performance account-day clock 및 빈 초기 state를 준비한다.
+        기능: repository, 공유 Account, observer와 빈 history/performance state를 준비한다.
         인자: repository -> startup Trade tuple을 제공할 persistence port
             clock -> Performance의 현재 KST 날짜를 결정할 optional UTC clock
+            account -> authoritative ETH 보유량을 제공할 shared Account
+            trade_update_observer -> durable Trade publication 직후 호출할 optional observer
         반환값: 없음
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/08/23
         """
-        # runtime Protocol을 만족하지 않는 repository와 잘못된 clock을 state 생성 전에 거부한다.
+        # runtime Protocol과 주입 dependency를 만족하지 않는 값을 state 생성 전에 거부한다.
         if repository is None or not callable(
             getattr(repository, "get_trade_history", None)
         ):
             raise TypeError("repository must provide get_trade_history")
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
+        selected_account = Account() if account is None else account
+        if not isinstance(selected_account, Account):
+            raise TypeError("account must be an Account")
+        if trade_update_observer is not None and not callable(
+            trade_update_observer
+        ):
+            raise TypeError("trade_update_observer must be callable")
 
         # load와 record가 서로의 candidate를 덮지 않게 operation lock 하나로 직렬화한다.
         self._repository = repository
-        self._clock = clock
+        self._account = selected_account
+        self._clock = _utc_now if clock is None else clock
+        self._details_summary_state: _TradeDetailsSummaryState | None = None
         self._operation_lock = RLock()
         self._pending_publications: dict[str, _PendingPublication] = {}
+        self._trade_update_observer = trade_update_observer
         pending_order_operation_names = (
             "delete_pending_order",
             "get_pending_order_recovery_records",
@@ -139,8 +255,19 @@ class TradeHistoryController:
         self._state_lock = RLock()
         self._state = _TradeHistoryLoadState(
             trade_history=TradeHistory(),
-            performance=Performance((), clock=clock),
+            performance=Performance((), clock=self._clock),
         )
+
+    @property
+    def account(self) -> Account:
+        """
+        함수 이름: account()
+        기능: 상세 조회에 사용하는 authoritative shared Account를 반환한다.
+        인자: 없음
+        반환값: 생성자에서 주입하거나 호환 경로로 생성한 Account
+        작성 날짜: 2026/08/23
+        """
+        return self._account  # bootstrap은 identity로 shared Account 조립을 검증할 수 있다.
 
     @property
     def trade_history(self) -> TradeHistory:
@@ -165,6 +292,192 @@ class TradeHistoryController:
         """
         with self._state_lock:
             return self._state.performance.get_performance()  # 같은 근거로 KST 날짜 경계만 현재 clock에 맞게 갱신한다.
+
+    def get_trade_details(
+        self,
+        period: HistoryPeriod = HistoryPeriod.TODAY,
+        side: TradeSide = TradeSide.ALL,
+    ) -> TradeDetailsResult:
+        """
+        함수 이름: get_trade_details()
+        기능: KST 기간·side query의 Trade와 authoritative ETH 보유량 및 전체 성과를 결합한다.
+        인자: period -> 오늘·최근 7일·최근 30일·전체 기간 preset
+            side -> 전체·매수·매도 거래 방향
+        반환값: 적용 query와 필터 행 및 요약 provenance를 담은 TradeDetailsResult
+        작성 날짜: 2026/08/23
+        """
+        # 최초 summary가 KST 자정을 가로지르면 새 account day에서 한 번 다시 결합한다.
+        with self._operation_lock:
+            for summary_attempt in range(2):
+                query = self._build_trade_history_query(period, side)
+                with self._state_lock:
+                    current_state = self._state
+                    rows = current_state.trade_history.find(query)
+
+                # 최초 상세 조회에서만 1.1.2.3~.4를 읽고 filter 조회는 기존 summary를 유지한다.
+                summary_state = self._details_summary_state
+                summary_is_current = (
+                    summary_state is not None
+                    and summary_state.account_version == self._account.version
+                    and summary_state.kst_date == query.end_date
+                )
+                if not summary_is_current:
+                    holdings, account_version = self._read_eth_holdings_snapshot()
+                    with self._state_lock:
+                        performance = current_state.performance.get_performance()
+                    if self._read_current_kst_date() != query.end_date:
+                        if summary_attempt == 0:
+                            continue  # 자정 뒤 query와 Performance를 같은 새 날짜로 다시 만든다.
+                        raise RuntimeError(
+                            "clock crossed the KST date boundary repeatedly"
+                        )
+                    summary_state = _TradeDetailsSummaryState(
+                        holdings=holdings,
+                        account_version=account_version,
+                        performance=performance,
+                        kst_date=query.end_date,
+                    )
+                    self._details_summary_state = summary_state
+
+                # Warm cache의 find가 자정을 가로질러도 전날 query를 반환하지 않고 한 번 재시도한다.
+                if self._read_current_kst_date() != query.end_date:
+                    if summary_attempt == 0:
+                        continue
+                    raise RuntimeError(
+                        "clock crossed the KST date boundary repeatedly"
+                    )
+
+                return TradeDetailsResult(
+                    query=query,
+                    rows=rows,
+                    holdings_asset=_HOLDINGS_ASSET,
+                    holdings=summary_state.holdings,
+                    account_version=summary_state.account_version,
+                    performance=summary_state.performance,
+                )  # 필터 행과 기존 D-12 summary snapshot의 범위를 섞지 않는다.
+
+        raise RuntimeError("trade details summary could not be stabilized")
+
+    def _read_current_kst_date(self) -> date:
+        """
+        함수 이름: _read_current_kst_date()
+        기능: 주입 UTC clock을 검증하고 현재 Asia/Seoul LocalDate로 변환한다.
+        인자: 없음
+        반환값: timezone-aware UTC clock이 가리키는 KST date
+        작성 날짜: 2026/08/23
+        """
+        # 주입 clock도 Performance와 동일하게 timezone-aware UTC만 허용한다.
+        current_time = self._clock()
+        if not isinstance(current_time, datetime):
+            raise TypeError("clock result must be a datetime")
+        if current_time.tzinfo is None or current_time.utcoffset() is None:
+            raise ValueError("clock result must be timezone-aware UTC")
+        if current_time.utcoffset() != timedelta(0):
+            raise ValueError("clock result must use UTC")
+
+        return current_time.astimezone(_KOREA_TIME_ZONE).date()
+
+    def _stabilize_performance_account_day(
+        self,
+        performance: Performance,
+    ) -> Performance:
+        """
+        함수 이름: _stabilize_performance_account_day()
+        기능: durable publication 직전 Performance를 경계 전후가 같은 KST account day로 갱신한다.
+        인자: performance -> 아직 publish되지 않은 전체 Performance candidate
+        반환값: 현재 KST 날짜의 daily aggregate를 가진 같은 Performance
+        작성 날짜: 2026/08/23
+        """
+        if not isinstance(performance, Performance):
+            raise TypeError("performance must be a Performance")
+
+        # Clock이 자정을 가로지르면 첫 계산을 버리고 새 account day에서 한 번 다시 계산한다.
+        for account_day_attempt in range(2):
+            account_day_before = self._read_current_kst_date()
+            current_performance = performance.get_performance()
+            account_day_after = self._read_current_kst_date()
+            if account_day_before == account_day_after:
+                return current_performance  # 내부 clock 호출도 두 같은 날짜 사이에서 실행됐다.
+            if account_day_attempt == 0:
+                continue
+
+        raise RuntimeError("performance account day could not be stabilized")
+
+    def _build_trade_history_query(
+        self,
+        period: HistoryPeriod,
+        side: TradeSide,
+    ) -> TradeHistoryQuery:
+        """
+        함수 이름: _build_trade_history_query()
+        기능: HistoryPeriod와 TradeSide를 현재 KST 양끝 포함 날짜 query로 변환한다.
+        인자: period -> 변환할 canonical HistoryPeriod
+            side -> 같은 query에 결합할 canonical TradeSide
+        반환값: KST LocalDate 범위를 담은 TradeHistoryQuery
+        작성 날짜: 2026/08/23
+        """
+        # Wire 문자열을 application 경계에서 묵시적으로 enum으로 바꾸지 않는다.
+        if not isinstance(period, HistoryPeriod):
+            raise TypeError("period must be the canonical HistoryPeriod")
+        if not isinstance(side, TradeSide):
+            raise TypeError("side must be the canonical TradeSide")
+
+        current_kst_date = self._read_current_kst_date()
+
+        # 최근 N일은 오늘을 1일로 세고 ALL도 미래 거래를 포함하지 않게 오늘에서 닫는다.
+        if period is HistoryPeriod.ALL:
+            start_date = date.min
+        else:
+            lookback_days = {
+                HistoryPeriod.TODAY: 0,
+                HistoryPeriod.LAST_7_DAYS: 6,
+                HistoryPeriod.LAST_30_DAYS: 29,
+            }[period]
+            start_date = current_kst_date - timedelta(days=lookback_days)
+
+        return TradeHistoryQuery(
+            start_date=start_date,
+            end_date=current_kst_date,
+            side=side,
+        )  # 조회 조건 하나가 기간과 방향을 동시에 보존한다.
+
+    def _read_eth_holdings_snapshot(self) -> tuple[Decimal, int]:
+        """
+        함수 이름: _read_eth_holdings_snapshot()
+        기능: Account update와 경합하지 않는 ETH 보유량 및 동일 version을 읽는다.
+        인자: 없음
+        반환값: authoritative ETH holdings와 이를 만든 Account version tuple
+        작성 날짜: 2026/08/23
+        """
+        # Account의 immutable state 교체 사이에서 version이 같을 때만 두 값을 한 snapshot으로 채택한다.
+        while True:
+            account_version = self._account.version
+            holdings = self._account.get_holdings(_HOLDINGS_ASSET)
+            if self._account.version == account_version:
+                return holdings, account_version  # 반환 version은 holdings의 source provenance다.
+
+    def _notify_trade_update(
+        self,
+        trade: Trade,
+        performance: Performance,
+    ) -> None:
+        """
+        함수 이름: _notify_trade_update()
+        기능: durable state publication 뒤 optional observer를 한 번 호출하고 실패를 격리한다.
+        인자: trade -> 방금 durable 저장 및 게시한 Trade
+            performance -> 같은 publication candidate의 전체 Performance
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        observer = self._trade_update_observer
+        if observer is None:
+            return
+
+        # Event 전송 실패가 이미 저장·게시된 Trade의 save retry로 오인되지 않게 격리한다.
+        try:
+            observer(trade, performance)
+        except Exception:
+            return  # observer는 exactly-once 시도하며 durable operation 결과를 되돌리지 않는다.
 
     @property
     def dirty_order_ids(self) -> frozenset[str]:
@@ -349,6 +662,7 @@ class TradeHistoryController:
             # history와 performance candidate가 모두 완성된 뒤 공유 state 하나만 교체한다.
             with self._state_lock:
                 self._state = next_state
+            self._details_summary_state = None  # 다음 상세 진입은 복원된 전체 state를 다시 결합한다.
 
             return next_trade_history  # 반환값도 방금 게시한 state의 동일 객체다.
 
@@ -402,10 +716,20 @@ class TradeHistoryController:
                 summary,
                 realized_result,
             )
-            next_trade_history = TradeHistory(current_state.trade_history.trades)
+            published_trades = current_state.trade_history.trades
+            next_trade_history = TradeHistory(published_trades)
             next_trade_history.add_trade(trade)
+
+            # 같은 order·같은 Trade의 멱등 재처리는 durable state와 live event를 다시 만들지 않는다.
+            if len(next_trade_history.trades) == len(published_trades):
+                return next(
+                    published_trade
+                    for published_trade in published_trades
+                    if published_trade.order_id == trade.order_id
+                )  # caller에도 이미 durable publication된 canonical Trade를 반환한다.
+
             next_performance = Performance(
-                current_state.trade_history.trades,
+                published_trades,
                 clock=self._clock,
             )
             next_performance.apply_new_trade(trade)
@@ -418,7 +742,7 @@ class TradeHistoryController:
                 state=next_state,
             )
 
-            # 메시지 13.5가 성공하기 전에는 history와 performance를 publish하지 않는다.
+            # 메시지 13.5와 account-day 안정화가 성공하기 전에는 두 candidate를 publish하지 않는다.
             save_trade = getattr(
                 self._repository,
                 "save_this_trade_by_order_id",
@@ -430,12 +754,24 @@ class TradeHistoryController:
                 )
             try:
                 save_trade(trade.order_id, trade)
+                published_performance = self._stabilize_performance_account_day(
+                    next_performance
+                )
             except Exception:
                 self._pending_publications[trade.order_id] = pending_publication
                 raise  # 공개 state는 유지하고 동일 Trade의 save-only retry 근거만 보존한다.
 
+            published_state = _TradeHistoryLoadState(
+                trade_history=next_trade_history,
+                performance=published_performance,
+            )  # Durable write 중 자정이 지나도 새 account day candidate만 공개한다.
+
             with self._state_lock:
-                self._state = next_state  # 두 공개 snapshot을 같은 state 교체로 게시한다.
+                self._state = published_state  # 두 공개 snapshot을 같은 state 교체로 게시한다.
+            self._details_summary_state = None  # 새 Trade 또는 KST rollover 성과는 다음 조회에서 원자 재결합한다.
+
+            # durable state publication 경계가 끝난 뒤 같은 candidate를 event observer에 전달한다.
+            self._notify_trade_update(trade, published_performance)
 
             return trade  # durable save와 두 domain publication이 모두 완료된 Trade다.
 
@@ -470,10 +806,24 @@ class TradeHistoryController:
                     "repository must provide save_this_trade_by_order_id"
                 )
             save_trade(order_id, pending_publication.trade)
+            published_performance = self._stabilize_performance_account_day(
+                pending_publication.state.performance
+            )
+            published_state = _TradeHistoryLoadState(
+                trade_history=pending_publication.state.trade_history,
+                performance=published_performance,
+            )  # Retry 지연 중 바뀐 KST account day도 publication 전에 다시 계산한다.
 
             # 재저장 성공 뒤에만 원래 candidate를 게시하고 마지막에 dirty key를 제거한다.
             with self._state_lock:
-                self._state = pending_publication.state
+                self._state = published_state
             del self._pending_publications[order_id]  # 게시 완료 뒤 dirty lock을 해제한다.
+            self._details_summary_state = None  # save-only retry의 새 성과도 다음 조회에서 원자 재결합한다.
+
+            # dirty 해제까지 성공한 기존 candidate를 최초 성공 publication으로 한 번만 알린다.
+            self._notify_trade_update(
+                pending_publication.trade,
+                published_performance,
+            )
 
             return pending_publication.trade  # 최초 실패 때 만든 동일 immutable Trade다.

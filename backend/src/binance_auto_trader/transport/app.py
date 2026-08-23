@@ -32,6 +32,9 @@ from .contracts import (
     error_response,
     json_bytes,
     map_account_snapshot,
+    map_performance,
+    map_trade,
+    parse_trade_history_query_parameters,
     validate_uuid_text,
 )
 from .event_stream import BackendEventStream
@@ -706,6 +709,7 @@ class LoopbackTransportServer:
                 handler,
                 request_target.path,
                 request_id,
+                request_query=request_target.query,
             )
         except TransportContractError as error:
             response = error_response(response_request_id, error)
@@ -741,11 +745,15 @@ class LoopbackTransportServer:
                     status=404,
                 )
             if request_target.query:
-                raise TransportContractError(
-                    "MALFORMED_REQUEST",
-                    "CORS preflight does not accept query parameters.",
-                    status=400,
-                )
+                if request_target.path != "/v1/trades":
+                    raise TransportContractError(
+                        "MALFORMED_REQUEST",
+                        "CORS preflight does not accept query parameters.",
+                        status=400,
+                    )
+                parse_trade_history_query_parameters(
+                    request_target.query
+                )  # Browser preflight도 실제 GET과 동일한 exact query만 허용한다.
             response_origin = self._validate_host_and_origin(handler)
             _require_empty_request_body(handler)
             requested_method = _require_single_header(
@@ -881,6 +889,8 @@ class LoopbackTransportServer:
         handler: _LoopbackRequestHandler,
         request_path: str,
         request_id: str,
+        *,
+        request_query: str = "",
     ) -> TransportResponse:
         """
         함수 이름: _dispatch_http_request()
@@ -888,6 +898,7 @@ class LoopbackTransportServer:
         인자: handler -> method, header와 body를 가진 request handler
             request_path -> query를 제거한 canonical request path
             request_id -> 검증을 마친 request UUID
+            request_query -> percent-encoding을 보존한 raw query 문자열
         반환값: route의 공통 envelope 응답
         작성 날짜: 2026/08/21
         """
@@ -914,7 +925,11 @@ class LoopbackTransportServer:
         # GET route는 request body를 허용하지 않고 command만 versioned JSON을 읽는다.
         if method == "GET":
             _require_empty_request_body(handler)
-            return self._route_http_request(endpoint_key, request_id)
+            return self._route_http_request(
+                endpoint_key,
+                request_id,
+                request_query=request_query,
+            )  # Trade history만 검증 전 raw query를 route에 전달한다.
 
         request_body, raw_body = _read_json_request_body(handler)
         _validate_request_schema(request_body)
@@ -958,6 +973,7 @@ class LoopbackTransportServer:
         *,
         request_body: JsonObject | None = None,
         command_id: str | None = None,
+        request_query: str = "",
     ) -> TransportResponse:
         """
         함수 이름: _route_http_request()
@@ -966,6 +982,7 @@ class LoopbackTransportServer:
             request_id -> 검증된 request UUID
             request_body -> command의 검증된 JSON object 또는 GET이면 None
             command_id -> 검증된 Idempotency-Key 또는 GET이면 None
+            request_query -> Trade history route의 raw query 문자열
         반환값: route TransportResponse
         작성 날짜: 2026/08/21
         """
@@ -993,10 +1010,18 @@ class LoopbackTransportServer:
                 command_id,
             )
 
-        return route_function(  # GET route는 기존 두 인자 query 계약을 유지한다.
+        # Trade history는 period와 side를 한 번에 검증하도록 raw query를 보존한다.
+        if endpoint_key == ("GET", "/v1/trades"):
+            return route_function(
+                request_id,
+                self._route_context,
+                request_query,
+            )  # Percent-decoding과 duplicate 판정은 contract owner가 수행한다.
+
+        return route_function(
             request_id,
             self._route_context,
-        )
+        )  # Query가 없는 GET route는 기존 두 인자 계약을 유지한다.
 
     def _lookup_idempotency_response(
         self,
@@ -1363,8 +1388,53 @@ def create_account_update_observer(
     return publish_account_updated
 
 
+def create_trade_history_update_observer(
+    event_stream: BackendEventStream,
+) -> Callable[[object, object], object]:
+    """
+    함수 이름: create_trade_history_update_observer()
+    기능: durable Trade publication을 주문과 전체 Performance event로 연속 발행한다.
+    인자: event_stream -> WebSocket server와 공유할 BackendEventStream
+    반환값: TradeHistoryController에 주입할 trade history observer
+    작성 날짜: 2026/08/23
+    """
+    if not isinstance(event_stream, BackendEventStream):
+        raise TypeError("event_stream must be a BackendEventStream")
+
+    def publish_trade_history_updated(
+        trade: object,
+        performance: object,
+    ) -> object:
+        """
+        함수 이름: publish_trade_history_updated()
+        기능: 신규 체결과 필터 범위와 독립적인 전체 성과를 순서대로 공개한다.
+        인자: trade -> persistence 성공 후 publish된 authoritative Trade
+            performance -> 같은 history publication의 authoritative Performance
+        반환값: ORDER_EXECUTED와 PERFORMANCE_UPDATED event tuple
+        작성 날짜: 2026/08/23
+        """
+        # 두 DTO를 먼저 완성해 Performance mapping 실패가 ORDER event만 남기지 않게 한다.
+        order_payload = {"trade": map_trade(trade)}
+        performance_payload = {
+            "performance": map_performance(performance),
+        }  # 필터링하지 않은 D-12 전체 성과를 별도 event payload로 만든다.
+
+        # 테이블 재조회 trigger와 성과 갱신을 하나의 atomic consecutive batch로 공개한다.
+        return event_stream.publish_many(
+            (
+                ("ORDER_EXECUTED", order_payload),
+                ("PERFORMANCE_UPDATED", performance_payload),
+            )
+        )
+
+    return publish_trade_history_updated
+
+
 def create_loopback_transport_application(
-    runtime_factory: Callable[[Callable[[object], object]], RuntimeSnapshotSource],
+    runtime_factory: Callable[
+        [Callable[[object], object], Callable[[object, object], object]],
+        RuntimeSnapshotSource,
+    ],
     session_token: str,
     *,
     allowed_origins: Sequence[str],
@@ -1374,7 +1444,7 @@ def create_loopback_transport_application(
     """
     함수 이름: create_loopback_transport_application()
     기능: 동일 event stream observer를 runtime factory와 loopback server에 top-level 조립한다.
-    인자: runtime_factory -> account observer를 받아 bootstrap runtime을 만드는 factory
+    인자: runtime_factory -> account와 trade history observer를 받아 runtime을 만드는 factory
         session_token -> inherited pipe 또는 memory로 받은 session token
         allowed_origins -> exact Tauri와 optional dev Origin 목록
         start_runtime -> runtime startup 함수 또는 bootstrap 기본 함수
@@ -1407,12 +1477,16 @@ def create_loopback_transport_application(
             raise TypeError("close_runtime must be callable")
         selected_close_runtime = close_runtime
 
-    # Event stream을 먼저 만들어 Account observer와 WebSocket이 같은 instance를 공유한다.
+    # Event stream을 먼저 만들어 두 observer와 WebSocket이 같은 instance를 공유한다.
     event_stream = BackendEventStream()
     account_observer = create_account_update_observer(event_stream)
+    trade_history_observer = create_trade_history_update_observer(event_stream)
     runtime: RuntimeSnapshotSource | None = None
     try:
-        runtime = runtime_factory(account_observer)
+        runtime = runtime_factory(
+            account_observer,
+            trade_history_observer,
+        )  # Entity callback과 loopback replay가 하나의 sequence owner를 공유한다.
         selected_start_runtime(runtime)
 
         # Startup 함수의 반환만 믿지 않고 descriptor 공개에 필요한 ready 사후조건을 확인한다.
@@ -1480,7 +1554,7 @@ def read_session_token_from_fd(token_fd: int) -> str:
 
 def run_transport_process(
     runtime_factory: Callable[
-        [Callable[[object], object]],
+        [Callable[[object], object], Callable[[object, object], object]],
         RuntimeSnapshotSource,
     ],
     *,
@@ -1494,7 +1568,7 @@ def run_transport_process(
     """
     함수 이름: run_transport_process()
     기능: inherited token과 runtime factory로 단일 소유 application process를 실행한다.
-    인자: runtime_factory -> shared account observer를 받아 bootstrap runtime을 만드는 factory
+    인자: runtime_factory -> shared account와 trade history observer를 받아 runtime을 만드는 factory
         token_fd -> session token을 한 번 읽을 inherited pipe FD
         ready_fd -> secret 없는 descriptor를 기록할 inherited pipe FD
         stop_fd -> 한 byte 또는 EOF로 종료를 알릴 inherited pipe FD
@@ -1689,6 +1763,13 @@ def _parse_request_target(request_target: object) -> object:
             "REQUEST_TOO_LARGE",
             "The request target exceeds its size limit.",
             status=413,
+        )
+
+    # RFC request-target에 존재할 수 없는 raw fragment delimiter는 query parsing 전에 거부한다.
+    if "#" in request_target:
+        raise TransportContractError(
+            "MALFORMED_REQUEST",
+            "Request target fragments are not allowed.",
         )
 
     parsed_target = urlsplit(request_target)

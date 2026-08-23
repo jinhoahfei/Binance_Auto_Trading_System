@@ -1,12 +1,100 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { TradeHistoryDetails } from '../../shared/contracts';
 import { DEFAULT_TRADING_LOGIC_COVERAGE } from '../../shared/contracts';
 import {
     CHART_DRAWING_FIXTURE,
     FakeUiCommandAdapter,
+    TRADE_RECORD_FIXTURES,
 } from '../../shared/testing';
+import { map_backend_snapshot } from '../../shared/api';
+import { create_backend_snapshot_fixture } from '../../shared/api/backendTestFixtures';
 import { UiApplicationFacade } from './UiApplicationFacade';
 
+/**
+ * 함수 이름: wait_for_trade_history_settlement()
+ * 기능: facade가 시작한 거래 상세 Promise와 actor 전이를 다음 event loop까지 기다린다.
+ * 인자: 없음
+ * 반환값: 조회 정착 후 완료되는 Promise
+ * 작성 날짜: 2026/08/23
+ */
+async function wait_for_trade_history_settlement(): Promise<void> {
+    await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+    });
+}
+
 describe('UiApplicationFacade', () => {
+    it('test_show_trade_details_message_trace: SHOW intent를 Case 3 1계열 live query와 render까지 연결한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-23',
+            history_records: [],
+        });
+        const observed_message_ids: Array<string> = ['1'];
+
+        facade.start();
+        expect(facade.dispatch({ type: 'SHOW_TRADE_HISTORY' })).toBe(true);
+        observed_message_ids.push('1.1', '1.1.1');
+        expect(facade.get_view_model().route).toBe('trade_history');
+        expect(facade.get_view_model().trade_history.status).toBe('loading');
+        await wait_for_trade_history_settlement();
+
+        expect(command_adapter.command_records).toContainEqual({
+            name: 'load_trade_history',
+            payload: { period: 'today', side: 'all' },
+        });
+        observed_message_ids.push('1.1.2');
+        expect(facade.get_view_model().trade_history.status).toBe('ready');
+        observed_message_ids.push('1.1.3');
+        expect(observed_message_ids).toEqual([
+            '1',
+            '1.1',
+            '1.1.1',
+            '1.1.2',
+            '1.1.3',
+        ]);
+        facade.stop();
+    });
+
+    it('test_trade_history_filter_message_trace: filter intent를 Case 3 2계열 combined query와 render까지 연결한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-23',
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+        await wait_for_trade_history_settlement();
+        facade.dispatch({ type: 'HISTORY_SIDE_SELECTED', side: 'sell' });
+        await wait_for_trade_history_settlement();
+        command_adapter.command_records.splice(0);
+
+        const observed_message_ids: Array<string> = ['2'];
+        expect(facade.dispatch({
+            type: 'HISTORY_PERIOD_SELECTED',
+            period: 'last30days',
+        })).toBe(true);
+        observed_message_ids.push('2.1', '2.1.1');
+        expect(facade.get_view_model().trade_history.status).toBe('loading');
+        await wait_for_trade_history_settlement();
+
+        expect(command_adapter.command_records).toEqual([{
+            name: 'load_trade_history',
+            payload: { period: 'last30days', side: 'sell' },
+        }]);
+        observed_message_ids.push('2.1.2');
+        expect(facade.get_view_model().trade_history.status).toBe('ready');
+        observed_message_ids.push('2.1.3');
+        expect(observed_message_ids).toEqual([
+            '2',
+            '2.1',
+            '2.1.1',
+            '2.1.2',
+            '2.1.3',
+        ]);
+        facade.stop();
+    });
+
     it('VR-01: REGIME 미선택 시작 intent를 안내 modal과 highlight 흐름으로 조정한다', () => {
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-12',
@@ -91,6 +179,196 @@ describe('UiApplicationFacade', () => {
         facade.stop();
     });
 
+    it('ACCOUNT/PERFORMANCE intent가 D-12 summary의 holdings와 성과 범위를 독립 갱신한다', () => {
+        const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
+            today: '2026-08-23',
+        });
+
+        facade.start();
+        facade.dispatch({
+            type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
+            position: { quantity: '2.5 ETH' },
+        });
+        facade.dispatch({
+            type: 'TRADE_HISTORY_PERFORMANCE_UPDATED',
+            daily_return: { value: '+1.25%', tone: 'positive' },
+            sell_performance: {
+                winRate: '60.00%',
+                completedCount: '3 / 5',
+                averageRealizedReturn: '+0.50%',
+                totalRealizedPnl: '12 USDT',
+                tone: 'positive',
+            },
+            fees: {
+                amount: '0.25 USDT',
+                totalExecutedAmount: '-',
+                averageSlippage: '-',
+            },
+        });
+
+        expect(facade.get_view_model().trade_history.summary).toMatchObject({
+            position: { quantity: '2.5 ETH' },
+            dailyReturn: { value: '+1.25%' },
+            sellPerformance: { completedCount: '3 / 5' },
+            fees: { amount: '0.25 USDT' },
+        });
+        facade.stop();
+    });
+
+    it('조회 중 event보다 오래된 초기 summary는 버리고 이후 명시적 refresh summary는 적용한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        let resolve_stale_query: ((details: TradeHistoryDetails) => void) | undefined;
+        let query_count = 0;
+        vi.spyOn(command_adapter, 'load_trade_history').mockImplementation(async () => {
+            query_count += 1;
+            if (query_count === 1) {
+                return new Promise<TradeHistoryDetails>((resolve) => {
+                    resolve_stale_query = resolve;
+                });
+            }
+
+            return {
+                records: TRADE_RECORD_FIXTURES,
+                summary: {
+                    ...command_adapter.trade_history_summary,
+                    dailyReturn: { value: '+2.00%', tone: 'positive' },
+                    position: { quantity: '3 ETH' },
+                },
+            };
+        });
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-23',
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+        await wait_for_trade_history_settlement();
+        expect(facade.get_view_model().trade_history.status).toBe('loading');
+
+        facade.dispatch({
+            type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
+            position: { quantity: '2.5 ETH' },
+        });
+        facade.dispatch({
+            type: 'TRADE_HISTORY_PERFORMANCE_UPDATED',
+            daily_return: { value: '+1.00%', tone: 'positive' },
+            sell_performance: {
+                winRate: '50.00%',
+                completedCount: '1 / 2',
+                averageRealizedReturn: '+0.50%',
+                totalRealizedPnl: '5 USDT',
+                tone: 'positive',
+            },
+            fees: {
+                amount: '0.10 USDT',
+                totalExecutedAmount: '-',
+                averageSlippage: '-',
+            },
+        });
+        resolve_stale_query?.({
+            records: [TRADE_RECORD_FIXTURES[0]!],
+            summary: {
+                ...command_adapter.trade_history_summary,
+                dailyReturn: { value: '-9.00%', tone: 'negative' },
+                position: { quantity: '99 ETH' },
+            },
+        });
+        await wait_for_trade_history_settlement();
+
+        expect(facade.get_view_model().trade_history.records).toEqual([
+            TRADE_RECORD_FIXTURES[0],
+        ]);
+        expect(facade.get_view_model().trade_history.summary).toMatchObject({
+            dailyReturn: { value: '+1.00%' },
+            position: { quantity: '2.5 ETH' },
+        });
+
+        // 새 revision에서 시작한 명시적 refresh는 KST rollover를 포함한 최신 composite를 적용한다.
+        facade.dispatch({ type: 'REFRESH_TRADE_HISTORY' });
+        await wait_for_trade_history_settlement();
+        expect(facade.get_view_model().trade_history.summary).toMatchObject({
+            dailyReturn: { value: '+2.00%' },
+            position: { quantity: '3 ETH' },
+        });
+        facade.stop();
+    });
+
+    it('ORDER_EXECUTED는 recent orders를 항상 갱신하고 active history에서만 현재 query를 refresh한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-23',
+            recent_trades: [],
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+        await wait_for_trade_history_settlement();
+        const query_count_before_order = command_adapter.command_records.filter((record) => {
+            return record.name === 'load_trade_history';
+        }).length;
+
+        facade.dispatch({
+            type: 'BUY_ORDER_EXECUTED',
+            trade: TRADE_RECORD_FIXTURES[0]!,
+        });
+        await wait_for_trade_history_settlement();
+        expect(facade.get_view_model().trader_panel.trades[0]).toEqual(TRADE_RECORD_FIXTURES[0]);
+        expect(command_adapter.command_records.filter((record) => {
+            return record.name === 'load_trade_history';
+        })).toHaveLength(query_count_before_order + 1);
+
+        facade.dispatch({ type: 'BACK_TO_DASHBOARD' });
+        facade.dispatch({
+            type: 'SELL_ORDER_EXECUTED',
+            trade: TRADE_RECORD_FIXTURES[1]!,
+        });
+        await wait_for_trade_history_settlement();
+        expect(facade.get_view_model().trader_panel.trades[0]).toEqual(TRADE_RECORD_FIXTURES[1]);
+        expect(command_adapter.command_records.filter((record) => {
+            return record.name === 'load_trade_history';
+        })).toHaveLength(query_count_before_order + 1);
+        facade.stop();
+    });
+
+    it('full resync의 recent_trades로 filtered table을 덮지 않고 active current query를 다시 읽는다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-23',
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+        await wait_for_trade_history_settlement();
+        facade.dispatch({ type: 'HISTORY_SIDE_SELECTED', side: 'sell' });
+        await wait_for_trade_history_settlement();
+        expect(facade.get_view_model().trade_history.records).toEqual([
+            TRADE_RECORD_FIXTURES[0],
+        ]);
+
+        const synchronized_snapshot = map_backend_snapshot(
+            create_backend_snapshot_fixture(),
+            '2026-08-23',
+        ).server_snapshot;
+        facade.dispatch({
+            type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
+            snapshot: synchronized_snapshot,
+        });
+
+        expect(facade.get_view_model().trade_history.status).toBe('loading');
+        expect(facade.get_view_model().trade_history.records).toEqual([
+            TRADE_RECORD_FIXTURES[0],
+        ]);
+        await wait_for_trade_history_settlement();
+        expect(command_adapter.command_records.at(-1)).toEqual({
+            name: 'load_trade_history',
+            payload: { period: 'today', side: 'sell' },
+        });
+        expect(facade.get_view_model().trade_history.records).toEqual([
+            TRADE_RECORD_FIXTURES[0],
+        ]);
+        facade.stop();
+    });
+
     it('Phase 6: 미지원 REGIME 선택은 유지하되 시작 명령은 unavailable 안내로 차단한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
@@ -158,7 +436,6 @@ describe('UiApplicationFacade', () => {
                 logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
                 command_enabled: false,
                 recent_trades: [],
-                history_records: [],
                 scale_in_percentage: 40,
                 scale_out_percentage: 60,
                 account_strategy: {
@@ -244,7 +521,6 @@ describe('UiApplicationFacade', () => {
                 logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
                 command_enabled: false,
                 recent_trades: [],
-                history_records: [],
                 scale_in_percentage: 50,
                 scale_out_percentage: 50,
                 account_strategy: {

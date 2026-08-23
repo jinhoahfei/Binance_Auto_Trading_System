@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
@@ -344,6 +344,79 @@ class BackendEventStream:
             self._condition.notify_all()
 
         return envelope
+
+    def publish_many(
+        self,
+        events: Sequence[tuple[str, Mapping[str, object]]],
+    ) -> tuple[BackendEventEnvelope, ...]:
+        """
+        함수 이름: publish_many()
+        기능: 서로 연관된 event 묶음을 검증 완료 뒤 연속 sequence로 원자 공개한다.
+        인자: events -> event type과 DTO payload pair의 비어 있지 않은 순서열
+        반환값: 입력 순서와 같은 immutable BackendEventEnvelope tuple
+        작성 날짜: 2026/08/23
+        """
+        if isinstance(events, (str, bytes)) or not isinstance(events, Sequence):
+            raise TypeError("events must be a sequence of event pairs")
+        if not events:
+            raise ValueError("events must not be empty")
+        if len(events) > self._max_replay_events:
+            raise ValueError("event batch exceeds the replay event limit")
+
+        # 모든 payload를 lock과 sequence 변경 전에 정규화해 후반 mapping 실패의 부분 발행을 막는다.
+        normalized_events: list[tuple[str, JsonObject]] = []
+        for event_pair in events:
+            if not isinstance(event_pair, tuple) or len(event_pair) != 2:
+                raise TypeError("each event must be an event type and payload tuple")
+            event_type, payload = event_pair
+            normalized_events.append(
+                (event_type, normalize_json_object(payload))
+            )  # 각 payload는 아직 replay buffer에 공개되지 않은 local candidate다.
+
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("event stream is closed")
+            if self._last_sequence > MAX_UNSIGNED_SEQUENCE - len(normalized_events):
+                raise OverflowError("transport sequence exhausted unsigned 64-bit range")
+
+            # Envelope와 frame 크기를 전부 확인한 뒤에만 replay deque와 sequence를 함께 commit한다.
+            candidate_events: list[_StoredEvent] = []
+            next_sequence = self._last_sequence
+            event_time = _normalize_event_time(
+                self._clock(),
+                "occurred_at",
+            )
+            publication_time = self._read_monotonic_time()
+            for event_type, normalized_payload in normalized_events:
+                next_sequence += 1
+                envelope = BackendEventEnvelope(
+                    session_id=self._session_id,
+                    event_id=str(uuid4()),
+                    sequence=next_sequence,
+                    occurred_at=event_time,
+                    event_type=event_type,
+                    aggregate_version=None,
+                    correlation_id=None,
+                    payload=normalized_payload,
+                )
+                if len(json_bytes(envelope.to_dto())) > MAX_WEBSOCKET_FRAME_BYTES:
+                    raise ValueError("event envelope exceeds the WebSocket frame limit")
+                candidate_events.append(
+                    _StoredEvent(
+                        envelope=envelope,
+                        published_at_monotonic=publication_time,
+                    )
+                )
+
+            self._events.extend(candidate_events)
+            self._last_sequence = next_sequence
+            self._prune_locked(publication_time)
+            self._condition.notify_all()
+
+        return tuple(
+            stored_event.envelope
+            for stored_event in candidate_events
+        )  # 호출자는 같은 atomic batch의 연속 event만 받는다.
 
     def replay_after(self, after_sequence: int) -> ReplayBatch:
         """

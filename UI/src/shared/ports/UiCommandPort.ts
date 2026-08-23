@@ -3,8 +3,8 @@ import type {
     CsvExportOptions,
     CsvExportReceipt,
     RegimeType,
+    TradeHistoryDetails,
     TradeHistoryQuery,
-    TradeRecord,
 } from '../contracts';
 
 /**
@@ -68,11 +68,14 @@ export interface UiCommandPort {
     /**
      * 함수 이름: load_trade_history()
      * 기능: 기간과 거래 방향 조건에 맞는 거래 내역 조회를 요청한다.
-     * 인자: query -> 거래 내역 필터
-     * 반환값: 정규화된 거래 내역 Promise
-     * 작성 날짜: 2026/08/12
+     * 인자: query -> 거래 내역 필터, signal -> 화면 수명주기에 연결된 optional 취소 신호
+     * 반환값: 필터된 거래 행과 D-12 고정 범위 요약을 결합한 상세 결과 Promise
+     * 작성 날짜: 2026/08/23
      */
-    load_trade_history(query: TradeHistoryQuery): Promise<ReadonlyArray<TradeRecord>>;
+    load_trade_history(
+        query: TradeHistoryQuery,
+        signal?: AbortSignal,
+    ): Promise<TradeHistoryDetails>;
 
     /**
      * 함수 이름: pick_csv_directory()

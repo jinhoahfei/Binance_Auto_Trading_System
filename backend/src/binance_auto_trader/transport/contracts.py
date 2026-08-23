@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 import json
 import re
 from typing import Any, Protocol
+from urllib.parse import parse_qsl
 from uuid import UUID
 
 from binance_auto_trader.domain.common import RegimeType
+from binance_auto_trader.domain.history import HistoryPeriod, TradeSide
 from binance_auto_trader.domain.trading.logic_registry import (
     list_trading_logic_configurations,
 )
@@ -36,6 +38,25 @@ _REGIME_TO_WIRE = {
 _WIRE_TO_REGIME = {
     wire_value: regime_type
     for regime_type, wire_value in _REGIME_TO_WIRE.items()
+}
+_HISTORY_PERIOD_FROM_WIRE = {
+    "today": HistoryPeriod.TODAY,
+    "last7days": HistoryPeriod.LAST_7_DAYS,
+    "last30days": HistoryPeriod.LAST_30_DAYS,
+    "all": HistoryPeriod.ALL,
+}
+_HISTORY_PERIOD_TO_WIRE = {
+    period: wire_value
+    for wire_value, period in _HISTORY_PERIOD_FROM_WIRE.items()
+}
+_HISTORY_SIDE_FROM_WIRE = {
+    "all": TradeSide.ALL,
+    "buy": TradeSide.BUY,
+    "sell": TradeSide.SELL,
+}
+_HISTORY_SIDE_TO_WIRE = {
+    side: wire_value
+    for wire_value, side in _HISTORY_SIDE_FROM_WIRE.items()
 }
 
 
@@ -377,6 +398,103 @@ def regime_from_wire(wire_value: str) -> RegimeType:
         ) from error
 
 
+def _trade_history_query_error() -> TransportContractError:
+    """
+    함수 이름: _trade_history_query_error()
+    기능: 상세 조회 query shape나 값이 비정규일 때 사용할 공개 안전 오류를 생성한다.
+    인자: 없음
+    반환값: 재시도 불가능한 MALFORMED_REQUEST 오류
+    작성 날짜: 2026/08/23
+    """
+    return TransportContractError(
+        "MALFORMED_REQUEST",
+        "Trade history query must contain one canonical period and side.",
+        status=400,
+        retryable=False,
+    )
+
+
+def _history_period_to_wire(period: HistoryPeriod) -> str:
+    """
+    함수 이름: _history_period_to_wire()
+    기능: canonical HistoryPeriod를 UI query와 동일한 lowercase wire 값으로 변환한다.
+    인자: period -> 상세 조회에 적용한 canonical 기간
+    반환값: today, last7days, last30days 또는 all
+    작성 날짜: 2026/08/23
+    """
+    try:
+        return _HISTORY_PERIOD_TO_WIRE[period]
+    except (KeyError, TypeError) as error:
+        raise TypeError("period must be a canonical HistoryPeriod") from error
+
+
+def _history_side_to_wire(side: TradeSide) -> str:
+    """
+    함수 이름: _history_side_to_wire()
+    기능: canonical TradeSide를 UI query와 동일한 lowercase wire 값으로 변환한다.
+    인자: side -> 상세 조회에 적용한 canonical 거래 방향
+    반환값: all, buy 또는 sell
+    작성 날짜: 2026/08/23
+    """
+    try:
+        return _HISTORY_SIDE_TO_WIRE[side]
+    except (KeyError, TypeError) as error:
+        raise TypeError("side must be a canonical TradeSide") from error
+
+
+def parse_trade_history_query_parameters(
+    query_parameters: str,
+) -> tuple[HistoryPeriod, TradeSide]:
+    """
+    함수 이름: parse_trade_history_query_parameters()
+    기능: raw URL query에서 exact period와 side를 canonical domain enum으로 복원한다.
+    인자: query_parameters -> fragment를 제외한 percent-encoded raw query string
+    반환값: canonical HistoryPeriod와 TradeSide tuple
+    작성 날짜: 2026/08/23
+    """
+    if not isinstance(query_parameters, str):
+        raise _trade_history_query_error()
+
+    # 두 field 이외의 누락·중복·unknown 값은 parser 단계에서 모두 같은 typed 400으로 닫는다.
+    try:
+        query_pairs = parse_qsl(
+            query_parameters,
+            keep_blank_values=True,
+            strict_parsing=True,
+            encoding="utf-8",
+            errors="strict",
+            max_num_fields=2,
+            separator="&",
+        )
+    except (UnicodeError, ValueError) as error:
+        raise _trade_history_query_error() from error
+    if len(query_pairs) != 2:
+        raise _trade_history_query_error()
+
+    # Percent-decoding 뒤의 exact 이름과 cardinality만 허용하고 whitespace를 정규화하지 않는다.
+    query_values: dict[str, str] = {}
+    expected_field_names = {"period", "side"}
+    for field_name, field_value in query_pairs:
+        if field_name not in expected_field_names:
+            raise _trade_history_query_error()
+        if field_name in query_values:
+            raise _trade_history_query_error()
+        if not field_value:
+            raise _trade_history_query_error()
+        query_values[field_name] = field_value
+    if set(query_values) != expected_field_names:
+        raise _trade_history_query_error()
+
+    # Wire enum lookup은 대소문자 변환이나 default 없이 canonical 값만 domain enum으로 바꾼다.
+    try:
+        period = _HISTORY_PERIOD_FROM_WIRE[query_values["period"]]
+        side = _HISTORY_SIDE_FROM_WIRE[query_values["side"]]
+    except KeyError as error:
+        raise _trade_history_query_error() from error
+
+    return period, side  # Controller에는 transport 문자열이 아니라 검증된 enum만 전달한다.
+
+
 def normalize_json_value(value: object) -> JsonValue:
     """
     함수 이름: normalize_json_value()
@@ -706,6 +824,68 @@ def map_performance(performance: object) -> JsonObject:
     )
 
 
+def map_trade_details(
+    trade_details: object,
+    period: HistoryPeriod,
+) -> JsonObject:
+    """
+    함수 이름: map_trade_details()
+    기능: 상세 조회 결과를 applied query, filtered rows와 별도 전체 summary DTO로 변환한다.
+    인자: trade_details -> TradeHistoryController가 반환한 TradeDetailsResult
+        period -> Controller query에 전달한 canonical 기간 preset
+    반환값: 금융값을 문자열로 보존한 composite trade-history DTO
+    작성 날짜: 2026/08/23
+    """
+    if not isinstance(period, HistoryPeriod):
+        raise TypeError("period must be a canonical HistoryPeriod")
+
+    # Result의 query 날짜·side와 filtered row tuple을 한 application snapshot에서 읽는다.
+    query = getattr(trade_details, "query")
+    rows = getattr(trade_details, "rows")
+    start_date = getattr(query, "start_date")
+    end_date = getattr(query, "end_date")
+    side = getattr(query, "side")
+    if type(start_date) is not date or type(end_date) is not date:
+        raise TypeError("trade detail query dates must be date values")
+    if not isinstance(rows, tuple):
+        raise TypeError("trade detail rows must be a tuple")
+    if len(rows) > MAX_TRADE_PAGE_SIZE:
+        raise TransportContractError(
+            "TRADE_HISTORY_PAGE_TOO_LARGE",
+            "Trade history query exceeds the maximum page size.",
+            status=413,
+            retryable=False,
+            details={"maximum_rows": MAX_TRADE_PAGE_SIZE},
+        )
+
+    # D-12에 따라 row filter 결과와 Account·Performance 전체 summary 범위를 분리한다.
+    row_dtos = [map_trade(row) for row in rows]  # 검증된 상한 안의 행만 일괄 mapping한다.
+    performance_dto = map_performance(
+        getattr(trade_details, "performance")
+    )  # Controller가 계산한 aggregate를 transport에서 다시 계산하지 않는다.
+    return normalize_json_object(
+        {
+            "query": {
+                "period": _history_period_to_wire(period),
+                "side": _history_side_to_wire(side),
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            },
+            "rows": row_dtos,
+            "row_count": len(row_dtos),
+            "summary": {
+                "holdings_asset": getattr(trade_details, "holdings_asset"),
+                "holdings": getattr(trade_details, "holdings"),
+                "account_version": getattr(
+                    trade_details,
+                    "account_version",
+                ),
+                "performance": performance_dto,
+            },
+        }
+    )
+
+
 def map_trading_logic_coverage() -> list[JsonObject]:
     """
     함수 이름: map_trading_logic_coverage()
@@ -849,6 +1029,7 @@ def render_typescript_contracts() -> str:
     return f"""/* 이 파일은 Python transport schema에서 생성됩니다. 직접 수정하지 마세요. */
 
 export const BACKEND_SCHEMA_VERSION = {SCHEMA_VERSION} as const;
+export const BACKEND_MAX_TRADE_PAGE_SIZE = {MAX_TRADE_PAGE_SIZE} as const;
 
 export type BackendDecimalString = string;
 export type BackendRegimeType = {regime_values};
@@ -864,6 +1045,8 @@ export type BackendTradingLogicStartGuard =
     | 'READY'
     | 'UNSUPPORTED_TRADING_LOGIC';
 export type BackendTradeSide = 'BUY' | 'SELL';
+export type BackendHistoryPeriod = 'today' | 'last7days' | 'last30days' | 'all';
+export type BackendTradeSideFilter = 'all' | 'buy' | 'sell';
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
 
 export interface BackendConnectionSnapshot {{
@@ -980,6 +1163,27 @@ export interface BackendPerformanceSnapshot {{
     readonly win_rate: BackendDecimalString | null;
 }}
 
+export interface BackendTradeDetailsQuery {{
+    readonly period: BackendHistoryPeriod;
+    readonly side: BackendTradeSideFilter;
+    readonly start_date: string;
+    readonly end_date: string;
+}}
+
+export interface BackendTradeDetailsSummary {{
+    readonly holdings_asset: 'ETH';
+    readonly holdings: BackendDecimalString;
+    readonly account_version: number;
+    readonly performance: BackendPerformanceSnapshot;
+}}
+
+export interface BackendTradeDetails {{
+    readonly query: BackendTradeDetailsQuery;
+    readonly rows: ReadonlyArray<BackendTradeSnapshot>;
+    readonly row_count: number;
+    readonly summary: BackendTradeDetailsSummary;
+}}
+
 export interface BackendSnapshot {{
     readonly session_id: string;
     readonly last_sequence: number;
@@ -1048,6 +1252,14 @@ export interface BackendEventEnvelope<TPayload = Readonly<Record<string, unknown
 
 export interface BackendAccountUpdatedPayload {{
     readonly account: BackendAccountSnapshot;
+}}
+
+export interface BackendOrderExecutedPayload {{
+    readonly trade: BackendTradeSnapshot;
+}}
+
+export interface BackendPerformanceUpdatedPayload {{
+    readonly performance: BackendPerformanceSnapshot;
 }}
 
 export type BackendResyncReason = 'REPLAY_GAP' | 'SEQUENCE_AHEAD';

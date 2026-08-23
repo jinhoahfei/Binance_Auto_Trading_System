@@ -14,6 +14,7 @@ export {
     is_backend_regime_type,
     map_backend_event_to_intents,
     map_backend_snapshot,
+    map_trade_history_summary,
     map_trade_record,
     parse_backend_web_socket_message,
     validate_account_snapshot,

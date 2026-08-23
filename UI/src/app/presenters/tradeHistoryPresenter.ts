@@ -15,10 +15,17 @@ const HISTORY_ROW_BY_ID = new Map(
 );
 
 const EMPTY_HISTORY_STATE = {
-    title: '표시할 거래 내역이 없습니다',
+    title: '거래 내역이 없습니다',
     description: '선택한 기간과 거래 구분에 해당하는 체결 기록이 없습니다.',
     suggestion: '필터를 변경하거나 자동매매를 시작한 뒤 다시 확인해 주세요.',
     actionLabel: '자동매매 화면으로 이동',
+};
+
+const LOADING_HISTORY_STATE = {
+    title: '거래 내역을 불러오는 중입니다',
+    description: '현재 선택한 기간과 거래 구분으로 최신 체결 기록을 조회하고 있습니다.',
+    suggestion: '잠시만 기다려 주세요.',
+    actionLabel: '조회 중',
 };
 
 const HISTORY_PERIOD_LABELS: Readonly<Record<AppViewModel['trade_history']['period'], string>> = {
@@ -188,32 +195,36 @@ export function present_trade_history_props(
 ): TradeHistoryPageProps {
     const is_empty = view_model.trade_history.status === 'empty';
     const is_failed = view_model.trade_history.status === 'failed';
-    const status_label = view_model.trade_history.is_loading
+    const is_loading = view_model.trade_history.is_loading;
+    const status_label = is_loading
         ? '조회 중'
         : is_failed
             ? '조회 실패'
             : `체결 ${view_model.trade_history.records.length}건`;
-    const empty_state = is_failed
-        ? {
-            title: '거래 내역을 불러오지 못했습니다',
-            description: view_model.trade_history.error?.message
-                ?? '거래 내역 조회 중 알 수 없는 오류가 발생했습니다.',
-            suggestion: '잠시 후 다시 시도해 주세요.',
-            actionLabel: '다시 시도',
-        }
-        : is_empty
-            ? EMPTY_HISTORY_STATE
-            : undefined;
+    const empty_state = is_loading
+        ? LOADING_HISTORY_STATE
+        : is_failed
+            ? {
+                title: '거래 내역을 불러오지 못했습니다',
+                description: view_model.trade_history.error?.message
+                    ?? '거래 내역 조회 중 알 수 없는 오류가 발생했습니다.',
+                suggestion: '잠시 후 다시 시도해 주세요.',
+                actionLabel: '다시 시도',
+            }
+            : is_empty
+                ? EMPTY_HISTORY_STATE
+                : undefined;
 
     return {
         description: `${HISTORY_PERIOD_LABELS[view_model.trade_history.period]} · ${view_model.trade_history.symbol} · ${HISTORY_SIDE_LABELS[view_model.trade_history.side]} · ${status_label}`,
         summary: view_model.trade_history.summary,
-        rows: is_failed
+        rows: is_loading || is_failed
             ? []
             : view_model.trade_history.records.map(create_trade_row_view_model),
         period: map_history_period_to_view(view_model.trade_history.period),
         side: map_history_side_to_view(view_model.trade_history.side),
-        filtersDisabled: view_model.trade_history.is_loading || is_failed,
+        isLoading: is_loading,
+        filtersDisabled: is_loading,
         ...(empty_state === undefined ? {} : { emptyState: empty_state }),
         onBack: () => controller.dispatch({ type: 'BACK_TO_DASHBOARD' }),
         onPeriodChange: (period) => controller.dispatch({
@@ -225,16 +236,20 @@ export function present_trade_history_props(
             side: map_view_side_to_history(side),
         }),
         onExportCsv: () => controller.dispatch({ type: 'OPEN_CSV_EXPORT' }),
-        onStartTrading: () => {
-            if (is_failed) {
-                controller.dispatch({ type: 'REFRESH_TRADE_HISTORY' });
-                return;
-            }
+        ...(is_loading
+            ? {}
+            : {
+                onStartTrading: () => {
+                    if (is_failed) {
+                        controller.dispatch({ type: 'REFRESH_TRADE_HISTORY' });
+                        return;
+                    }
 
-            controller.dispatch({ type: 'BACK_TO_DASHBOARD' });
-            if (!view_model.trading.is_trading) {
-                controller.dispatch({ type: 'START_TRADING_CLICKED' });
-            }
-        },
+                    controller.dispatch({ type: 'BACK_TO_DASHBOARD' });
+                    if (!view_model.trading.is_trading) {
+                        controller.dispatch({ type: 'START_TRADING_CLICKED' });
+                    }
+                },
+            }),
     };
 }

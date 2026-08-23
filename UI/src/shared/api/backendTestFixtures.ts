@@ -181,6 +181,14 @@ export function create_backend_event_fixture(
     event_id = TEST_BACKEND_EVENT_ID,
     session_id = TEST_BACKEND_SESSION_ID,
 ): BackendEventEnvelope {
+    const account_payload = payload.account;
+    const account_version = typeof account_payload === 'object'
+        && account_payload !== null
+        && 'version' in account_payload
+        && Number.isSafeInteger(account_payload.version)
+        ? account_payload.version as number
+        : null;
+
     return {
         schema_version: BACKEND_SCHEMA_VERSION,
         session_id,
@@ -188,7 +196,8 @@ export function create_backend_event_fixture(
         sequence,
         occurred_at: '2026-08-21T02:03:04.567890Z',
         type,
-        aggregate_version: null,
+        // ACCOUNT_UPDATED fixture는 production observer와 같은 exact Account.version을 사용한다.
+        aggregate_version: account_version,
         correlation_id: null,
         payload,
     };

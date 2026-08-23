@@ -19,6 +19,10 @@ describe('거래 내역 표시 컴포넌트', () => {
 
     expect(screen.getByText('+1.62%')).toBeInTheDocument();
     expect(screen.getByText('0.8421 ETH')).toBeInTheDocument();
+    expect(screen.getByText('오늘 계좌 수익률')).toBeInTheDocument();
+    expect(screen.getByText('전체 매도 성과')).toBeInTheDocument();
+    expect(screen.getByText('현재 ETH 보유량')).toBeInTheDocument();
+    expect(screen.getByText('오늘 계좌 수수료')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '진입당시 ETH가격' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '직전 매수 수익률' })).toBeInTheDocument();
     expect(screen.getByText('Momentum Exit')).toBeInTheDocument();
@@ -64,5 +68,25 @@ describe('거래 내역 표시 컴포넌트', () => {
     expect(screen.getByText('거래 내역이 없습니다')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '자동매매 시작하기' }));
     expect(handle_start_trading).toHaveBeenCalledTimes(1);
+  });
+
+  it('loading 중에는 empty CTA를 노출하지 않고 busy 상태만 표시한다', () => {
+    render(
+      <TradeTable
+        emptyState={{
+          title: '거래 내역을 불러오는 중입니다',
+          description: '최신 체결 기록을 조회하고 있습니다.',
+          suggestion: '잠시만 기다려 주세요.',
+          actionLabel: '조회 중',
+        }}
+        isLoading
+        rows={[]}
+      />,
+    );
+
+    expect(screen.getByLabelText('거래 내역 표')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('거래 내역을 불러오는 중입니다')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '조회 중' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '자동매매 시작하기' })).not.toBeInTheDocument();
   });
 });

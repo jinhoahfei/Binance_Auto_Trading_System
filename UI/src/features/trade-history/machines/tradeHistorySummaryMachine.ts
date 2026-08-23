@@ -35,6 +35,10 @@ export type TradeHistorySummaryMachineEvent =
         readonly type: 'BUY_ORDER_EXECUTED';
         readonly position: PositionSummary;
     }
+    | {
+        readonly type: 'HOLDINGS_SNAPSHOT_UPDATED';
+        readonly position: PositionSummary;
+    }
     | { readonly type: 'DAILY_TRADING_FEE_CHANGED'; readonly fees: FeeSummary };
 
 const DEFAULT_TRADE_HISTORY_SUMMARY: TradeHistorySummaryViewModel = {
@@ -118,6 +122,7 @@ export function create_trade_history_summary_machine(
                     ...context.summary,
                     position: event.type === 'BUY_ORDER_EXECUTED'
                         || event.type === 'SELL_ORDER_EXECUTED'
+                        || event.type === 'HOLDINGS_SNAPSHOT_UPDATED'
                         ? event.position
                         : context.summary.position,
                 }),
@@ -143,6 +148,9 @@ export function create_trade_history_summary_machine(
             },
             PERFORMANCE_SNAPSHOT_UPDATED: {
                 actions: 'update_performance_snapshot',
+            },
+            HOLDINGS_SNAPSHOT_UPDATED: {
+                actions: 'update_position',
             },
         },
         states: {

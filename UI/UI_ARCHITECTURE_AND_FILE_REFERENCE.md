@@ -4,7 +4,7 @@
 |---|---|
 | 문서 상태 | As-built — 현재 구현 기준 |
 | 작성일 | 2026-08-12 |
-| 최종 갱신일 | 2026-08-21 |
+| 최종 갱신일 | 2026-08-23 |
 | 대상 경로 | `/Users/oscar/Desktop/Binance_Auto/UI` |
 | 대상 구현 | React + TypeScript + XState + Vite + Tauri 2 UI |
 | 제외 범위 | 실제 Binance client·credential·주문 실행, 실제 CSV writer, packaged sidecar 실행·종료 lifecycle |
@@ -36,6 +36,7 @@
 - backend 명령은 `UiCommandPort` 뒤로 격리되어 있다.
 - production entry는 `BackendUiAdapter`의 ready snapshot을 먼저 적용하며, Storybook과 화면 tests만 `FakeUiCommandAdapter`를 명시적으로 사용한다.
 - Phase 7의 REGIME 선택, split, 자동매매 start/stop은 `expected_version`과 idempotency key를 포함해 backend fake session owner에 연결되어 있다.
+- Phase 10의 Trade History는 최초 `today/all`, 12개 결합 filter, D-12 summary/rows 분리와 order/account/performance event 및 sequence gap 재조회를 실제 backend에 연결한다.
 - backend 계좌·REGIME·성과 read model은 ETHUSDT/USDT 단위를 유지하고 없는 position·entry price·slippage를 추측하지 않는다.
 - 가격 차트는 Binance 공개 market-data REST/WebSocket에서 `ETHUSDT`의 `1m`, `30m`, `4h`, `1d` 봉을 조회·구독한다.
 - 실시간 시장 데이터는 WebSocket을 먼저 시작한 뒤 REST 과거 봉과 병합하고, 동일 `symbol + interval + open_time`에는 WebSocket 값을 우선한다.
@@ -47,8 +48,8 @@
 
 demo bootstrap의 초기 상태는 API 연결 표시가 online이고 자동매매는 정지 상태이며,
 실제 적용 REGIME은 `null`이다. production bootstrap은 이 fixture를 읽지 않고 backend의
-추천/선택/account/history/performance snapshot을 사용한다. 추천값은 표시만 하며 사용자
-선택값으로 자동 적용하지 않는다.
+추천/선택/account/recent/performance snapshot과 별도 Trade History details query를 사용한다.
+추천값은 표시만 하며 사용자 선택값으로 자동 적용하지 않는다.
 
 ## 3. 전체 아키텍처
 
@@ -664,8 +665,8 @@ trade-history/
 | `components/TradeHistoryComponents.test.tsx` | 요약/행 구조, 두 filter intent, empty action을 검증한다. |
 | `components/types.ts` | history 표시 filter, summary, 표 행, empty state ViewModel을 정의한다. |
 | `components/index.ts` | 거래 내역 Boundary 컴포넌트의 공개 barrel이다. |
-| `machines/tradeHistoryMachine.ts` | 기간·side filter를 조합해 `UiCommandPort.load_trade_history()`를 호출하고 idle/loading/ready/empty/failed를 관리한다. |
-| `machines/tradeHistoryMachine.test.ts` | filter 조합, empty 결과, adapter 실패를 검증한다. |
+| `machines/tradeHistoryMachine.ts` | 기간·side filter를 조합해 `UiCommandPort.load_trade_history()`를 호출하고 idle/loading/ready/empty/failed, KST 자정 timer, in-flight 취소와 order/resync/summary revision 경쟁을 관리한다. |
+| `machines/tradeHistoryMachine.test.ts` | 12개 filter, empty/failure/retry, KST 자정, load 중 체결, resync, 화면 이탈 취소와 재진입 stale 방어를 검증한다. |
 | `machines/tradeHistorySummaryMachine.ts` | 수익률, 매도 성과, ETH 보유량, 수수료를 네 독립 표시 region으로 관리한다. |
 | `machines/tradeHistorySummaryMachine.test.ts` | D1~D4 summary 갱신의 독립성을 검증한다. |
 | `fixtures.ts` | Figma 요약 수치, empty 요약과 9개 상세 거래 행 fixture를 제공한다. |
@@ -813,12 +814,12 @@ src/shared/
 
 | 파일 | 역할 |
 |---|---|
-| `api/BackendUiAdapter.ts` | Bearer/request/idempotency header, timeout과 HTTP envelope를 처리하고 REGIME/start/stop/split command의 body·`expected_version`과 command receipt를 strict 검증한다. query 없는 WebSocket 첫-frame 인증, sequence dedup/gap, snapshot-first full resync와 trading version 단조 동기화를 구현하며 업무 guard는 소유하지 않는다. |
-| `api/backendEventMapper.ts` | generated wire 값을 strict runtime 검증하고 backend snapshot/event를 계산 없는 UI record와 facade intent로 변환한다. ETHUSDT/ETH/USDT와 market-indicator version/price coherence, canonical 5개 `logic_coverage` 순서, support/status Guard, trading session/version/ratio/position 일치를 fail closed로 검증하며 KRW 환산, entry price, slippage나 상태별 성과를 추측하지 않는다. |
-| `api/*.test.ts` | malformed/unknown schema, request/session mismatch, product/cross-field 불일치, duplicate·out-of-order·gap sequence, reconnect snapshot 우선, USDT 단위와 unavailable 값을 검증한다. |
+| `api/BackendUiAdapter.ts` | Bearer/request/idempotency header, caller 취소·timeout과 HTTP envelope를 처리하고 REGIME/start/stop/split command 및 strict Trade History composite query를 검증한다. query 없는 WebSocket 첫-frame 인증, sequence dedup/gap, snapshot-first full resync와 trading version·event sequence·history summary revision 동기화를 구현하며 업무 guard는 소유하지 않는다. |
+| `api/backendEventMapper.ts` | generated wire 값을 strict runtime 검증하고 backend snapshot/order/account/performance event를 계산 없는 UI record와 facade intent로 변환한다. ETHUSDT/ETH/USDT와 market-indicator version/price coherence, canonical 5개 `logic_coverage` 순서, support/status Guard, trading session/version/ratio/position 일치를 fail closed로 검증하며 KRW 환산, entry price, slippage나 상태별 성과를 추측하지 않는다. |
+| `api/*.test.ts` | malformed/unknown schema, request/session mismatch, Trade History exact composite/caller 취소, product/cross-field 불일치, duplicate·out-of-order·gap sequence, reconnect snapshot 우선, USDT 단위와 unavailable 값을 검증한다. |
 | `api/backendTestFixtures.ts` | production token과 분리된 transport contract unit fixture를 제공한다. |
-| `contracts/backendContracts.generated.ts` | Python transport schema renderer의 deterministic 출력이다. trading snapshot의 status/session/version/split/position/`command_enabled`와 canonical `logic_coverage` (`regime_type`, `support_status`, `start_guard`)를 포함하며 직접 수정하지 않음을 backend drift test가 byte-for-byte로 확인한다. private `LOWER_BB` key와 transition ID는 UI에 노출하지 않는다. |
-| `contracts/uiContracts.ts` | generated `RegimeType`을 재사용하고 `TradingLogicCoverage`와 production default(TYPE_0 supported, TYPE_1~4 unsupported), 기간, 거래 방향, `TradeRecord`, chart drawing, CSV option/receipt와 공통 오류 형식을 정의한다. |
+| `contracts/backendContracts.generated.ts` | Python transport schema renderer의 deterministic 출력이다. trading snapshot/coverage와 Trade History query·rows·summary 및 order/performance event payload를 포함하며 직접 수정하지 않음을 backend drift test가 byte-for-byte로 확인한다. private `LOWER_BB` key와 transition ID는 UI에 노출하지 않는다. |
+| `contracts/uiContracts.ts` | generated `RegimeType`을 재사용하고 `TradingLogicCoverage`와 production default(TYPE_0 supported, TYPE_1~4 unsupported), `TradeRecord`, `TradeHistoryQuery/Details`, chart drawing, CSV option/receipt와 공통 오류 형식을 정의한다. |
 | `contracts/index.ts` | 공통 contract type의 공개 barrel이다. |
 | `formatting/decimalText.ts` | 금융 문자열을 JS number 연산 없이 부호·소수점·quote asset 표시로 변환한다. |
 | `errors/commandFailure.ts` | adapter typed failure의 code/message를 actor별 fallback과 한 형식으로 정규화한다. |
@@ -948,7 +949,7 @@ PNG는 모두 1440×1024, `deviceScaleFactor=1` 기준이다. 구현 variant를 
 |---|---|---|
 | 전역 route/modal | `uiShellMachine` | dashboard/history, 활성 modal 하나 |
 | 기능 UI 상태 | 기능별 XState actor | tab, interval, filter, candidate, pending |
-| backend 표시 snapshot | Python runtime → `BackendUiAdapter` → read-only actor context | REGIME 추천/선택, USDT account, recent/history/performance |
+| backend 표시 snapshot/query | Python runtime → `BackendUiAdapter` → read-only actor context | REGIME 추천/선택, USDT account, recent/performance snapshot과 filtered history details |
 | UI 순간 상태 | React component/hook | 달력 표시 월, drawing 중 pointer, chart instance, focus return |
 | 화면용 파생값 | `AppViewModel`과 presenter | status label, table row, component props |
 | 외부 명령 결과 | `UiCommandPort` 구현체 | 시작/중지, 조회, CSV, shutdown |
@@ -1006,7 +1007,8 @@ snapshot/event가 소유한다.
 - 최초 주기별 1,000개와 좌측 이동 시 1,000개 단위 지연 적재를 통한 Binance 첫 거래 봉까지의 과거 탐색
 - 주기별 실제 시각·거래량, EMA9·BB20, 연결/재연결/오류 상태 표시
 - 최근 체결/실시간 지표 tab
-- history filter, empty/failed state, 조회 재시도와 실제 상태 기반 description
+- live history 최초 `today/all`, 12개 결합 filter, loading/ready/empty/failed/retry와 실제 상태 기반 description
+- `ORDER_EXECUTED` recent/history 갱신, Account/Performance summary 갱신, sequence gap 및 KST 자정 현재 query 재조회
 - CSV 입력·달력·validation과 공백 저장 경로 거부
 - dashboard/trade-history route 단위 production code splitting
 - 앱 종료 확인과 Tauri 창 close interception
@@ -1024,7 +1026,7 @@ snapshot/event가 소유한다.
 | 자동매매 | Phase 7 fake REGIME/start/stop/split command, version/idempotency와 stopping/reconciliation/terminated 표시 연결 완료. `disabled`·`testnet`·`live`는 fail closed | Phase 8 order/fill owner, Phase 9 실제 Binance client |
 | REGIME 계산 | backend 추천/지표 read와 sole-writer `set_regime_type` 적용 command 완료. active 변경은 `TRADING_ACTIVE` | 새 REGIME 전략은 Event-Action Table/registry 선행 |
 | 계좌/포지션 | live Account와 Phase 7 authoritative `PositionSnapshot`/보유 여부 read 완료 | Phase 8 mutable Position과 execution 반영 |
-| 거래 내역 | startup recent/performance read 완료, 상세 query unavailable | Phase 10 detail/query owner |
+| 거래 내역 | Phase 10 strict composite details, 12개 filter, D-12 summary/rows 분리, event/gap/KST 자정 갱신 완료 | Phase 11 CSV export 결과 연결 |
 | CSV 폴더 선택 | 결정적 fake 경로 반환 | Tauri dialog 또는 backend filesystem adapter |
 | CSV 파일 쓰기 | fake receipt 반환 | `UiCommandPort.export_csv` 실제 writer/atomic save |
 | shutdown | live route는 typed unavailable, demo는 fake 완료 | Phase 12 거래 engine flush, stream close, sidecar 종료 |

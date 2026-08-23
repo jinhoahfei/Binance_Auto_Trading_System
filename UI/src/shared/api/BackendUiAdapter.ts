@@ -2,16 +2,19 @@ import type {
     BackendAuthenticateMessage,
     BackendEventEnvelope,
     BackendSnapshot,
+    BackendTradeDetails,
+    BackendTradeDetailsQuery,
+    BackendTradeDetailsSummary,
     BackendTradingLogicSupportStatus,
     BackendTradingStatus,
 } from '../contracts';
-import { BACKEND_SCHEMA_VERSION } from '../contracts';
+import { BACKEND_MAX_TRADE_PAGE_SIZE, BACKEND_SCHEMA_VERSION } from '../contracts';
 import type {
     CsvExportOptions,
     CsvExportReceipt,
     RegimeType,
+    TradeHistoryDetails,
     TradeHistoryQuery,
-    TradeRecord,
 } from '../contracts';
 import type { UiApplicationIntent } from '../../app/control';
 import type { TradingCommandReceipt, UiCommandPort } from '../ports';
@@ -20,9 +23,11 @@ import {
     BackendContractError,
     decode_backend_http_envelope,
     map_backend_event_to_intents,
+    map_trade_history_summary,
     map_trade_record,
     parse_backend_web_socket_message,
     validate_backend_snapshot,
+    validate_performance_snapshot,
     validate_trade_snapshot,
 } from './backendEventMapper';
 
@@ -31,7 +36,12 @@ const MAX_TRACKED_EVENT_IDS = 10_000;
 const MAX_PENDING_IDEMPOTENCY_KEYS = 128;
 const NORMAL_CLIENT_CLOSE_CODE = 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
+const ADAPTER_STOP_ABORT_REASON = Symbol('ADAPTER_STOP_ABORT_REASON');
+const CALLER_REQUEST_ABORT_REASON = Symbol('CALLER_REQUEST_ABORT_REASON');
+const REQUEST_TIMEOUT_ABORT_REASON = Symbol('REQUEST_TIMEOUT_ABORT_REASON');
 const UNIT_INTERVAL_RATIO_PATTERN = /^(?:0(?:\.[0-9]+)?|1(?:\.0+)?)$/u;
+const NON_NEGATIVE_DECIMAL_PATTERN = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
+const LOCAL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const BACKEND_TRADING_STATUSES: ReadonlySet<BackendTradingStatus> = new Set([
     'not_started',
     'running',
@@ -372,32 +382,231 @@ function percentage_to_ratio_text(percentage: number): string {
     return `0.${percentage.toString().padStart(2, '0')}`.replace(/0$/u, '');
 }
 
+// Generated composite와 각 primitive의 exact wire key를 runtime 검증 목록으로 고정한다.
+const TRADE_DETAILS_KEYS = [
+    'query',
+    'rows',
+    'row_count',
+    'summary',
+] as const satisfies ReadonlyArray<keyof BackendTradeDetails>;
+const TRADE_DETAILS_QUERY_KEYS = [
+    'period',
+    'side',
+    'start_date',
+    'end_date',
+] as const satisfies ReadonlyArray<keyof BackendTradeDetailsQuery>;
+const TRADE_DETAILS_SUMMARY_KEYS = [
+    'holdings_asset',
+    'holdings',
+    'account_version',
+    'performance',
+] as const satisfies ReadonlyArray<keyof BackendTradeDetailsSummary>;
+const PERFORMANCE_KEYS = [
+    'daily_return_rate',
+    'cumulative_return_rate',
+    'realized_pnl',
+    'daily_fee',
+    'total_fee',
+    'average_sell_return_rate',
+    'total_profit',
+    'winning_sell_count',
+    'losing_sell_count',
+    'breakeven_sell_count',
+    'completed_sell_count',
+    'win_rate',
+] as const satisfies ReadonlyArray<keyof BackendTradeDetailsSummary['performance']>;
+const TRADE_KEYS = [
+    'trade_id',
+    'order_id',
+    'client_order_id',
+    'symbol',
+    'executed_at',
+    'side',
+    'regime_type',
+    'strategy',
+    'requested_quantity',
+    'executed_quantity',
+    'executed_amount',
+    'average_fill_price',
+    'market_price_at_decision',
+    'fee_amount',
+    'fee_asset',
+    'fee_quote_amount',
+    'allocated_cost_basis',
+    'realized_pnl',
+    'realized_return_rate',
+    'exit_reason',
+] as const satisfies ReadonlyArray<keyof BackendTradeDetails['rows'][number]>;
+
 /**
- * 함수 이름: validate_trade_page()
- * 기능: 미래 trade query 성공값의 rows와 row_count가 서로 일치하는지 검증한다.
- * 인자: value -> `/v1/trades` 성공 data
- * 반환값: 계산 없이 mapping한 UI trade 목록
- * 작성 날짜: 2026/08/21
+ * 함수 이름: require_exact_record()
+ * 기능: composite 상세 응답의 object 여부와 허용된 exact key 집합을 함께 검증한다.
+ * 인자: value -> 검증할 JSON 값, keys -> 허용 key 목록, field_name -> 오류 경계 이름
+ * 반환값: exact key만 가진 record
+ * 작성 날짜: 2026/08/23
  */
-function validate_trade_page(value: unknown): ReadonlyArray<TradeRecord> {
+function require_exact_record(
+    value: unknown,
+    keys: ReadonlyArray<string>,
+    field_name: string,
+): Record<string, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
-            'Backend trade page must be an object',
+            `Backend ${field_name} must be an object`,
         );
     }
 
-    const page = value as Record<string, unknown>;
-    if (!Array.isArray(page.rows)
-        || !Number.isSafeInteger(page.row_count)
-        || page.row_count !== page.rows.length) {
+    const record = value as Record<string, unknown>;
+    const actual_keys = Object.keys(record);
+    if (actual_keys.length !== keys.length
+        || !keys.every((key) => Object.hasOwn(record, key))) {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
-            'Backend trade page is invalid',
+            `Backend ${field_name} keys are invalid`,
         );
     }
 
-    return page.rows.map((row) => map_trade_record(validate_trade_snapshot(row)));
+    return record;
+}
+
+/**
+ * 함수 이름: parse_local_date_epoch()
+ * 기능: YYYY-MM-DD가 실제 Gregorian 날짜인지 확인하고 UTC day 비교값으로 변환한다.
+ * 인자: value -> backend가 반환한 inclusive KST LocalDate
+ * 반환값: 검증된 날짜의 UTC epoch millisecond
+ * 작성 날짜: 2026/08/23
+ */
+function parse_local_date_epoch(value: unknown): number {
+    if (typeof value !== 'string' || !LOCAL_DATE_PATTERN.test(value)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend trade query date is invalid',
+        );
+    }
+
+    const epoch = Date.parse(`${value}T00:00:00.000Z`);
+    if (!Number.isFinite(epoch)
+        || new Date(epoch).toISOString().slice(0, 10) !== value) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend trade query date is invalid',
+        );
+    }
+
+    return epoch;
+}
+
+/**
+ * 함수 이름: validate_trade_details_query()
+ * 기능: backend가 echo한 period/side와 inclusive KST 날짜 범위가 요청과 일치하는지 검증한다.
+ * 인자: value -> 상세 응답 query, requested_query -> UI가 전송한 결합 filter
+ * 반환값: 검증된 wire query
+ * 작성 날짜: 2026/08/23
+ */
+function validate_trade_details_query(
+    value: unknown,
+    requested_query: TradeHistoryQuery,
+): BackendTradeDetailsQuery {
+    const query = require_exact_record(value, TRADE_DETAILS_QUERY_KEYS, 'trade query');
+    if (query.period !== requested_query.period || query.side !== requested_query.side) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend trade query does not match the requested filters',
+        );
+    }
+
+    const start_epoch = parse_local_date_epoch(query.start_date);
+    const end_epoch = parse_local_date_epoch(query.end_date);
+    const inclusive_span_days = ((end_epoch - start_epoch) / 86_400_000) + 1;
+    const expected_span_days = requested_query.period === 'today'
+        ? 1
+        : requested_query.period === 'last7days'
+            ? 7
+            : requested_query.period === 'last30days'
+                ? 30
+                : null;
+    const is_invalid_all_range = requested_query.period === 'all'
+        && query.start_date !== '0001-01-01';
+
+    // Preset은 inclusive day 수를, 전체 기간은 명세된 최소 LocalDate를 정확히 사용해야 한다.
+    if (end_epoch < start_epoch
+        || is_invalid_all_range
+        || (expected_span_days !== null && inclusive_span_days !== expected_span_days)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend trade query date range is inconsistent',
+        );
+    }
+
+    return query as unknown as BackendTradeDetailsQuery;
+}
+
+/**
+ * 함수 이름: validate_trade_details_summary()
+ * 기능: current ETH holdings와 account version, 전체 Performance의 exact composite 계약을 검증한다.
+ * 인자: value -> 상세 응답 summary
+ * 반환값: 검증된 wire summary
+ * 작성 날짜: 2026/08/23
+ */
+function validate_trade_details_summary(value: unknown): BackendTradeDetailsSummary {
+    const summary = require_exact_record(value, TRADE_DETAILS_SUMMARY_KEYS, 'trade summary');
+    const performance = require_exact_record(
+        summary.performance,
+        PERFORMANCE_KEYS,
+        'trade performance',
+    );
+    if (summary.holdings_asset !== 'ETH'
+        || typeof summary.holdings !== 'string'
+        || !NON_NEGATIVE_DECIMAL_PATTERN.test(summary.holdings)
+        || !Number.isSafeInteger(summary.account_version)
+        || (summary.account_version as number) < 0) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend trade summary is invalid',
+        );
+    }
+
+    validate_performance_snapshot(performance);
+
+    return summary as unknown as BackendTradeDetailsSummary;
+}
+
+/**
+ * 함수 이름: validate_trade_details()
+ * 기능: 상세 조회의 query, filtered rows와 D-12 summary를 하나의 strict 결과로 검증한다.
+ * 인자: value -> `/v1/trades` 성공 data, requested_query -> 전송한 period/side filter
+ * 반환값: UI actor가 소비할 정규화된 composite 상세 결과
+ * 작성 날짜: 2026/08/23
+ */
+function validate_trade_details(
+    value: unknown,
+    requested_query: TradeHistoryQuery,
+): TradeHistoryDetails {
+    const details = require_exact_record(value, TRADE_DETAILS_KEYS, 'trade details');
+    validate_trade_details_query(details.query, requested_query);
+    const summary = validate_trade_details_summary(details.summary);
+    if (!Array.isArray(details.rows)
+        || !Number.isSafeInteger(details.row_count)
+        || (details.row_count as number) < 0
+        || (details.row_count as number) > BACKEND_MAX_TRADE_PAGE_SIZE
+        || details.row_count !== details.rows.length) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend trade rows are invalid',
+        );
+    }
+
+    const wire_details = details as unknown as BackendTradeDetails;
+    const records = wire_details.rows.map((row) => {
+        require_exact_record(row, TRADE_KEYS, 'trade row');
+        return map_trade_record(validate_trade_snapshot(row));
+    });
+
+    return {
+        records,
+        summary: map_trade_history_summary(summary.performance, summary.holdings),
+    };
 }
 
 /**
@@ -809,14 +1018,15 @@ export class BackendUiAdapter implements UiCommandPort {
 
     /**
      * 함수 이름: load_trade_history()
-     * 기능: period/side query를 URLSearchParams로 직렬화하고 typed unavailable 또는 검증된 rows를 반환한다.
-     * 인자: query -> UI trade history filter
-     * 반환값: 검증된 UI trade 목록 Promise
-     * 작성 날짜: 2026/08/21
+     * 기능: period/side query를 URLSearchParams로 직렬화하고 strict composite 상세 결과를 반환한다.
+     * 인자: query -> UI trade history filter, signal -> route invoke 수명주기 취소 신호
+     * 반환값: 검증된 필터 행과 D-12 summary Promise
+     * 작성 날짜: 2026/08/23
      */
     async load_trade_history(
         query: TradeHistoryQuery,
-    ): Promise<ReadonlyArray<TradeRecord>> {
+        signal?: AbortSignal,
+    ): Promise<TradeHistoryDetails> {
         const query_string = new URLSearchParams({
             period: query.period,
             side: query.side,
@@ -825,7 +1035,10 @@ export class BackendUiAdapter implements UiCommandPort {
         return this.request_json(
             'GET',
             `/v1/trades?${query_string}`,
-            validate_trade_page,
+            (value) => validate_trade_details(value, query),
+            undefined,
+            false,
+            signal,
         );
     }
 
@@ -898,7 +1111,7 @@ export class BackendUiAdapter implements UiCommandPort {
      * 기능: Bearer/X-Request-Id와 command Idempotency-Key를 붙이고 공통 envelope를 decode한다.
      * 인자: method -> HTTP method, path -> exact endpoint/query
      *      validate_data -> success data validator, body -> optional JSON body
-     *      is_command -> idempotency header 필요 여부
+     *      is_command -> idempotency header 필요 여부, caller_signal -> optional 호출자 취소 신호
      * 반환값: 검증된 success data Promise
      * 작성 날짜: 2026/08/21
      */
@@ -908,6 +1121,7 @@ export class BackendUiAdapter implements UiCommandPort {
         validate_data: (value: unknown) => Data,
         body?: Readonly<Record<string, unknown>>,
         is_command = false,
+        caller_signal?: AbortSignal,
     ): Promise<Data> {
         const token = this.#session_token;
         if (token === null) {
@@ -939,13 +1153,27 @@ export class BackendUiAdapter implements UiCommandPort {
         }
 
         const abort_controller = new AbortController();
+        const abort_from_caller = () => {
+            abort_controller.abort(CALLER_REQUEST_ABORT_REASON);
+        };
+
+        // Caller가 이미 취소됐거나 이후 취소되면 adapter 소유 controller에 같은 수명 경계를 합성한다.
+        if (caller_signal?.aborted === true) {
+            abort_from_caller();
+        } else {
+            caller_signal?.addEventListener('abort', abort_from_caller, { once: true });
+        }
         this.#active_abort_controllers.add(abort_controller);
         const timeout_handle = globalThis.setTimeout(() => {
-            abort_controller.abort();
+            abort_controller.abort(REQUEST_TIMEOUT_ABORT_REASON);
         }, this.#request_timeout_ms);
         let response_status: number | null = null;
 
         try {
+            if (abort_controller.signal.aborted) {
+                throw abort_controller.signal.reason;
+            }
+
             const response = await this.#fetch(`${this.#http_origin}${path}`, {
                 method,
                 headers,
@@ -975,6 +1203,27 @@ export class BackendUiAdapter implements UiCommandPort {
             }
             return decoded_data;
         } catch (error) {
+            if (abort_controller.signal.reason === CALLER_REQUEST_ABORT_REASON) {
+                throw new BackendAdapterError(
+                    'BACKEND_REQUEST_CANCELLED',
+                    'Backend request was cancelled',
+                    false,
+                );
+            }
+            if (abort_controller.signal.reason === ADAPTER_STOP_ABORT_REASON) {
+                throw new BackendAdapterError(
+                    'ADAPTER_STOPPED',
+                    'Backend adapter has already stopped',
+                    false,
+                );
+            }
+            if (abort_controller.signal.reason === REQUEST_TIMEOUT_ABORT_REASON) {
+                throw new BackendAdapterError(
+                    'BACKEND_REQUEST_TIMEOUT',
+                    'Backend request timed out',
+                    true,
+                );
+            }
             if (error instanceof BackendCommandError) {
                 const is_definitive_client_failure = !error.retryable
                     && response_status !== null
@@ -992,15 +1241,12 @@ export class BackendUiAdapter implements UiCommandPort {
             }
 
             throw new BackendAdapterError(
-                abort_controller.signal.aborted
-                    ? 'BACKEND_REQUEST_TIMEOUT'
-                    : 'BACKEND_UNREACHABLE',
-                abort_controller.signal.aborted
-                    ? 'Backend request timed out'
-                    : 'Backend is unavailable',
+                'BACKEND_UNREACHABLE',
+                'Backend is unavailable',
                 true,
             );
         } finally {
+            caller_signal?.removeEventListener('abort', abort_from_caller);
             globalThis.clearTimeout(timeout_handle);
             this.#active_abort_controllers.delete(abort_controller);
         }
@@ -1326,7 +1572,7 @@ export class BackendUiAdapter implements UiCommandPort {
      */
     private abort_active_requests(): void {
         this.#active_abort_controllers.forEach((abort_controller) => {
-            abort_controller.abort();
+            abort_controller.abort(ADAPTER_STOP_ABORT_REASON);
         });
         this.#active_abort_controllers.clear();
     }

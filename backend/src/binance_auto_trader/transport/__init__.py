@@ -7,6 +7,7 @@ from .app import (
     ServerDescriptor,
     create_account_update_observer,
     create_loopback_transport_application,
+    create_trade_history_update_observer,
     read_session_token_from_fd,
     run_transport_process,
 )
@@ -51,6 +52,7 @@ __all__ = [  # wildcard import도 명시된 Phase 5 공개 API 밖으로 확장�
     "build_snapshot_dto",
     "create_account_update_observer",
     "create_loopback_transport_application",
+    "create_trade_history_update_observer",
     "decimal_from_wire",
     "datetime_to_wire",
     "decimal_to_wire",

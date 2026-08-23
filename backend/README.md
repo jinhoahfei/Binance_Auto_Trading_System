@@ -23,8 +23,8 @@
   buffer 병합, snapshot 교체 순서 조정
 - `application/trading_controller.py`: account·REGIME/session, serial Action 실행,
   same-ID 주문 reconciliation, Position/history 반영과 startup/reconnect 복구
-- `application/trade_history_controller.py`: Repository → TradeHistory →
-  Performance 초기 복원
+- `application/trade_history_controller.py`: Repository → TradeHistory → Performance 초기 복원,
+  KST 상세 query·D-12 summary cache와 durable Trade event observer 조정
 - `bootstrap/`: Entity/Gateway/Controller 조립, 실행 mode, market → account →
   history/performance startup과 이중 opt-in Testnet 전용 composition
 - `transport/`: `127.0.0.1` random-port HTTP/WebSocket, schema v2 DTO,
@@ -208,6 +208,6 @@ authenticated read-only, capped BUY/force-sell과
 open-order/position 실제 restart scenario는 아직 실행하지 않았으며 Phase 9 master
 완료 조건도 열어 둡니다.
 
-Trade History details와 CSV export는 Phase 10~11, packaged Tauri sidecar는 Phase 12,
-market-event→strategy E2E와 live readiness는 Phase 13 범위입니다. domain package에는
-transport/network/file 의존성이 없습니다.
+Trade History details와 live UI query/event 연결은 Phase 10에서 완료했습니다. CSV export는
+Phase 11, packaged Tauri sidecar는 Phase 12, market-event→strategy E2E와 live readiness는
+Phase 13 범위입니다. domain package에는 transport/network/file 의존성이 없습니다.

@@ -1,7 +1,7 @@
 """거래 이력, 조회 조건과 startup Performance 공개 계약을 제공한다."""
 
 from .performance import InvalidZeroCostBasisError, Performance
-from .query import TradeHistoryQuery, TradeSide
+from .query import HistoryPeriod, TradeHistoryQuery, TradeSide
 from .trade import (
     FeeAssetConversionRequiredError,
     TRADE_RECORD_TYPE,
@@ -18,6 +18,7 @@ __all__ = [
     "OrderHistoryConflictError",
     "FeeAssetConversionRequiredError",
     "InvalidZeroCostBasisError",
+    "HistoryPeriod",
     "Performance",
     "RealizedResult",
     "TRADE_RECORD_TYPE",

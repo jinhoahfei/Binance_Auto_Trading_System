@@ -1,6 +1,7 @@
 /* 이 파일은 Python transport schema에서 생성됩니다. 직접 수정하지 마세요. */
 
 export const BACKEND_SCHEMA_VERSION = 2 as const;
+export const BACKEND_MAX_TRADE_PAGE_SIZE = 1000 as const;
 
 export type BackendDecimalString = string;
 export type BackendRegimeType = 'type0' | 'type1' | 'type2' | 'type3' | 'type4';
@@ -16,6 +17,8 @@ export type BackendTradingLogicStartGuard =
     | 'READY'
     | 'UNSUPPORTED_TRADING_LOGIC';
 export type BackendTradeSide = 'BUY' | 'SELL';
+export type BackendHistoryPeriod = 'today' | 'last7days' | 'last30days' | 'all';
+export type BackendTradeSideFilter = 'all' | 'buy' | 'sell';
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
 
 export interface BackendConnectionSnapshot {
@@ -132,6 +135,27 @@ export interface BackendPerformanceSnapshot {
     readonly win_rate: BackendDecimalString | null;
 }
 
+export interface BackendTradeDetailsQuery {
+    readonly period: BackendHistoryPeriod;
+    readonly side: BackendTradeSideFilter;
+    readonly start_date: string;
+    readonly end_date: string;
+}
+
+export interface BackendTradeDetailsSummary {
+    readonly holdings_asset: 'ETH';
+    readonly holdings: BackendDecimalString;
+    readonly account_version: number;
+    readonly performance: BackendPerformanceSnapshot;
+}
+
+export interface BackendTradeDetails {
+    readonly query: BackendTradeDetailsQuery;
+    readonly rows: ReadonlyArray<BackendTradeSnapshot>;
+    readonly row_count: number;
+    readonly summary: BackendTradeDetailsSummary;
+}
+
 export interface BackendSnapshot {
     readonly session_id: string;
     readonly last_sequence: number;
@@ -200,6 +224,14 @@ export interface BackendEventEnvelope<TPayload = Readonly<Record<string, unknown
 
 export interface BackendAccountUpdatedPayload {
     readonly account: BackendAccountSnapshot;
+}
+
+export interface BackendOrderExecutedPayload {
+    readonly trade: BackendTradeSnapshot;
+}
+
+export interface BackendPerformanceUpdatedPayload {
+    readonly performance: BackendPerformanceSnapshot;
 }
 
 export type BackendResyncReason = 'REPLAY_GAP' | 'SEQUENCE_AHEAD';

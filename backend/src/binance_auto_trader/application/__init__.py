@@ -8,7 +8,7 @@ from .regime_controller import (
     RegimeEvaluationTrace,
     TradingSelectionPort,
 )
-from .trade_history_controller import TradeHistoryController
+from .trade_history_controller import TradeDetailsResult, TradeHistoryController
 from .trading_controller import (
     AccountStreamRecoveryBlockedError,
     OrderExecutionFailureCode,
@@ -38,6 +38,7 @@ __all__ = [
     "RegimeEvaluationTrace",
     "SplitRatioResult",
     "StartupOrderReconciliationError",
+    "TradeDetailsResult",
     "TradeHistoryController",
     "TradingController",
     "TradingLogicSelectionResult",

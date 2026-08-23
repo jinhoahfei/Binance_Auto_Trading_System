@@ -376,6 +376,7 @@ describe('backend snapshot and event mapping', () => {
         ]);
         expect(mapped.facade_options.command_enabled).toBe(false);
         expect(mapped.facade_options.is_trading).toBe(false);
+        expect(mapped.facade_options).not.toHaveProperty('history_records');
         expect(mapped.server_snapshot).toMatchObject({
             trading_version: 0,
             trading_session_id: null,
@@ -400,7 +401,7 @@ describe('backend snapshot and event mapping', () => {
             entry_price: null,
             total: '432.150',
         });
-        expect(mapped.server_snapshot.trade_history_summary.position.quantity).toBe('-');
+        expect(mapped.server_snapshot.trade_history_summary.position.quantity).toBe('1.75 ETH');
         expect(mapped.server_snapshot.trade_history_summary.sellPerformance).toMatchObject({
             averageRealizedReturn: '-0.10%',
             totalRealizedPnl: '-0.40 USDT',
@@ -464,9 +465,40 @@ describe('backend snapshot and event mapping', () => {
 
         expect(map_backend_event_to_intents(account_event)).toEqual([
             expect.objectContaining({ type: 'ACCOUNT_ASSETS_UPDATED' }),
+            {
+                type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
+                position: { quantity: '1.75 ETH' },
+            },
         ]);
         expect(map_backend_event_to_intents(unknown_event)).toEqual([]);
         expect(map_backend_event_to_intents(ready_event)).toEqual([]);
+    });
+
+    it('ACCOUNT_UPDATED에 ETH balance가 없으면 Account.get_holdings 계약대로 summary를 0 ETH로 갱신한다', () => {
+        const account = create_backend_snapshot_fixture().account;
+        const account_event = create_backend_event_fixture(10, 'ACCOUNT_UPDATED', {
+            account: {
+                ...account,
+                balances: account.balances.filter((balance) => balance.asset !== 'ETH'),
+            },
+        });
+
+        expect(map_backend_event_to_intents(account_event)).toContainEqual({
+            type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
+            position: { quantity: '0 ETH' },
+        });
+    });
+
+    it('ACCOUNT_UPDATED envelope와 payload의 account version 불일치를 fail closed한다', () => {
+        const account = create_backend_snapshot_fixture().account;
+        const account_event = {
+            ...create_backend_event_fixture(10, 'ACCOUNT_UPDATED', { account }),
+            aggregate_version: account.version + 1,
+        };
+
+        expect(() => map_backend_event_to_intents(account_event)).toThrowError(
+            expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
+        );
     });
 
     it('TRADING_SESSION_UPDATED를 version/ratio/position을 보존한 lifecycle intent로 mapping한다', () => {

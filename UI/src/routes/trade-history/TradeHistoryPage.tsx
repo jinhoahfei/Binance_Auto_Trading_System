@@ -19,6 +19,7 @@ export interface TradeHistoryPageProps {
   rows: ReadonlyArray<TradeRowViewModel>;
   period: HistoryPeriod;
   side: TradeSideFilter;
+  isLoading?: boolean;
   filtersDisabled?: boolean;
   emptyState?: EmptyTradeHistoryViewModel;
   csvExportDialog?: CSVExportDialogProps;
@@ -31,10 +32,10 @@ export interface TradeHistoryPageProps {
 
 /**
  * 함수 이름: TradeHistoryPage()
- * 기능: 거래 내역 상세 화면의 제목, 요약, 필터, 표와 CSV 팝업을 배치한다.
- * 인자: props -> 표시 모델과 라우트에서 상위 제어기로 전달할 사용자 의도 처리 함수
+ * 기능: 거래 내역 상세 화면의 제목, D-12 요약, 실제 조회 상태, 필터, 표와 CSV 팝업을 배치한다.
+ * 인자: props -> 조회 상태 표시 모델과 상위 제어기로 전달할 사용자 의도 처리 함수
  * 반환값: 앱 헤더를 제외한 거래 내역 상세 라우트 본문
- * 작성 날짜: 2026/08/12
+ * 작성 날짜: 2026/08/23
  */
 export function TradeHistoryPage({
   title = '거래 내역 상세',
@@ -43,6 +44,7 @@ export function TradeHistoryPage({
   rows,
   period,
   side,
+  isLoading = false,
   filtersDisabled = false,
   emptyState,
   csvExportDialog,
@@ -79,6 +81,7 @@ export function TradeHistoryPage({
 
       <div className={styles.table}>
         <TradeTable
+          isLoading={isLoading}
           rows={rows}
           {...(emptyState ? { emptyState } : {})}
           {...(onStartTrading ? { onStartTrading } : {})}

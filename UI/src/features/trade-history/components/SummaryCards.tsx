@@ -27,7 +27,7 @@ function get_tone_class(tone: MetricTone) {
 
 /**
  * 함수 이름: SummaryCards()
- * 기능: 당일 수익률, 매도 성과, ETH 보유량과 수수료 요약을 네 개 카드로 표시한다.
+ * 기능: D-12의 오늘 계좌 범위와 전체 history 범위를 구분한 요약을 네 개 카드로 표시한다.
  * 인자: props -> 거래 내역 요약 표시 모델
  * 반환값: 거래 내역 상단 요약 카드 묶음
  * 작성 날짜: 2026/08/12
@@ -41,7 +41,7 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
       <article className={styles.card}>
         <h2 className={styles.title}>
           <span className={`${styles.accent} ${styles.dailyAccent}`} />
-          당일 전체 수익률
+          오늘 계좌 수익률
         </h2>
         <p className={`${styles.dailyValue} ${daily_return_tone}`}>{summary.dailyReturn.value}</p>
       </article>
@@ -49,7 +49,7 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
       <article className={`${styles.card} ${styles.sellCard}`}>
         <h2 className={styles.title}>
           <span className={`${styles.accent} ${styles.sellAccent}`} />
-          매도 성과
+          전체 매도 성과
         </h2>
         <div className={styles.sellHeadline}>
           <p className={`${styles.sellRate} ${sell_performance_tone}`}>{summary.sellPerformance.winRate}</p>
@@ -66,7 +66,7 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
       <article className={styles.card}>
         <h2 className={styles.title}>
           <span className={`${styles.accent} ${styles.positionAccent}`} />
-          현재 ETH 보유 수량
+          현재 ETH 보유량
         </h2>
         <p className={styles.positionValue}>{summary.position.quantity}</p>
       </article>
@@ -74,7 +74,7 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
       <article className={styles.card}>
         <h2 className={styles.title}>
           <span className={`${styles.accent} ${styles.feeAccent}`} />
-          당일 수수료
+          오늘 계좌 수수료
         </h2>
         <p className={styles.feeValue}>{summary.fees.amount}</p>
         <p className={styles.feeHelper}>
