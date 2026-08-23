@@ -1,6 +1,6 @@
 """TradeHistoryRepository의 JSONL streaming 복원과 crash recovery를 검증한다."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -15,6 +15,8 @@ from binance_auto_trader.adapters.persistence import (
 from binance_auto_trader.domain.history import (
     FeeAssetConversionRequiredError,
     OrderHistoryConflictError,
+    TradeHistoryQuery,
+    TradeSide,
 )
 from binance_auto_trader.domain.trading.states import OrderSide
 
@@ -551,6 +553,168 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
             )
 
         self.assertFalse(self.history_path.exists())  # invalid 요청은 파일도 만들지 않는다.
+
+    def test_stream_trades_filters_inclusive_kst_dates_and_side(self) -> None:
+        """
+        함수 이름: test_stream_trades_filters_inclusive_kst_dates_and_side()
+        기능: KST 자정 양끝 경계와 ALL·BUY·SELL filter가 file order를 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        # 2026-08-21 KST의 직전·시작·끝·직후 instant를 UTC record로 준비한다.
+        boundary_trades = (
+            make_trade(
+                trade_id="before",
+                order_id="81",
+                executed_at=datetime(2026, 8, 20, 14, 59, 59, tzinfo=timezone.utc),
+            ),
+            make_trade(
+                trade_id="start",
+                order_id="82",
+                executed_at=datetime(2026, 8, 20, 15, 0, tzinfo=timezone.utc),
+            ),
+            make_trade(
+                trade_id="end",
+                order_id="83",
+                executed_at=datetime(
+                    2026,
+                    8,
+                    21,
+                    14,
+                    59,
+                    59,
+                    999999,
+                    tzinfo=timezone.utc,
+                ),
+                side=OrderSide.SELL,
+            ),
+            make_trade(
+                trade_id="after",
+                order_id="84",
+                executed_at=datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc),
+            ),
+        )
+        self.history_path.write_bytes(
+            b"".join(
+                encode_record(make_trade_record(trade)) + b"\n"
+                for trade in boundary_trades
+            )
+        )
+        selected_date = date(2026, 8, 21)
+
+        # 같은 LocalDate 범위에서 ALL은 두 경계를 포함하고 side별 조회는 한 건씩 남긴다.
+        all_trades = tuple(
+            self.repository.stream_trades(
+                TradeHistoryQuery(selected_date, selected_date)
+            )
+        )
+        buy_trades = tuple(
+            self.repository.stream_trades(
+                TradeHistoryQuery(
+                    selected_date,
+                    selected_date,
+                    TradeSide.BUY,
+                )
+            )
+        )
+        sell_trades = tuple(
+            self.repository.stream_trades(
+                TradeHistoryQuery(
+                    selected_date,
+                    selected_date,
+                    TradeSide.SELL,
+                )
+            )
+        )
+
+        self.assertEqual(
+            tuple(trade.trade_id for trade in all_trades),
+            ("start", "end"),
+        )
+        self.assertEqual(tuple(trade.trade_id for trade in buy_trades), ("start",))
+        self.assertEqual(tuple(trade.trade_id for trade in sell_trades), ("end",))
+
+    def test_stream_trades_is_lazy_deduplicated_and_does_not_call_tuple_api(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_stream_trades_is_lazy_deduplicated_and_does_not_call_tuple_api()
+        기능: export iterator가 get_trade_history 복제 없이 동일 record를 한 번만 지연 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        first_trade = make_trade(trade_id="first", order_id="91")
+        second_trade = make_trade(trade_id="second", order_id="92")
+        first_line = encode_record(make_trade_record(first_trade)) + b"\n"
+        second_line = encode_record(make_trade_record(second_trade)) + b"\n"
+        self.history_path.write_bytes(first_line + first_line + second_line)
+        query = TradeHistoryQuery(date(2026, 8, 21), date(2026, 8, 21))
+        self.repository.get_trade_history()  # startup이 만든 durable index를 export 시작 상태로 준비한다.
+
+        # export가 tuple API나 전체 index 재생성을 호출하면 즉시 실패하도록 두 경계를 막는다.
+        with patch.object(
+            TradeHistoryRepository,
+            "get_trade_history",
+            side_effect=AssertionError("tuple API must not be called"),
+        ), patch.object(
+            TradeHistoryRepository,
+            "_read_history_file",
+            side_effect=AssertionError("index must not be copied"),
+        ):
+            trade_iterator = self.repository.stream_trades(query)
+            streamed_trades = tuple(trade_iterator)
+
+        self.assertEqual(
+            tuple(trade.trade_id for trade in streamed_trades),
+            ("first", "second"),
+        )
+
+    def test_stream_trades_snapshot_excludes_later_append_and_closes_reader(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_stream_trades_snapshot_excludes_later_append_and_closes_reader()
+        기능: iterator 생성 뒤 append를 제외한 byte snapshot과 explicit close의 descriptor 정리를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        first_trade = make_trade(trade_id="snapshot", order_id="101")
+        later_trade = make_trade(trade_id="later", order_id="102")
+        self.repository.save_this_trade_by_order_id("101", first_trade)
+        query = TradeHistoryQuery(date(2026, 8, 21), date(2026, 8, 21))
+
+        # iterator가 capture한 file 길이 뒤에 새 durable record를 append한다.
+        trade_iterator = self.repository.stream_trades(query)
+        self.repository.save_this_trade_by_order_id("102", later_trade)
+        self.assertEqual(next(trade_iterator), first_trade)
+        self.assertIsNotNone(trade_iterator.gi_frame)
+        reader = trade_iterator.gi_frame.f_locals["history_file"]
+
+        trade_iterator.close()  # downstream write failure와 같은 조기 종료를 모사한다.
+
+        self.assertTrue(reader.closed)
+        self.assertEqual(
+            tuple(self.repository.stream_trades(query)),
+            (first_trade, later_trade),
+        )
+
+    def test_stream_trades_missing_file_is_an_empty_iterator(self) -> None:
+        """
+        함수 이름: test_stream_trades_missing_file_is_an_empty_iterator()
+        기능: history 파일이 없을 때 오류나 파일 생성 없이 빈 iterator를 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        query = TradeHistoryQuery(date(2026, 8, 21), date(2026, 8, 21))
+
+        streamed_trades = tuple(self.repository.stream_trades(query))
+
+        self.assertEqual(streamed_trades, ())
+        self.assertFalse(self.history_path.exists())  # read-only export 조회는 빈 JSONL을 만들지 않는다.
 
 
 if __name__ == "__main__":

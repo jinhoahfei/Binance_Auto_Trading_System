@@ -1,4 +1,7 @@
 import type {
+    BackendCsvExportReceipt,
+    BackendCsvExportRequest,
+    BackendCsvPeriod,
     BackendRegimeType,
     BackendTradingLogicCoverage,
     BackendTradingLogicStartGuard,
@@ -74,7 +77,7 @@ export type HistoryPeriod = 'today' | 'last7days' | 'last30days' | 'all';
 /**
  * CSV 내보내기에 사용할 기간 필터이다.
  */
-export type CsvPeriod = Exclude<HistoryPeriod, 'all'> | 'custom';
+export type CsvPeriod = BackendCsvPeriod;
 
 /**
  * 거래 방향 또는 전체 방향을 나타낸다.
@@ -180,22 +183,12 @@ export interface ChartDrawing {
 /**
  * CSV 내보내기에 필요한 검증 완료 옵션이다.
  */
-export interface CsvExportOptions {
-    readonly directory: string;
-    readonly file_name: string;
-    readonly period: CsvPeriod;
-    readonly start_date: LocalDateString;
-    readonly end_date: LocalDateString;
-    readonly timezone: 'Asia/Seoul';
-}
+export type CsvExportOptions = Omit<BackendCsvExportRequest, 'schema_version'>;
 
 /**
  * CSV 내보내기 완료 후 adapter가 반환하는 결과이다.
  */
-export interface CsvExportReceipt {
-    readonly file_path: string;
-    readonly exported_row_count: number;
-}
+export type CsvExportReceipt = BackendCsvExportReceipt;
 
 /**
  * 화면에서 사용하는 공통 명령 실패 표현이다.

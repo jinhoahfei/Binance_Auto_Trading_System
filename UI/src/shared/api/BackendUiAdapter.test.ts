@@ -2,6 +2,7 @@ import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BACKEND_SCHEMA_VERSION } from '../contracts';
+import type { CsvExportOptions } from '../contracts';
 import type { BackendUiAdapterCallbacks, BackendWebSocket } from './BackendUiAdapter';
 import {
     BackendAdapterError,
@@ -21,6 +22,14 @@ const TEST_REQUEST_ID = 'f5a4f621-25f8-4dd2-bfb7-1b80e9561423';
 const TEST_IDEMPOTENCY_ID = '2522ef0c-d88d-42b3-a22f-fc7bdd09a662';
 const SECOND_EVENT_ID = '06a59589-0aed-44fa-8983-7246aeb4c619';
 const THIRD_EVENT_ID = 'c9ca6590-9d50-436d-8648-e8cc9ef7957f';
+const CSV_EXPORT_OPTIONS: CsvExportOptions = {
+    directory: '/Users/oscar/Exports',
+    file_name: 'binance_trades_2026-08-23.csv',
+    period: 'last7days',
+    start_date: '2026-08-17',
+    end_date: '2026-08-23',
+    timezone: 'Asia/Seoul',
+};
 
 /**
  * 클래스 이름: FakeBackendWebSocket
@@ -478,6 +487,180 @@ describe('BackendUiAdapter HTTP contract', () => {
             period: 'today',
             side: 'all',
         })).rejects.toMatchObject({ code: 'MALFORMED_BACKEND_PAYLOAD' });
+    });
+
+    it.each([
+        {
+            label: '폴더 선택',
+            native_result: '/Users/oscar/Exports',
+            expected_result: '/Users/oscar/Exports',
+        },
+        {
+            label: '사용자 취소',
+            native_result: null,
+            expected_result: null,
+        },
+    ])('native picker의 $label 결과를 손실 없이 반환한다', async ({
+        native_result,
+        expected_result,
+    }) => {
+        const picker_mock = vi.fn(async (): Promise<unknown> => native_result);
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            pick_csv_directory: picker_mock,
+        });
+
+        await expect(adapter.pick_csv_directory()).resolves.toBe(expected_result);
+        expect(picker_mock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        undefined,
+        42,
+        { directory: '/Users/oscar/Exports' },
+        ['/Users/oscar/Exports'],
+    ])('native picker의 string/null 외 결과 %j를 fail closed한다', async (native_result) => {
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            pick_csv_directory: vi.fn(async (): Promise<unknown> => native_result),
+        });
+
+        await expect(adapter.pick_csv_directory()).rejects.toMatchObject({
+            code: 'MALFORMED_NATIVE_PICKER_RESULT',
+        });
+    });
+
+    it('native picker typed failure를 변형하거나 경로를 추가하지 않고 전파한다', async () => {
+        const native_failure = {
+            code: 'CSV_EXPORT_DIRECTORY_INVALID',
+            message: 'The selected CSV export directory is invalid.',
+        };
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            pick_csv_directory: vi.fn(async () => Promise.reject(native_failure)),
+        });
+
+        await expect(adapter.pick_csv_directory()).rejects.toBe(native_failure);
+    });
+
+    it('CSV option 전체와 schema version을 POST하고 strict success receipt를 반환한다', async () => {
+        const receipt = {
+            file_path: '/Users/oscar/Exports/binance_trades_2026-08-23.csv',
+            exported_row_count: 17,
+        };
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(request_headers(init)['X-Request-Id']!, receipt);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await expect(adapter.export_csv(CSV_EXPORT_OPTIONS)).resolves.toEqual(receipt);
+        expect(fetch_mock.mock.calls[0]?.[0]).toBe(
+            'http://127.0.0.1:42123/v1/csv-exports',
+        );
+        expect(fetch_mock.mock.calls[0]?.[1]?.method).toBe('POST');
+        expect(JSON.parse(fetch_mock.mock.calls[0]?.[1]?.body as string) as unknown).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION,
+            ...CSV_EXPORT_OPTIONS,
+        });
+    });
+
+    it.each([
+        {
+            label: '누락 key',
+            receipt: { file_path: '/Users/oscar/Exports/trades.csv' },
+        },
+        {
+            label: 'unknown key',
+            receipt: {
+                file_path: '/Users/oscar/Exports/trades.csv',
+                exported_row_count: 1,
+                future_value: 'unexpected',
+            },
+        },
+        {
+            label: '빈 path',
+            receipt: { file_path: '   ', exported_row_count: 1 },
+        },
+        {
+            label: '0 row',
+            receipt: { file_path: '/Users/oscar/Exports/trades.csv', exported_row_count: 0 },
+        },
+        {
+            label: '음수 row',
+            receipt: { file_path: '/Users/oscar/Exports/trades.csv', exported_row_count: -1 },
+        },
+        {
+            label: '비정수 row',
+            receipt: { file_path: '/Users/oscar/Exports/trades.csv', exported_row_count: 1.5 },
+        },
+        {
+            label: 'unsafe row',
+            receipt: {
+                file_path: '/Users/oscar/Exports/trades.csv',
+                exported_row_count: Number.MAX_SAFE_INTEGER + 1,
+            },
+        },
+    ])('CSV receipt의 $label를 fail closed한다', async ({ receipt }) => {
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(request_headers(init)['X-Request-Id']!, receipt);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await expect(adapter.export_csv(CSV_EXPORT_OPTIONS)).rejects.toMatchObject({
+            code: 'MALFORMED_BACKEND_PAYLOAD',
+        });
+    });
+
+    it('CSV backend typed failure를 receipt로 오인하지 않고 보존한다', async () => {
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_failure_response(
+                request_headers(init)['X-Request-Id']!,
+                'DESTINATION_EXISTS',
+                false,
+                409,
+            );
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await expect(adapter.export_csv(CSV_EXPORT_OPTIONS)).rejects.toMatchObject({
+            code: 'DESTINATION_EXISTS',
+            retryable: false,
+        });
+    });
+
+    it('CSV export는 일반 timeout을 적용하지 않고 adapter stop에서만 중단한다', async () => {
+        vi.useFakeTimers();
+        try {
+            const received_signals: Array<AbortSignal> = [];
+            const adapter = new BackendUiAdapter(create_descriptor(), {
+                fetch: create_abortable_fetch_mock(received_signals),
+                create_uuid: create_uuid_factory(),
+                request_timeout_ms: 50,
+            });
+            const request_promise = adapter.export_csv(CSV_EXPORT_OPTIONS);
+            const rejection_assertion = expect(request_promise).rejects.toMatchObject({
+                code: 'ADAPTER_STOPPED',
+                retryable: false,
+            });
+
+            // 기존 CSV 300초 상한을 넘겨도 streaming command의 signal은 살아 있어야 한다.
+            await vi.advanceTimersByTimeAsync(600_000);
+            expect(received_signals).toHaveLength(1);
+            expect(received_signals[0]?.aborted).toBe(false);
+
+            adapter.stop();
+
+            await rejection_assertion;
+            expect(received_signals[0]?.aborted).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('Bearer/X-Request-Id와 command Idempotency-Key를 보내고 typed failure를 보존한다', async () => {

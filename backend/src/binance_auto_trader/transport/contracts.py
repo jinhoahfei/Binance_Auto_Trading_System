@@ -8,13 +8,21 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 import json
+from pathlib import Path
 import re
 from typing import Any, Protocol
 from urllib.parse import parse_qsl
 from uuid import UUID
 
 from binance_auto_trader.domain.common import RegimeType
-from binance_auto_trader.domain.history import HistoryPeriod, TradeSide
+from binance_auto_trader.domain.history import (
+    CSVExportOptions,
+    CSVExportResult,
+    CSVExportValidationError,
+    CSVPeriod,
+    HistoryPeriod,
+    TradeSide,
+)
 from binance_auto_trader.domain.trading.logic_registry import (
     list_trading_logic_configurations,
 )
@@ -57,6 +65,12 @@ _HISTORY_SIDE_FROM_WIRE = {
 _HISTORY_SIDE_TO_WIRE = {
     side: wire_value
     for wire_value, side in _HISTORY_SIDE_FROM_WIRE.items()
+}
+_CSV_PERIOD_FROM_WIRE = {
+    "today": CSVPeriod.TODAY,
+    "last7days": CSVPeriod.WEEKLY,
+    "last30days": CSVPeriod.MONTHLY,
+    "custom": CSVPeriod.CUSTOM,
 }
 
 
@@ -495,6 +509,134 @@ def parse_trade_history_query_parameters(
     return period, side  # Controller에는 transport 문자열이 아니라 검증된 enum만 전달한다.
 
 
+def _local_date_from_wire(value: object, field_name: str) -> date:
+    """
+    함수 이름: _local_date_from_wire()
+    기능: CSV command의 YYYY-MM-DD 문자열을 canonical LocalDate로 엄격히 복원한다.
+    인자: value -> JSON request의 날짜 값
+        field_name -> typed 오류 detail에 사용할 field 이름
+    반환값: calendar 유효성까지 검증한 date
+    작성 날짜: 2026/08/23
+    """
+    # Python이 허용하는 basic ISO 형식은 wire 계약보다 넓으므로 exact 모양을 먼저 제한한다.
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value) is None
+    ):
+        raise TransportContractError(
+            "INVALID_CSV_EXPORT_OPTIONS",
+            "CSV export date must use YYYY-MM-DD.",
+            status=422,
+            details={"field": field_name},
+        )
+
+    # 윤년과 월별 일수는 표준 LocalDate parser로 검증하고 원문을 관대하게 보정하지 않는다.
+    try:
+        parsed_date = date.fromisoformat(value)
+    except ValueError as error:
+        raise TransportContractError(
+            "INVALID_CSV_EXPORT_OPTIONS",
+            "CSV export date is not a valid calendar date.",
+            status=422,
+            details={"field": field_name},
+        ) from error
+
+    return parsed_date  # Domain에는 wire 문자열이 아니라 canonical date만 전달한다.
+
+
+def parse_csv_export_options(
+    request_body: Mapping[str, object],
+) -> CSVExportOptions:
+    """
+    함수 이름: parse_csv_export_options()
+    기능: exact CSV command DTO를 검증해 filesystem 비의존 domain option으로 복원한다.
+    인자: request_body -> renderer가 보낸 CSV command JSON object
+    반환값: 경로 문자열·파일명·기간·날짜를 검증한 CSVExportOptions
+    작성 날짜: 2026/08/23
+    """
+    # 누락, typo와 미래 field를 묵인하지 않고 versioned command shape를 먼저 고정한다.
+    require_command_fields(
+        request_body,
+        (
+            "directory",
+            "file_name",
+            "period",
+            "start_date",
+            "end_date",
+            "timezone",
+        ),
+    )
+
+    # 문자열 field는 trim이나 대소문자 보정 없이 renderer가 합의한 값만 허용한다.
+    string_field_names = (
+        "directory",
+        "file_name",
+        "period",
+        "start_date",
+        "end_date",
+        "timezone",
+    )
+    for field_name in string_field_names:
+        if not isinstance(request_body[field_name], str):
+            raise TransportContractError(
+                "INVALID_CSV_EXPORT_OPTIONS",
+                "CSV export fields must be strings.",
+                status=422,
+                details={"field": field_name},
+            )
+    if request_body["timezone"] != "Asia/Seoul":
+        raise TransportContractError(
+            "INVALID_CSV_EXPORT_OPTIONS",
+            "CSV export timezone must be Asia/Seoul.",
+            status=422,
+            details={"field": "timezone"},
+        )
+
+    # 기간 enum과 두 calendar date를 domain 객체 생성 전에 각각 strict 복원한다.
+    try:
+        period = _CSV_PERIOD_FROM_WIRE[request_body["period"]]
+    except KeyError as error:
+        raise TransportContractError(
+            "INVALID_CSV_EXPORT_OPTIONS",
+            "CSV export period is not supported.",
+            status=422,
+            details={"field": "period"},
+        ) from error
+    start_date = _local_date_from_wire(
+        request_body["start_date"],
+        "start_date",
+    )
+    end_date = _local_date_from_wire(
+        request_body["end_date"],
+        "end_date",
+    )
+
+    # Domain이 traversal, reserved filename과 날짜 순서를 최종적으로 다시 검증한다.
+    try:
+        return CSVExportOptions(
+            save_location=request_body["directory"],
+            period=period,
+            start_date=start_date,
+            end_date=end_date,
+            file_name=request_body["file_name"],
+        )
+    except (CSVExportValidationError, TypeError, ValueError) as error:
+        field_name = getattr(error, "field", None)
+        if field_name == "save_location":
+            field_name = "directory"
+        details = (
+            {"field": field_name}
+            if isinstance(field_name, str) and field_name
+            else {}
+        )
+        raise TransportContractError(
+            "INVALID_CSV_EXPORT_OPTIONS",
+            "CSV export options are invalid.",
+            status=422,
+            details=details,
+        ) from error
+
+
 def normalize_json_value(value: object) -> JsonValue:
     """
     함수 이름: normalize_json_value()
@@ -886,6 +1028,29 @@ def map_trade_details(
     )
 
 
+def map_csv_export_result(result: CSVExportResult) -> JsonObject:
+    """
+    함수 이름: map_csv_export_result()
+    기능: 실제 filesystem publication 결과를 UI CSV receipt DTO로 변환한다.
+    인자: result -> CSV writer가 반환한 검증된 export 결과
+    반환값: 절대 파일 경로와 1 이상 data row count를 담은 JSON object
+    작성 날짜: 2026/08/23
+    """
+    # 동형 객체의 임의 path와 row count가 성공 envelope로 노출되지 않게 canonical type을 고정한다.
+    if not isinstance(result, CSVExportResult):
+        raise TypeError("result must be a CSVExportResult")
+    # OS를 아는 transport 경계가 domain의 문자열-only 결과를 absolute receipt로 최종 제한한다.
+    if not Path(result.file_path).is_absolute():
+        raise ValueError("CSV export result path must be absolute")
+
+    return normalize_json_object(
+        {
+            "file_path": result.file_path,
+            "exported_row_count": result.exported_row_count,
+        }
+    )  # Domain result에 없는 filesystem 내부 정보는 receipt에 추가하지 않는다.
+
+
 def map_trading_logic_coverage() -> list[JsonObject]:
     """
     함수 이름: map_trading_logic_coverage()
@@ -1026,6 +1191,10 @@ def render_typescript_contracts() -> str:
         f"'{wire_value}'"
         for wire_value in _REGIME_TO_WIRE.values()
     )
+    csv_period_values = " | ".join(
+        f"'{wire_value}'"
+        for wire_value in _CSV_PERIOD_FROM_WIRE
+    )  # Domain enum 선언 순서와 wire command 계약을 deterministic하게 보존한다.
     return f"""/* 이 파일은 Python transport schema에서 생성됩니다. 직접 수정하지 마세요. */
 
 export const BACKEND_SCHEMA_VERSION = {SCHEMA_VERSION} as const;
@@ -1047,6 +1216,7 @@ export type BackendTradingLogicStartGuard =
 export type BackendTradeSide = 'BUY' | 'SELL';
 export type BackendHistoryPeriod = 'today' | 'last7days' | 'last30days' | 'all';
 export type BackendTradeSideFilter = 'all' | 'buy' | 'sell';
+export type BackendCsvPeriod = {csv_period_values};
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
 
 export interface BackendConnectionSnapshot {{
@@ -1182,6 +1352,21 @@ export interface BackendTradeDetails {{
     readonly rows: ReadonlyArray<BackendTradeSnapshot>;
     readonly row_count: number;
     readonly summary: BackendTradeDetailsSummary;
+}}
+
+export interface BackendCsvExportRequest {{
+    readonly schema_version: typeof BACKEND_SCHEMA_VERSION;
+    readonly directory: string;
+    readonly file_name: string;
+    readonly period: BackendCsvPeriod;
+    readonly start_date: string;
+    readonly end_date: string;
+    readonly timezone: 'Asia/Seoul';
+}}
+
+export interface BackendCsvExportReceipt {{
+    readonly file_path: string;
+    readonly exported_row_count: number;
 }}
 
 export interface BackendSnapshot {{

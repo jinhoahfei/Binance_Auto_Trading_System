@@ -11,6 +11,10 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
+from binance_auto_trader.domain.history import (
+    CSVExportOptions,
+    CSVExportResult,
+)
 from binance_auto_trader.transport import (
     BackendEventStream,
     LoopbackTransportServer,
@@ -22,6 +26,68 @@ from tests.unit.transport.test_contracts import _create_ready_runtime
 
 
 TEST_ORIGIN = "http://127.0.0.1:5173"
+
+
+def _encode_csv_export_body(file_name: str) -> str:
+    """
+    함수 이름: _encode_csv_export_body()
+    기능: actual HTTP test에 사용할 Phase 11 exact CSV command JSON을 생성한다.
+    인자: file_name -> valid command와 conflict command를 구분할 안전한 basename
+    반환값: schema version 2의 완전한 CSV export JSON 문자열
+    작성 날짜: 2026/08/23
+    """
+    # 실제 command parser가 요구하는 여섯 option field와 schema version을 모두 제공한다.
+    request_payload = {
+        "schema_version": 2,
+        "directory": "/tmp",
+        "file_name": file_name,
+        "period": "custom",
+        "start_date": "2026-08-23",
+        "end_date": "2026-08-23",
+        "timezone": "Asia/Seoul",
+    }
+
+    return json.dumps(
+        request_payload,
+        separators=(",", ":"),
+        sort_keys=True,
+    )  # Idempotency fingerprint가 요청 순서가 아닌 canonical test body에 고정된다.
+
+
+class _SuccessfulCSVExportController:
+    """
+    클래스 이름: _SuccessfulCSVExportController
+    기능: actual HTTP command가 strict option을 전달하면 typed 성공 receipt를 반환한다.
+    작성 날짜: 2026/08/23
+    """
+
+    def __init__(self) -> None:
+        """
+        함수 이름: __init__()
+        기능: 실제 route 실행 횟수와 전달된 canonical option을 기록할 목록을 준비한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/23
+        """
+        self.received_options: list[CSVExportOptions] = []
+
+    def export_csv(self, options: CSVExportOptions) -> CSVExportResult:
+        """
+        함수 이름: export_csv()
+        기능: 전달 option을 기록하고 transport mapper가 검증할 typed receipt를 반환한다.
+        인자: options -> strict request DTO에서 복원한 canonical CSV option
+        반환값: absolute path와 양수 row count를 가진 CSVExportResult
+        작성 날짜: 2026/08/23
+        """
+        # Route가 동형 dictionary가 아니라 domain option을 넘겼는지 기록과 검증으로 고정한다.
+        if not isinstance(options, CSVExportOptions):
+            raise TypeError("options must be CSVExportOptions")
+        self.received_options.append(options)
+
+        return CSVExportResult(
+            file_path=f"/tmp/{options.file_name}",
+            exported_row_count=2,
+        )  # HTTP test는 filesystem 대신 이미 게시가 끝난 typed 결과 경계를 재현한다.
 
 
 class _TrackingLock:
@@ -426,13 +492,16 @@ class LoopbackHttpServerTests(unittest.TestCase):
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
-        # Owner가 없는 terminal 실패도 same-key/same-body replay와 body conflict를 구분한다.
+        # 실제 Phase 11 DTO와 typed receipt를 사용해 same-body replay와 body conflict를 구분한다.
+        csv_export_controller = _SuccessfulCSVExportController()
+        self.runtime.trade_history_controller = csv_export_controller
+        csv_export_body = _encode_csv_export_body("http-idempotent.csv")
         first_status, first_payload, _ = _request_json(
             self.server,
             self.token,
             "POST",
             "/v1/csv-exports",
-            body='{"schema_version":2}',
+            body=csv_export_body,
             request_id=first_request_id,
             idempotency_key=idempotency_key,
         )
@@ -441,7 +510,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/csv-exports",
-            body='{"schema_version":2}',
+            body=csv_export_body,
             request_id=second_request_id,
             idempotency_key=idempotency_key,
         )
@@ -450,7 +519,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/csv-exports",
-            body='{"schema_version":2,"expected_version":0}',
+            body=_encode_csv_export_body("http-conflict.csv"),
             request_id=str(uuid4()),
             idempotency_key=idempotency_key,
         )
@@ -474,13 +543,21 @@ class LoopbackHttpServerTests(unittest.TestCase):
             missing_version_payload["error"]["code"],
             "MALFORMED_REQUEST",
         )
-        # Replay는 현재 request ID를 쓰되 첫 terminal error를 보존하고 conflict는 거부한다.
-        self.assertEqual(first_status, 503)
-        self.assertEqual(first_payload["error"]["code"], "FEATURE_NOT_AVAILABLE")
+        # Replay는 현재 request ID를 쓰되 첫 typed receipt를 보존하고 다른 body는 거부한다.
+        self.assertEqual(first_status, 201)
+        self.assertTrue(first_payload["ok"])
+        self.assertEqual(
+            first_payload["data"],
+            {
+                "file_path": "/tmp/http-idempotent.csv",
+                "exported_row_count": 2,
+            },
+        )
         self.assertEqual(second_status, first_status)
         self.assertEqual(first_payload["request_id"], first_request_id)
         self.assertEqual(second_payload["request_id"], second_request_id)
-        self.assertEqual(second_payload["error"], first_payload["error"])
+        self.assertEqual(second_payload["data"], first_payload["data"])
+        self.assertEqual(len(csv_export_controller.received_options), 1)
         self.assertEqual(conflict_status, 409)
         self.assertEqual(
             conflict_payload["error"]["code"],
@@ -495,9 +572,12 @@ class LoopbackHttpServerTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/21
         """
-        # 두 동시 요청이 공유할 READY runtime, key와 synchronized route counter를 준비한다.
+        # 두 동시 요청이 공유할 READY runtime, typed CSV owner와 route counter를 준비한다.
         self.runtime.ready = True
         self.runtime.state.status = "READY"
+        csv_export_controller = _SuccessfulCSVExportController()
+        self.runtime.trade_history_controller = csv_export_controller
+        csv_export_body = _encode_csv_export_body("http-concurrent.csv")
         idempotency_key = str(uuid4())
         original_route = self.server._route_http_request
         route_call_count = 0
@@ -553,7 +633,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
                     self.token,
                     "POST",
                     "/v1/csv-exports",
-                    body='{"schema_version":2}',
+                    body=csv_export_body,
                     request_id=str(uuid4()),
                     idempotency_key=idempotency_key,
                 )
@@ -569,6 +649,10 @@ class LoopbackHttpServerTests(unittest.TestCase):
         # Single-flight lock이 route 한 번과 동일한 terminal 결과를 보장하는지 확인한다.
         self.assertEqual(route_call_count, 1)
         self.assertEqual(len(responses), 2)
+        self.assertEqual(len(csv_export_controller.received_options), 1)
+        self.assertTrue(
+            all(response_status == 201 for response_status, _, _ in responses)
+        )  # 두 client 모두 최초 created receipt의 replay를 받아야 한다.
 
         # 멱등 replay도 각 HTTP 요청의 correlation ID를 유지하되 나머지 결과는 같아야 한다.
         first_payload = dict(responses[0][1] or {})

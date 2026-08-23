@@ -4,10 +4,10 @@
 |---|---|
 | 문서 상태 | As-built — 현재 구현 기준 |
 | 작성일 | 2026-08-12 |
-| 최종 갱신일 | 2026-08-23 |
+| 최종 갱신일 | 2026-08-24 |
 | 대상 경로 | `/Users/oscar/Desktop/Binance_Auto/UI` |
 | 대상 구현 | React + TypeScript + XState + Vite + Tauri 2 UI |
-| 제외 범위 | 실제 Binance client·credential·주문 실행, 실제 CSV writer, packaged sidecar 실행·종료 lifecycle |
+| 제외 범위 | 실제 Binance credential 기반 외부 실행, packaged sidecar 실행·종료 lifecycle |
 
 ## 1. 문서 목적
 
@@ -37,10 +37,13 @@
 - production entry는 `BackendUiAdapter`의 ready snapshot을 먼저 적용하며, Storybook과 화면 tests만 `FakeUiCommandAdapter`를 명시적으로 사용한다.
 - Phase 7의 REGIME 선택, split, 자동매매 start/stop은 `expected_version`과 idempotency key를 포함해 backend fake session owner에 연결되어 있다.
 - Phase 10의 Trade History는 최초 `today/all`, 12개 결합 filter, D-12 summary/rows 분리와 order/account/performance event 및 sequence gap 재조회를 실제 backend에 연결한다.
+- Phase 11의 CSV는 Tauri native folder picker, KST 자정 재개방, generated request/receipt,
+  backend snapshot streaming과 실제 atomic file publication 결과에 연결한다.
 - backend 계좌·REGIME·성과 read model은 ETHUSDT/USDT 단위를 유지하고 없는 position·entry price·slippage를 추측하지 않는다.
 - 가격 차트는 Binance 공개 market-data REST/WebSocket에서 `ETHUSDT`의 `1m`, `30m`, `4h`, `1d` 봉을 조회·구독한다.
 - 실시간 시장 데이터는 WebSocket을 먼저 시작한 뒤 REST 과거 봉과 병합하고, 동일 `symbol + interval + open_time`에는 WebSocket 값을 우선한다.
-- Tauri는 1440×1024 데스크톱 창과 memory-only one-shot backend descriptor command를 제공한다. sidecar 실행·패키징·종료는 Phase 12에 남아 있다.
+- Tauri는 1440×1024 데스크톱 창, memory-only one-shot backend descriptor와 native CSV
+  directory picker command를 제공한다. sidecar 실행·패키징·종료는 Phase 12에 남아 있다.
 - Storybook의 공통 harness가 Figma 16개 프레임을 상태 fixture로 재현한다.
 - 스타일은 semantic CSS token, CSS Modules, Radix primitive를 중심으로 구성한다.
 - `App.tsx`는 dashboard와 trade-history Route Boundary를 `React.lazy`와 동적 `import()`로 분리하고, 최초 로드 동안 접근 가능한 `Suspense` fallback을 표시한다.
@@ -64,6 +67,7 @@ flowchart LR
     Actors --> Port["UiCommandPort"]
     Port --> Live["production: BackendUiAdapter"]
     Port --> Fake["Storybook/tests: FakeUiCommandAdapter"]
+    Live --> NativePicker["Tauri native folder picker"]
     Live --> Loopback["127.0.0.1 HTTP/WebSocket\nsnapshot-first + sequence"]
     Loopback --> Backend["Python application runtime"]
     Actors --> Snapshot["UiApplicationSnapshot"]
@@ -89,7 +93,7 @@ flowchart LR
 | Contract/Port | `src/shared/contracts`, `src/shared/ports` | Python에서 생성한 wire schema, 기능 간 데이터 형식과 backend 명령 경계를 정의한다. |
 | Adapter/Fixture | `src/shared/api`, `src/shared/testing`, `src/app/bootstrap` | production loopback serialization/reconnect와 별도의 결정적 demo/test 경계를 제공한다. |
 | Design system | `src/shared/styles`, `src/shared/ui` | 공통 token, 전역 규칙, 재사용 가능한 primitive를 제공한다. |
-| Desktop shell | `apps/desktop/src-tauri` | Tauri 창, 권한, CSP, 최종 창 제거를 담당한다. |
+| Desktop shell | `apps/desktop/src-tauri` | Tauri 창, 권한, CSP, 최종 창 제거와 CSV native folder picker를 담당한다. |
 
 ### 3.2 사용자 입력에서 다시 렌더링되기까지
 
@@ -191,6 +195,7 @@ apps/desktop/src-tauri/
 ├── capabilities/
 │   └── main-window.json
 ├── src/
+│   ├── dialog.rs
 │   ├── lib.rs
 │   └── main.rs
 ├── build.rs
@@ -200,14 +205,15 @@ apps/desktop/src-tauri/
 
 | 파일 | 역할 |
 |---|---|
-| `Cargo.toml` | Tauri shell crate, Rust edition, `serde`, `tauri` 의존성을 정의한다. |
+| `Cargo.toml` | Tauri shell crate, Rust edition, `serde`, `tauri`와 공식 `tauri-plugin-dialog` 의존성을 정의한다. |
 | `build.rs` | Tauri build-time code generation을 실행한다. |
 | `src/main.rs` | native executable entry이며 library의 `run()`을 호출한다. |
-| `src/lib.rs` | 최소 권한 `tauri::Builder`, strict descriptor 검증과 memory-only one-shot `take_backend_connection_descriptor` command를 등록한다. 초기 slot은 비어 있어 Phase 12 launcher가 stage하기 전에는 fail closed한다. |
+| `src/dialog.rs` | 공식 dialog plugin의 folder picker를 absolute UTF-8 `string`, 취소 `null`, path-free typed failure로 제한한다. |
+| `src/lib.rs` | 최소 권한 `tauri::Builder`, strict descriptor와 memory-only one-shot command, dialog plugin과 `choose_csv_export_directory` command를 등록한다. 초기 descriptor slot은 Phase 12 launcher가 stage하기 전까지 fail closed한다. |
 | `tauri.conf.json` | 1440×1024 기본 창, 1180×760 최소 크기, Vite dev URL, frontend build 경로, CSP와 bundle 설정을 정의한다. |
 | `capabilities/main-window.json` | 메인 창의 기본 API와 상태머신 종료 완료 후 `destroy` 권한만 허용한다. |
 
-현재 Tauri Rust 코드는 거래나 sidecar spawn을 구현하지 않는다. 창, descriptor 전달과
+현재 Tauri Rust 코드는 거래나 sidecar spawn을 구현하지 않는다. 창, descriptor 전달, picker와
 보안 경계만 제공하며, OS close event의 UI 순서는 TypeScript의
 `DesktopWindowLifecycle`과 `appExitMachine`이 담당한다. Python executable 조립과
 descriptor stage, 실제 안전 종료는 Phase 12 책임이다.
@@ -814,11 +820,11 @@ src/shared/
 
 | 파일 | 역할 |
 |---|---|
-| `api/BackendUiAdapter.ts` | Bearer/request/idempotency header, caller 취소·timeout과 HTTP envelope를 처리하고 REGIME/start/stop/split command 및 strict Trade History composite query를 검증한다. query 없는 WebSocket 첫-frame 인증, sequence dedup/gap, snapshot-first full resync와 trading version·event sequence·history summary revision 동기화를 구현하며 업무 guard는 소유하지 않는다. |
+| `api/BackendUiAdapter.ts` | Bearer/request/idempotency header, caller 취소·일반 timeout과 HTTP envelope를 처리하고 REGIME/start/stop/split, strict Trade History와 CSV command를 검증한다. CSV는 완료 결과가 불명확해지는 wall-clock timeout 없이 adapter stop만 수용하고, native picker 결과를 `string \| null`로 제한한다. WebSocket 인증, sequence dedup/gap과 snapshot-first resync를 구현하며 업무 guard는 소유하지 않는다. |
 | `api/backendEventMapper.ts` | generated wire 값을 strict runtime 검증하고 backend snapshot/order/account/performance event를 계산 없는 UI record와 facade intent로 변환한다. ETHUSDT/ETH/USDT와 market-indicator version/price coherence, canonical 5개 `logic_coverage` 순서, support/status Guard, trading session/version/ratio/position 일치를 fail closed로 검증하며 KRW 환산, entry price, slippage나 상태별 성과를 추측하지 않는다. |
-| `api/*.test.ts` | malformed/unknown schema, request/session mismatch, Trade History exact composite/caller 취소, product/cross-field 불일치, duplicate·out-of-order·gap sequence, reconnect snapshot 우선, USDT 단위와 unavailable 값을 검증한다. |
+| `api/*.test.ts` | malformed/unknown schema, request/session mismatch, Trade History, CSV exact request/receipt·picker·장기 request stop, product/cross-field 불일치, event dedup/gap와 reconnect snapshot 우선을 검증한다. |
 | `api/backendTestFixtures.ts` | production token과 분리된 transport contract unit fixture를 제공한다. |
-| `contracts/backendContracts.generated.ts` | Python transport schema renderer의 deterministic 출력이다. trading snapshot/coverage와 Trade History query·rows·summary 및 order/performance event payload를 포함하며 직접 수정하지 않음을 backend drift test가 byte-for-byte로 확인한다. private `LOWER_BB` key와 transition ID는 UI에 노출하지 않는다. |
+| `contracts/backendContracts.generated.ts` | Python transport schema renderer의 deterministic 출력이다. trading snapshot/coverage, Trade History, CSV request/receipt와 order/performance event payload를 포함하며 backend drift test가 byte-for-byte로 확인한다. private `LOWER_BB` key와 transition ID는 UI에 노출하지 않는다. |
 | `contracts/uiContracts.ts` | generated `RegimeType`을 재사용하고 `TradingLogicCoverage`와 production default(TYPE_0 supported, TYPE_1~4 unsupported), `TradeRecord`, `TradeHistoryQuery/Details`, chart drawing, CSV option/receipt와 공통 오류 형식을 정의한다. |
 | `contracts/index.ts` | 공통 contract type의 공개 barrel이다. |
 | `formatting/decimalText.ts` | 금융 문자열을 JS number 연산 없이 부호·소수점·quote asset 표시로 변환한다. |
@@ -877,7 +883,7 @@ src/stories/
 
 ### 12.3 테스트 파일 요약
 
-2026-08-21 Phase 5 검증 기준 전체 suite는 31개 파일, 122개 test이며 다음 계층을 확인한다.
+2026-08-24 Phase 11 검증 기준 전체 suite는 31개 파일, 220개 test이며 다음 계층을 확인한다.
 
 | 범위 | 테스트 파일 |
 |---|---|
@@ -1009,7 +1015,8 @@ snapshot/event가 소유한다.
 - 최근 체결/실시간 지표 tab
 - live history 최초 `today/all`, 12개 결합 filter, loading/ready/empty/failed/retry와 실제 상태 기반 description
 - `ORDER_EXECUTED` recent/history 갱신, Account/Performance summary 갱신, sequence gap 및 KST 자정 현재 query 재조회
-- CSV 입력·달력·validation과 공백 저장 경로 거부
+- CSV 입력·달력·validation, dialog 재개방 KST rollover, Tauri native folder picker 취소 보존,
+  실제 backend streaming export와 absolute path/row-count success·typed failure modal
 - dashboard/trade-history route 단위 production code splitting
 - 앱 종료 확인과 Tauri 창 close interception
 - ready backend snapshot-first hydration, sequence 기반 account event와 full resync
@@ -1026,12 +1033,9 @@ snapshot/event가 소유한다.
 | 자동매매 | Phase 7 fake REGIME/start/stop/split command, version/idempotency와 stopping/reconciliation/terminated 표시 연결 완료. `disabled`·`testnet`·`live`는 fail closed | Phase 8 order/fill owner, Phase 9 실제 Binance client |
 | REGIME 계산 | backend 추천/지표 read와 sole-writer `set_regime_type` 적용 command 완료. active 변경은 `TRADING_ACTIVE` | 새 REGIME 전략은 Event-Action Table/registry 선행 |
 | 계좌/포지션 | live Account와 Phase 7 authoritative `PositionSnapshot`/보유 여부 read 완료 | Phase 8 mutable Position과 execution 반영 |
-| 거래 내역 | Phase 10 strict composite details, 12개 filter, D-12 summary/rows 분리, event/gap/KST 자정 갱신 완료 | Phase 11 CSV export 결과 연결 |
-| CSV 폴더 선택 | 결정적 fake 경로 반환 | Tauri dialog 또는 backend filesystem adapter |
-| CSV 파일 쓰기 | fake receipt 반환 | `UiCommandPort.export_csv` 실제 writer/atomic save |
 | shutdown | live route는 typed unavailable, demo는 fake 완료 | Phase 12 거래 engine flush, stream close, sidecar 종료 |
 | native sidecar | one-shot descriptor state/command만 구현 | Phase 12 process spawn, stage, package와 crash lifecycle |
-| E2E | actual Python process→React read test 존재 | packaged Tauri/real testnet E2E는 Phase 12~13 |
+| E2E | actual Python process→React read와 real Repository→Controller→CSV gateway temporary-directory E2E 존재 | packaged Tauri/real testnet E2E는 Phase 12~13 |
 
 후속 업무 owner를 추가할 때 React 표시 component가 Binance SDK, Tauri file API 또는
 거래 계산을 직접 import하면 안 된다. 인증 transport는 `BackendUiAdapter`, command의
@@ -1073,16 +1077,18 @@ corepack pnpm dev
 | `pnpm desktop:dev` | Rust/Cargo 환경에서 Tauri desktop 개발 앱을 실행한다. |
 | `pnpm desktop:build` | Tauri desktop bundle을 생성한다. |
 
-### 18.4 2026-08-21 Phase 5 검증 결과
+### 18.4 2026-08-24 Phase 11 검증 결과
 
 - strict TypeScript typecheck가 오류 없이 통과했다.
-- Vitest 전체 suite 31개 파일, 122개 test가 모두 통과했다.
+- Vitest 전체 suite 31개 파일, 220개 test가 모두 통과했다.
 - 실제 Python child process가 제공한 loopback snapshot을 React App에 표시하고 메시지 1~5 순서를 검증했다.
 - Python renderer와 `backendContracts.generated.ts`의 byte-for-byte drift 검사가 통과했다.
+- native picker cancel/malformed failure, exact CSV request/receipt, pending duplicate 차단, 실패 option 보존과 KST 자정 rollover가 통과했다.
+- CSV wall-clock timeout은 적용하지 않고 adapter stop이 진행 중 request를 abort하는 600초 fake-timer 검증이 통과했다.
 - Vite production build가 성공했고 dashboard/history route별 asset 분리가 유지됐다.
 - build 결과에 `DashboardPage`와 `TradeHistoryPage` JS/CSS가 별도 asset으로 생성됐다.
 - Storybook static build가 성공해 demo/Figma fixture bootstrap 회귀를 보존했다.
-- 현재 환경에는 Rust toolchain이 없어 `src/lib.rs`의 native unit test 3개는 실행하지 못했으며, 해당 실행은 Phase 12 toolchain 검증에도 남긴다.
+- 현재 환경에는 Cargo/Rust toolchain이 없어 `src/lib.rs`와 `src/dialog.rs`의 native unit test 6개는 실행하지 못했으며, 해당 compile/test는 Phase 12 toolchain 검증에도 남긴다.
 
 ## 19. 새 기능을 추가할 때의 순서
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future
 from dataclasses import dataclass
 import hashlib
 import hmac
@@ -74,12 +75,13 @@ _COMMAND_ENDPOINTS = frozenset(
         ("POST", "/v1/shutdown"),
     }
 )
-_PHASE7_COMMAND_ENDPOINTS = frozenset(
+_BODY_COMMAND_ENDPOINTS = frozenset(
     {
         ("POST", "/v1/regime/selection"),
         ("POST", "/v1/trading/start"),
         ("POST", "/v1/trading/stop"),
         ("PATCH", "/v1/trading/split-ratios"),
+        ("POST", "/v1/csv-exports"),
     }
 )
 _KNOWN_ENDPOINTS = frozenset(
@@ -184,6 +186,40 @@ class _IdempotencyRecord:
 
     fingerprint: bytes
     response: TransportResponse
+
+
+@dataclass(frozen=True, slots=True)
+class _IdempotencyFlight:
+    """
+    클래스 이름: _IdempotencyFlight
+    기능: 실행 중인 한 command key의 fingerprint와 공유 terminal 결과를 보존한다.
+    작성 날짜: 2026/08/24
+    """
+
+    fingerprint: bytes
+    response_future: Future[TransportResponse]
+
+
+def _replay_response_for_request(
+    response: TransportResponse,
+    request_id: str,
+) -> TransportResponse:
+    """
+    함수 이름: _replay_response_for_request()
+    기능: 최초 command 결과를 보존하면서 envelope correlation ID만 현재 요청에 맞춘다.
+    인자: response -> 최초 또는 single-flight leader의 terminal 응답
+        request_id -> replay를 요청한 현재 HTTP 요청 UUID
+    반환값: 현재 request ID와 최초 status/data/error를 가진 새 TransportResponse
+    작성 날짜: 2026/08/24
+    """
+    replay_payload = dict(response.payload)
+    replay_payload[
+        "request_id"
+    ] = request_id  # 업무 결과는 재사용하되 transport correlation은 각 요청마다 고유하다.
+    return TransportResponse(
+        status=response.status,
+        payload=replay_payload,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,6 +629,7 @@ class LoopbackTransportServer:
         self._idempotency_lock = RLock()
         self._idempotency_records: dict[str, _IdempotencyRecord] = {}
         self._idempotency_order: deque[str] = deque()
+        self._idempotency_flights: dict[str, _IdempotencyFlight] = {}
         self._http_server = _LoopbackHttpServer(self)
         self._server_thread: Thread | None = None
         self._started = False
@@ -942,7 +979,7 @@ class LoopbackTransportServer:
             + raw_body
         ).digest()
 
-        # cache lookup과 conflict 판정을 route 실행 전에 수행해 command 재호출을 막는다.
+        # 짧은 global 임계 구역에서는 cache 조회와 key별 single-flight 예약만 수행한다.
         with self._idempotency_lock:
             cached_response = self._lookup_idempotency_response(
                 idempotency_key,
@@ -952,19 +989,61 @@ class LoopbackTransportServer:
             if cached_response is not None:
                 return cached_response
 
-            # reservation부터 route 결과 저장까지 한 lock으로 직렬화해 동시 중복 실행을 막는다.
+            existing_flight = self._idempotency_flights.get(idempotency_key)
+            if existing_flight is None:
+                command_flight = _IdempotencyFlight(
+                    fingerprint=request_fingerprint,
+                    response_future=Future(),
+                )
+                self._idempotency_flights[idempotency_key] = command_flight
+                owns_command_execution = True
+            elif hmac.compare_digest(
+                existing_flight.fingerprint,
+                request_fingerprint,
+            ):
+                command_flight = existing_flight
+                owns_command_execution = False
+            else:
+                conflict = TransportContractError(
+                    "IDEMPOTENCY_CONFLICT",
+                    "The idempotency key was already used for different content.",
+                    status=409,
+                )
+                return error_response(request_id, conflict)
+
+        if not owns_command_execution:
+            # 같은 key/body만 route 밖에서 첫 실행의 terminal 결과를 기다린다.
+            shared_response = command_flight.response_future.result()
+            return _replay_response_for_request(shared_response, request_id)
+
+        try:
+            # 서로 다른 key의 장기 export와 stop/shutdown은 global lock 없이 병행할 수 있다.
             response = self._route_http_request(
                 endpoint_key,
                 request_id,
                 request_body=request_body,
                 command_id=idempotency_key,
             )
+        except BaseException as error:
+            # 예기치 않은 route 실패도 동일 key waiter를 영구 대기시키지 않고 함께 종료한다.
+            with self._idempotency_lock:
+                if self._idempotency_flights.get(idempotency_key) is command_flight:
+                    self._idempotency_flights.pop(idempotency_key, None)
+                command_flight.response_future.set_exception(error)
+            raise
+
+        with self._idempotency_lock:
+            # Terminal 응답은 cache에 먼저 게시한 뒤 waiter를 깨워 새 동일-key race를 막는다.
             self._store_idempotency_response(
                 idempotency_key,
                 request_fingerprint,
                 response,
             )
-            return response
+            if self._idempotency_flights.get(idempotency_key) is command_flight:
+                self._idempotency_flights.pop(idempotency_key, None)
+            command_flight.response_future.set_result(response)
+
+        return response
 
     def _route_http_request(
         self,
@@ -999,8 +1078,8 @@ class LoopbackTransportServer:
         }
         route_function = route_by_endpoint[endpoint_key]
 
-        # Phase 7 lifecycle command만 body와 command ID를 application 경계에 전달한다.
-        if endpoint_key in _PHASE7_COMMAND_ENDPOINTS:
+        # Versioned mutation command는 body와 command ID를 각 application owner 경계에 전달한다.
+        if endpoint_key in _BODY_COMMAND_ENDPOINTS:
             if request_body is None or command_id is None:
                 raise RuntimeError("command route requires body and command ID")
             return route_function(
@@ -1046,13 +1125,9 @@ class LoopbackTransportServer:
                 existing_record.fingerprint,
                 request_fingerprint,
             ):
-                replay_payload = dict(existing_record.response.payload)
-                replay_payload[
-                    "request_id"
-                ] = request_id  # command 결과는 재사용해도 correlation은 현재 HTTP 요청에 맞춘다.
-                return TransportResponse(
-                    status=existing_record.response.status,
-                    payload=replay_payload,
+                return _replay_response_for_request(
+                    existing_record.response,
+                    request_id,
                 )
 
         conflict = TransportContractError(

@@ -113,13 +113,19 @@ HTTP status 기본 매핑은 다음과 같다.
 | Status | 의미 |
 |---:|---|
 | `200` | query 또는 idempotent no-op 성공 |
-| `202` | 장기 stop/export/shutdown command 수락 |
+| `201` | 동기 CSV 파일 publication 완료와 actual path/row-count receipt |
+| `202` | 장기 stop/shutdown command 수락 |
 | `400` | malformed DTO 또는 지원하지 않는 schema |
 | `401` | token 없음/불일치 |
 | `403` | origin/host/mode/live gate 거부 |
 | `409` | version, active session, idempotency 또는 destination 충돌 |
 | `422` | domain validation 실패 또는 미지원 REGIME |
 | `503` | backend not ready, offline 또는 reconciliation lock |
+
+CSV는 별도 job/status endpoint가 없는 `exportCSV(): CSVExportResult` 계약이므로 Phase 11에서
+파일의 fsync·atomic rename이 끝난 뒤 `201`과 actual receipt를 동기로 반환한다. job ID만 받고
+나중에 결과를 조회하는 비동기 `202` export는 별도 ADR과 polling/event 계약 없이는 사용하지
+않는다.
 
 ## 5. Event envelope
 

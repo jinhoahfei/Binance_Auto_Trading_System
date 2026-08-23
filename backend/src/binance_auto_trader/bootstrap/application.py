@@ -17,6 +17,7 @@ from binance_auto_trader.adapters.binance import (
     BinanceWebSocketClient,
     WebSocketGateway,
 )
+from binance_auto_trader.adapters.filesystem import CSVFileGateway
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
 from binance_auto_trader.application import (
     AccountStreamRecoveryBlockedError,
@@ -950,8 +951,9 @@ def create_application_runtime(
         selected_history_repository,
         clock=clock,
         account=account,
+        csv_export_writer=CSVFileGateway(),
         trade_update_observer=trade_history_update_observer,
-    )  # 상세 조회와 실시간 event가 runtime의 같은 Account·history를 본다.
+    )  # 상세 조회, 실시간 event와 CSV export가 같은 durable history owner를 본다.
     position = Position()
 
     # 거래 Controller가 Position과 history를 공유해 Phase 8 outcome commit 순서를 소유한다.

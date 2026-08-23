@@ -177,18 +177,19 @@ Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는
 ### 3.3 현재 완료되지 않은 핵심
 
 - [ ] 부분 완료 — `TradingController`의 실제 Testnet Order Action, pending journal,
-  startup/reconnect reconciliation까지 연결됐다. credential 기반 lifecycle 증거는 아직 없고
-  export는 Phase 11 범위다.
+  startup/reconnect reconciliation까지 연결됐다. credential 기반 lifecycle 증거는 아직 없다.
 - [ ] 부분 완료 — 공식 account/order REST와 signed user-data stream client 조립,
   credential/signature/session 관리는 구현했지만 실제 credential parity 실행은 남아 있다.
 - [ ] 부분 완료 — backend `Account`, `Order`, mutable `Position`, `ExecutionSummary`,
   v1/v2 `Trade`, `TradeHistory`, `Performance`가 실제 Binance mapping까지 연결됐다.
   credential 기반 외부 Testnet lifecycle과 열린 legacy lot migration 도구는 완료되지 않았다.
-- [ ] 부분 완료 — JSONL `TradeHistoryRepository`의 startup read/recovery/index와 order ID 멱등 append/flush/fsync/save-only retry를 구현했다. `stream_trades`와 CSV writer는 Phase 11 범위다.
+- [x] 완료 — JSONL `TradeHistoryRepository`의 startup read/recovery/index, order ID 멱등
+  append/flush/fsync/save-only retry와 byte snapshot `stream_trades`를 구현하고, native
+  no-replace rename 기반 CSV writer까지 Phase 11에서 연결했다.
 - [ ] 부분 완료 — Python application bootstrap, loopback HTTP/WebSocket와 backend event stream은 구현됐다. Tauri sidecar spawn, descriptor stage, package와 안전 종료 lifecycle은 Phase 12 범위다.
-- [ ] 부분 완료 — production read/Phase 7 command path는 `BackendUiAdapter`를 사용하고
-  demo/Storybook/tests는 `FakeUiCommandAdapter`를 유지한다. 실제 Testnet order runtime은
-  backend에만 있으며 CSV UI의 실제 filesystem 연결은 후속 Phase 범위다.
+- [x] 완료 — production read/command path는 `BackendUiAdapter`를 사용하고
+  demo/Storybook/tests는 `FakeUiCommandAdapter`를 유지한다. Phase 11에서 Tauri native directory
+  picker와 실제 streaming filesystem export receipt까지 production adapter에 연결했다.
 - [ ] 부분 완료 — authoritative backend market/regime/account/history/trading-session snapshot과
   Testnet runtime은 구현됐지만 packaged UI가 Testnet composition을 선택하는 경로는 Phase 12
   범위다. UI 공개 차트는 parity 전 display-only로 유지한다.
@@ -198,7 +199,7 @@ Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는
   lifecycle harness를 구현했으며 local restart reconciliation을 검증했다. harness의
   credential 기반 실행과 전체 UI Communication Case는 아직 남아 있다.
 
-### 3.4 Phase 1~10에서 해소한 위험과 남은 계약 공백
+### 3.4 Phase 1~11에서 해소한 위험과 남은 계약 공백
 
 Phase 1에서 두 독립 distribution을 `backend/` 하나로 통합했다. root의
 `RegimeSTM/`·`TradingSTM/` source tree를 제거했고, clean environment에 설치한
@@ -268,6 +269,14 @@ event batch로 발행하며 Account/Performance event와 sequence gap을 UI acto
 payload를 변경하지 않아 새 공식 Binance 문서 해석이 필요하지 않았고 Communication Case 3,
 ADR-004와 ADR-005의 기존 계약만 적용했다.
 
+Phase 11에서는 Case 4의 UI draft와 독립된 backend `CSVExportOptions` 검증, KST preset과
+JSONL byte snapshot iterator를 연결했다. ADR-004의 고정 21열을 UTF-8 BOM·CRLF·RFC 4180으로
+한 행씩 기록하고 file fsync 뒤 OS native no-replace rename으로 게시한다. native picker 취소,
+빈 결과, destination 경합과 filesystem fault는 경로를 반사하지 않는 typed 결과로 닫았다.
+장기 write는 TradeHistory operation lock과 transport의 전역 idempotency lock 밖에서 실행해
+terminal Trade publication 및 서로 다른 stop/shutdown command를 차단하지 않는다. Binance API
+payload를 변경하지 않았으므로 이 Phase도 새 Binance 공식 문서 해석이 필요하지 않았다.
+
 남은 표현과 지원 상태는 다음과 같다.
 
 | 위치 | 현재 값 |
@@ -295,9 +304,9 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 | 체크 | Communication 클래스 | 현재 상태와 근거 | 남은 일 |
 |---|---|---|---|
 | [x] | `AppShellUI` | React `App`, `AppHeader`, modal host와 live snapshot/loading/typed failure Boundary를 구현 | 없음 |
-| [ ] | `UIStateController` | `UiApplicationFacade`가 snapshot/event bridge, Phase 7 command와 Phase 10 Trade History query/event/reconnect/KST timer를 조정 | Phase 11 live export 조정 |
+| [x] | `UIStateController` | `UiApplicationFacade`가 snapshot/event bridge, Phase 7 command, Phase 10 Trade History와 Phase 11 native picker/export lifecycle을 조정 | 없음 |
 | [x] | `UISTM` | root/feature XState actor와 Phase 5 snapshot 전체 동기화/reconnect를 구현 | 후속 command ack E2E 추가 |
-| [ ] | `TradingController` | account, strict selection, session start/stop, queue/scheduler, Phase 8 Order/Position/history/force-sell 실행과 Phase 9 pending journal·confirmed-rejection durability·startup/reconnect reconciliation을 구현 | credential 기반 실제 Testnet lifecycle 증거와 Phase 11 export 조정 |
+| [ ] | `TradingController` | account, strict selection, session start/stop, queue/scheduler, Phase 8 Order/Position/history/force-sell 실행과 Phase 9 pending journal·confirmed-rejection durability·startup/reconnect reconciliation을 구현 | credential 기반 실제 Testnet lifecycle 증거 |
 | [x] | `TradingSTM` | exact 109개 lower-BB transition·queue, 5-row immutable coverage, typed unsupported/no-fallback, G-07 안전 종료와 session `run` 연결을 구현 | 없음 |
 | [x] | `TradingContext` | mutable/versioned owner, `initialize`, ordered runtime patch 적용, typed mutation·split ratio·Position/pending Order publication을 구현 | 없음 |
 | [ ] | `MarketDataController` | backend authoritative WS-first/REST/merge/snapshot 초기화와 RegimeController 최초/full-resync 평가를 구현 | 4H/30m live event 발행과 후속 runtime 연결 |
@@ -312,15 +321,15 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 | [x] | `Trade` | frozen JSONL v1/v2 reader·v2 writer, strict Decimal/plain/UTC/schema와 실제 자산 흐름 수수료 회계를 Order/ExecutionSummary/RealizedResult에 연결 | 열린 v1 ETH-fee lot의 별도 migration 도구는 후속 운영 과제 |
 | [x] | `TradeHistory` | constructor, same-content idempotent `add_trade`/conflict, KST inclusive-date/side `find` 구현 | 없음 |
 | [x] | `Performance` | D-11 startup/daily aggregate, `calculate_realized_result`, `apply_new_trade`, KST day rollover를 구현 | 없음 |
-| [ ] | `TradeHistoryController` | startup atomic publish, Performance → Trade → TradeHistory → Repository terminal execution/save-only retry와 Phase 10 details/query/observer를 구현 | Phase 11 export |
-| [ ] | `TradeHistoryRepository` | streaming read/recovery/index, order ID 멱등 append·flush·fsync·uncertain-save와 pending sidecar v2 상태 전이 내구성을 구현 | Phase 11 `stream_trades` |
+| [x] | `TradeHistoryController` | startup atomic publish, terminal execution/save-only retry, Phase 10 details와 Phase 11 KST preset·snapshot streaming export 조정을 구현 | 없음 |
+| [x] | `TradeHistoryRepository` | streaming read/recovery/index, order ID 멱등 append·flush·fsync·uncertain-save, pending sidecar v2와 byte-length snapshot `stream_trades`를 구현 | 없음 |
 | [x] | `Account` | balance/current price/valuation/UTC/version/`get_holdings`, transport DTO와 update event 연결 구현 | 없음 |
 | [x] | `RecentOrderUI` | recent-orders Boundary와 backend `ORDER_EXECUTED` event 갱신을 구현 | 없음 |
-| [x] | `TradeHistoryUI` | live details page, 12개 filter, 실제 상태/retry, event·resync·KST 자정 갱신과 D-12 summary/rows 분리를 구현 | Phase 11 export 진입의 실제 결과 연결 |
+| [x] | `TradeHistoryUI` | live details page, 12개 filter, 실제 상태/retry, event·resync·KST 자정 갱신, D-12 summary/rows 분리와 실제 CSV 결과 진입을 구현 | 없음 |
 | [x] | `TradeHistoryQuery` | backend LocalDate·side 불변 query와 KST 경계 구현 | 없음; period→date/wire mapping은 Controller/transport 책임 |
-| [x] | `PopupUI` | CSV dialog와 modal state로 구현 | native picker/실제 export 결과 연결 |
-| [ ] | `CSVExportOptions` | TypeScript draft와 UI validation만 구현 | backend 최종 검증 value object 구현 |
-| [ ] | `CSVFileGateway` | fake receipt만 반환 | native picker realization과 atomic CSV write 구현 |
+| [x] | `PopupUI` | CSV dialog, native picker 취소 보존, pending 중복 차단과 실제 success/error modal을 구현 | 없음 |
+| [x] | `CSVExportOptions` | UI draft와 독립적인 backend frozen value object, KST preset, 날짜·파일명·경로 구조 검증을 구현 | 없음 |
+| [x] | `CSVFileGateway` | ADR-004 schema streaming, UTF-8 BOM/CRLF, fsync와 OS native no-replace atomic rename을 구현 | 없음 |
 
 - [x] 27개 Communication 클래스의 현재 상태를 검토했다.
 
@@ -333,7 +342,7 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 | Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, fake session branch와 실제 Testnet adapter 기반 local lifecycle harness를 구현 | credential 기반 실제 Testnet lifecycle 증거, Phase 12 packaged sidecar | Phase 7, 9, 12 |
 | Case 2 Buy/Sell | fake pipeline 메시지 `1`~`14`, 실제 Binance order mapping·pending journal·startup/reconnect reconciliation과 production-runtime lifecycle harness를 구현 | credential 기반 capped BUY/force-sell 실행; harness의 BUY trigger는 test-only private action seam이라 market-event→strategy E2E는 Phase 13에 남음 | Phase 8~9, 13 |
 | Case 3 Trade History | `SHOW_TRADE_HISTORY` 최초 `TODAY + ALL`, 12개 결합 filter, backend composite details, D-12 summary/rows 분리, order/account/performance event와 gap resync/KST 자정 갱신을 구현 | 없음 | Phase 10 |
-| Case 4 CSV Export | popup, date/file validation, fake picker/receipt, backend KST `TradeHistoryQuery` | backend option 검증, `stream_trades`, native picker, 실제 atomic file write | Phase 11~12 |
+| Case 4 CSV Export | popup, backend option/KST 검증, byte snapshot `stream_trades`, native picker, 실제 atomic file write와 typed receipt/failure를 구현 | 없음 | Phase 11 |
 
 현재 기준으로 live trading 준비 완료라고 볼 수 있는 Case는 **0개**다. startup read 경로,
 fake Trading Order pipeline과 실제 Binance Testnet adapter/reconciliation 구현은 연결됐지만
@@ -719,7 +728,7 @@ UI `<<boundary>>` classifier는 ES class 하나가 아니라 component/module �
 | `CSVExportOptions` | backend `domain/history/csv_export_options.py`; UI에는 draft DTO만 유지 |
 | `CSVFileGateway` | backend `adapters/filesystem/csv_file_gateway.py`; directory picker realization은 Tauri `dialog.rs` |
 
-- [ ] 각 Communication 클래스의 authoritative 구현 위치가 위 표와 일치한다.
+- [x] 각 Communication 클래스의 authoritative 구현 위치가 위 표와 일치한다.
 
 ---
 
@@ -1085,7 +1094,7 @@ Operation 재호출로 full resync한다.
 | POST | `/v1/trading/start` | trading start 계약; Phase 7 owner 전에는 `FEATURE_NOT_AVAILABLE` |
 | POST | `/v1/trading/stop` | authoritative Position 기준 stop 계약; Phase 7 owner 전에는 `FEATURE_NOT_AVAILABLE` |
 | PATCH | `/v1/trading/split-ratios` | scale-in/out 계약; Phase 7 owner 전에는 `FEATURE_NOT_AVAILABLE` |
-| POST | `/v1/csv-exports` | 검증된 export 계약; Phase 11 owner 전에는 `FEATURE_NOT_AVAILABLE` |
+| POST | `/v1/csv-exports` | 검증된 option을 streaming export하고 absolute path/row count 또는 typed failure를 반환 |
 | POST | `/v1/shutdown` | flush/stream close 계약; Phase 12 owner 전에는 `FEATURE_NOT_AVAILABLE` |
 | WS | `/v1/events` | sequence가 있는 active read backend event stream |
 
@@ -1509,36 +1518,51 @@ in-memory transport에서 2/2 통과했다.
 
 **작업 체크리스트:**
 
-- [ ] UI draft validation과 별개로 backend가 directory, filename, date range를 다시 검증한다.
-- [ ] preset을 KST 시작/종료 LocalDate로 변환한다.
-- [ ] picker 취소 시 기존 선택 경로를 유지하고 backend export를 호출하지 않는다.
-- [ ] `TradeHistoryRepository.stream_trades(query)`가 전체 history 복제 없이 iterator를 반환한다.
-- [ ] CSV column과 순서를 schema로 고정한다.
-- [ ] Decimal은 locale과 무관한 plain string, timestamp는 ISO-8601로 기록한다.
-- [ ] D-13 encoding/빈 결과/overwrite 규칙을 구현한다.
-- [ ] filename traversal, separator, reserved name, 빈 이름을 거부한다.
-- [ ] 같은 directory 내부 temporary file에 기록하고 flush/fsync 후 atomic rename한다.
-- [ ] 성공 시 path/row count, 실패 시 typed reason을 반환한다.
-- [ ] UI progress 중 중복 submit을 막고 success/error modal을 실제 결과로 표시한다.
-- [ ] 실패 시 options를 유지해 수정 후 재시도할 수 있게 한다.
+- [x] UI draft validation과 별개로 backend가 directory, filename, date range를 다시 검증한다.
+- [x] preset을 KST 시작/종료 LocalDate로 변환한다.
+- [x] picker 취소 시 기존 선택 경로를 유지하고 backend export를 호출하지 않는다.
+- [x] `TradeHistoryRepository.stream_trades(query)`가 전체 history 복제 없이 iterator를 반환한다.
+- [x] CSV column과 순서를 schema로 고정한다.
+- [x] Decimal은 locale과 무관한 plain string, timestamp는 ISO-8601로 기록한다.
+- [x] D-13 encoding/빈 결과/overwrite 규칙을 구현한다.
+- [x] filename traversal, separator, reserved name, 빈 이름을 거부한다.
+- [x] 같은 directory 내부 temporary file에 기록하고 flush/fsync 후 atomic rename한다.
+- [x] 성공 시 path/row count, 실패 시 typed reason을 반환한다.
+- [x] UI progress 중 중복 submit을 막고 success/error modal을 실제 결과로 표시한다.
+- [x] 실패 시 options를 유지해 수정 후 재시도할 수 있게 한다.
 
 **검증 시나리오:**
 
-- [ ] 정상 export와 정확한 header/row golden file.
-- [ ] picker cancel.
-- [ ] invalid filename/date/directory.
-- [ ] empty query.
-- [ ] destination exists.
-- [ ] permission/disk/write/rename failure.
-- [ ] 큰 history의 bounded-memory streaming.
-- [ ] KST 날짜 경계와 UTF-8 한국어 필드.
+- [x] 정상 export와 정확한 header/row golden file.
+- [x] picker cancel.
+- [x] invalid filename/date/directory.
+- [x] empty query.
+- [x] destination exists.
+- [x] permission/disk/write/rename failure.
+- [x] 큰 history의 bounded-memory streaming.
+- [x] KST 날짜 경계와 UTF-8 한국어 필드.
 
 **완료 조건:**
 
-- [ ] temporary directory E2E에서 실제 CSV가 생성되고 내용이 golden file과 일치한다.
-- [ ] Case 4의 모든 성공/validation/I/O failure message branch가 검증된다.
+- [x] temporary directory E2E에서 실제 CSV가 생성되고 내용이 golden file과 일치한다.
+- [x] Case 4의 모든 성공/validation/I/O failure message branch가 검증된다.
 
-**완료 증거:** 미기록
+**완료 증거 (2026-08-24):**
+
+| 항목 | 증거 |
+|---|---|
+| Communication 범위 | Case 4 `1`~`4.1.6b`: popup validation, native picker, backend option/KST 재검증, snapshot stream, CSV write, success와 typed failure |
+| Domain/계약 | frozen `CSVExportOptions`/`CSVExportResult`, `today`/7일/30일/custom, safe basename, generated schema v2 request/receipt drift gate |
+| Streaming | Repository가 lock 아래 JSONL byte length와 dedup index count를 snapshot으로 고정하고 iterator를 반환한다. Controller는 snapshot 획득 뒤 operation lock을 해제하며 Gateway의 5,000행 test는 추가 Trade를 한 번에 하나만 유지한다. |
+| 파일 정책 | ADR-004 21열, CSV schema literal `1`, UTF-8 BOM, CRLF, RFC 4180, plain Decimal, UTC `Z`/KST offset, null empty field, same-directory temporary, file fsync, OS native no-replace atomic rename |
+| Fault/경합 | empty/no-file, invalid·empty directory, destination 선점 race, permission/write/fsync/rename/cleanup, iterator close, 상대 receipt 차단, export 중 terminal publication과 서로 다른 idempotency key 병행을 검증 |
+| 실제 E2E | real Repository → Controller → CSVFileGateway temporary-directory 흐름에서 KST 경계, BUY/SELL, 한국어·쉼표·따옴표·개행과 independent exact golden bytes를 검증 |
+| Native/UI | Tauri dialog plugin의 folder picker를 `string \| null` IPC로 제한하고 취소 보존, pending 중복 차단, 실제 receipt modal, 실패 option 보존과 KST 자정 재개방을 검증 |
+| 전체 회귀 | backend `unittest discover` 573개 실행: 569 통과, credential 기반 4개 safe skip; architecture 53/53, UI Vitest 31 files·220/220, TypeScript/Vite build, contract generator drift, `compileall`, `git diff --check` 통과 |
+| 공식 문서 | Tauri 2 dialog plugin 설치/초기화와 Rust `blocking_pick_folder`/`FilePath.into_path` 계약을 공식 문서로 확인 |
+| 범위 방어 | Trade History 화면의 1,000행 한도를 export에 재사용하지 않았고 Phase 12 sidecar spawn/package/shutdown 및 Phase 13 live enable은 변경하지 않음 |
+| 남은 환경 검증 | 현재 host에 Cargo/Rust toolchain이 없어 native Rust unit 6개와 desktop compile은 실행하지 못했으며 Phase 12 toolchain/package gate에 유지 |
+| 작업 commit | 생성하지 않음 — 사용자 요청 범위에 commit은 포함되지 않음 |
 
 ---
 
@@ -1630,11 +1654,14 @@ mapping 및 package를 선행한 뒤 Phase 6 coverage gate와 Phase 7 session li
 완성했다. Phase 9 production 구현과 local fault/restart 검증까지 완료했으며, 다음 작업은
 Phase 9의 credential 기반 실제 Testnet 검증이다. 사용자가 Phase 10을 명시적으로 요청했고
 그 기술 선행 Phase 5/8은 완료되어 있어, 외부 credential만 기다리는 Phase 9 master를
-완료 처리하지 않은 채 Phase 10의 독립 History read/UI 범위만 예외적으로 완료했다. 이후에도
-병렬 개발이 필요하면 같은 source 파일을 동시에 수정하지 않는다.
+완료 처리하지 않은 채 Phase 10의 독립 History read/UI 범위만 예외적으로 완료했다.
+사용자가 Phase 11을 명시적으로 요청했고 기술 선행 Phase 4/5/10이 모두 완료되어 있어,
+같은 원칙으로 Phase 9 외부 credential 증거를 오표기하지 않은 채 독립 CSV 범위를 완료했다.
+이후에도 병렬 개발이 필요하면 같은 source 파일을 동시에 수정하지 않는다.
 
 - [x] Phase 9 local 구현까지 의존 순서를 지키고 선행 완료 조건을 건너뛰지 않았다.
 - [x] Phase 10은 완료된 Phase 5/8 산출물만 사용했고, Phase 9 외부 검증을 완료로 오표기하지 않았다.
+- [x] Phase 11은 완료된 Phase 4/5/10 산출물만 사용했고, Phase 9 외부 검증을 완료로 오표기하지 않았다.
 
 ---
 
@@ -1763,7 +1790,7 @@ Communication message/operation:
 - [x] Phase 8 — Buy/Sell execution pipeline
 - [ ] Phase 9 — Binance testnet adapter (구현 완료·credential 검증 대기)
 - [x] Phase 10 — Trade History live UI
-- [ ] Phase 11 — CSV 실제 export
+- [x] Phase 11 — CSV 실제 export
 - [ ] Phase 12 — Tauri sidecar/package/shutdown
 - [ ] Phase 13 — 장애 복구/E2E/live readiness
 - [ ] 모든 Communication message ↔ code ↔ test 추적성 완료
@@ -1789,15 +1816,14 @@ deterministic fault injection은 2/2 통과했다. lifecycle harness는 producti
 과장하지 않는다. 실제 MARKET 체결 금액과 거래소 filter 판정도 decision-price local
 max-notional 사전 검사보다 authoritative하다.
 
-Phase 10은 완료했다. 다음 내부 구현 Phase는 Phase 11 CSV actual export지만, roadmap의
-가장 앞선 미완료 완료 조건은 여전히 Phase 9의 credential 기반 외부 검증이다. Phase 11을
-진행할 때는 이번 strict details query의 1,000-row 화면 한도를 pagination으로 임의 확장하지
-않고 ADR-005와 `TradeHistoryRepository.stream_trades()`를 따르는 별도 streaming export로
-구현한다.
+Phase 11은 완료했다. 다음 내부 구현 Phase는 Phase 12 Tauri sidecar/package/shutdown이지만,
+roadmap의 가장 앞선 미완료 완료 조건은 여전히 Phase 9의 credential 기반 외부 검증이다.
+CSV export는 strict details query의 1,000-row 화면 한도를 재사용하지 않고 ADR-004/005와
+`TradeHistoryRepository.stream_trades()`를 따르는 별도 snapshot streaming 경계로 구현했다.
 
 `TYPE_1`~`TYPE_4`는 해당 Event-Action Table과 state diagram이 생기기 전까지 계속
-`UNSUPPORTED_TRADING_LOGIC`이다. `stream_trades()`/CSV는 Phase 11, Tauri sidecar/package는
-Phase 12, live enable은 Phase 13의 별도 사용자 승인 범위로 남긴다.
+`UNSUPPORTED_TRADING_LOGIC`이다. `stream_trades()`/CSV는 Phase 11에서 완료했고,
+Tauri sidecar/package는 Phase 12, live enable은 Phase 13의 별도 사용자 승인 범위로 남긴다.
 
 - [x] Phase 0 완료 조건과 증거를 기록했다.
 - [x] Phase 1을 시작하기 전 Communication/ADR-001과 현재 git 상태를 다시 확인했다.
@@ -1821,3 +1847,5 @@ Phase 12, live enable은 Phase 13의 별도 사용자 승인 범위로 남긴다
 - [ ] Phase 9 authenticated read-only, capped BUY/force-sell lifecycle과 open-order/position restart의 실제 Testnet 통과 증거를 기록했다.
 - [x] Phase 10을 시작하기 전 Communication Case 3 `1`~`2.1.3`, D-12, ADR-004/005와 현재 UI/roadmap 구현을 다시 확인했다.
 - [x] Phase 10 controller/transport/event/UI 구현, Case 3 trace, fault·KST 경계와 전체 회귀 완료 증거를 기록했다.
+- [x] Phase 11을 시작하기 전 Communication Case 4 `1`~`4.1.6b`, D-13, ADR-004 검증 의무와 UI/roadmap 구현을 다시 확인했다.
+- [x] Phase 11 option/streaming/native picker/atomic CSV 구현, golden·fault·경합·KST 경계와 전체 회귀 완료 증거를 기록했다.

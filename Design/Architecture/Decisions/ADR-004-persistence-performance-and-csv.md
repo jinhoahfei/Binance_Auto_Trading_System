@@ -354,6 +354,9 @@ realized_return_rate,exit_reason
 - destination이 이미 있으면 `DESTINATION_EXISTS`로 실패하며 overwrite하지 않는다.
 - 같은 directory에 `.<final-name>.<uuid>.tmp`를 생성해 write → flush → fsync한 뒤
   no-replace atomic rename을 수행한다.
+- macOS/Linux는 native exclusive rename, Windows는 destination을 교체하지 않는 rename을
+  사용한다. rename 성공 뒤 지원되는 POSIX filesystem의 parent directory fsync는
+  best-effort로 보강하되 이미 게시된 결과를 불안전하게 rollback하지 않는다.
 - 오류 시 temporary file은 best-effort로 제거하고 원래 destination은 건드리지 않는다.
 - 성공 결과는 absolute path와 실제 data row count를 반환한다.
 
@@ -366,4 +369,4 @@ realized_return_rate,exit_reason
 - [x] CSV column, encoding, empty, overwrite와 atomic write가 확정되었다.
 - [ ] Phase 3에서 indicator golden vector를 자동 테스트로 옮긴다.
 - [x] Phase 4에서 JSONL/Performance golden test를 구현했다.
-- [ ] Phase 11에서 CSV golden file과 filesystem fault matrix를 구현한다.
+- [x] Phase 11에서 CSV golden file과 filesystem fault matrix를 구현했다.

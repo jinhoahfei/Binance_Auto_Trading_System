@@ -105,6 +105,8 @@ export interface UiApplicationFacadeOptions {
     readonly today: LocalDateString;
     readonly trading_symbol?: string;
     readonly csv_default_file_name?: string;
+    // 생략하면 CSV actor는 today를 고정 날짜 source로 사용한다.
+    readonly get_current_kst_date?: () => LocalDateString;
     readonly chart_interval?: ChartInterval;
     readonly chart_indicators?: {
         readonly bollinger_bands?: boolean;
@@ -588,6 +590,9 @@ export class UiApplicationFacade {
                 ...(options.csv_default_file_name === undefined
                     ? {}
                     : { default_file_name: options.csv_default_file_name }),
+                ...(options.get_current_kst_date === undefined
+                    ? {}
+                    : { get_current_kst_date: options.get_current_kst_date }),
             })),
             chart: createActor(create_chart_machine({
                 ...(options.chart_interval === undefined

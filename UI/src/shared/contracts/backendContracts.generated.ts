@@ -19,6 +19,7 @@ export type BackendTradingLogicStartGuard =
 export type BackendTradeSide = 'BUY' | 'SELL';
 export type BackendHistoryPeriod = 'today' | 'last7days' | 'last30days' | 'all';
 export type BackendTradeSideFilter = 'all' | 'buy' | 'sell';
+export type BackendCsvPeriod = 'today' | 'last7days' | 'last30days' | 'custom';
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
 
 export interface BackendConnectionSnapshot {
@@ -154,6 +155,21 @@ export interface BackendTradeDetails {
     readonly rows: ReadonlyArray<BackendTradeSnapshot>;
     readonly row_count: number;
     readonly summary: BackendTradeDetailsSummary;
+}
+
+export interface BackendCsvExportRequest {
+    readonly schema_version: typeof BACKEND_SCHEMA_VERSION;
+    readonly directory: string;
+    readonly file_name: string;
+    readonly period: BackendCsvPeriod;
+    readonly start_date: string;
+    readonly end_date: string;
+    readonly timezone: 'Asia/Seoul';
+}
+
+export interface BackendCsvExportReceipt {
+    readonly file_path: string;
+    readonly exported_row_count: number;
 }
 
 export interface BackendSnapshot {

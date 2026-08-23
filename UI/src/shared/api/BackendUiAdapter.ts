@@ -1,5 +1,8 @@
+import { invoke } from '@tauri-apps/api/core';
+
 import type {
     BackendAuthenticateMessage,
+    BackendCsvExportRequest,
     BackendEventEnvelope,
     BackendSnapshot,
     BackendTradeDetails,
@@ -112,12 +115,13 @@ export interface BackendWebSocket {
 }
 
 /**
- * transport 의존성을 browser global 대신 test에서 결정적으로 주입하는 옵션이다.
+ * transport와 native picker 의존성을 browser global 대신 test에서 결정적으로 주입하는 옵션이다.
  */
 export interface BackendUiAdapterDependencies {
     readonly fetch?: typeof fetch;
     readonly create_web_socket?: (url: string) => BackendWebSocket;
     readonly create_uuid?: () => string;
+    readonly pick_csv_directory?: () => Promise<unknown>;
     readonly request_timeout_ms?: number;
 }
 
@@ -166,6 +170,17 @@ export class BackendAdapterError extends Error {
  */
 function create_default_web_socket(url: string): BackendWebSocket {
     return new WebSocket(url);
+}
+
+/**
+ * 함수 이름: invoke_default_csv_directory_picker()
+ * 기능: Tauri native command를 호출해 OS 폴더 선택 결과를 가져온다.
+ * 인자: 없음
+ * 반환값: native command가 반환한 미검증 값 Promise
+ * 작성 날짜: 2026/08/23
+ */
+async function invoke_default_csv_directory_picker(): Promise<unknown> {
+    return invoke<unknown>('choose_csv_export_directory');
 }
 
 /**
@@ -382,7 +397,7 @@ function percentage_to_ratio_text(percentage: number): string {
     return `0.${percentage.toString().padStart(2, '0')}`.replace(/0$/u, '');
 }
 
-// Generated composite와 각 primitive의 exact wire key를 runtime 검증 목록으로 고정한다.
+// Generated composite, primitive와 command receipt의 exact wire key를 runtime 검증 목록으로 고정한다.
 const TRADE_DETAILS_KEYS = [
     'query',
     'rows',
@@ -437,6 +452,10 @@ const TRADE_KEYS = [
     'realized_return_rate',
     'exit_reason',
 ] as const satisfies ReadonlyArray<keyof BackendTradeDetails['rows'][number]>;
+const CSV_EXPORT_RECEIPT_KEYS = [
+    'file_path',
+    'exported_row_count',
+] as const satisfies ReadonlyArray<keyof CsvExportReceipt>;
 
 /**
  * 함수 이름: require_exact_record()
@@ -611,24 +630,21 @@ function validate_trade_details(
 
 /**
  * 함수 이름: validate_csv_receipt()
- * 기능: 미래 CSV command 성공값을 기존 UiCommandPort receipt로 검증한다.
+ * 기능: CSV command 성공값의 exact key, non-empty path와 양수 row count를 검증한다.
  * 인자: value -> `/v1/csv-exports` 성공 data
  * 반환값: 검증된 CSV receipt
- * 작성 날짜: 2026/08/21
+ * 작성 날짜: 2026/08/23
  */
 function validate_csv_receipt(value: unknown): CsvExportReceipt {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        throw new BackendContractError(
-            'MALFORMED_BACKEND_PAYLOAD',
-            'Backend CSV receipt must be an object',
-        );
-    }
-
-    const receipt = value as Record<string, unknown>;
+    const receipt = require_exact_record(
+        value,
+        CSV_EXPORT_RECEIPT_KEYS,
+        'CSV receipt',
+    );
     if (typeof receipt.file_path !== 'string'
-        || receipt.file_path.length === 0
+        || receipt.file_path.trim().length === 0
         || !Number.isSafeInteger(receipt.exported_row_count)
-        || (receipt.exported_row_count as number) < 0) {
+        || (receipt.exported_row_count as number) <= 0) {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
             'Backend CSV receipt is invalid',
@@ -649,6 +665,7 @@ export class BackendUiAdapter implements UiCommandPort {
     readonly #fetch: typeof fetch;
     readonly #create_web_socket: (url: string) => BackendWebSocket;
     readonly #create_uuid: () => string;
+    readonly #invoke_csv_directory_picker: () => Promise<unknown>;
     readonly #request_timeout_ms: number;
     readonly #http_origin: string;
     readonly #web_socket_url: string;
@@ -701,6 +718,8 @@ export class BackendUiAdapter implements UiCommandPort {
         this.#create_web_socket = dependencies.create_web_socket
             ?? create_default_web_socket;
         this.#create_uuid = dependencies.create_uuid ?? create_default_uuid;
+        this.#invoke_csv_directory_picker = dependencies.pick_csv_directory
+            ?? invoke_default_csv_directory_picker;
         this.#request_timeout_ms = request_timeout_ms;
         this.#http_origin = `http://127.0.0.1:${validated_descriptor.port}`;
         this.#web_socket_url = `ws://127.0.0.1:${validated_descriptor.port}/v1/events`;
@@ -1044,34 +1063,47 @@ export class BackendUiAdapter implements UiCommandPort {
 
     /**
      * 함수 이름: pick_csv_directory()
-     * 기능: native picker가 Phase 12 전에는 fake path를 반환하지 않고 typed unavailable을 전파한다.
+     * 기능: native picker 결과를 string 또는 취소 null로만 제한해 UI actor에 전달한다.
      * 인자: 없음
-     * 반환값: 항상 rejected Promise
-     * 작성 날짜: 2026/08/21
+     * 반환값: 선택한 directory 문자열 또는 취소를 나타내는 null Promise
+     * 작성 날짜: 2026/08/23
      */
     async pick_csv_directory(): Promise<string | null> {
-        throw new BackendCommandError(
-            'FEATURE_NOT_AVAILABLE',
-            'Directory selection is not available in the current application phase.',
-            false,
+        const selected_directory = await this.#invoke_csv_directory_picker();
+
+        // Native IPC 경계에서 primitive string과 명시적 취소 null 외의 값을 차단한다.
+        if (selected_directory === null || typeof selected_directory === 'string') {
+            return selected_directory;
+        }
+
+        throw new BackendContractError(
+            'MALFORMED_NATIVE_PICKER_RESULT',
+            'Native CSV directory picker result is invalid',
         );
     }
 
     /**
      * 함수 이름: export_csv()
-     * 기능: Phase 5 fail-closed CSV endpoint에 authenticated command를 전달하고 미래 success는 검증한다.
+     * 기능: 검증된 CSV option 전체를 authenticated backend command로 전달하고 strict receipt를 반환한다.
      * 인자: options -> UI가 검증한 CSV export option
      * 반환값: backend typed receipt Promise
-     * 작성 날짜: 2026/08/21
+     * 작성 날짜: 2026/08/23
      */
     async export_csv(options: CsvExportOptions): Promise<CsvExportReceipt> {
-        void options;
+        // Generated request type가 schema version과 option 전체의 Python-owned 계약 drift를 막는다.
+        const request_body = {
+            schema_version: BACKEND_SCHEMA_VERSION,
+            ...options,
+        } satisfies BackendCsvExportRequest;
+
         return this.request_json(
             'POST',
             '/v1/csv-exports',
             validate_csv_receipt,
-            { schema_version: BACKEND_SCHEMA_VERSION },
+            request_body,
             true,
+            undefined,
+            null,
         );
     }
 
@@ -1112,6 +1144,7 @@ export class BackendUiAdapter implements UiCommandPort {
      * 인자: method -> HTTP method, path -> exact endpoint/query
      *      validate_data -> success data validator, body -> optional JSON body
      *      is_command -> idempotency header 필요 여부, caller_signal -> optional 호출자 취소 신호
+     *      timeout_ms -> 양수 timeout milliseconds, null이면 wall-clock timeout 미적용
      * 반환값: 검증된 success data Promise
      * 작성 날짜: 2026/08/21
      */
@@ -1122,6 +1155,7 @@ export class BackendUiAdapter implements UiCommandPort {
         body?: Readonly<Record<string, unknown>>,
         is_command = false,
         caller_signal?: AbortSignal,
+        timeout_ms: number | null = this.#request_timeout_ms,
     ): Promise<Data> {
         const token = this.#session_token;
         if (token === null) {
@@ -1164,9 +1198,12 @@ export class BackendUiAdapter implements UiCommandPort {
             caller_signal?.addEventListener('abort', abort_from_caller, { once: true });
         }
         this.#active_abort_controllers.add(abort_controller);
-        const timeout_handle = globalThis.setTimeout(() => {
-            abort_controller.abort(REQUEST_TIMEOUT_ABORT_REASON);
-        }, this.#request_timeout_ms);
+        // Streaming CSV는 시간 상한 없이 기다리되 active controller로 adapter stop은 계속 수용한다.
+        const timeout_handle = timeout_ms === null
+            ? null
+            : globalThis.setTimeout(() => {
+                abort_controller.abort(REQUEST_TIMEOUT_ABORT_REASON);
+            }, timeout_ms);
         let response_status: number | null = null;
 
         try {
@@ -1247,7 +1284,9 @@ export class BackendUiAdapter implements UiCommandPort {
             );
         } finally {
             caller_signal?.removeEventListener('abort', abort_from_caller);
-            globalThis.clearTimeout(timeout_handle);
+            if (timeout_handle !== null) {
+                globalThis.clearTimeout(timeout_handle);
+            }
             this.#active_abort_controllers.delete(abort_controller);
         }
     }

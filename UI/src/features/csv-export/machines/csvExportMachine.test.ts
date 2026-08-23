@@ -17,6 +17,48 @@ async function wait_for_actor_settlement(): Promise<void> {
 }
 
 describe('csvExportMachine', () => {
+    it('dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        let current_kst_date = '2026-08-12';
+        const actor = createActor(create_csv_export_machine(command_adapter, {
+            today: current_kst_date,
+            get_current_kst_date: () => current_kst_date,
+        }));
+
+        actor.start();
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+        expect(actor.getSnapshot().context).toMatchObject({
+            today: '2026-08-12',
+            start_date: '2026-08-12',
+            end_date: '2026-08-12',
+            file_name: 'binance_trades_2026-08-12.csv',
+        });
+        actor.send({ type: 'CLOSE_CSV_EXPORT_POPUP' });
+
+        // KST 자정이 지난 뒤 같은 actor를 다시 열면 모든 날짜 기반 기본값이 새 날짜를 공유한다.
+        current_kst_date = '2026-08-13';
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+        expect(actor.getSnapshot().context).toMatchObject({
+            today: '2026-08-13',
+            start_date: '2026-08-13',
+            end_date: '2026-08-13',
+            file_name: 'binance_trades_2026-08-13.csv',
+            file_name_draft: 'binance_trades_2026-08-13.csv',
+        });
+
+        actor.send({ type: 'SELECT_CSV_WEEKLY_HISTORY' });
+        expect(actor.getSnapshot().context).toMatchObject({
+            start_date: '2026-08-07',
+            end_date: '2026-08-13',
+        });
+        actor.send({ type: 'SELECT_CSV_MONTHLY_HISTORY' });
+        expect(actor.getSnapshot().context).toMatchObject({
+            start_date: '2026-07-15',
+            end_date: '2026-08-13',
+        });
+        actor.stop();
+    });
+
     it('TD4-05/VR-07: 저장 위치가 없으면 export 명령을 차단하고 필드를 표시한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
         const actor = createActor(create_csv_export_machine(command_adapter, {
@@ -48,6 +90,28 @@ describe('csvExportMachine', () => {
 
         expect(actor.getSnapshot().context.directory).toBeNull();
         expect(actor.getSnapshot().context.validation_errors.directory).not.toBeNull();
+        expect(command_adapter.command_records.filter((record) => record.name === 'export_csv')).toHaveLength(0);
+        actor.stop();
+    });
+
+    it('CR1-03/CR-12: picker 취소는 기존 선택 경로를 유지하고 export를 시작하지 않는다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.selected_directory = '/Users/demo/FirstExport';
+        const actor = createActor(create_csv_export_machine(command_adapter, {
+            today: '2026-08-12',
+        }));
+
+        actor.start();
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+        actor.send({ type: 'SAVE_LOCATION_SELECT_CLICKED' });
+        await wait_for_actor_settlement();
+
+        // 두 번째 native picker의 null은 사용자 취소이므로 기존 directory를 교체하지 않는다.
+        command_adapter.selected_directory = null;
+        actor.send({ type: 'SAVE_LOCATION_SELECT_CLICKED' });
+        await wait_for_actor_settlement();
+
+        expect(actor.getSnapshot().context.directory).toBe('/Users/demo/FirstExport');
         expect(command_adapter.command_records.filter((record) => record.name === 'export_csv')).toHaveLength(0);
         actor.stop();
     });
@@ -186,7 +250,49 @@ describe('csvExportMachine', () => {
 
         expect(actor.getSnapshot().matches('complete')).toBe(true);
         expect(actor.getSnapshot().context.receipt?.exported_row_count).toBe(3);
+        expect(actor.getSnapshot().context.receipt?.file_path).toBe(
+            '/Users/demo/Exports/binance_trades_2026-08-12.csv',
+        );
         expect(command_adapter.command_records.filter((record) => record.name === 'export_csv')).toHaveLength(1);
+        actor.stop();
+    });
+
+    it('TD4-07/TD4-08: export 실패는 실제 오류와 option을 유지해 수정 후 재시도하게 한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.queue_failure('export_csv', new Error('Disk write failed safely.'));
+        const actor = createActor(create_csv_export_machine(command_adapter, {
+            today: '2026-08-12',
+        }));
+
+        actor.start();
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+        actor.send({ type: 'SAVE_LOCATION_SELECT_CLICKED' });
+        await wait_for_actor_settlement();
+        actor.send({ type: 'SELECT_CSV_MONTHLY_HISTORY' });
+        actor.send({ type: 'FILE_NAME_CLICKED' });
+        actor.send({ type: 'FILE_NAME_CHANGED', file_name: 'monthly-history' });
+        actor.send({ type: 'ENTER_KEY_TYPED' });
+        actor.send({ type: 'EXPORT_CSV' });
+        await wait_for_actor_settlement();
+
+        expect(actor.getSnapshot().matches('error')).toBe(true);
+        expect(actor.getSnapshot().context).toMatchObject({
+            directory: '/Users/demo/Exports',
+            period: 'last30days',
+            start_date: '2026-07-14',
+            end_date: '2026-08-12',
+            file_name: 'monthly-history.csv',
+            file_name_draft: 'monthly-history.csv',
+            command_error: {
+                code: 'CSV_EXPORT_FAILED',
+                message: 'Disk write failed safely.',
+            },
+        });
+
+        actor.send({ type: 'CSV_EXPORT_ERROR_CONFIRMED' });
+        expect(actor.getSnapshot().matches('editing')).toBe(true);
+        expect(actor.getSnapshot().context.directory).toBe('/Users/demo/Exports');
+        expect(actor.getSnapshot().context.file_name).toBe('monthly-history.csv');
         actor.stop();
     });
 });

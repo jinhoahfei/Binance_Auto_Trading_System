@@ -1,6 +1,6 @@
 """ADR-004 JSONL v1/v2 거래 이력을 streaming 방식으로 복원하고 v2를 기록한다."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
@@ -8,12 +8,15 @@ import os
 from pathlib import Path
 from threading import RLock
 from typing import BinaryIO
+from zoneinfo import ZoneInfo
 
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.history import (
     FeeAssetConversionRequiredError,
     OrderHistoryConflictError,
     Trade,
+    TradeHistoryQuery,
+    TradeSide,
     trade_from_json_object,
     trade_to_json_object,
 )
@@ -80,6 +83,7 @@ _PENDING_ORDER_METADATA_KEYS = frozenset(
         "symbol",
     }
 )
+_KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
 
 
 class HistoryCorruptedError(ValueError):
@@ -628,6 +632,7 @@ class TradeHistoryRepository:
         "_clock",
         "_index_loaded",
         "_lock",
+        "_ordered_order_ids",
         "_pending_order_storage_path",
         "_pending_order_lifecycles_by_client_id",
         "_pending_orders_by_client_id",
@@ -670,6 +675,7 @@ class TradeHistoryRepository:
         self._clock = selected_clock
         self._lock = RLock()
         self._trades_by_order_id: dict[str, Trade] = {}
+        self._ordered_order_ids: list[str] = []
         self._index_loaded = False  # 첫 save도 기존 파일 index를 먼저 확인하게 한다.
         self._uncertain_order_ids: set[str] = set()
         self._pending_orders_by_client_id: dict[str, Order] = {}
@@ -910,13 +916,14 @@ class TradeHistoryRepository:
                 history_file = self._storage_path.open("rb")
             except FileNotFoundError:
                 self._trades_by_order_id = {}
+                self._ordered_order_ids = []
                 self._index_loaded = True
                 return ()  # 존재하지 않는 첫 startup은 손상이나 복구 대상이 아니다.
 
             # 완전한 load가 끝나기 전에는 이전 공개 index를 유지한다.
             try:
                 with history_file:
-                    loaded_trades, loaded_index = self._read_history_file(
+                    loaded_index, loaded_order_ids = self._read_history_file(
                         history_file
                     )
                 self._confirm_storage_durability()
@@ -926,8 +933,65 @@ class TradeHistoryRepository:
 
             # streaming parse가 완전히 성공한 뒤에만 이전 공개 index를 한 번에 교체한다.
             self._trades_by_order_id = loaded_index
+            self._ordered_order_ids = loaded_order_ids
             self._index_loaded = True
-            return loaded_trades  # file order가 보존된 immutable tuple이다.
+            return tuple(
+                loaded_index.values()
+            )  # dedup index의 insertion order로 immutable file 순서를 반환한다.
+
+    def stream_trades(self, query: TradeHistoryQuery) -> Iterator[Trade]:
+        """
+        함수 이름: stream_trades()
+        기능: JSONL byte snapshot을 line 단위로 읽어 KST 날짜와 side가 맞는 Trade를 지연 반환한다.
+        인자: query -> KST 양끝 포함 날짜 범위와 거래 방향 조건
+        반환값: 파일 순서를 보존하며 전체 Trade collection을 복제하지 않는 iterator
+        작성 날짜: 2026/08/23
+        """
+        # 문자열이나 유사 객체가 query 불변식을 우회하지 못하게 파일 접근 전에 검증한다.
+        if not isinstance(query, TradeHistoryQuery):
+            raise TypeError("query must be a TradeHistoryQuery")
+
+        with self._lock:
+            # 같은 process가 소유한 durable index와 JSONL descriptor를 하나의 lock 경계에서 고정한다.
+            try:
+                history_file = self._storage_path.open("rb")
+            except FileNotFoundError:
+                self._trades_by_order_id = {}
+                self._ordered_order_ids = []
+                self._index_loaded = True
+                return iter(())  # 파일 없음은 close할 descriptor가 없는 빈 durable stream이다.
+
+            try:
+                # startup 또는 불확실 append 뒤에만 index를 재생성해 정상 export의 전체-history 복제를 피한다.
+                if not self._index_loaded:
+                    loaded_index, loaded_order_ids = self._read_history_file(
+                        history_file
+                    )
+                    self._confirm_storage_durability()
+                    self._trades_by_order_id = loaded_index
+                    self._ordered_order_ids = loaded_order_ids
+                    self._index_loaded = True
+
+                history_file.seek(0)
+                snapshot_length = os.fstat(
+                    history_file.fileno()
+                ).st_size  # 같은 descriptor의 현재 byte 경계를 lock 아래에서 고정한다.
+                snapshot_index = self._trades_by_order_id
+                ordered_order_ids = self._ordered_order_ids
+                snapshot_order_count = len(ordered_order_ids)
+                history_file.close()  # index replay용 descriptor는 iterator를 반환하기 전에 닫는다.
+            except Exception:
+                history_file.close()
+                self._index_loaded = False
+                raise
+
+        return self._stream_history_snapshot(
+            snapshot_length,
+            query,
+            snapshot_index,
+            ordered_order_ids,
+            snapshot_order_count,
+        )  # iterator가 EOF·오류·close에서 열린 descriptor를 정리한다.
 
     def save_this_trade_by_order_id(
         self,
@@ -985,6 +1049,9 @@ class TradeHistoryRepository:
                 raise
 
             self._trades_by_order_id[normalized_order_id] = trade  # fsync 성공 뒤에만 index를 게시한다.
+            self._ordered_order_ids.append(
+                normalized_order_id
+            )  # durable append와 동일한 file order를 streaming dedup 기준에 추가한다.
             self._uncertain_order_ids.discard(normalized_order_id)
 
     def _append_pending_order_event(
@@ -1210,17 +1277,17 @@ class TradeHistoryRepository:
     def _read_history_file(
         self,
         history_file: BinaryIO,
-    ) -> tuple[tuple[Trade, ...], dict[str, Trade]]:
+    ) -> tuple[dict[str, Trade], list[str]]:
         """
         함수 이름: _read_history_file()
         기능: open binary file을 streaming parse하고 malformed partial tail만 복구한다.
         인자: history_file -> streaming read할 binary file
-        반환값: dedup된 Trade tuple과 rebuilt order ID index
-        작성 날짜: 2026/08/21
+        반환값: rebuilt order ID index와 최초 record의 file-order ID 목록
+        작성 날짜: 2026/08/23
         """
-        # file order list와 order-id dedup index를 공개 state와 분리된 local 값으로 만든다.
-        loaded_trades: list[Trade] = []
+        # order-id dedup index와 작은 순서 metadata를 공개 state와 분리된 local 값으로 만든다.
         loaded_index: dict[str, Trade] = {}
+        loaded_order_ids: list[str] = []
         line_number = 0
 
         # readline 하나씩 처리해 전체 JSONL을 메모리에 올리지 않고 마지막 offset을 보존한다.
@@ -1288,10 +1355,115 @@ class TradeHistoryRepository:
                     f"order_id {trade.order_id} has conflicting trade content"
                 )
 
-            loaded_trades.append(trade)
             loaded_index[trade.order_id] = trade
+            loaded_order_ids.append(
+                trade.order_id
+            )  # 최초 durable record의 순서만 별도 metadata에 보존한다.
 
-        return tuple(loaded_trades), loaded_index  # 완전한 local 결과만 caller가 게시한다.
+        return (
+            loaded_index,
+            loaded_order_ids,
+        )  # 완전한 local replay 결과만 caller가 repository state로 게시한다.
+
+    def _stream_history_snapshot(
+        self,
+        snapshot_length: int,
+        query: TradeHistoryQuery,
+        snapshot_index: Mapping[str, Trade],
+        ordered_order_ids: list[str],
+        snapshot_order_count: int,
+    ) -> Iterator[Trade]:
+        """
+        함수 이름: _stream_history_snapshot()
+        기능: 고정 byte 경계의 JSONL을 검증하며 중복 제거와 query filter를 지연 적용한다.
+        인자: snapshot_length -> 읽기를 중단할 exclusive file byte offset
+            query -> KST 날짜와 side 조회 조건
+            snapshot_index -> 같은 byte snapshot을 replay한 canonical order index
+            ordered_order_ids -> 최초 record 순서를 보존한 repository metadata
+            snapshot_order_count -> snapshot에 포함된 unique order 개수
+        반환값: 조건에 맞는 Trade iterator
+        작성 날짜: 2026/08/23
+        """
+        # generator가 실제 소비될 때만 descriptor를 열어 미소비 iterator의 resource 누수를 막는다.
+        with self._storage_path.open("rb") as history_file:
+            line_number = 0
+            next_order_index = 0
+
+            # 각 readline 크기를 남은 snapshot byte로 제한해 이후 append를 같은 export에 섞지 않는다.
+            while history_file.tell() < snapshot_length:
+                remaining_length = snapshot_length - history_file.tell()
+                raw_line = history_file.readline(remaining_length)
+                if raw_line == b"":
+                    raise HistoryCorruptedError(
+                        line_number + 1,
+                        "SnapshotChanged",
+                    )  # truncate나 file 교체로 snapshot 경계 전에 EOF가 오면 fail closed한다.
+
+                # 원본 JSONL과 동일하게 CRLF를 거부하고 snapshot 끝의 valid non-LF record는 허용한다.
+                line_number += 1
+                has_line_feed = raw_line.endswith(b"\n")
+                record_bytes = raw_line[:-1] if has_line_feed else raw_line
+                if record_bytes.endswith(b"\r"):
+                    framing_error = ValueError(
+                        "JSONL record separator must be LF"
+                    )
+                    raise HistoryCorruptedError(
+                        line_number,
+                        type(framing_error).__name__,
+                    ) from framing_error
+
+                # strict UTF-8·JSON과 exact Trade schema를 startup reader와 같은 순서로 검증한다.
+                try:
+                    decoded_record = _decode_json_line(record_bytes)
+                    trade = _trade_from_decoded_json(decoded_record)
+                except FeeAssetConversionRequiredError:
+                    raise
+                except (
+                    _DuplicateJsonKeyError,
+                    _NonStandardJsonConstantError,
+                    TypeError,
+                    UnicodeDecodeError,
+                    ValueError,
+                    json.JSONDecodeError,
+                ) as error:
+                    raise HistoryCorruptedError(
+                        line_number,
+                        type(error).__name__,
+                    ) from error
+
+                # replay index와 같은 canonical record만 받아 duplicate line을 추가 row 없이 건너뛴다.
+                canonical_trade = snapshot_index.get(trade.order_id)
+                if canonical_trade is None or canonical_trade != trade:
+                    raise OrderHistoryConflictError(
+                        f"order_id {trade.order_id} has conflicting trade content"
+                    )
+                is_first_record = (
+                    next_order_index < snapshot_order_count
+                    and ordered_order_ids[next_order_index] == trade.order_id
+                )
+                if not is_first_record:
+                    continue  # 같은 canonical order의 후속 durable duplicate는 export하지 않는다.
+                next_order_index += 1
+
+                # UTC execution instant를 KST LocalDate로 바꾼 뒤 양끝 포함 범위를 적용한다.
+                executed_date = trade.executed_at.astimezone(
+                    _KOREA_TIME_ZONE
+                ).date()
+                if not query.start_date <= executed_date <= query.end_date:
+                    continue
+                if query.side is TradeSide.BUY and trade.side is not OrderSide.BUY:
+                    continue
+                if query.side is TradeSide.SELL and trade.side is not OrderSide.SELL:
+                    continue
+
+                yield trade  # 원본 최초 record 순서대로 한 건씩 downstream CSV writer에 전달한다.
+
+            # snapshot metadata와 실제 byte replay의 unique record 수가 다르면 조용히 누락하지 않는다.
+            if next_order_index != snapshot_order_count:
+                raise HistoryCorruptedError(
+                    line_number + 1,
+                    "SnapshotChanged",
+                )
 
     def _recover_partial_tail(
         self,

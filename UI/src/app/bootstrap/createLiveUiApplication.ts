@@ -78,11 +78,19 @@ export async function create_live_ui_application(
         );
     }
 
-    const today = options.today ?? current_kst_date();
+    const fixed_today = options.today;
+    // Production은 매 dialog open에서 KST 날짜를 다시 읽고, fixture는 주입 날짜를 고정한다.
+    const get_current_kst_date = fixed_today === undefined
+        ? current_kst_date
+        : () => fixed_today;
+    const today = get_current_kst_date();
     const mapped_snapshot = map_backend_snapshot(initial_snapshot, today);
     const facade = new UiApplicationFacade(
         command_adapter,
-        mapped_snapshot.facade_options,
+        {
+            ...mapped_snapshot.facade_options,
+            get_current_kst_date,
+        },
     );
     let is_active = false;
 
@@ -107,7 +115,11 @@ export async function create_live_ui_application(
                     intents.forEach((intent) => facade.dispatch(intent));
                 },
                 on_full_resync: (snapshot) => {
-                    const remapped_snapshot = map_backend_snapshot(snapshot, today);
+                    // Resync도 오래된 bootstrap 날짜 대신 같은 LocalDate source를 다시 읽는다.
+                    const remapped_snapshot = map_backend_snapshot(
+                        snapshot,
+                        get_current_kst_date(),
+                    );
 
                     facade.dispatch({
                         type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',

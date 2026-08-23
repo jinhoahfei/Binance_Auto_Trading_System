@@ -1,3 +1,5 @@
+mod dialog;
+
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
@@ -186,8 +188,12 @@ fn take_backend_connection_descriptor(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(BackendConnectionDescriptorState::default())
-        .invoke_handler(tauri::generate_handler![take_backend_connection_descriptor])
+        .invoke_handler(tauri::generate_handler![
+            take_backend_connection_descriptor,
+            dialog::choose_csv_export_directory,
+        ])
         .run(tauri::generate_context!())
         .expect("Tauri 애플리케이션을 실행할 수 없습니다.");
 }

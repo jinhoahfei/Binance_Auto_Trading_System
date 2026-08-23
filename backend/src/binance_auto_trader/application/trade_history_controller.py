@@ -1,6 +1,6 @@
 """Trade history 복원·상세 조회·durable execution publication을 조정한다."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -9,6 +9,8 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from binance_auto_trader.domain.history import (
+    CSVExportOptions,
+    CSVExportResult,
     HistoryPeriod,
     Performance,
     Trade,
@@ -50,11 +52,21 @@ class TradeHistoryPersistencePendingError(RuntimeError):
     code = "TRADE_HISTORY_PERSISTENCE_PENDING"
 
 
+class CSVExportUnavailableError(RuntimeError):
+    """
+    클래스 이름: CSVExportUnavailableError
+    기능: CSV export writer가 조립되지 않은 application 구성을 typed 오류로 알린다.
+    작성 날짜: 2026/08/23
+    """
+
+    code = "CSV_EXPORT_UNAVAILABLE"
+
+
 class TradeHistoryRepositoryPort(Protocol):
     """
     클래스 이름: TradeHistoryRepositoryPort
-    기능: TradeHistoryController가 startup 거래 목록을 읽기 위해 요구하는 최소 port를 정의한다.
-    작성 날짜: 2026/08/21
+    기능: TradeHistoryController가 startup 복원·durable 저장·CSV stream에 요구하는 port를 정의한다.
+    작성 날짜: 2026/08/23
     """
 
     def get_trade_history(self) -> tuple[Trade, ...]:
@@ -79,6 +91,39 @@ class TradeHistoryRepositoryPort(Protocol):
             trade -> 저장할 canonical Trade
         반환값: 없음
         작성 날짜: 2026/08/22
+        """
+        ...
+
+    def stream_trades(self, query: TradeHistoryQuery) -> Iterator[Trade]:
+        """
+        함수 이름: stream_trades()
+        기능: KST 날짜와 side 조건에 맞는 durable Trade를 iterator로 반환한다.
+        인자: query -> 검증된 거래 이력 조회 조건
+        반환값: 전체 이력을 복제하지 않는 Trade iterator
+        작성 날짜: 2026/08/23
+        """
+        ...
+
+
+class CSVExportWriterPort(Protocol):
+    """
+    클래스 이름: CSVExportWriterPort
+    기능: Controller가 filesystem 구현을 import하지 않고 CSV를 게시하는 port를 정의한다.
+    작성 날짜: 2026/08/23
+    """
+
+    def write_csv(
+        self,
+        trades: Iterable[Trade],
+        options: CSVExportOptions,
+    ) -> CSVExportResult:
+        """
+        함수 이름: write_csv()
+        기능: Trade stream을 검증된 위치에 CSV로 원자 게시한다.
+        인자: trades -> 조회 조건에 맞는 Trade iterable
+            options -> 저장 위치와 파일명을 포함한 CSV option
+        반환값: 절대 파일 경로와 실제 data row 수
+        작성 날짜: 2026/08/23
         """
         ...
 
@@ -183,13 +228,14 @@ class _PendingPublication:
 class TradeHistoryController:
     """
     클래스 이름: TradeHistoryController
-    기능: startup 복원, 상세 조회와 terminal execution의 durable 저장 및 publication을 조정한다.
+    기능: startup 복원, 상세·CSV 조회와 terminal execution의 durable 저장 및 publication을 조정한다.
     작성 날짜: 2026/08/23
     """
 
     __slots__ = (
         "_account",
         "_clock",
+        "_csv_export_writer",
         "_details_summary_state",
         "_operation_lock",
         "_pending_publications",
@@ -206,15 +252,17 @@ class TradeHistoryController:
         clock: Callable[[], datetime] | None = None,
         *,
         account: Account | None = None,
+        csv_export_writer: CSVExportWriterPort | None = None,
         trade_update_observer: Callable[[Trade, Performance], object]
         | None = None,
     ) -> None:
         """
         함수 이름: __init__()
-        기능: repository, 공유 Account, observer와 빈 history/performance state를 준비한다.
+        기능: repository, CSV writer, 공유 Account, observer와 빈 history/performance state를 준비한다.
         인자: repository -> startup Trade tuple을 제공할 persistence port
             clock -> Performance의 현재 KST 날짜를 결정할 optional UTC clock
             account -> authoritative ETH 보유량을 제공할 shared Account
+            csv_export_writer -> Trade stream을 실제 CSV 파일로 게시할 optional port
             trade_update_observer -> durable Trade publication 직후 호출할 optional observer
         반환값: 없음
         작성 날짜: 2026/08/23
@@ -233,11 +281,16 @@ class TradeHistoryController:
             trade_update_observer
         ):
             raise TypeError("trade_update_observer must be callable")
+        if csv_export_writer is not None and not callable(
+            getattr(csv_export_writer, "write_csv", None)
+        ):
+            raise TypeError("csv_export_writer must provide write_csv")
 
         # load와 record가 서로의 candidate를 덮지 않게 operation lock 하나로 직렬화한다.
         self._repository = repository
         self._account = selected_account
         self._clock = _utc_now if clock is None else clock
+        self._csv_export_writer = csv_export_writer
         self._details_summary_state: _TradeDetailsSummaryState | None = None
         self._operation_lock = RLock()
         self._pending_publications: dict[str, _PendingPublication] = {}
@@ -357,6 +410,59 @@ class TradeHistoryController:
                 )  # 필터 행과 기존 D-12 summary snapshot의 범위를 섞지 않는다.
 
         raise RuntimeError("trade details summary could not be stabilized")
+
+    def export_csv(self, options: CSVExportOptions) -> CSVExportResult:
+        """
+        함수 이름: export_csv()
+        기능: KST preset을 확정하고 ALL-side durable Trade stream을 CSV writer에 전달한다.
+        인자: options -> backend에서 다시 검증한 CSV export option
+        반환값: 생성된 절대 경로와 실제 data row 수를 담은 CSVExportResult
+        작성 날짜: 2026/08/23
+        """
+        # Application 경계는 동형 DTO 대신 검증된 domain value만 받아 파일 작업으로 넘긴다.
+        if not isinstance(options, CSVExportOptions):
+            raise TypeError("options must be a CSVExportOptions")
+
+        with self._operation_lock:
+            # 불확실한 durable save가 있으면 export snapshot에 포함되는지 추측하지 않는다.
+            if self._pending_publications:
+                raise TradeHistoryPersistencePendingError(
+                    "pending trade persistence blocks CSV export"
+                )
+
+            # Preset 날짜는 renderer가 보낸 draft가 아니라 backend KST clock으로 다시 확정한다.
+            current_kst_date = self._read_current_kst_date()
+            start_date, end_date = options.resolve_dates(current_kst_date)
+            query = TradeHistoryQuery(
+                start_date=start_date,
+                end_date=end_date,
+                side=TradeSide.ALL,
+            )  # CSV 범위는 양끝 포함 KST LocalDate이며 side는 항상 ALL이다.
+
+            # Repository와 writer의 optional capability를 호출 직전에 확인해 기존 test fake를 보존한다.
+            stream_trades = getattr(self._repository, "stream_trades", None)
+            if not callable(stream_trades):
+                raise CSVExportUnavailableError(
+                    "repository does not support CSV streaming"
+                )
+            csv_export_writer = self._csv_export_writer
+            if csv_export_writer is None:
+                raise CSVExportUnavailableError(
+                    "CSV export writer is not configured"
+                )
+
+            # Repository가 현재 durable byte/index 경계를 lock 안에서 snapshot iterator로 고정한다.
+            trade_iterator = stream_trades(query)
+
+        # 장시간 파일 쓰기는 terminal Trade publication을 막지 않도록 operation lock 밖에서 수행한다.
+        result = csv_export_writer.write_csv(
+            trade_iterator,
+            options,
+        )
+        if not isinstance(result, CSVExportResult):
+            raise TypeError("CSV writer must return CSVExportResult")
+
+        return result  # 성공 receipt는 writer가 실제 게시를 마친 뒤에만 반환된다.
 
     def _read_current_kst_date(self) -> date:
         """

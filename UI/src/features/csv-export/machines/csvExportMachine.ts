@@ -32,6 +32,8 @@ export interface CsvExportMachineContext {
 export interface CsvExportMachineOptions {
     readonly today: LocalDateString;
     readonly default_file_name?: string;
+    // 생략하면 초기 today를 고정 source로 사용해 demo와 test의 결정성을 보존한다.
+    readonly get_current_kst_date?: () => LocalDateString;
 }
 
 export type CsvExportMachineEvent =
@@ -134,7 +136,8 @@ export function create_csv_export_machine(
     command_port: UiCommandPort,
     options: CsvExportMachineOptions,
 ) {
-    const default_file_name = options.default_file_name
+    const get_current_kst_date = options.get_current_kst_date ?? (() => options.today);
+    const initial_default_file_name = options.default_file_name
         ?? `binance_trades_${options.today}.csv`;
     const empty_validation_errors: CsvValidationErrors = {
         directory: null,
@@ -180,17 +183,25 @@ export function create_csv_export_machine(
             },
         },
         actions: {
-            reset_draft: assign({
-                directory: null,
-                period: 'today',
-                start_date: ({ context }) => context.today,
-                end_date: ({ context }) => context.today,
-                file_name: default_file_name,
-                file_name_draft: default_file_name,
-                calendar_target: null,
-                validation_errors: empty_validation_errors,
-                command_error: null,
-                receipt: null,
+            reset_draft: assign(() => {
+                // 한 dialog open 경계에서 날짜를 한 번만 읽어 자정 전후 필드 drift를 막는다.
+                const current_today = get_current_kst_date();
+                const current_default_file_name = options.default_file_name
+                    ?? `binance_trades_${current_today}.csv`;
+
+                return {
+                    today: current_today,
+                    directory: null,
+                    period: 'today' as const,
+                    start_date: current_today,
+                    end_date: current_today,
+                    file_name: current_default_file_name,
+                    file_name_draft: current_default_file_name,
+                    calendar_target: null,
+                    validation_errors: empty_validation_errors,
+                    command_error: null,
+                    receipt: null,
+                };
             }),
             store_directory: assign({
                 directory: ({ context, event }) => {
@@ -324,8 +335,8 @@ export function create_csv_export_machine(
             period: 'today',
             start_date: options.today,
             end_date: options.today,
-            file_name: default_file_name,
-            file_name_draft: default_file_name,
+            file_name: initial_default_file_name,
+            file_name_draft: initial_default_file_name,
             calendar_target: null,
             validation_errors: empty_validation_errors,
             command_error: null,
