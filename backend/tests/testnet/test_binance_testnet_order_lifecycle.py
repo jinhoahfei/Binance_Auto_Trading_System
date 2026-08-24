@@ -34,6 +34,7 @@ from binance_auto_trader.domain.trading.states import (
 from tests.testnet._support import (
     ORDER_SKIP_REASON,
     ORDER_TESTNET_REQUESTED,
+    seed_verified_closed_history,
 )
 
 
@@ -85,6 +86,9 @@ class BinanceTestnetOrderLifecycleTests(unittest.TestCase):
             mode=0o700,
         )
         self.history_path = self.artifact_directory / "history.jsonl"
+        self.baseline_trades = seed_verified_closed_history(
+            self.history_path
+        )  # 이전 실제 run의 Position 0 provenance를 새 account startup에 먼저 인계한다.
         self.runtime = create_testnet_application_runtime(
             history_path=self.history_path,
         )  # 기본 Kline 개수를 유지해 production startup 지표 계산까지 실제로 수행한다.
@@ -284,7 +288,7 @@ class BinanceTestnetOrderLifecycleTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: _wait_for_session_termination()
-        기능: force-sell의 same-order 조회와 capped 잔량 retry를 유한 시간 동안 처리한다.
+        기능: force-sell의 same-order 조회와 Position-bound 잔량 retry를 유한 시간 동안 처리한다.
         인자: timeout_seconds -> TERMINATED 상태를 기다릴 최대 초
         반환값: 없음
         작성 날짜: 2026/08/23
@@ -315,7 +319,13 @@ class BinanceTestnetOrderLifecycleTests(unittest.TestCase):
         """
         controller = self.runtime.trading_controller
         if controller.status is TradingSessionStatus.NOT_STARTED:
-            return
+            # Cold restart runtime은 active session 없이 복구 Position만 가질 수 있다.
+            if not controller.snapshot_session().has_open_position:
+                return
+            controller.liquidate_recovered_position(
+                command_id=f"phase9-cleanup-recovered-{uuid4().hex}",
+                expected_version=controller.context.version,
+            )  # 일반 start/stop 대신 public liquidation-only Operation으로만 노출을 닫는다.
         if controller.status is TradingSessionStatus.TERMINATED:
             return
 
@@ -400,7 +410,7 @@ class BinanceTestnetOrderLifecycleTests(unittest.TestCase):
             )
             lifecycle_trace.append("BUY_HISTORY_DURABLE")
 
-            # Public stop이 authoritative Position을 보고 capped ForceSellAll을 시작한다.
+            # Public stop이 authoritative Position을 보고 entry cap 예외인 ForceSellAll을 시작한다.
             trade_count_before_stop = len(self.runtime.trade_history.trades)
             stop_result = controller.stop_trading(
                 command_id=f"phase9-stop-{uuid4().hex}",
@@ -421,7 +431,7 @@ class BinanceTestnetOrderLifecycleTests(unittest.TestCase):
             buy_result = self._wait_for_recent_order_result(buy_trade)
             self.assertIs(buy_result.status, OrderStatus.FILLED)
 
-            # 가격 이동으로 cap 잔량 retry가 생겨도 이번 stop 이후의 SELL Trade를 모두 검증한다.
+            # 가격 이동과 partial retry가 있어도 이번 stop은 BUY로 얻은 Position만 정확히 닫는다.
             stop_trades = self.runtime.trade_history.trades[
                 trade_count_before_stop:
             ]
@@ -429,12 +439,17 @@ class BinanceTestnetOrderLifecycleTests(unittest.TestCase):
             self.assertTrue(
                 all(trade.side is OrderSide.SELL for trade in stop_trades)
             )
+            self.assertEqual(
+                sum(
+                    (
+                        sell_trade.executed_quantity
+                        for sell_trade in stop_trades
+                    ),
+                    Decimal("0"),
+                ),
+                buy_trade.executed_quantity,
+            )
             for sell_trade in stop_trades:
-                self.assertLessEqual(
-                    sell_trade.requested_quantity
-                    * sell_trade.market_price_at_decision,
-                    self.max_notional,
-                )
                 sell_result = self._wait_for_recent_order_result(sell_trade)
                 self.assertIs(sell_result.status, OrderStatus.FILLED)
             lifecycle_trace.append("FORCE_SELL_HISTORY_DURABLE")

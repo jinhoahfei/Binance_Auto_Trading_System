@@ -9,16 +9,20 @@ from decimal import Decimal, InvalidOperation
 import os
 
 from binance_auto_trader.adapters.binance.api_gateway import (
+    APIGateway,
     DEFAULT_KLINE_LIMIT,
 )
+from binance_auto_trader.application import TradingController
 from binance_auto_trader.bootstrap.application import (
     ApplicationRuntime,
+    ExecutionMode,
     _TESTNET_ORDER_CAPABILITY,
     create_application_runtime,
 )
 from binance_auto_trader.domain.history import Performance, Trade
 from binance_auto_trader.domain.trading import Account
 from binance_auto_trader.domain.trading.order import Order, OrderResult
+from binance_auto_trader.domain.trading.states import OrderSide
 
 
 BINANCE_RUN_TESTNET_ENV = "BINANCE_RUN_TESTNET"
@@ -31,6 +35,7 @@ BINANCE_SPOT_TESTNET_STREAM_ORIGIN = "wss://stream.testnet.binance.vision"
 BINANCE_SPOT_TESTNET_WEBSOCKET_API_URL = (
     "wss://ws-api.testnet.binance.vision/ws-api/v3"
 )
+_ACCOUNTING_SUPPORTED_FEE_ASSETS = frozenset({"ETH", "USDT"})
 
 
 class TestnetConfigurationError(RuntimeError):
@@ -119,6 +124,25 @@ class _TestnetOrderPermissionRESTClient:
         # Account 조회는 주문 mutation이 아니며 APIGateway의 정규화 경계를 그대로 통과한다.
         return self._delegate.get_account()
 
+    def get_account_commission(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_commission()
+        기능: 허용된 signed account commission 조회를 고정 testnet delegate에 전달한다.
+        인자: symbol -> 수수료 정책을 조회할 canonical Spot symbol
+        반환값: 공식 Spot account commission payload
+        작성 날짜: 2026/08/24
+        """
+        # 수수료 자산 preflight는 주문 mutation 전에 제3 자산 가능성을 차단하는 read-only 조회다.
+        get_account_commission = getattr(
+            self._delegate,
+            "get_account_commission",
+            None,
+        )
+        if not callable(get_account_commission):
+            raise TypeError("delegate must provide get_account_commission")
+
+        return get_account_commission(symbol=symbol)  # Raw 응답은 APIGateway만 정규화한다.
+
     def query_order_result(self, *, order: Order) -> OrderResult:
         """
         함수 이름: query_order_result()
@@ -191,7 +215,30 @@ class _TestnetOrderPermissionRESTClient:
         if not callable(prepare_order):
             raise TypeError("delegate must provide prepare_order")
 
-        return prepare_order(order=order)  # cap이 설정된 실제 client만 준비를 완료한다.
+        # 공식 signed commission 설정을 매 attempt 전에 확인해 제3 자산 fill을 주문 전에 막는다.
+        commission_policy = APIGateway(
+            self._delegate
+        ).fetch_commission_discount_policy(order.symbol)
+        if (
+            commission_policy.can_charge_discount_asset
+            and commission_policy.discount_asset
+            not in _ACCOUNTING_SUPPORTED_FEE_ASSETS
+        ):
+            raise TestnetConfigurationError(
+                "testnet commission policy permits an unsupported fee asset"
+            )
+
+        # 공식 FAQ상 MARKET BUY 수수료는 수신 ETH에서 빠질 수 있어 LOT_SIZE dust를 만든다.
+        if (
+            order.side is OrderSide.BUY
+            and commission_policy.market_buy_received_asset_commission_rate
+            > Decimal("0")
+        ):
+            raise TestnetConfigurationError(
+                "testnet MARKET BUY commission can create unsupported base-asset dust"
+            )
+
+        return prepare_order(order=order)  # 실제 client가 일반 cap과 STOP cleanup 예외를 적용한다.
 
     def submit_order(self, *, order: Order) -> OrderResult:
         """
@@ -307,7 +354,7 @@ def _read_positive_max_notional(
             f"{BINANCE_TESTNET_MAX_NOTIONAL_ENV} must be a positive decimal"
         )
 
-    return max_notional  # caller는 이 값을 넘는 test order 수량을 만들 수 없다.
+    return max_notional  # Caller는 BUY 진입과 일반 주문 cap에 쓰고 STOP cleanup만 예외로 둔다.
 
 
 def load_testnet_configuration(
@@ -360,9 +407,9 @@ def require_testnet_order_permission(
 ) -> Decimal:
     """
     함수 이름: require_testnet_order_permission()
-    기능: 주문 이중 opt-in이 완성된 configuration에서 notional 상한을 반환한다.
+    기능: 주문 이중 opt-in이 완성된 configuration에서 BUY 진입 notional 상한을 반환한다.
     인자: configuration -> load_testnet_configuration() 결과
-    반환값: test order가 넘지 않아야 할 양수 Decimal 상한
+    반환값: BUY 진입과 일반 주문 방어에 사용할 양수 Decimal 상한
     작성 날짜: 2026/08/22
     """
     # test helper가 read-only configuration으로 주문 객체를 만들기 전에 명시적으로 차단한다.
@@ -403,6 +450,11 @@ def create_testnet_application_runtime(
     account_update_observer: Callable[[Account], object] | None = None,
     trade_history_update_observer: Callable[[Trade, Performance], object]
     | None = None,
+    trading_session_update_observer: Callable[
+        [TradingController, ExecutionMode],
+        object,
+    ]
+    | None = None,
     *,
     history_path: str | os.PathLike[str],
     environment: Mapping[str, str] | None = None,
@@ -414,6 +466,7 @@ def create_testnet_application_runtime(
     기능: 고정 Spot Testnet client와 execution_mode testnet runtime을 opt-in 설정으로 조립한다.
     인자: account_update_observer -> 실제 Account 변경 뒤 호출할 optional observer
         trade_history_update_observer -> durable Trade와 전체 Performance 게시 후 호출할 observer
+        trading_session_update_observer -> event cycle 뒤 session snapshot을 게시할 observer
         history_path -> test run별 local JSONL history 경로
         environment -> 주입 환경 mapping 또는 실제 os.environ이면 None
         clock -> runtime 전체가 공유할 optional UTC clock
@@ -432,6 +485,10 @@ def create_testnet_application_runtime(
         raise TypeError(
             "trade_history_update_observer must be callable"
         )  # Durable publication 후에 실행할 호출 경계만 허용한다.
+    if trading_session_update_observer is not None and not callable(
+        trading_session_update_observer
+    ):
+        raise TypeError("trading_session_update_observer must be callable")
 
     # 모든 설정을 client 생성 전에 검증해 잘못된 opt-in에서 객체나 network가 만들어지지 않게 한다.
     configuration = load_testnet_configuration(environment)
@@ -465,6 +522,7 @@ def create_testnet_application_runtime(
         ),
         account_update_observer=account_update_observer,
         trade_history_update_observer=trade_history_update_observer,
+        trading_session_update_observer=trading_session_update_observer,
         clock=clock,
         kline_limit=kline_limit,
     )  # live mode와 base URL 환경변수를 전달할 surface를 의도적으로 제공하지 않는다.

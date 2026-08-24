@@ -21,12 +21,19 @@ from tests.unit.bootstrap.test_application import (
 
 def _create_fixture_runtime_factory(
     configuration: SidecarConfiguration,
-) -> Callable[[Callable[[Account], object], Callable[[object, object], object]], ApplicationRuntime]:
+) -> Callable[
+    [
+        Callable[[Account], object],
+        Callable[[object, object], object],
+        Callable[[object, object], object],
+    ],
+    ApplicationRuntime,
+]:
     """
     함수 이름: _create_fixture_runtime_factory()
     기능: FD6 history 경로와 transport observer를 사용하는 READY test runtime factory를 만든다.
     인자: configuration -> production parser가 검증한 sidecar configuration
-    반환값: observer 두 개를 받아 ApplicationRuntime을 반환하는 factory
+    반환값: observer 세 개를 받아 ApplicationRuntime을 반환하는 factory
     작성 날짜: 2026/08/24
     """
     if not isinstance(configuration, SidecarConfiguration):
@@ -35,12 +42,14 @@ def _create_fixture_runtime_factory(
     def runtime_factory(
         account_update_observer: Callable[[Account], object],
         trade_history_update_observer: Callable[[object, object], object],
+        trading_session_update_observer: Callable[[object, object], object],
     ) -> ApplicationRuntime:
         """
         함수 이름: runtime_factory()
         기능: network startup 없이 실제 shutdown과 fsync를 수행할 READY runtime을 조립한다.
         인자: account_update_observer -> shared Account event observer
             trade_history_update_observer -> shared Trade event observer
+            trading_session_update_observer -> shared trading lifecycle observer
         반환값: production transport가 소유할 ApplicationRuntime
         작성 날짜: 2026/08/24
         """
@@ -50,6 +59,7 @@ def _create_fixture_runtime_factory(
             history_path=configuration.history_path,
             account_update_observer=account_update_observer,
             trade_history_update_observer=trade_history_update_observer,
+            trading_session_update_observer=trading_session_update_observer,
         )
         with runtime.application_lock:
             # Production start callback이 network I/O 없이 멱등 READY를 관찰하게 한다.

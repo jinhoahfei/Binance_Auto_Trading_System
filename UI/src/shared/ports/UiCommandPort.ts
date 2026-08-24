@@ -48,6 +48,15 @@ export interface UiCommandPort {
     force_sell_and_stop(): Promise<TradingCommandReceipt>;
 
     /**
+     * 함수 이름: liquidate_recovered_position()
+     * 기능: 자동 재개 없이 startup에서 복구한 Position만 전량 청산하도록 요청한다.
+     * 인자: 없음
+     * 반환값: backend가 확정한 복구 청산 lifecycle 결과 Promise
+     * 작성 날짜: 2026/08/24
+     */
+    liquidate_recovered_position(): Promise<TradingCommandReceipt>;
+
+    /**
      * 함수 이름: apply_regime()
      * 기능: 선택한 REGIME을 향후 거래 판단에 적용하도록 요청한다.
      * 인자: regime_type -> 적용할 REGIME 유형

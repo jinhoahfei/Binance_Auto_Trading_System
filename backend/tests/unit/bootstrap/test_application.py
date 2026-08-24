@@ -7,9 +7,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from threading import Event, Thread
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from binance_auto_trader.application import TradingController
+from binance_auto_trader.application import (
+    AccountStreamRecoveryBlockedError,
+    TradingController,
+    TradingSessionStatus,
+)
 from binance_auto_trader.bootstrap import (
     ApplicationStatus,
     ExecutionMode,
@@ -18,6 +22,7 @@ from binance_auto_trader.bootstrap import (
     parse_execution_mode,
 )
 from binance_auto_trader.bootstrap.application import _FAKE_ORDER_CAPABILITY
+from binance_auto_trader.domain.trading import OrderResult, OrderStatus
 
 
 FIXED_TIME = datetime(2026, 8, 21, 2, 0, tzinfo=timezone.utc)  # 시간 의존 상태를 고정한다.
@@ -257,6 +262,7 @@ class ApplicationFactoryTests(unittest.TestCase):
         )
         self.assertIs(runtime.execution_mode, ExecutionMode.FAKE)
         self.assertIs(runtime.trading_controller._command_gate, True)
+        self.assertIsNone(runtime._trading_event_runtime_worker)
         self.assertFalse(runtime.trading_controller.command_enabled)
         self.assertIs(runtime.state.status, ApplicationStatus.CREATED)
         self.assertFalse(runtime.ready)
@@ -297,6 +303,120 @@ class ApplicationFactoryTests(unittest.TestCase):
                 history_repository=repository,
                 trade_history_update_observer=object(),  # type: ignore[arg-type]
             )
+
+        # Trading lifecycle publication 경계도 callable이 아닌 객체를 worker에 보존하지 않는다.
+        with self.assertRaisesRegex(
+            TypeError,
+            "trading_session_update_observer must be callable",
+        ):
+            create_application_runtime(
+                rest_client,
+                web_socket_client,
+                history_repository=repository,
+                trading_session_update_observer=object(),  # type: ignore[arg-type]
+            )
+
+    def test_transport_observer_composes_worker_without_initial_publication(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_transport_observer_composes_worker_without_initial_publication()
+        기능: production observer가 단일 worker를 만들되 READY start만으로 event를 게시하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        trading_observer = Mock()
+        runtime = create_application_runtime(
+            _StubRestClient(),
+            _StubWebSocketClient(),
+            history_repository=_StubHistoryRepository(),
+            trading_session_update_observer=trading_observer,
+            clock=lambda: FIXED_TIME,
+        )
+        worker = runtime._trading_event_runtime_worker
+        if worker is None:
+            raise AssertionError("transport observer must compose an event worker")
+
+        # Lifecycle READY만 직접 게시하고 여러 cadence 동안 빈 Controller cycle을 관찰한다.
+        with runtime.application_lock:
+            runtime._publish_state(
+                status=ApplicationStatus.READY,
+                failure=None,
+                startup_trace=(),
+            )
+        try:
+            self.assertTrue(worker.start())
+            Event().wait(0.3)
+            trading_observer.assert_not_called()
+        finally:
+            close_application(runtime)
+
+    def test_inactive_cycle_failure_keeps_runtime_command_gate_closed(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_inactive_cycle_failure_keeps_runtime_command_gate_closed()
+        기능: session 전 terminal worker failure도 process lifetime reconciliation blocker로 남는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        failure_published = Event()
+
+        def observe_failure(
+            controller: object,
+            execution_mode: object,
+        ) -> None:
+            """
+            함수 이름: observe_failure()
+            기능: fail-closed snapshot publication 완료를 test thread에 알린다.
+            인자: controller -> fail-closed TradingController
+                execution_mode -> runtime ExecutionMode
+            반환값: 없음
+            작성 날짜: 2026/08/24
+            """
+            if controller is None or execution_mode is None:
+                raise AssertionError("observer inputs must be authoritative")
+
+            failure_published.set()
+
+        runtime = create_application_runtime(
+            _StubRestClient(),
+            _StubWebSocketClient(),
+            history_repository=_StubHistoryRepository(),
+            trading_session_update_observer=observe_failure,
+            clock=lambda: FIXED_TIME,
+        )
+        worker = runtime._trading_event_runtime_worker
+        if worker is None:
+            raise AssertionError("transport observer must compose an event worker")
+        with runtime.application_lock:
+            runtime.trading_controller._startup_reconciliation_complete = True
+            runtime._publish_state(
+                status=ApplicationStatus.READY,
+                failure=None,
+                startup_trace=(),
+            )
+
+        # Controlled cycle failure는 active session이 없어도 runtime 전체 command gate를 잠근다.
+        try:
+            with patch.object(
+                runtime.trading_controller,
+                "run_event_runtime_cycle",
+                new=AsyncMock(
+                    side_effect=RuntimeError("controlled inactive cycle failure")
+                ),
+            ):
+                self.assertTrue(worker.start())
+                self.assertTrue(worker.request_processing())
+                self.assertTrue(failure_published.wait(1.0))
+
+            self.assertTrue(worker.failed)
+            self.assertTrue(runtime.trading_controller.reconciliation_required)
+            self.assertFalse(runtime.trading_controller.command_enabled)
+        finally:
+            close_application(runtime)
 
     def test_testnet_orders_require_separate_opt_in_and_live_stays_locked(
         self,
@@ -404,67 +524,285 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
 
         return runtime
 
-    def test_callback_recovers_only_after_ready_and_outside_application_lock(
+    def test_unknown_application_order_result_wakes_recovery_and_publishes_lock(
         self,
     ) -> None:
         """
-        함수 이름: test_callback_recovers_only_after_ready_and_outside_application_lock()
-        기능: callback이 gate만 즉시 닫고 READY 이후 worker가 application lock 밖에서 복구하는지 검증한다.
+        함수 이름: test_unknown_application_order_result_wakes_recovery_and_publishes_lock()
+        기능: 알 수 없는 app 주문 event가 REST 복구를 깨우고 fail-closed lifecycle을 게시하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/08/24
         """
+        published_states: list[
+            tuple[TradingSessionStatus, bool, ExecutionMode]
+        ] = []
+
+        def observe_trading_session(
+            controller: TradingController,
+            execution_mode: ExecutionMode,
+        ) -> None:
+            """
+            함수 이름: observe_trading_session()
+            기능: callback 시점의 status와 command gate를 transport publication 증거로 보존한다.
+            인자: controller -> fail-closed 상태를 소유한 TradingController
+                execution_mode -> runtime의 고정 Testnet 실행 mode
+            반환값: 없음
+            작성 날짜: 2026/08/24
+            """
+            published_states.append(
+                (
+                    controller.status,
+                    controller.command_enabled,
+                    execution_mode,
+                )
+            )
+
         runtime = create_application_runtime(
             _StubRestClient(),
             _StubWebSocketClient(),
             history_repository=_StubHistoryRepository(),
             execution_mode="testnet",
+            trading_session_update_observer=observe_trading_session,
+            clock=lambda: FIXED_TIME,
+        )
+        recovery_worker = runtime._account_stream_recovery_worker
+        if recovery_worker is None:
+            raise AssertionError("testnet runtime must compose a recovery worker")
+
+        # 실제 REST 없이 active callback 조건과 startup 완료 상태만 application lock 아래 준비한다.
+        with runtime.application_lock:
+            runtime.trading_controller._command_gate = True
+            runtime.trading_controller._startup_reconciliation_complete = True
+            runtime.trading_controller._status = TradingSessionStatus.RUNNING
+            with runtime.web_socket_gateway._lock:
+                runtime.web_socket_gateway._account_connected = True
+                runtime.web_socket_gateway._account_subscription = (
+                    _StubSubscription()
+                )
+            runtime._publish_state(
+                status=ApplicationStatus.READY,
+                failure=None,
+                startup_trace=(),
+            )
+
+        unknown_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id="bat-unknown-runtime-order",
+            exchange_order_id="92001",
+            status=OrderStatus.NEW,
+            processed_at=FIXED_TIME,
+        )
+        order_callback = runtime.web_socket_gateway._order_result_callback
+        if order_callback is None:
+            raise AssertionError("runtime must compose an order-result callback")
+
+        try:
+            # Recovery thread는 mock wake로 대체해 network 없이 callback의 두 외부 결과를 검증한다.
+            with patch.object(
+                recovery_worker,
+                "request_recovery",
+                return_value=True,
+            ) as request_recovery:
+                result_accepted = order_callback(unknown_result)
+
+            self.assertFalse(result_accepted)
+            request_recovery.assert_called_once_with()
+            self.assertIs(
+                runtime.trading_controller.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+            self.assertFalse(runtime.trading_controller.command_enabled)
+            self.assertEqual(
+                published_states,
+                [
+                    (
+                        TradingSessionStatus.RECONCILIATION_REQUIRED,
+                        False,
+                        ExecutionMode.TESTNET,
+                    )
+                ],
+            )
+        finally:
+            close_application(runtime)
+
+    def test_active_disconnect_wakes_recovery_and_publishes_lock_once(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_active_disconnect_wakes_recovery_and_publishes_lock_once()
+        기능: 일반 account stream 장애가 active session 잠금 lifecycle을 정확히 한 번 게시하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        published_states: list[
+            tuple[TradingSessionStatus, bool, ExecutionMode]
+        ] = []
+
+        def observe_trading_session(
+            controller: TradingController,
+            execution_mode: ExecutionMode,
+        ) -> None:
+            """
+            함수 이름: observe_trading_session()
+            기능: 일반 stream 장애 callback 시점의 authoritative lifecycle을 보존한다.
+            인자: controller -> fail-closed 상태를 소유한 TradingController
+                execution_mode -> runtime의 고정 Testnet 실행 mode
+            반환값: 없음
+            작성 날짜: 2026/08/24
+            """
+            published_states.append(
+                (
+                    controller.status,
+                    controller.command_enabled,
+                    execution_mode,
+                )
+            )
+
+        runtime = create_application_runtime(
+            _StubRestClient(),
+            _StubWebSocketClient(),
+            history_repository=_StubHistoryRepository(),
+            execution_mode="testnet",
+            trading_session_update_observer=observe_trading_session,
+            clock=lambda: FIXED_TIME,
+        )
+        recovery_worker = runtime._account_stream_recovery_worker
+        if recovery_worker is None:
+            raise AssertionError("testnet runtime must compose a recovery worker")
+        recovery_callback = (
+            runtime.web_socket_gateway._reconciliation_required_callback
+        )
+
+        # 실제 REST 없이 RUNNING session과 READY recovery Guard를 같은 application lock에서 준비한다.
+        with runtime.application_lock:
+            runtime.trading_controller._command_gate = True
+            runtime.trading_controller._startup_reconciliation_complete = True
+            runtime.trading_controller._status = TradingSessionStatus.RUNNING
+            with runtime.web_socket_gateway._lock:
+                runtime.web_socket_gateway._account_connected = True
+                runtime.web_socket_gateway._account_subscription = (
+                    _StubSubscription()
+                )
+            runtime._publish_state(
+                status=ApplicationStatus.READY,
+                failure=None,
+                startup_trace=(),
+            )
+
+        try:
+            # Recovery thread는 mock wake로 바꾸고 공통 disconnect callback의 즉시 publication을 격리한다.
+            with patch.object(
+                recovery_worker,
+                "request_recovery",
+                return_value=True,
+            ) as request_recovery:
+                recovery_callback("account_dispatcher_overflow")
+
+            request_recovery.assert_called_once_with()
+            self.assertIs(
+                runtime.trading_controller.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+            self.assertFalse(runtime.trading_controller.command_enabled)
+            self.assertEqual(
+                published_states,
+                [
+                    (
+                        TradingSessionStatus.RECONCILIATION_REQUIRED,
+                        False,
+                        ExecutionMode.TESTNET,
+                    )
+                ],
+            )
+        finally:
+            close_application(runtime)
+
+    def test_callback_recovers_only_after_ready_and_publishes_atomically(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_callback_recovers_only_after_ready_and_publishes_atomically()
+        기능: callback이 gate를 닫고 READY 복구와 성공 publication을 한 lock 구간에서 수행하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/22
+        """
+        account_publications: list[int] = []
+        trading_publications: list[
+            tuple[TradingSessionStatus, bool, ExecutionMode]
+        ] = []
+        recovery_publication_completed = Event()
+
+        def observe_recovered_account(selected_account: object) -> None:
+            """
+            함수 이름: observe_recovered_account()
+            기능: account stream 복구 뒤 transport에 게시한 Account version을 기록한다.
+            인자: selected_account -> runtime의 authoritative Account
+            반환값: 없음
+            작성 날짜: 2026/08/24
+            """
+            account_publications.append(
+                selected_account.version
+            )  # 두 번째 REST snapshot이 transport observer까지 도달했음을 기록한다.
+
+        def observe_recovered_trading_state(
+            selected_controller: TradingController,
+            execution_mode: ExecutionMode,
+        ) -> None:
+            """
+            함수 이름: observe_recovered_trading_state()
+            기능: fail-close와 복구 성공의 lifecycle·command gate publication을 기록한다.
+            인자: selected_controller -> authoritative TradingController
+                execution_mode -> runtime의 고정 Testnet mode
+            반환값: 없음
+            작성 날짜: 2026/08/24
+            """
+            trading_publications.append(
+                (
+                    selected_controller.status,
+                    selected_controller.command_enabled,
+                    execution_mode,
+                )
+            )
+            if selected_controller.command_enabled:
+                recovery_publication_completed.set()  # Backend gate 재개가 UI observer까지 도달해야 성공이다.
+
+        runtime = create_application_runtime(
+            _StubRestClient(),
+            _StubWebSocketClient(),
+            history_repository=_StubHistoryRepository(),
+            execution_mode="testnet",
+            account_update_observer=observe_recovered_account,
+            trading_session_update_observer=(
+                observe_recovered_trading_state
+            ),
             clock=lambda: FIXED_TIME,
         )
         recovery_callback = (
             runtime.web_socket_gateway._reconciliation_required_callback
         )
         recovery_calls: list[TradingController] = []
-        application_lock_was_available = Event()
+        application_lock_probe_results: list[bool] = []
         recovery_started = Event()
         release_recovery = Event()
         recovery_completed = Event()
 
         def recover_account_stream(
             selected_controller: TradingController,
+            *,
+            recovery_commit_observer: Callable[[], object] | None = None,
         ) -> _StubSubscription:
             """
             함수 이름: recover_account_stream()
-            기능: 별도 probe가 application lock을 획득한 뒤 test barrier에서 복구 성공을 제어한다.
+            기능: test barrier 뒤 gate commit과 observer가 같은 application lock을 쓰는지 검증한다.
             인자: selected_controller -> runtime worker가 호출한 TradingController
+                recovery_commit_observer -> Controller commit 직후 호출할 application hook
             반환값: 복구 성공을 나타내는 fake subscription
             작성 날짜: 2026/08/22
             """
             recovery_calls.append(selected_controller)
-
-            def acquire_application_lock() -> None:
-                """
-                함수 이름: acquire_application_lock()
-                기능: worker의 Controller 호출 시 application lock이 비어 있는지 별도 thread로 확인한다.
-                인자: 없음
-                반환값: 없음
-                작성 날짜: 2026/08/22
-                """
-                with runtime.application_lock:
-                    application_lock_was_available.set()
-
-            # 같은 worker thread의 RLock 재진입이 아니라 별도 thread의 실제 획득을 검사한다.
-            lock_probe = Thread(
-                target=acquire_application_lock,
-                daemon=True,
-            )
-            lock_probe.start()
-            if not application_lock_was_available.wait(timeout=1.0):
-                raise AssertionError(
-                    "recovery operation was called while application lock was held"
-                )
-            lock_probe.join()
-
             recovery_started.set()
             release_recovery.wait(timeout=1.0)
             with runtime.application_lock:
@@ -474,7 +812,37 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
                     runtime.web_socket_gateway._account_subscription = (
                         _StubSubscription()
                     )
-            recovery_completed.set()  # 원래 Controller 성공처럼 fail-closed gate를 연 뒤 알린다.
+
+                def probe_application_lock() -> None:
+                    """
+                    함수 이름: probe_application_lock()
+                    기능: gate commit과 publication 사이 application lock이 점유됐는지 확인한다.
+                    인자: 없음
+                    반환값: 없음
+                    작성 날짜: 2026/08/24
+                    """
+                    acquired = runtime.application_lock.acquire(blocking=False)
+                    application_lock_probe_results.append(acquired)
+                    if acquired:
+                        runtime.application_lock.release()  # 예상 밖 성공도 lock을 누수하지 않는다.
+
+                # 별도 thread가 gate-open과 observer 사이에 command lock을 얻지 못해야 한다.
+                lock_probe = Thread(
+                    target=probe_application_lock,
+                    daemon=True,
+                )
+                lock_probe.start()
+                lock_probe.join(timeout=1.0)
+                if lock_probe.is_alive():
+                    raise AssertionError("application lock probe did not complete")
+                if application_lock_probe_results != [False]:
+                    raise AssertionError(
+                        "recovery commit and publication must share one lock"
+                    )
+                if recovery_commit_observer is None:
+                    raise AssertionError("recovery commit observer is required")
+                recovery_commit_observer()
+            recovery_completed.set()  # Gate와 publication이 모두 끝난 뒤 worker 성공을 알린다.
 
             return _StubSubscription()
 
@@ -492,6 +860,18 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
                 with recovery_worker._state_lock:
                     self.assertIsNone(recovery_worker._active_thread)
                 self.assertEqual(recovery_calls, [])
+                self.assertEqual(account_publications, [])
+                self.assertEqual(
+                    trading_publications,
+                    [
+                        (
+                            TradingSessionStatus.NOT_STARTED,
+                            False,
+                            ExecutionMode.TESTNET,
+                        )
+                    ],
+                )
+                trading_publications.clear()  # READY 이후 fail-close와 recovery pair만 격리한다.
 
                 # Startup reconciliation과 READY가 모두 공개된 뒤의 단절만 worker에 전달한다.
                 with runtime.application_lock:
@@ -511,15 +891,129 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
                 recovery_callback("disconnect_after_ready")
                 self.assertTrue(recovery_started.wait(timeout=1.0))
                 self.assertFalse(runtime.trading_controller.command_enabled)
-                self.assertTrue(application_lock_was_available.is_set())
+                self.assertEqual(
+                    application_lock_probe_results,
+                    [],
+                )  # Release 전에는 아직 gate commit/publication 임계 구역에 진입하지 않는다.
 
                 release_recovery.set()
                 self.assertTrue(recovery_completed.wait(timeout=1.0))
+                self.assertTrue(
+                    recovery_publication_completed.wait(timeout=1.0)
+                )
                 self.assertTrue(runtime.trading_controller.command_enabled)
                 self.assertEqual(recovery_calls, [runtime.trading_controller])
+                self.assertEqual(application_lock_probe_results, [False])
+                self.assertEqual(
+                    account_publications,
+                    [runtime.account.version],
+                )
+                self.assertEqual(
+                    trading_publications,
+                    [
+                        (
+                            TradingSessionStatus.NOT_STARTED,
+                            False,
+                            ExecutionMode.TESTNET,
+                        ),
+                        (
+                            TradingSessionStatus.NOT_STARTED,
+                            True,
+                            ExecutionMode.TESTNET,
+                        ),
+                    ],
+                )
         finally:
             release_recovery.set()
             close_application(runtime)  # Test 실패 시에도 worker와 runtime 자원을 회수한다.
+
+    def test_recovery_publication_failure_permanently_fail_closes_commands(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovery_publication_failure_permanently_fail_closes_commands()
+        기능: 복구 성공 publication 실패가 backend-only 주문 재개로 남지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        account_observer = Mock(
+            side_effect=RuntimeError("controlled account publication failure")
+        )
+        trading_observer = Mock()
+        runtime = create_application_runtime(
+            _StubRestClient(),
+            _StubWebSocketClient(),
+            history_repository=_StubHistoryRepository(),
+            execution_mode="testnet",
+            account_update_observer=account_observer,
+            trading_session_update_observer=trading_observer,
+            clock=lambda: FIXED_TIME,
+        )
+        recovery_worker = runtime._account_stream_recovery_worker
+        if recovery_worker is None:
+            raise AssertionError("testnet runtime must compose a recovery worker")
+
+        # 복구 REST/WS가 gate를 연 직후라고 가정하고 READY publication 상태를 조립한다.
+        with runtime.application_lock:
+            runtime.trading_controller._command_gate = True
+            runtime.trading_controller._startup_reconciliation_complete = True
+            runtime.trading_controller._stream_reconciliation_required = False
+            with runtime.web_socket_gateway._lock:
+                runtime.web_socket_gateway._account_connected = True
+                runtime.web_socket_gateway._account_subscription = (
+                    _StubSubscription()
+                )
+            runtime._publish_state(
+                status=ApplicationStatus.READY,
+                failure=None,
+                startup_trace=(),
+            )
+        self.assertTrue(runtime.trading_controller.command_enabled)
+
+        def commit_recovery_with_observer_failure(
+            selected_controller: TradingController,
+            *,
+            recovery_commit_observer: Callable[[], object] | None = None,
+        ) -> _StubSubscription:
+            """
+            함수 이름: commit_recovery_with_observer_failure()
+            기능: 열린 gate와 실패하는 application observer를 같은 Controller lock 구간으로 재현한다.
+            인자: selected_controller -> runtime TradingController
+                recovery_commit_observer -> 복구 성공 publication hook
+            반환값: 도달하지 않는 fake subscription
+            작성 날짜: 2026/08/24
+            """
+            if selected_controller is not runtime.trading_controller:
+                raise AssertionError("unexpected TradingController identity")
+            if recovery_commit_observer is None:
+                raise AssertionError("recovery commit observer is required")
+
+            # 실제 Controller처럼 gate commit과 observer callback을 같은 application RLock에 둔다.
+            with runtime.application_lock:
+                recovery_commit_observer()
+            return _StubSubscription()
+
+        try:
+            with patch.object(
+                TradingController,
+                "reconnect_account_stream_after_reconciliation",
+                autospec=True,
+                side_effect=commit_recovery_with_observer_failure,
+            ):
+                with self.assertRaises(AccountStreamRecoveryBlockedError):
+                    recovery_worker._recovery_operation()
+
+            # Account publication 실패 뒤 fail-close trading snapshot을 한 번만 시도한다.
+            account_observer.assert_called_once_with(runtime.account)
+            trading_observer.assert_called_once_with(
+                runtime.trading_controller,
+                ExecutionMode.TESTNET,
+            )
+            self.assertTrue(runtime.trading_controller.reconciliation_required)
+            self.assertFalse(runtime.trading_controller.command_enabled)
+        finally:
+            close_application(runtime)
 
     def test_duplicate_disconnects_coalesce_and_close_joins_worker(
         self,
@@ -544,11 +1038,14 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
 
         def recover_account_stream(
             selected_controller: TradingController,
+            *,
+            recovery_commit_observer: Callable[[], object] | None = None,
         ) -> _StubSubscription:
             """
             함수 이름: recover_account_stream()
             기능: runtime close의 join과 중복 병합을 관찰할 때까지 단일 복구 호출을 유지한다.
             인자: selected_controller -> worker가 호출한 runtime TradingController
+                recovery_commit_observer -> gate commit과 같은 lock에서 실행할 application hook
             반환값: release 이후 fake subscription
             작성 날짜: 2026/08/22
             """
@@ -557,6 +1054,10 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
             recovery_calls.append("recovery")
             recovery_started.set()
             release_recovery.wait(timeout=1.0)  # Close thread가 join에서 대기할 시간을 만든다.
+            if recovery_commit_observer is None:
+                raise AssertionError("recovery commit observer is required")
+            with runtime.application_lock:
+                recovery_commit_observer()  # 실제 Controller의 atomic commit callback 경계를 재현한다.
 
             return _StubSubscription()
 

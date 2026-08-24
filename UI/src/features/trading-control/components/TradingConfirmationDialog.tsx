@@ -8,6 +8,7 @@ export type TradingDialogKind =
   | 'starting'
   | 'stop'
   | 'forceStop'
+  | 'recoveryLiquidation'
   | 'regimeRequired'
   | 'connectionRequired'
   | 'tradingUnavailable';
@@ -83,6 +84,15 @@ function get_dialog_copy(
       confirmLabel: '강제 매도 후 중지',
       tone: 'negative',
     },
+    recoveryLiquidation: {
+      title: '복구 포지션을 청산할까요?',
+      description: '재시작 과정에서 복구된 포지션이며 자동매매는 재개되지 않습니다.',
+      label: '복구 처리',
+      detail: '현재 잔여 수량을 전량 매도하고 종료하시겠습니까?',
+      cancelLabel: '취소',
+      confirmLabel: '복구 포지션 청산',
+      tone: 'negative',
+    },
     regimeRequired: {
       title: 'REGIME type을 먼저 선택해주세요',
       description: 'REGIME type이 선택되지 않아 자동매매 실행을 시작할 수 없습니다.',
@@ -127,7 +137,7 @@ function get_dialog_copy(
 
 /**
  * 함수 이름: TradingConfirmationDialog()
- * 기능: 시작, 중지, REGIME 및 연결 guard 결과를 공통 확인 모달로 표시한다.
+ * 기능: 시작, 중지, 복구 Position 청산, REGIME 및 연결 guard 결과를 표시한다.
  * 인자: props -> 모달 종류, REGIME 문구와 확인·취소 처리 함수
  * 반환값: 자동매매 확인 Dialog 요소
  * 작성 날짜: 2026/08/12

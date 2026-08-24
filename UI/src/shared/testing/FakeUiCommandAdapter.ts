@@ -14,6 +14,7 @@ type FakeCommandName =
     | 'start_trading'
     | 'stop_trading'
     | 'force_sell_and_stop'
+    | 'liquidate_recovered_position'
     | 'apply_regime'
     | 'update_split_order'
     | 'load_trade_history'
@@ -68,6 +69,13 @@ export class FakeUiCommandAdapter implements UiCommandPort {
         session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
         version: 2,
     };
+    recovered_position_liquidation_receipt: TradingCommandReceipt = {
+        status: 'terminated',
+        session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+        version: 2,
+    };
+    recovered_position_liquidation_promise:
+        Promise<TradingCommandReceipt> | null = null;  // Race test가 HTTP 완료 시점을 제어한다.
 
     private readonly failure_queues = new Map<FakeCommandName, Array<Error>>();
 
@@ -125,6 +133,24 @@ export class FakeUiCommandAdapter implements UiCommandPort {
         this.throw_queued_failure('force_sell_and_stop');
 
         return this.stop_trading_receipt;
+    }
+
+    /**
+     * 함수 이름: liquidate_recovered_position()
+     * 기능: startup 복구 Position 전용 청산 명령을 일반 stop과 구분하여 기록한다.
+     * 인자: 없음
+     * 반환값: 설정된 recovery liquidation lifecycle 결과 Promise
+     * 작성 날짜: 2026/08/24
+     */
+    async liquidate_recovered_position(): Promise<TradingCommandReceipt> {
+        this.record_command('liquidate_recovered_position', null);
+        this.throw_queued_failure('liquidate_recovered_position');
+
+        if (this.recovered_position_liquidation_promise !== null) {
+            return this.recovered_position_liquidation_promise;
+        }
+
+        return this.recovered_position_liquidation_receipt;
     }
 
     /**

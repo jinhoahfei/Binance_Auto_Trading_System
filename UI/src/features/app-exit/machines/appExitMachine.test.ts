@@ -2,6 +2,7 @@ import { createActor } from 'xstate';
 import { describe, expect, it } from 'vitest';
 
 import { BackendAdapterError } from '../../../shared/api';
+import type { TradingCommandReceipt } from '../../../shared/ports';
 import { FakeUiCommandAdapter } from '../../../shared/testing';
 import { create_app_exit_machine } from './appExitMachine';
 
@@ -66,6 +67,201 @@ describe('appExitMachine Phase 12 lifecycle', () => {
         expect(command_adapter.command_records).toEqual([
             { name: 'force_sell_and_stop', payload: null },
             { name: 'shutdown_application', payload: null },
+        ]);
+        actor.stop();
+    });
+
+    it('재시작 복구 포지션 종료는 일반 stop 대신 recovery liquidation을 사용한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_app_exit_machine(command_adapter));
+
+        // NOT_STARTED와 열린 Position 조합을 명시해 정상 실행 세션의 stop과 구분한다.
+        actor.start();
+        actor.send({
+            type: 'EXIT_CLICKED',
+            has_open_position: true,
+            is_trading: false,
+        });
+        actor.send({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
+        await wait_for_exit_actor_settlement();
+        await wait_for_exit_actor_settlement();
+
+        expect(actor.getSnapshot().matches('ui_final_state')).toBe(true);
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
+            { name: 'shutdown_application', payload: null },
+        ]);
+        actor.stop();
+    });
+
+    it('복구 청산 STOPPING은 terminal event 전 shutdown하지 않고 확인 뒤 정확히 한 번 종료한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.recovered_position_liquidation_receipt = {
+            status: 'stopping',
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            version: 3,
+        };
+        const actor = createActor(create_app_exit_machine(command_adapter));
+
+        actor.start();
+        actor.send({
+            type: 'EXIT_CLICKED',
+            has_open_position: true,
+            is_trading: false,
+        });
+        actor.send({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
+        await wait_for_exit_actor_settlement();
+
+        // STOPPING receipt만으로 Position을 지우거나 backend shutdown을 시작하지 않는다.
+        expect(actor.getSnapshot().matches('awaiting_liquidation_terminal')).toBe(true);
+        expect(actor.getSnapshot().context).toMatchObject({
+            had_open_position: true,
+            had_recovered_position: true,
+        });
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
+        ]);
+
+        // TERMINATED라도 authoritative Position이 남아 있으면 shutdown barrier를 열지 않는다.
+        actor.send({
+            type: 'TRADING_SESSION_UPDATED',
+            version: 4,
+            status: 'terminated',
+            has_open_position: true,
+        });
+        expect(actor.getSnapshot().matches('awaiting_liquidation_terminal')).toBe(true);
+        expect(command_adapter.command_records).toHaveLength(1);
+
+        actor.send({
+            type: 'TRADING_SESSION_UPDATED',
+            version: 5,
+            status: 'terminated',
+            has_open_position: false,
+        });
+        await wait_for_exit_actor_settlement();
+
+        expect(actor.getSnapshot().matches('ui_final_state')).toBe(true);
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
+            { name: 'shutdown_application', payload: null },
+        ]);
+        actor.stop();
+    });
+
+    it('복구 terminal event가 STOPPING receipt보다 먼저 와도 latch 뒤 shutdown을 한 번 수행한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        let resolve_liquidation!: (receipt: TradingCommandReceipt) => void;
+        command_adapter.recovered_position_liquidation_promise = new Promise((resolve) => {
+            resolve_liquidation = resolve;
+        });
+        const actor = createActor(create_app_exit_machine(command_adapter));
+
+        actor.start();
+        actor.send({
+            type: 'EXIT_CLICKED',
+            has_open_position: true,
+            is_trading: false,
+        });
+        actor.send({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
+        await wait_for_exit_actor_settlement();
+
+        // HTTP가 대기 중이어도 더 최신 terminal lifecycle을 force_selling context에 보존한다.
+        actor.send({
+            type: 'TRADING_SESSION_UPDATED',
+            version: 4,
+            status: 'terminated',
+            has_open_position: false,
+        });
+        resolve_liquidation({
+            status: 'stopping',
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            version: 3,
+        });
+        await wait_for_exit_actor_settlement();
+        await wait_for_exit_actor_settlement();
+
+        expect(actor.getSnapshot().matches('ui_final_state')).toBe(true);
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
+            { name: 'shutdown_application', payload: null },
+        ]);
+        actor.stop();
+    });
+
+    it('복구 reconciliation event가 STOPPING receipt보다 먼저 오면 상태를 보존하고 종료를 차단한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        let resolve_liquidation!: (receipt: TradingCommandReceipt) => void;
+        command_adapter.recovered_position_liquidation_promise = new Promise((resolve) => {
+            resolve_liquidation = resolve;
+        });
+        const actor = createActor(create_app_exit_machine(command_adapter));
+
+        actor.start();
+        actor.send({
+            type: 'EXIT_CLICKED',
+            has_open_position: true,
+            is_trading: false,
+        });
+        actor.send({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
+        await wait_for_exit_actor_settlement();
+
+        // 더 최신 reconciliation event가 도착하면 뒤늦은 STOPPING receipt가 이를 덮지 못한다.
+        actor.send({
+            type: 'TRADING_SESSION_UPDATED',
+            version: 4,
+            status: 'reconciliation_required',
+            has_open_position: true,
+        });
+        resolve_liquidation({
+            status: 'stopping',
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            version: 3,
+        });
+        await wait_for_exit_actor_settlement();
+
+        expect(actor.getSnapshot().matches('force_sell_exit_confirmation')).toBe(true);
+        expect(actor.getSnapshot().context).toMatchObject({
+            had_open_position: true,
+            had_recovered_position: true,
+            error: {
+                code: 'EXIT_LIQUIDATION_RECONCILIATION_REQUIRED',
+            },
+        });
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
+        ]);
+        actor.stop();
+    });
+
+    it('복구 청산 RECONCILIATION_REQUIRED는 Position 상태와 창을 유지하고 shutdown을 차단한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.recovered_position_liquidation_receipt = {
+            status: 'reconciliation_required',
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            version: 3,
+        };
+        const actor = createActor(create_app_exit_machine(command_adapter));
+
+        actor.start();
+        actor.send({
+            type: 'EXIT_CLICKED',
+            has_open_position: true,
+            is_trading: false,
+        });
+        actor.send({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
+        await wait_for_exit_actor_settlement();
+
+        // 조정 필요 receipt는 오류 확인 상태로 돌아가고 recovered Position 표식을 보존한다.
+        expect(actor.getSnapshot().matches('force_sell_exit_confirmation')).toBe(true);
+        expect(actor.getSnapshot().context).toMatchObject({
+            had_open_position: true,
+            had_recovered_position: true,
+            error: {
+                code: 'EXIT_LIQUIDATION_RECONCILIATION_REQUIRED',
+            },
+        });
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
         ]);
         actor.stop();
     });

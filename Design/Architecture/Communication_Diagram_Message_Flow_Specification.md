@@ -211,16 +211,17 @@ Operation 표는 UML 표기이므로 기존 다이어그램의 camelCase를 보�
 |---|---|---|---|---|---|---|
 | `7` | `User -> AppShellUI` | `startConfirmed() : void` | 없음 | `void` | 사용자가 시작 확인 팝업에서 거래 시작을 확정한다. | Boundary가 `7.1`로 확인 event를 전달한다. |
 | `7.1` | `AppShellUI -> UIStateController` | `startTrading() : void` | 없음 | `void` | 자동매매 시작 UI event를 전달한다. | UI 상태 전이 후 실제 trading 시작을 `7.1.1`에 위임한다. |
-| `7.1.1` | `UIStateController -> TradingController` | `startTrading(commandId : String, expectedVersion : int) : TradingSessionResult` | 멱등 command ID와 호출자가 관측한 Context version | session status, session ID, commit된 version과 STM trace | TradingController에 자동매매 시작을 요청한다. | Controller가 selected REGIME, 지원 mapping, connection, Account/Position과 실행 mode gate를 먼저 검증한다. 미지원이면 Context를 초기화하지 않고 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. `fake`는 명령을 허용하고, Phase 9 `testnet`은 고정 Testnet endpoint·startup reconciliation·별도 주문 opt-in·양수 max-notional 상한을 모두 만족할 때만 허용한다. `disabled`, read-only `testnet`, `live`는 fail closed다. 성공 시 `7.1.1.1`과 `7.1.1.2`를 순서대로 정확히 한 번 실행하며, 같은 `commandId`와 payload는 최초 typed 결과를 재사용한다. |
+| `7.1.1` | `UIStateController -> TradingController` | `startTrading(commandId : String, expectedVersion : int) : TradingSessionResult` | 멱등 command ID와 호출자가 관측한 Context version | session status, session ID, commit된 version과 STM trace | TradingController에 자동매매 시작을 요청한다. | Controller가 selected REGIME, 지원 mapping, connection, Account/Position과 실행 mode gate를 먼저 검증한다. 미지원이면 Context를 초기화하지 않고 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. `fake`는 명령을 허용하고, Phase 9 `testnet`은 고정 Testnet endpoint·startup reconciliation·별도 주문 opt-in·양수 BUY entry max-notional을 모두 만족할 때만 허용한다. `disabled`, read-only `testnet`, `live`는 fail closed다. 성공 시 `7.1.1.1`과 `7.1.1.2`를 순서대로 정확히 한 번 실행하며, 같은 `commandId`와 payload는 최초 typed 결과를 재사용한다. |
 | `7.1.1.1` | `TradingController -> TradingContext` | `initialize(account : Account, selectedRegime : RegimeType, position : PositionSnapshot, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void` | 계좌, 선택 REGIME, 현재 authoritative 포지션 snapshot, 분할 비율 | `void` | TradingSTM이 사용할 시작 context를 초기화한다. | Phase 7 canonical Start/Stop 모델은 기존 클래스인 `:TradingContext` lifeline을 이 위치에 포함한다. `positionOwner`, pending 주문 값, `tradingPhase`, `lowerEventId` 등 runtime 값을 일관된 시작값으로 만들고 계좌·포지션·설정 참조를 연결한다. |
 | `7.1.1.2` | `TradingController -> TradingSTM` | `run(context : TradingContextView) : TradingSTMResult` | 초기화된 TradingContext에서 만든 불변 view | 초기 trading action | TradingSTM을 실행한다. | 원본 그림의 번호는 `7.1.1.1`이다. Controller가 mutable Context를 snapshot으로 만든 뒤 넘긴다. STM은 시작 가능 조건과 초기 상태를 결정하고 반환 Action은 Controller가 소비한다. |
 
-### 4.7 자동매매 중지와 전량 매도
+### 4.7 자동매매 중지, 복구 포지션 인수와 전량 매도
 
 아래 표는 필수 누락 메시지와 안전 branch를 삽입한 최종 numbering이다. 기존 그림의
 무조건 전량 매도 흐름은 `Position.quantity`와 pending 주문을 확인하는 `alt` fragment로
 교체해야 한다. `a`는 무포지션, `p`는 pending reconciliation, `b`는 보유 포지션
-force-sell branch를 뜻한다.
+force-sell branch를 뜻한다. 재시작에서 복원된 포지션은 일반 stop의 의미를 넓히지 않고
+별도 `8R` 명시 청산 Operation으로만 인수한다.
 
 | 번호 | 호출자 -> 수신자 | Operation | Parameter | Return | 설명 | 동작 과정 |
 |---|---|---|---|---|---|---|
@@ -234,6 +235,33 @@ force-sell branch를 뜻한다.
 | `8.1.1.2b` | `TradingController -> APIGateway` | `sellAllPosition(symbol : String, quantity : Decimal) : OrderResult` | `[Position.quantity > 0 && pendingOrder == null]`, 현재 잔여 수량 | 강제 매도 주문 결과 | 실제 잔여 포지션만 전량 매도한다. | 수량은 0보다 커야 하며 Spot free ETH와 Position 수량을 넘지 않는다. timeout/partial/unknown은 ADR-002대로 같은 주문을 reconciliation하고, terminal zero-fill force-sell은 3초 간격 최대 4회 retry한다. |
 | `8.1.1.2b.1` | `APIGateway -> Binance REST API` | `sellAllPosition(symbol : String, quantity : Decimal) : BinanceOrderResponse` | 보유 symbol과 0보다 큰 잔여 수량 | Binance 주문 응답 | Binance Spot에 실제 강제 매도 주문을 제출한다. | 응답은 `8.1.1.2b`의 반환값으로 정규화한다. Position 수량이 0이면 이 메시지는 금지된다. |
 | `8.1.1.3` | `TradingController -> TradingSTM` | `orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult` | `FORCE_SELL_FINISHED` 또는 `FORCE_SELL_FAILED`, 결과 반영 뒤 Context | 중지 완료/재조정 전이 | 보유 또는 pending branch의 구체 완료 결과를 STM에 전달한다. | Position 반영과 history durable 저장 뒤 수량이 0일 때만 `FORCE_SELL_FINISHED`를 보낸다. 실패·상태 불명·저장 실패는 종료 완료로 표시하지 않고 `G-06R` 또는 `RECONCILIATION_REQUIRED`를 유지한다. |
+| `8R` | `User -> AppShellUI` | `recoveredPositionLiquidationConfirmed() : void` | 없음 | `void` | 사용자가 startup에서 복원된 포지션의 명시 청산을 확정한다. | 자동매매 재개 확인과 다른 경고 UI를 사용하며 Boundary가 `8R.1`로 확인 event를 전달한다. |
+| `8R.1` | `AppShellUI -> UIStateController` | `liquidateRecoveredPosition() : void` | 없음 | `void` | 복구 포지션 청산 의도를 제어 계층에 전달한다. | UIStateController는 최신 snapshot의 open Position 표시를 참고하되 실제 가능 여부와 수량은 `8R.1.1`에 위임한다. |
+| `8R.1.1` | `UIStateController -> TradingController` | `liquidateRecoveredPosition(commandId : String, expectedVersion : int) : TradingSessionResult` | 멱등 command ID와 호출자가 관측한 Context version | stopping, terminated 또는 reconciliation session 결과 | startup에서 설명 가능하게 복원된 포지션을 청산 전용 세션으로 인수한다. | `NOT_STARTED`, startup reconciliation 완료, command/order gate 준비, active·pending·dirty persistence 없음, authoritative 수량 양수와 owner 존재, durable open lot의 단일 지원 REGIME·owner 일치를 모두 검증한다. 또한 effective free ETH가 Position 전량 이상이고, 최신 signed commission·symbol filter 준비 뒤 `requestedQuantity == submittedQuantity == Position.quantity`여야 한다. max-notional은 BUY entry에만 적용하며 가격 상승 뒤 이 exposure-reducing SELL을 막지 않는다. 하나라도 다르면 pending journal과 주문 POST 없이 거부한다. UI 선택 REGIME은 provenance로 사용하지 않는다. 같은 `commandId`와 payload는 최초 결과를 재사용하고, 진행 중 새 command는 새 force-sell intent를 만들지 않는다. |
+| `8R.1.1.1` | `TradingController -> TradingContext` | `initialize(account : Account, recoveredRegime : RegimeType, position : PositionSnapshot, scaleInRatio : Decimal, scaleOutRatio : Decimal); updatePosition(position : PositionSnapshot, owner : PositionOwner) : void` | durable history에서 검증한 REGIME·owner와 authoritative Position | `void` | 복구 Position만 소유하는 liquidation-only Context를 초기화한다. | 새 session ID·직렬 outcome queue·해당 REGIME의 fresh STM을 함께 준비하지만 `TradingSTM.run()`은 호출하지 않는다. 초기화와 STOP 판정 전 실패는 외부 주문 없이 이전 `NOT_STARTED` 상태로 원자 복원한다. |
+| `8R.1.1.2` | `TradingController -> TradingSTM` | `handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult` | `event = STOP_CONFIRMED`, 복구 owner가 설정된 불변 Context view | `G-06` force-sell 결과 | 자동 전략을 시작하지 않고 복구 포지션 청산만 시작한다. | fresh STM의 global STOP transition을 직접 사용하며 `8.1.1.2b` 이후의 기존 제출·same-ID reconciliation·history·`G-06F/G-06R` 절차를 그대로 따른다. 시장 event와 신규 BUY는 이 세션에서 허용하지 않는다. |
+
+Production bootstrap은 위 메시지를 새 업무 lifeline으로 확장하지 않고, process당 하나의
+중단 가능한 event runtime worker가 `TradingController.runEventRuntimeCycle()`을 깨운다.
+이 bounded Operation은 `RETRY_BACKOFF` due 작업을 한 번 release한 뒤 직렬 queue를 유한
+microstep만큼 drain한다. 동기 REST 결과와 WebSocket 주문 결과는 worker wake만 요청하며,
+route별 drain, 주문별 timer/thread와 busy loop는 금지한다. worker는 cycle 뒤 authoritative
+trading snapshot을 transport observer에 게시하므로 동기 `FILLED`도 `8R.1.1`의 202 응답 뒤
+수동 drain 없이 `8.1.1.3`과 `G-06F`를 완료할 수 있다.
+
+`8R.1.1.2`가 기존 메시지 `5`와 `6` 사이의 제출 전 pending-order `PREPARED` journal을
+저장할 때, 저장 Operation의 예외는 file·parent-directory fsync 이전 실패와 fsync 완료 뒤
+실패를 구분하지 못하는 모호한 durability cut-point다. 이 경우 `6`/`6.1`의 REST POST는
+금지하지만, 이미 durable할 수 있는 journal과 liquidation-only session을 `NOT_STARTED`로
+rollback하지 않는다. `TradingController`는 `RECONCILIATION_REQUIRED`와 command/safe-shutdown
+gate를 유지하고 운영자가 sidecar와 같은 client ID의 거래소 사실을 조정하게 한다.
+
+복구 청산에는 BUY entry cap을 적용하지 않으며 exchange 수량 step 때문에 여러 부분 주문으로
+시작하지 않는다. 최초
+prepare가 전량을 내림 조정하면 위 `8R.1.1` 명령 전 상태로 원자 복원하고 같은 command ID의
+재시도를 허용한다. 실제 terminal partial fill 뒤 남은 수량의 prepare가 전량 조건을 만족하지
+못하면 이미 발생한 거래소·history 사실을 되돌리지 않고 `RECONCILIATION_REQUIRED`에서
+운영자 개입을 요구한다.
 
 ## 5. Case 2 - Buy and Sell
 
@@ -426,6 +454,7 @@ Operation
 - `selectRegime(regimeType : RegimeType) : void`
 - `startTrading() : void`
 - `stopTrading() : void`
+- `liquidateRecoveredPosition() : void`
 - `showAllTradingDetails() : void`
 - `tradeHistoryFilterChanged(period : HistoryPeriod, side : TradeSide) : void`
 - `openCSVExport() : void`
@@ -436,7 +465,7 @@ Operation
 `UIStateController`의 위 Operation은 사용자 event를 받는 논리 façade이므로 `void`로
 표현한다. Phase 7 구현에서는 `UiApplicationFacade`와 `BackendUiAdapter`가 이 event에
 stable command ID와 최신 expected Context version을 결합한 뒤 메시지 `6.1.1`,
-`7.1.1`, `8.1.1`의 concrete typed application Operation을 호출한다.
+`7.1.1`, `8.1.1`, `8R.1.1`의 concrete typed application Operation을 호출한다.
 
 ### 8.3 UISTM
 
@@ -475,8 +504,9 @@ Operation
 - `updateSplitRatios(commandId : String, expectedVersion : int, scaleIn : Decimal, scaleOut : Decimal) : SplitRatioResult`
 - `startTrading(commandId : String, expectedVersion : int) : TradingSessionResult`
 - `stopTrading(commandId : String, expectedVersion : int) : TradingSessionResult`
+- `liquidateRecoveredPosition(commandId : String, expectedVersion : int) : TradingSessionResult`
 - `reconcileStartupState() : void`
-- `reconnectAccountStreamAfterReconciliation() : Subscription`
+- `reconnectAccountStreamAfterReconciliation(recoveryCommitObserver : Callable? = null) : Subscription`
 - `observeOrderResult(result : OrderResult) : boolean`
 
 `fetchSelectedTradingLogic`은 `TYPE_0`을 정확히 109개 transition의 lower-BB
@@ -491,8 +521,10 @@ pending sidecar를 exchange open/recent/same-ID 사실에 대조한다. numeric 
 허용하지 않는다. stream 재연결은 첫 account snapshot 뒤 새 signed stream ACK를 먼저
 확보하고, 그 뒤 주문 snapshot/rebase와 두 번째 account snapshot을 완료한 조용한
 barrier에서만 command를 다시 허용한다. 위 camelCase Operation은 Python의
-`commit_regime_selection`, `update_split_ratios`, `start_trading`, `stop_trading`에
-각각 대응한다. mutable `Position`이 authoritative 주문 체결 수량을 소유하고
+`commit_regime_selection`, `update_split_ratios`, `start_trading`, `stop_trading`,
+`liquidate_recovered_position`에 각각 대응한다. 복구 청산은 durable open lot의 REGIME과
+owner를 검증한 liquidation-only session에서만 `STOP_CONFIRMED`를 처리하며 `run()`이나
+자동 전략 event를 실행하지 않는다. mutable `Position`이 authoritative 주문 체결 수량을 소유하고
 `PositionSnapshot`은 Context publication과 start/stop Guard에 그 값을 전달한다.
 
 ### 8.5 TradingSTM
@@ -568,6 +600,7 @@ Operation
 
 - `loadAllKlines(symbol : String, limit : int) : Map<Interval, List<Kline>>`
 - `fetchAccountSnapshot(asset : String = "ETH") : AccountSnapshot`
+- `fetchCommissionDiscountPolicy(symbol : String) : CommissionDiscountPolicy`
 - `sellAllPosition(symbol : String, quantity : Decimal) : OrderResult`
 - `submitOrder(order : Order) : OrderResult`
 - `queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult`
@@ -577,6 +610,16 @@ Operation
 
 조회와 취소는 `orderId` 또는 `clientOrderId` 중 하나 이상을 요구한다. retry 횟수나
 전략 판단은 이 Gateway가 아니라 `TradingController`가 ADR-002에 따라 수행한다.
+Testnet 주문 준비는 signed `GET /api/v3/account/commission`의
+`standardCommission`, `specialCommission`, `taxCommission` 네 비율과 discount flag를
+엄격히 정규화한다. 제3 수수료 자산 가능성은 차단하며, dust 회계가 구현되기 전에는 MARKET
+BUY의 `taker + buyer` 합이 세 유형 중 하나라도 양수이면 수신 ETH 차감 가능성을 이유로
+주문 전에 fail closed한다. 두 discount enable flag가 참이면 할인율 숫자가 0이어도
+tax/special 수수료가 검증된 string discount asset으로 전환될 수 있으므로 제3 자산 가능성을
+차단한다. 공식 endpoint schema는 `discountAsset` string을 요구하지만, 2026-08-24 실제 Spot
+Testnet은 두 flag가 참이고 discount와 12개 commission 비율이 모두 0인 응답에서 explicit
+`null`을 반환했다. 이 exact all-zero schema drift만 수수료 자산 부재로 허용하며, field 누락,
+하나라도 양수인 null 또는 string이 아닌 다른 타입은 fail closed한다.
 
 ### 8.9 WebSocketGateway
 
@@ -959,6 +1002,7 @@ Operation
 - `get4hKlines(symbol : String, limit : int) : List<Kline>`
 - `get1dKlines(symbol : String, limit : int) : List<Kline>`
 - `getAccount() : BinanceAccountResponse`
+- `getAccountCommission(symbol : String) : BinanceCommissionResponse`
 - `placeOrder(symbol : String, side : OrderSide, quantity : Decimal) : BinanceOrderResponse`
 - `getOrderStatus(symbol : String, orderId : Long) : BinanceOrderStatusResponse`
 - `getAccountTrades(symbol : String, orderId : Long) : List<Fill>`
@@ -1019,7 +1063,7 @@ session 평가와 runtime을 즉시 종료한다.
 `TYPE_0`의 registry coverage와 session orchestration이 준비되어도
 `command_enabled`는 실행 mode gate와 분리한다. `fake`는 `true`이고 Phase 9
 `testnet`은 고정 endpoint, startup reconciliation, 별도 주문 opt-in과 양수
-max-notional 상한뿐 아니라 현재 account stream의 connected·caught-up barrier를 모두
+BUY entry max-notional 상한뿐 아니라 현재 account stream의 connected·caught-up barrier를 모두
 만족할 때만 `true`다. `disabled`, read-only `testnet`과
 `live`는 `false`다. `TYPE_1`~`TYPE_4`는
 추천·표시·선택을 허용하되 start만 차단한다. 미지원 타입을 `TYPE_0`이나
@@ -1031,8 +1075,9 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 `ExecutionMode`는 `disabled`, `fake`, `testnet`, `live` 네 값만 허용하며 default는
 `disabled`다. Phase 9의 `testnet` bootstrap은 공식 Spot Testnet endpoint만 고정해
 사용하고 credential 기반 read-only 실행과 주문 실행을 분리한다. 주문은 별도 opt-in과
-양수 max-notional 상한, startup reconciliation이 모두 있어야 하며, 상한은 decision
-price 기준 사전 추정치이므로 거래소 filter 검증을 대체하지 않는다. `live`는 ADR-003의
+양수 BUY entry max-notional 상한, startup reconciliation이 모두 있어야 하며, 상한은 decision
+price 기준 신규 노출 사전 추정치이므로 거래소 filter 검증을 대체하지 않는다. STOP/recovery
+SELL은 Position과 free ETH 수량으로 제한하고 이 quote entry cap을 적용하지 않는다. `live`는 ADR-003의
 release 승인, 매 실행 확인, 세 가지 non-null Decimal 한도와 reconciliation을 모두
 통과해야 하지만 Phase 13 전에는 구현 경로와 관계없이 비활성이다.
 
@@ -1041,6 +1086,16 @@ subscribe ACK를 먼저 확보한다. 그 ACK 아래에서 open/recent/same-ID �
 stream accumulator를 rebase한 뒤 두 번째 full account snapshot을 적용한다. barrier 중
 event backlog가 생기거나 설명되지 않은 app-prefix 주문/fill, provenance 누락, balance
 불일치가 발견되면 subscription을 닫고 command를 계속 차단한다.
+복구가 성공하면 재조정 commit부터 publication까지 하나의 application RLock 구간을 유지한다.
+두 REST snapshot으로 확정한 authoritative Account를 먼저 게시하고, 이어 다시 열린 command
+gate와 trading lifecycle을 게시한다.
+이 publication이 실패하면 backend만 주문 가능 상태로 남기지 않고 event runtime failure로
+영구 fail closed한다.
+
+현재 process가 모르는 `bat-` client order ID의 execution report도 정상 callback으로
+버리지 않는다. 즉시 command gate를 `RECONCILIATION_REQUIRED`로 닫고 authoritative trading
+snapshot을 게시한 뒤 같은 account recovery worker를 깨워 open/recent order와 두 account
+snapshot barrier를 다시 수행한다.
 
 ### 10.4 변경 Operation 추적성
 
@@ -1053,13 +1108,15 @@ event backlog가 생기거나 설명되지 않은 app-prefix 주문/fill, proven
 | D-15 / `7.1.1` | `UIStateController -> TradingController` | `startTrading(commandId, expectedVersion) : TradingSessionResult` | readiness와 optimistic version 검증 뒤 Context initialize와 STM `run` 1회, duplicate 결과 재사용 |
 | D-02 / `G-07` | `TradingController -> TradingSTM` | `handle(UPPER_BAND_TOUCHED, context) : TradingSTMResult` | pending 우선의 세 가지 `SAFE_TERMINATION` branch 중 하나만 결정하고 미구현 상단 전략으로 인계하지 않음 |
 | D-05 / `8.1.1` | `UIStateController -> TradingController` | `stopTrading(commandId, expectedVersion) : TradingSessionResult` | `RUNNING` 최초 stop만 아래 STM 전이를 실행하고 중지·종료 상태의 후속 stop은 성공 no-op |
+| D-05·D-08 / `8R.1.1` | `UIStateController -> TradingController` | `liquidateRecoveredPosition(commandId, expectedVersion) : TradingSessionResult` | startup에서 검증한 open lot만 별도 liquidation-only session으로 인수하고 일반 stop·자동 resume와 분리 |
+| D-05·D-08 / `8R.1.1.2` | `TradingController -> TradingSTM` | `handle(STOP_CONFIRMED, recoveredContext) : TradingSTMResult` | `run()` 없이 G-06만 시작하고 기존 force-sell·same-ID·G-06F/G-06R 계약 재사용 |
 | D-05 / `8.1.1.1` | `TradingController -> TradingSTM` | `handle(STOP_CONFIRMED, context) : TradingSTMResult` | Position/pending guard는 기존 STM G-05/G-06/G-06P가 결정 |
 | D-05 / `8.1.1.2b` | `TradingController -> APIGateway` | `sellAllPosition(symbol, quantity) : OrderResult` | `quantity > 0`에서만 호출, Spot 보유량 초과 금지 |
 | D-08 / `8.1.1.2p`·Case 2 `8` | `TradingController -> APIGateway` | `queryOrderResult(symbol, orderId?, clientOrderId?) : OrderResult` | 같은 주문의 사실 정규화, retry schedule은 Controller 책임 |
 | D-08 / `8.1.1.2p.1` | `TradingController -> APIGateway` | `cancelOrder(symbol, orderId?, clientOrderId?) : OrderResult` | 취소 요청만 수행, 결과 재조회 필수 |
 | D-08 / startup 복구 | `TradingController -> APIGateway` | `listOpenOrderResults(symbol) : List<OrderResult>` | 앱 주문의 open 상태 정규화, 전략 판단 금지 |
 | D-08 / startup 복구 | `TradingController -> APIGateway` | `listRecentOrderResults(symbol, limit) : List<OrderResult>` | 앱 client ID prefix의 최근 주문·누적 fill을 정규화해 durable history 이후 누락 execution과 Testnet reset provenance를 대조 |
-| D-08 / stream 재연결 | `TradingController -> WebSocketGateway/APIGateway` | `reconnectAccountStreamAfterReconciliation() : Subscription` | 첫 account REST 뒤 stream ACK를 먼저 얻고 open/recent/same-ID → rebase → 두 번째 account REST를 수행한다. numeric ID collision은 Order/Position 적용 전에 막고 terminal fill은 durable pair+summary와 exact match한다. pending REMOVE·backlog·disconnect·검증 실패에서는 gate 유지 |
+| D-08 / stream 재연결 | `TradingController -> WebSocketGateway/APIGateway` | `reconnectAccountStreamAfterReconciliation(recoveryCommitObserver?) : Subscription` | 첫 account REST 뒤 stream ACK를 먼저 얻고 open/recent/same-ID → rebase → 두 번째 account REST를 수행한다. numeric ID collision은 Order/Position 적용 전에 막고 terminal fill은 durable pair+summary와 exact match한다. pending REMOVE·backlog·disconnect·검증 실패에서는 gate를 유지한다. optional application hook은 gate commit 직후 같은 RLock에서 Account/trading publication을 수행한다. |
 | D-04 / Case 2 `14`, `8.1.1.3` | `TradingController -> TradingSTM` | `orderFinished(event, context) : TradingSTMResult` | concrete normalized outcome만 허용, `handle`로 위임 |
 | D-07 / `1.4` | `MarketDataController -> RegimeController` | `calculate4HIndicators(snapshot) : IndicatorSnapshot` | ADR-004의 확정봉·Decimal·golden formula 사용 |
 | D-10~D-13 / Case 2 `13`, Case 3·4 | `TradingController/UIStateController -> TradeHistoryController` | 기존 `recordOrderExecution`, `getTradeDetails`, `exportCSV` | JSONL/Performance/KST/CSV 정책을 조정, 새 업무 클래스 불필요 |
@@ -1070,7 +1127,9 @@ event backlog가 생기거나 설명되지 않은 app-prefix 주문/fill, proven
 - 주문 취소와 open/recent order 조회는 `APIGateway`의 Binance REST 캡슐화 책임에 응집되므로
   이 클래스에 추가했다.
 - Regime evaluation Action dispatcher는 `RegimeController`, Trading event loop와 retry
-  scheduler는 `TradingController`의 private 구현이다.
+  scheduler 정책은 `TradingController`의 private 구현이다. Production bootstrap의 단일
+  interruptible worker는 Controller의 bounded cycle을 호출하고 상태 publication을 연결할
+  뿐 due 시각, same-ID, 잔여 수량과 retry 예산을 판단하지 않는다.
 - JSONL은 `TradeHistoryRepository`, CSV write는 `CSVFileGateway`, transport DTO 변환은
   `BackendUiAdapter`와 함수 기반 route가 소유한다.
 - 새 trading strategy class는 만들지 않는다. 새 REGIME logic은 Event-Action Table과

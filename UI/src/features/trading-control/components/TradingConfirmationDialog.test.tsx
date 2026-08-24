@@ -33,6 +33,22 @@ describe('TradingConfirmationDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('order command failed');
   });
 
+  it('Phase 9: 복구 Position을 자동매매 재개와 구분한 청산 문구를 표시한다', () => {
+    render(
+      <TradingConfirmationDialog
+        kind="recoveryLiquidation"
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+        open
+      />,
+    );
+
+    expect(screen.getByRole('dialog', { name: '복구 포지션을 청산할까요?' }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/자동매매는 재개되지 않습니다/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '복구 포지션 청산' })).toBeEnabled();
+  });
+
   it.each([
     {
       reason: 'unsupported_logic' as const,

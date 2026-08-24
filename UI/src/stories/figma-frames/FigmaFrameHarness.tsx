@@ -153,6 +153,7 @@ export function FigmaFrameHarness({ frame }: FigmaFrameHarnessProps) {
   return (
     <div className={frame_class_name} data-figma-frame={frame}>
       <AppHeader
+        hasOpenPosition={false}
         isCommandPending={fixture.header.is_command_pending}
         isConnected={fixture.header.is_connected}
         isTrading={fixture.header.is_trading}

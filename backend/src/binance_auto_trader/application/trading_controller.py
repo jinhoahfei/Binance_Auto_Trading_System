@@ -88,6 +88,7 @@ from binance_auto_trader.domain.trading.order import (
 from binance_auto_trader.domain.trading.position import (
     LegacyFeeAccountingMigrationRequiredError,
     Position,
+    PositionStateSnapshot,
 )
 from binance_auto_trader.domain.trading.results import TradingSTMResult
 from binance_auto_trader.domain.trading.states import (
@@ -360,6 +361,22 @@ class AccountStreamRecoveryBlockedError(StartupOrderReconciliationError):
     code = "ACCOUNT_STREAM_RECOVERY_BLOCKED"
 
 
+class _RecoveredPositionLiquidationGateClosedError(RuntimeError):
+    """
+    클래스 이름: _RecoveredPositionLiquidationGateClosedError
+    기능: 복구 청산의 사전 Guard 뒤 주문 effect gate가 닫힌 cut-point를 나타낸다.
+    작성 날짜: 2026/08/24
+    """
+
+
+class _RecoveredPositionLiquidationPreflightError(RuntimeError):
+    """
+    클래스 이름: _RecoveredPositionLiquidationPreflightError
+    기능: 복구 청산의 journal·REST POST 전 주문 사전검증 실패를 나타낸다.
+    작성 날짜: 2026/08/24
+    """
+
+
 class OrderExecutionFailureCode(str, Enum):
     """
     클래스 이름: OrderExecutionFailureCode
@@ -377,6 +394,7 @@ class OrderExecutionFailureCode(str, Enum):
     PENDING_ORDER_NOT_FOUND = "PENDING_ORDER_NOT_FOUND"
     SYMBOL_FILTER_REJECTED = "SYMBOL_FILTER_REJECTED"
     STREAM_RECONCILIATION_REQUIRED = "STREAM_RECONCILIATION_REQUIRED"
+    EVENT_RUNTIME_FAILED = "EVENT_RUNTIME_FAILED"
 
 
 class OrderExecutionTraceResult(str, Enum):
@@ -766,6 +784,7 @@ class TradingController:
         maximum_order_notional: Decimal | None = None,
         order_retry_jitter: Callable[[], Decimal] | None = None,
         order_retry_waiter: Callable[[timedelta], object] | None = None,
+        event_runtime_notifier: Callable[[], object] | None = None,
         clock: Callable[[], datetime] | None = None,
         application_lock: RLock | None = None,
     ) -> None:
@@ -782,9 +801,10 @@ class TradingController:
             position -> 실제 fill과 average cost를 소유할 Phase 8 Position 또는 None
             trade_history_controller -> terminal execution을 durable 기록할 Controller 또는 None
             pending_order_recovery_enabled -> testnet 제출 전 sidecar journal 활성 여부
-            maximum_order_notional -> Order 생성 전에 적용할 선택 quote 결정금액 상한
+            maximum_order_notional -> BUY와 일반 SELL 생성 전 적용하고 force SELL은 제외할 quote 상한
             order_retry_jitter -> 각 일반 주문 대기에 적용할 0.8~1.2 Decimal provider 또는 None
             order_retry_waiter -> startup same-order 조회 지연을 수행할 callable 또는 None
+            event_runtime_notifier -> queue 또는 due 작업이 생겼음을 알릴 non-blocking callback
             clock -> event와 scheduler가 공유할 UTC clock 또는 None
             application_lock -> transport publication과 공유할 application RLock 또는 None
         반환값: 없음
@@ -827,6 +847,10 @@ class TradingController:
             raise TypeError("order_retry_jitter must be callable or None")
         if order_retry_waiter is not None and not callable(order_retry_waiter):
             raise TypeError("order_retry_waiter must be callable or None")
+        if event_runtime_notifier is not None and not callable(
+            event_runtime_notifier
+        ):
+            raise TypeError("event_runtime_notifier must be callable or None")
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
         if application_lock is not None and not hasattr(
@@ -855,6 +879,9 @@ class TradingController:
         self._order_retry_waiter = (
             order_retry_waiter or _wait_for_order_retry_delay
         )  # 실제 startup은 backoff를 기다리고 test는 no-op waiter로 시간만 검증한다.
+        self._event_runtime_notifier = (
+            event_runtime_notifier
+        )  # Controller는 실행 thread가 아니라 wake 신호 경계만 보존한다.
 
         # Phase 8 Position이 주입되면 시작 Guard와 Context도 같은 authoritative 수량을 사용한다.
         if position is not None:
@@ -913,8 +940,10 @@ class TradingController:
         self._active_trace_event_id: str | None = None
         self._account_free_overlays: dict[str, _AccountFreeOverlay] = {}
         self._stream_reconciliation_required = False
+        self._event_runtime_failed = False  # 이 process에서는 worker failure 뒤 command gate를 다시 열지 않는다.
         self._startup_reconciliation_complete = False
         self._startup_reconciliation_blocked = False
+        self._recovered_position_liquidation_session = False  # 일반 stop과 복구 청산의 멱등 namespace를 구분한다.
 
     @property
     def account(self) -> Account:
@@ -1029,19 +1058,25 @@ class TradingController:
     def command_enabled(self) -> bool:
         """
         함수 이름: command_enabled()
-        기능: bootstrap mode gate와 account stream 재조정 상태를 fail closed로 평가한다.
+        기능: bootstrap mode, account stream과 event runtime gate를 fail closed로 평가한다.
         인자: 없음
         반환값: 거래 command가 허용되면 True
         작성 날짜: 2026/08/21
         """
+        # Testnet startup 복구와 연결 재조정이 끝난 경우에만 공개 command gate를 연다.
         return (
             self._mode_command_enabled
             and self._web_socket_gateway.account_ready
             and not self._stream_reconciliation_required
+            and not self._event_runtime_failed
+            and (
+                not self._pending_order_recovery_enabled
+                or self._startup_reconciliation_complete
+            )
             and not self._startup_reconciliation_blocked
             and self._status
             is not TradingSessionStatus.RECONCILIATION_REQUIRED
-        )  # 연결 backlog뿐 아니라 order/history reconciliation lifecycle도 command를 잠근다.
+        )  # Testnet startup과 연결 backlog의 order/history reconciliation lifecycle을 모두 잠근다.
 
     @property
     def reconciliation_required(self) -> bool:
@@ -1052,10 +1087,11 @@ class TradingController:
         반환값: 미해결 재조정 상태가 하나라도 있으면 True
         작성 날짜: 2026/08/24
         """
-        # 공개 lifecycle과 두 내부 gate를 같은 session lock 아래에서 한 번에 판정한다.
+        # 공개 lifecycle과 startup, stream 및 event worker gate를 같은 session lock에서 판정한다.
         with self._session_lock:
             return (
                 self._stream_reconciliation_required
+                or self._event_runtime_failed
                 or self._startup_reconciliation_blocked
                 or not self._startup_reconciliation_complete
                 or self._status
@@ -1168,6 +1204,13 @@ class TradingController:
                     self._selected_regime
                 )
 
+            # Startup 복구 전 Context가 초기화되지 않았어도 authoritative Position을 숨기지 않는다.
+            has_open_position = (
+                self._position.quantity > Decimal("0")
+                if self._position is not None
+                else self._position_snapshot.is_open
+            )
+
             # mutable Context의 각 값을 session lock 아래 같은 publication에 묶는다.
             return TradingSessionSnapshot(
                 status=self._status,
@@ -1175,7 +1218,7 @@ class TradingController:
                 version=self._context.version,
                 scale_in=self._context.scale_in_ratio,
                 scale_out=self._context.scale_out_ratio,
-                has_open_position=self._context.position.is_open,
+                has_open_position=has_open_position,
                 command_enabled=self.command_enabled,
                 selected=self._selected_regime,
                 support_status=(
@@ -1384,6 +1427,9 @@ class TradingController:
             previous_force_sell_intent_id = self._force_sell_intent_id
             previous_force_sell_retry_due_at = self._force_sell_retry_due_at
             previous_order_trace = tuple(self._order_trace)
+            previous_recovery_liquidation_session = (
+                self._recovered_position_liquidation_session
+            )
 
             try:
                 # 모든 Guard를 통과한 뒤 Context와 새 session-owned 자원을 초기화한다.
@@ -1423,6 +1469,7 @@ class TradingController:
                 self._force_sell_retry_due_at = None
                 self._order_trace.clear()
                 self._active_trace_event_id = None
+                self._recovered_position_liquidation_session = False  # 일반 start는 복구 청산 세션 표식을 상속하지 않는다.
 
                 # initialize된 동일 Context snapshot으로 run을 정확히 한 번 호출한다.
                 start_result = selected_stm.run(self._context.snapshot())
@@ -1452,6 +1499,9 @@ class TradingController:
                 self._force_sell_intent_id = previous_force_sell_intent_id
                 self._force_sell_retry_due_at = previous_force_sell_retry_due_at
                 self._order_trace = list(previous_order_trace)
+                self._recovered_position_liquidation_session = (
+                    previous_recovery_liquidation_session
+                )
                 self._status = previous_status
                 raise
 
@@ -1464,6 +1514,262 @@ class TradingController:
                 fingerprint,
                 result,
             )  # run 성공 뒤에만 duplicate start 결과를 고정한다.
+            return result
+
+    def liquidate_recovered_position(
+        self,
+        *,
+        command_id: str,
+        expected_version: int,
+    ) -> TradingSessionResult:
+        """
+        함수 이름: liquidate_recovered_position()
+        기능: startup에서 복원한 Position을 자동 resume 없이 청산 전용 세션으로 인수한다.
+        인자: command_id -> 일반 stop과 분리된 transport 멱등 식별자
+            expected_version -> 호출자가 관측한 context version
+        반환값: STOPPING, TERMINATED 또는 reconciliation 상태 결과
+        작성 날짜: 2026/08/24
+        """
+        # 잘못된 version 형식은 command cache와 복구 provenance를 읽기 전에 거부한다.
+        self._validate_expected_version_value(expected_version)
+        fingerprint = (expected_version,)
+
+        with self._session_lock:
+            # Exact duplicate만 stale 검사보다 먼저 replay하고 다른 payload 재사용은 거부한다.
+            cached = self._read_command_record(
+                "recovered-position-liquidation",
+                command_id,
+                fingerprint,
+            )
+            if cached is not None:
+                return self._require_session_result(cached)
+            self._require_expected_version(expected_version)
+
+            # 이미 시작된 같은 복구 청산은 새 force-sell intent 없이 진행 상태만 반환한다.
+            if self._recovered_position_liquidation_session:
+                if (
+                    self._active_stm is None
+                    or self._session_id is None
+                    or self._status
+                    not in (
+                        TradingSessionStatus.STOPPING,
+                        TradingSessionStatus.RECONCILIATION_REQUIRED,
+                        TradingSessionStatus.TERMINATED,
+                    )
+                ):
+                    raise TradingSessionError(
+                        TradingSessionFailureCode.INVALID_SESSION_STATE,
+                        "Recovered-position liquidation session is inconsistent",
+                        current_version=self._context.version,
+                        expected_version=expected_version,
+                    )
+                result = self._create_session_result(None)
+                self._store_command_record(
+                    "recovered-position-liquidation",
+                    command_id,
+                    fingerprint,
+                    result,
+                )  # 새 command ID도 현재 상태만 기록하고 liquidation intent를 재생성하지 않는다.
+                return result
+
+            # 정상 자동매매 세션은 별도 복구 Operation으로 중지하거나 인수하지 않는다.
+            if self._is_active_locked():
+                raise TradingSessionError(
+                    TradingSessionFailureCode.TRADING_ALREADY_ACTIVE,
+                    "An active trading session cannot be recovery-liquidated",
+                    current_version=self._context.version,
+                    expected_version=expected_version,
+                )
+
+            # 모든 startup·history·Position guard를 통과한 durable provenance만 session에 사용한다.
+            recovered_regime, recovered_owner, recovered_position = (
+                self._validate_recovered_position_liquidation_prerequisites()
+            )
+            recovered_stm = TradingSTM.get_stm_instance(
+                recovered_regime
+            )  # Registry가 지원하지 않는 durable REGIME은 session 생성 전에 차단한다.
+
+            # 외부 주문 전 setup 실패를 원자 복원할 수 있도록 변경 대상 전체를 보존한다.
+            context_checkpoint = self._context._create_checkpoint()
+            previous_selected_regime = self._selected_regime
+            previous_selected_stm = self._selected_stm
+            previous_active_stm = self._active_stm
+            previous_session_id = self._session_id
+            previous_status = self._status
+            previous_event_queue = self._event_queue
+            previous_event_processor = self._event_processor
+            previous_action_trace = tuple(self._action_trace)
+            previous_external_actions = tuple(self._external_actions)
+            previous_cleanup_failures = tuple(self._cleanup_failures)
+            previous_cleanup_state = self._cleanup_in_progress
+            previous_order_states_by_client_id = dict(
+                self._order_states_by_client_id
+            )
+            previous_order_states_by_order_id = dict(
+                self._order_states_by_order_id
+            )
+            previous_scheduled_order_queries = dict(
+                self._scheduled_order_queries
+            )
+            previous_submission_attempts = dict(
+                self._submission_attempts_by_intent
+            )
+            previous_quantity_overrides = dict(
+                self._quantity_overrides_by_intent
+            )
+            previous_force_sell_intent_id = self._force_sell_intent_id
+            previous_force_sell_retry_due_at = self._force_sell_retry_due_at
+            previous_order_trace = tuple(self._order_trace)
+            previous_active_trace_event_id = self._active_trace_event_id
+            previous_recovery_liquidation_session = (
+                self._recovered_position_liquidation_session
+            )
+
+            def restore_pre_liquidation_state() -> None:
+                """
+                함수 이름: restore_pre_liquidation_state()
+                기능: 외부 effect 전 복구 청산 setup을 원래 NOT_STARTED snapshot으로 되돌린다.
+                인자: 없음
+                반환값: 없음
+                작성 날짜: 2026/08/24
+                """
+                # Context, STM과 session identity를 명령 전 snapshot으로 함께 되돌린다.
+                self._context._restore_checkpoint(context_checkpoint)
+                self._selected_regime = previous_selected_regime
+                self._selected_stm = previous_selected_stm
+                self._active_stm = previous_active_stm
+                self._session_id = previous_session_id
+                self._status = previous_status
+                self._event_queue = previous_event_queue
+                self._event_processor = previous_event_processor
+                self._scheduler.clear()
+
+                # 외부 effect 전 임시 trace와 주문 pipeline 상태도 같은 checkpoint로 복원한다.
+                self._action_trace = list(previous_action_trace)
+                self._external_actions = list(previous_external_actions)
+                self._cleanup_failures = list(previous_cleanup_failures)
+                self._cleanup_in_progress = previous_cleanup_state
+                self._order_states_by_client_id = (
+                    previous_order_states_by_client_id
+                )
+                self._order_states_by_order_id = previous_order_states_by_order_id
+                self._scheduled_order_queries = previous_scheduled_order_queries
+                self._submission_attempts_by_intent = previous_submission_attempts
+                self._quantity_overrides_by_intent = previous_quantity_overrides
+                self._force_sell_intent_id = previous_force_sell_intent_id
+                self._force_sell_retry_due_at = previous_force_sell_retry_due_at
+                self._order_trace = list(previous_order_trace)
+                self._active_trace_event_id = previous_active_trace_event_id
+                self._recovered_position_liquidation_session = (
+                    previous_recovery_liquidation_session
+                )
+
+            try:
+                # Durable REGIME·owner와 Position을 새 Context에 묶되 strategy run은 호출하지 않는다.
+                self._context.initialize(
+                    self._account,
+                    recovered_regime,
+                    recovered_position,
+                    self._context.scale_in_ratio,
+                    self._context.scale_out_ratio,
+                )
+                self._context.update_position(
+                    recovered_position,
+                    position_owner=recovered_owner,
+                )
+                self._session_id = str(uuid4())  # 복구 청산도 transport가 검증하는 canonical UUID를 쓴다.
+                self._selected_stm = None
+                self._active_stm = recovered_stm
+                self._event_queue = SerialEventQueue()
+                self._event_processor = RunToCompletionEventProcessor(
+                    stm=recovered_stm,
+                    context_provider=self._context.snapshot,
+                    action_executor=self._execute_action,
+                    event_queue=self._event_queue,
+                    clock=self._clock,
+                    order_finished_observer=self._record_order_finished_trace,
+                    event_processing_observer=self._observe_processing_event,
+                )
+                self._scheduler.clear()
+                self._action_trace.clear()
+                self._external_actions.clear()
+                self._cleanup_failures.clear()
+                self._cleanup_in_progress = False
+
+                # 이전 process에서 종료된 주문 state와 retry 예산은 새 청산 intent에 재사용하지 않는다.
+                self._order_states_by_client_id.clear()
+                self._order_states_by_order_id.clear()
+                self._scheduled_order_queries.clear()
+                self._submission_attempts_by_intent.clear()
+                self._quantity_overrides_by_intent.clear()
+                self._force_sell_intent_id = None
+                self._force_sell_retry_due_at = None
+                self._order_trace.clear()
+                self._active_trace_event_id = None
+                self._recovered_position_liquidation_session = True
+
+                # Fresh STM에는 LOGIC_STARTED 대신 global STOP_CONFIRMED만 정확히 한 번 전달한다.
+                stop_event = TradingEvent(
+                    event_type=TradingEventType.STOP_CONFIRMED,
+                    occurred_at=self._clock(),
+                    priority=EventPriority.USER_COMMAND,
+                    event_id=f"recovery-stop-{self._session_id}-{command_id}",
+                )
+                stop_result = recovered_stm.handle(
+                    stop_event,
+                    self._context.snapshot(),
+                )
+                has_force_sell = any(
+                    isinstance(action, ForceSellAll)
+                    for action in stop_result.action_requests
+                )
+                if stop_result.transition_ids != ("G-06",) or not has_force_sell:
+                    raise RuntimeError(
+                        "Recovered open Position must enter canonical G-06"
+                    )
+            except Exception:
+                # Journal이나 REST POST 전 setup 실패만 원래 NOT_STARTED 상태로 되돌린다.
+                restore_pre_liquidation_state()
+                raise
+
+            # G-06를 공개한 뒤부터는 durable journal과 거래소 사실을 rollback하지 않는다.
+            self._status = TradingSessionStatus.STOPPING
+            previous_trace_event_id = self._active_trace_event_id
+            self._active_trace_event_id = stop_event.event_id
+            try:
+                self._apply_stm_result(stop_result)
+            except _RecoveredPositionLiquidationGateClosedError as error:
+                # Gate가 effect 직전에 닫혔으면 journal·POST가 없으므로 명령 전 상태로 재시도 가능하게 복원한다.
+                restore_pre_liquidation_state()
+                raise TradingSessionError(
+                    TradingSessionFailureCode.CONNECTION_NOT_READY,
+                    "Account stream changed before recovered-position liquidation",
+                    current_version=self._context.version,
+                    expected_version=expected_version,
+                ) from error
+            except _RecoveredPositionLiquidationPreflightError as error:
+                # Journal·POST가 없는 filter·commission 사전검증 실패는 명령 전 상태로 되돌린다.
+                restore_pre_liquidation_state()
+                raise TradingSessionError(
+                    TradingSessionFailureCode.COMMAND_DISABLED,
+                    "Recovered-position liquidation preflight failed",
+                    current_version=self._context.version,
+                    expected_version=expected_version,
+                ) from error
+            except Exception:
+                self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+                raise  # 예상 밖 effect 실패도 NOT_STARTED로 위장하지 않고 operator 복구를 요구한다.
+            finally:
+                self._active_trace_event_id = previous_trace_event_id
+
+            self._synchronize_status_from_context(recovered_stm)
+            result = self._create_session_result(stop_result)
+            self._store_command_record(
+                "recovered-position-liquidation",
+                command_id,
+                fingerprint,
+                result,
+            )  # G-06 Action 적용 뒤에만 exact duplicate receipt를 고정한다.
             return result
 
     def stop_trading(
@@ -1643,7 +1949,11 @@ class TradingController:
             if self._event_queue is None:
                 raise RuntimeError("running session requires an event queue")
 
-            return self._event_queue.enqueue(event)
+            enqueued_event = self._event_queue.enqueue(event)
+            if enqueued_event is not None:
+                self._request_event_runtime_processing()
+
+            return enqueued_event
 
     async def process_next_event(self) -> TradingSTMResult | None:
         """
@@ -1710,6 +2020,40 @@ class TradingController:
 
             return tuple(results)
 
+    async def run_event_runtime_cycle(
+        self,
+        *,
+        max_microsteps: int = 10_000,
+    ) -> tuple[TradingSTMResult, ...]:
+        """
+        함수 이름: run_event_runtime_cycle()
+        기능: due 주문 retry를 한 번 release한 뒤 직렬 queue를 bounded microstep으로 처리한다.
+        인자: max_microsteps -> 이번 production cycle에서 허용할 최대 event 수
+        반환값: 실제 처리한 TradingSTMResult tuple
+        작성 날짜: 2026/08/24
+        """
+        # bool과 무한·비양수 한도는 queue를 건드리기 전에 명시적으로 거부한다.
+        if type(max_microsteps) is not int:
+            raise TypeError("max_microsteps must be an integer")
+        if max_microsteps <= 0:
+            raise ValueError("max_microsteps must be positive")
+
+        with self._session_lock:
+            # 비활성 또는 terminal cleanup 중인 session에서는 scheduler와 queue를 모두 보존한다.
+            if self._cleanup_in_progress or self._status not in (
+                TradingSessionStatus.RUNNING,
+                TradingSessionStatus.STOPPING,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            ):
+                return ()
+
+            # 같은 lock 안에서 due 작업을 먼저 enqueue하고 그 결과까지 이번 bounded cycle에 처리한다.
+            self.trigger_scheduled_evaluations(
+                ReevaluationTrigger.RETRY_BACKOFF,
+                occurred_at=self._clock(),
+            )
+            return await self.drain_events(max_microsteps=max_microsteps)
+
     def trigger_scheduled_evaluations(
         self,
         trigger: ReevaluationTrigger,
@@ -1747,6 +2091,9 @@ class TradingController:
                 enqueued_event = self._event_queue.enqueue(released_event)
                 if enqueued_event is not None:
                     enqueued_events.append(enqueued_event)
+
+            if enqueued_events:
+                self._request_event_runtime_processing()
 
             return tuple(enqueued_events)
 
@@ -2499,14 +2846,24 @@ class TradingController:
                 "testnet reset or open-position order provenance is missing"
             )
 
-    def reconnect_account_stream_after_reconciliation(self) -> Subscription:
+    def reconnect_account_stream_after_reconciliation(
+        self,
+        *,
+        recovery_commit_observer: Callable[[], object] | None = None,
+    ) -> Subscription:
         """
         함수 이름: reconnect_account_stream_after_reconciliation()
         기능: disconnect 뒤 account·open order를 REST 재조정하고 새 user stream 세대를 연다.
-        인자: 없음
+        인자: recovery_commit_observer -> gate 재개와 같은 lock에서 호출할 optional application hook
         반환값: full reconciliation 뒤 시작한 새 account subscription
         작성 날짜: 2026/08/22
         """
+        # Optional hook은 재조정 mutation을 시작하기 전에 검증해 잘못된 caller를 fail fast한다.
+        if recovery_commit_observer is not None and not callable(
+            recovery_commit_observer
+        ):
+            raise TypeError("recovery_commit_observer must be callable or None")
+
         with self._session_lock:
             # Reconnect operation 전체에서 command gate를 닫고 REST full snapshot부터 다시 적용한다.
             self._stream_reconciliation_required = True
@@ -2838,8 +3195,257 @@ class TradingController:
             # Context rebase까지 성공한 뒤에만 새 handle을 publish하고 command gate를 다시 연다.
             self._account_subscription = subscription
             self._stream_reconciliation_required = unresolved_state_remains
+            if recovery_commit_observer is not None:
+                try:
+                    recovery_commit_observer()
+                except Exception:
+                    # Application publication 실패도 열린 backend gate로 남지 않게 같은 lock에서 닫는다.
+                    if not self._event_runtime_failed:
+                        self.mark_event_runtime_failed()
+                    raise
 
             return subscription  # Unresolved 주문은 새 stream을 유지하되 다음 reconciliation까지 gate를 잠근다.
+
+    def _validate_recovered_position_liquidation_prerequisites(
+        self,
+    ) -> tuple[RegimeType, StrategyType, PositionSnapshot]:
+        """
+        함수 이름: _validate_recovered_position_liquidation_prerequisites()
+        기능: 복구 Position 청산의 lifecycle, gate, pending, provenance와 전량 주문 가능성을 검증한다.
+        인자: 없음
+        반환값: 검증된 REGIME, Position owner와 authoritative PositionSnapshot tuple
+        작성 날짜: 2026/08/24
+        """
+        # 복구 Operation은 pending journal을 강제하는 runtime에서 startup 완료 뒤에만 허용한다.
+        if not self._pending_order_recovery_enabled:
+            raise TradingSessionError(
+                TradingSessionFailureCode.COMMAND_DISABLED,
+                "Recovered-position liquidation is not enabled",
+                current_version=self._context.version,
+            )
+        if not self._startup_reconciliation_complete:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Startup position reconciliation is incomplete",
+                current_version=self._context.version,
+            )
+        if (
+            self._startup_reconciliation_blocked
+            or self._stream_reconciliation_required
+            or self._event_runtime_failed
+        ):
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Order or account stream reconciliation blocks liquidation",
+                current_version=self._context.version,
+            )
+        if not self._mode_command_enabled:
+            raise TradingSessionError(
+                TradingSessionFailureCode.COMMAND_DISABLED,
+                "Trading commands are disabled by the selected execution mode",
+                current_version=self._context.version,
+            )
+
+        # 정상 session 자원이나 staged UI REGIME이 있으면 복구 provenance로 덮지 않는다.
+        if (
+            self._status is not TradingSessionStatus.NOT_STARTED
+            or self._session_id is not None
+            or self._active_stm is not None
+            or self._event_queue is not None
+            or self._event_processor is not None
+            or self._context.initialized
+            or self._selected_regime is not None
+            or self._selected_stm is not None
+        ):
+            raise TradingSessionError(
+                TradingSessionFailureCode.INVALID_SESSION_STATE,
+                "Recovery liquidation requires a pristine NOT_STARTED session",
+                current_version=self._context.version,
+            )
+        if self._cleanup_in_progress or self._session_subscriptions:
+            raise TradingSessionError(
+                TradingSessionFailureCode.INVALID_SESSION_STATE,
+                "Recovery liquidation session resources are not pristine",
+                current_version=self._context.version,
+            )
+
+        # Account·시장·signed stream이 모두 같은 startup 세대로 준비돼야 외부 SELL을 허용한다.
+        if not self._market_snapshot.ready:
+            raise TradingSessionError(
+                TradingSessionFailureCode.MARKET_NOT_READY,
+                "MarketSnapshot must be ready before recovery liquidation",
+                current_version=self._context.version,
+            )
+        if not self._account.ready:
+            raise TradingSessionError(
+                TradingSessionFailureCode.ACCOUNT_NOT_READY,
+                "Account must be ready before recovery liquidation",
+                current_version=self._context.version,
+            )
+        if not self._web_socket_gateway.account_ready:
+            raise TradingSessionError(
+                TradingSessionFailureCode.CONNECTION_NOT_READY,
+                "Account stream must be caught up before recovery liquidation",
+                current_version=self._context.version,
+            )
+
+        # Pending·query·저장 재시도가 하나라도 있으면 새 force-sell과 동시에 진행하지 않는다.
+        retained_order_states = (
+            *self._order_states_by_client_id.values(),
+            *self._order_states_by_order_id.values(),
+        )  # 어느 identity index에만 남은 state도 청산 준비에서 누락하지 않는다.
+        unresolved_order_state = any(
+            state.persistence_pending
+            or state.pending_recovery_pending
+            or state.awaiting_terminal_zero_confirmation
+            or state.order.status is None
+            or state.order.status is OrderStatus.UNKNOWN
+            or state.order.status in ACTIVE_ORDER_STATUSES
+            for state in retained_order_states
+        )
+        history_controller = self._require_trade_history_controller()
+        if (
+            unresolved_order_state
+            or self._persistence_states_by_order_id
+            or self._scheduled_order_queries
+            or history_controller.dirty_order_ids
+            or len(self._scheduler) > 0
+            or self._context.pending_order is not None
+            or history_controller.get_pending_order_recovery_records()
+        ):
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Pending order recovery blocks recovered-position liquidation",
+                current_version=self._context.version,
+            )
+
+        # Entity와 startup publication은 수량·평균가까지 정확히 같은 open Position이어야 한다.
+        position = self._require_position()
+        try:
+            position.require_history_accounting_compatibility()
+        except LegacyFeeAccountingMigrationRequiredError as error:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Recovered Position requires fee-accounting migration",
+                current_version=self._context.version,
+            ) from error
+        position_state = position.get_snapshot()
+        recovered_position = PositionSnapshot(
+            quantity=position_state.quantity,
+            entry_price=(
+                position_state.average_entry_price
+                if position_state.quantity > Decimal("0")
+                else None
+            ),
+        )
+        if not recovered_position.is_open:
+            raise TradingSessionError(
+                TradingSessionFailureCode.TRADING_NOT_STARTED,
+                "No recovered open Position is available for liquidation",
+                current_version=self._context.version,
+            )
+        if position_state.owner is None or recovered_position != self._position_snapshot:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Recovered Position owner or startup snapshot is inconsistent",
+                current_version=self._context.version,
+            )
+
+        # Pending recovery까지 반영된 최종 durable history를 재생해 open lot의 단일 REGIME을 구한다.
+        try:
+            recovered_regime, recovered_owner = (
+                self._resolve_recovered_position_provenance(
+                    history_controller.trade_history.trades,
+                    position_state,
+                )
+            )
+        except (ValueError, LegacyFeeAccountingMigrationRequiredError) as error:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Recovered Position durable provenance is inconsistent",
+                current_version=self._context.version,
+            ) from error
+        if recovered_owner is not position_state.owner:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Recovered Position owner does not match durable history",
+                current_version=self._context.version,
+            )
+        configuration = get_trading_logic_configuration(recovered_regime)
+        if (
+            configuration.support_status
+            is not TradingLogicSupportStatus.SUPPORTED
+        ):
+            raise TradingSessionError(
+                TradingSessionFailureCode.UNSUPPORTED_TRADING_LOGIC,
+                "Recovered Position REGIME is not supported",
+                current_version=self._context.version,
+            )
+
+        # Account free ETH가 durable Position 전량보다 작으면 부분 SELL로 불일치를 숨기지 않는다.
+        effective_free_base = self._get_effective_free_balance(_BASE_ASSET)
+        if effective_free_base < recovered_position.quantity:
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Recovered Position exceeds the effective free ETH balance",
+                current_version=self._context.version,
+            )
+
+        # Entry cap은 가격 상승 뒤 청산을 막지 않으며 SELL은 검증된 Position 전량만 줄인다.
+        return recovered_regime, recovered_owner, recovered_position
+
+    def _resolve_recovered_position_provenance(
+        self,
+        durable_trades: tuple[Trade, ...],
+        authoritative_state: PositionStateSnapshot,
+    ) -> tuple[RegimeType, StrategyType]:
+        """
+        함수 이름: _resolve_recovered_position_provenance()
+        기능: 전체 durable execution을 재생해 현재 open lot의 단일 REGIME과 owner를 검증한다.
+        인자: durable_trades -> startup pending recovery까지 반영된 canonical Trade tuple
+            authoritative_state -> Controller Position의 최종 immutable state
+        반환값: 현재 open lot의 canonical REGIME과 owner
+        작성 날짜: 2026/08/24
+        """
+        if not isinstance(durable_trades, tuple) or any(
+            not isinstance(trade, Trade) for trade in durable_trades
+        ):
+            raise TypeError("durable_trades must be a tuple of Trade values")
+        if not isinstance(authoritative_state, PositionStateSnapshot):
+            raise TypeError(
+                "authoritative_state must be a PositionStateSnapshot"
+            )
+
+        # 별도 Position에 같은 회계를 재생하며 닫힌 과거 lot의 REGIME은 다음 lot로 넘기지 않는다.
+        replayed_position = Position(_TRADING_SYMBOL)
+        open_lot_regime: RegimeType | None = None
+        open_lot_owner: StrategyType | None = None
+        for trade in durable_trades:
+            if replayed_position.quantity == Decimal("0"):
+                if trade.side is not OrderSide.BUY:
+                    raise ValueError("A recovered open lot must begin with BUY")
+                open_lot_regime = trade.regime_type
+                open_lot_owner = trade.strategy
+            elif (
+                trade.regime_type is not open_lot_regime
+                or trade.strategy is not open_lot_owner
+            ):
+                raise ValueError(
+                    "A recovered open lot cannot mix REGIME or owner"
+                )
+
+            replayed_position.apply_historical_trade(trade)
+            if replayed_position.quantity == Decimal("0"):
+                open_lot_regime = None
+                open_lot_owner = None
+
+        # Final Position 전체가 startup owner의 authoritative state와 같아야 history를 신뢰한다.
+        if replayed_position.get_snapshot() != authoritative_state:
+            raise ValueError("Durable history does not reproduce Position state")
+        if open_lot_regime is None or open_lot_owner is None:
+            raise ValueError("Durable history does not contain an open lot")
+
+        return open_lot_regime, open_lot_owner
 
     def _validate_start_prerequisites(self) -> None:
         """
@@ -2860,6 +3466,15 @@ class TradingController:
             raise TradingSessionError(
                 TradingSessionFailureCode.CONNECTION_NOT_READY,
                 "Account stream requires full REST reconciliation",
+                current_version=self._context.version,
+            )
+        if (
+            self._pending_order_recovery_enabled
+            and not self._startup_reconciliation_complete
+        ):
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Startup order and position reconciliation is incomplete",
                 current_version=self._context.version,
             )
         if self._startup_reconciliation_blocked:
@@ -2988,15 +3603,11 @@ class TradingController:
 
             returned_events.extend(self._execute_action(action))
 
-        # direct start/stop 경로의 동기 주문 결과도 batch 완료 뒤 같은 serial queue에 넣는다.
+        # direct start/stop의 동기 결과도 공통 queue+wake 경계에서 다음 microstep으로 넘긴다.
         if returned_events:
-            if self._event_queue is None:
-                raise RuntimeError("order outcomes require an initialized event queue")
-            for returned_event in returned_events:
-                self._event_queue.enqueue(
-                    returned_event,
-                    internal=True,
-                )  # message 14는 재귀 호출 없이 다음 microstep에서만 실행한다.
+            self._enqueue_order_outcomes(
+                returned_events
+            )  # message 14는 재귀 호출 없이 worker의 다음 bounded cycle에서만 실행한다.
 
     def _execute_action(
         self,
@@ -3033,6 +3644,7 @@ class TradingController:
             scheduled_action = self._apply_order_retry_delay(action)
             if scheduled_action is not None:
                 self._scheduler.schedule(scheduled_action)
+                self._request_event_runtime_processing()
             return ()
         if isinstance(action, CancelScheduledEvaluation):
             self._scheduler.cancel(action.scope)
@@ -3046,6 +3658,13 @@ class TradingController:
         # 외부 effect trace는 실제 fake Gateway 실행 여부와 무관하게 원본 Action을 보존한다.
         self._external_actions.append(action)
         if not self._order_pipeline_enabled:
+            if (
+                self._recovered_position_liquidation_session
+                and isinstance(action, ForceSellAll)
+            ):
+                raise _RecoveredPositionLiquidationGateClosedError(
+                    "Recovered-position liquidation effect gate is closed"
+                )
             return ()  # legacy/disabled fixture는 Phase 7의 수동 outcome 경계를 유지한다.
         if isinstance(action, SubmitOrder):
             return self._submit_order_action(action)
@@ -3067,14 +3686,20 @@ class TradingController:
         반환값: Phase 8 pipeline 실행 가능 여부
         작성 날짜: 2026/08/22
         """
+        # Mode·startup·stream·event worker·owner가 모두 준비된 경우에만 주문 effect를 허용한다.
         return (
             self._mode_command_enabled
             and self._web_socket_gateway.account_ready
             and not self._stream_reconciliation_required
+            and not self._event_runtime_failed
+            and (
+                not self._pending_order_recovery_enabled
+                or self._startup_reconciliation_complete
+            )
             and not self._startup_reconciliation_blocked
             and self._position is not None
             and self._trade_history_controller is not None
-        )  # 공개 command lifecycle lock과 별개로 기존 주문의 내부 reconciliation만 계속 허용한다.
+        )  # Startup 복구 전 외부 effect를 막고 완료 뒤 기존 주문의 내부 reconciliation을 허용한다.
 
     def _prepare_order_patch_trace(
         self,
@@ -3343,6 +3968,13 @@ class TradingController:
                 self._context.version,
                 failure_code=OrderExecutionFailureCode.ZERO_ORDER_QUANTITY,
             )
+            # 복구 Position이 있지만 현재 free 수량이 0이면 effect 전 원상복구해 재동기화 후 재시도한다.
+            if self._recovered_position_liquidation_session:
+                raise _RecoveredPositionLiquidationPreflightError(
+                    "recovered-position liquidation quantity is zero"
+                )
+
+            # 일반 세션의 0 수량은 기존 fail-closed 주문 재조정 정책을 유지한다.
             self._enter_order_reconciliation(
                 None,
                 OrderExecutionFailureCode.ZERO_ORDER_QUANTITY,
@@ -3351,9 +3983,10 @@ class TradingController:
             return ()  # 수량 0에서는 Gateway를 단 한 번도 호출하지 않는다.
 
         # 수량 확정 뒤 선택 REGIME과 filter 전 Order aggregate를 먼저 완성한다.
-        selected_regime = self._selected_regime
-        if selected_regime is None:
-            raise RuntimeError("an active order requires a selected REGIME")
+        active_stm = self._active_stm
+        if active_stm is None:
+            raise RuntimeError("an active order requires a TradingSTM")
+        selected_regime = active_stm.regime_type  # 주문 REGIME은 UI 선택이 아니라 session owner에서 읽는다.
         order = Order(
             intent_id=action.idempotency_key,
             client_order_id=provisional_client_id,
@@ -3370,7 +4003,7 @@ class TradingController:
         # 최신 exchangeInfo filter는 요청 수량을 보존한 채 제출 수량만 내림 조정한다.
         try:
             order = self._api_gateway.prepare_order(order)
-        except Exception:
+        except Exception as error:
             self._append_order_trace_values(
                 "5",
                 action.idempotency_key,
@@ -3379,12 +4012,40 @@ class TradingController:
                 context_version,
                 failure_code=OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
             )
+            # 복구 청산은 durable journal·POST 전 실패이므로 상위 Operation이 원자적 복원한다.
+            if self._recovered_position_liquidation_session:
+                raise _RecoveredPositionLiquidationPreflightError(
+                    "recovered-position liquidation order preflight failed"
+                ) from error
+
+            # 일반 자동매매 세션은 기존 fail-closed 정책대로 재조정 상태로 전환한다.
             self._enter_order_reconciliation(
                 None,
                 OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
                 message_id=None,
             )
             return ()  # filter 위반 수량은 거래소 REST 경계에 도달하지 않는다.
+
+        # 복구 청산은 부분 cap·LOT_SIZE 내림을 허용하지 않고 한 주문의 정확한 전량만 journal에 넣는다.
+        if self._recovered_position_liquidation_session:
+            current_position_quantity = self._require_position().quantity
+            if (
+                requested_quantity != current_position_quantity
+                or order.submitted_quantity != current_position_quantity
+            ):
+                self._append_order_trace_values(
+                    "5",
+                    action.idempotency_key,
+                    provisional_client_id,
+                    None,
+                    context_version,
+                    failure_code=(
+                        OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED
+                    ),
+                )
+                raise _RecoveredPositionLiquidationPreflightError(
+                    "recovered-position liquidation must submit the exact full Position"
+                )  # PREPARED fsync 전이므로 상위 Operation이 동일 command 재시도를 허용한다.
 
         # Filter 적용을 마친 정확한 Order를 한 submission state와 durable recovery 근거로 묶는다.
         state = _OrderExecutionState(
@@ -3409,7 +4070,8 @@ class TradingController:
                     OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
                     message_id=None,
                 )
-                return ()  # 제출 전 journal이 durable하지 않으면 신규 POST를 절대 보내지 않는다.
+                # 예외가 fsync 뒤일 수 있어 session/journal은 rollback하지 않되 신규 POST는 금지한다.
+                return ()  # Operator가 sidecar와 same-ID 거래소 사실을 조정할 때까지 gate를 잠근다.
             state.pending_recovery_pending = True  # UPSERT fsync 성공 사실을 history 저장과 별도로 추적한다.
 
         self._order_states_by_client_id[order.client_order_id] = state
@@ -3539,10 +4201,14 @@ class TradingController:
                 else:
                     natural_quantity = maximum_sell_quantity * split_ratio
 
+        # STOP/recovery force SELL은 Position/free balance가 상한이고 entry quote cap을 적용하지 않는다.
+        if side is OrderSide.SELL and force_sell:
+            return natural_quantity
+
         return self._apply_order_notional_ceiling(
             natural_quantity,
             market_price,
-        )  # Testnet cap도 Order/journal identity를 만들기 전에 승인 수량에 포함한다.
+        )  # BUY와 일반 SELL cap은 Order/journal identity를 만들기 전에 승인 수량에 포함한다.
 
     def _apply_order_notional_ceiling(
         self,
@@ -3551,10 +4217,10 @@ class TradingController:
     ) -> Decimal:
         """
         함수 이름: _apply_order_notional_ceiling()
-        기능: 선택 quote 상한을 decision price 기준 BUY·SELL base 수량에 보수적으로 적용한다.
+        기능: 선택 quote 상한을 decision price 기준 BUY 또는 일반 SELL base 수량에 보수적으로 적용한다.
         인자: quantity -> Account·Position·split으로 계산한 자연 주문 수량
             market_price -> 수량 상한을 quote 금액으로 환산할 결정 시점 가격
-        반환값: 설정 상한 이하로 내림 제한한 base 수량
+        반환값: 설정된 quote 상한 이하로 내림 제한한 base 수량
         작성 날짜: 2026/08/23
         """
         # Factory가 Testnet order mode에만 주입하므로 None에서는 기존 fake 계산을 그대로 보존한다.
@@ -4031,6 +4697,7 @@ class TradingController:
                 due_at=due_at,
             )
         )  # 같은 client ID schedule은 최신 시간 제약 하나로 대체한다.
+        self._request_event_runtime_processing()  # 단일 worker가 due polling을 즉시 시작하게 한다.
 
     def _finalize_terminal_execution(
         self,
@@ -4631,6 +5298,7 @@ class TradingController:
                 )
                 return ()
             self._force_sell_retry_due_at = self._clock() + _FORCE_SELL_RETRY_DELAY
+            self._request_event_runtime_processing()
             return ()  # G-06R action stack에서 즉시 재귀 제출하지 않는다.
 
         return self._submit_force_sell(intent_id, position.quantity)
@@ -4652,7 +5320,16 @@ class TradingController:
         if position.quantity <= Decimal("0"):
             return ()
 
-        return self._submit_force_sell(intent_id, position.quantity)
+        try:
+            return self._submit_force_sell(intent_id, position.quantity)
+        except _RecoveredPositionLiquidationPreflightError:
+            # 최초 공개 명령과 달리 established recovery retry는 원복할 NOT_STARTED 경계가 없다.
+            self._enter_order_reconciliation(
+                self._find_latest_state_for_intent(intent_id),
+                OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+                message_id="5",
+            )
+            return ()  # Worker 밖으로 private 예외를 내보내지 않고 operator gate를 영구적으로 닫는다.
 
     def _submit_force_sell(
         self,
@@ -4802,6 +5479,10 @@ class TradingController:
             if enqueued_event is not None:
                 enqueued_events.append(enqueued_event)
 
+        # 한 wake 신호로 여러 concrete outcome을 합치고 queue가 비었으면 불필요한 신호를 만들지 않는다.
+        if enqueued_events:
+            self._request_event_runtime_processing()
+
         return tuple(enqueued_events)
 
     def _find_state_by_order_identifier(
@@ -4911,6 +5592,31 @@ class TradingController:
                 version_before,
                 failure_code=failure_code,
             )
+
+    def mark_event_runtime_failed(self) -> None:
+        """
+        함수 이름: mark_event_runtime_failed()
+        기능: bounded event cycle 실패를 credential 없는 typed reconciliation 상태로 잠근다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        with self._session_lock:
+            self._event_runtime_failed = True
+
+            # 이미 terminal인 session은 background 실패 때문에 새 active 상태로 되살리지 않는다.
+            if self._cleanup_in_progress or self._status not in (
+                TradingSessionStatus.RUNNING,
+                TradingSessionStatus.STOPPING,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            ):
+                return
+
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.EVENT_RUNTIME_FAILED,
+                message_id=None,
+            )  # Queue, pending journal과 same-ID state는 보존하고 신규 주문 gate만 닫는다.
 
     def _record_order_finished_trace(
         self,
@@ -5088,7 +5794,7 @@ class TradingController:
 
         # 현재 lower-event identity를 보충해 후속 event를 동일 serial queue에 등록한다.
         context_snapshot = self._context.snapshot()
-        self._event_queue.enqueue(
+        enqueued_event = self._event_queue.enqueue(
             TradingEvent(
                 event_type=action.event_type,
                 occurred_at=self._clock(),
@@ -5103,6 +5809,21 @@ class TradingController:
             ),
             internal=True,
         )  # 후속 microstep은 재귀 호출하지 않고 queue로만 이어간다.
+        if enqueued_event is not None:
+            self._request_event_runtime_processing()
+
+    def _request_event_runtime_processing(self) -> None:
+        """
+        함수 이름: _request_event_runtime_processing()
+        기능: queue 또는 due 작업의 존재를 production runtime driver에 non-blocking으로 알린다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Unit 조립에는 notifier가 없을 수 있으며 Controller가 직접 thread를 만들지는 않는다.
+        notifier = self._event_runtime_notifier
+        if notifier is not None:
+            notifier()  # Bootstrap worker의 Event.set 경계만 호출하고 queue를 여기서 drain하지 않는다.
 
     def _cleanup_session_resources(self) -> None:
         """

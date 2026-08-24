@@ -14,6 +14,7 @@ export interface TradingCommandContext {
     readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled: boolean;
     readonly is_trading: boolean;
+    readonly is_recovery_liquidation: boolean;
     readonly has_open_position: boolean;
     readonly regime_highlight_requested: boolean;
     readonly notice: 'not_running' | null;
@@ -71,6 +72,8 @@ export type TradingCommandEvent =
     | { readonly type: 'STOP_CANCELED' }
     | { readonly type: 'FORCE_SELL_AND_STOP_CONFIRMED' }
     | { readonly type: 'FORCE_SELL_AND_STOP_CANCELED' }
+    | { readonly type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' }
+    | { readonly type: 'RECOVERED_POSITION_LIQUIDATION_CANCELED' }
     | { readonly type: 'API_DISCONNECTED' }
     | { readonly type: 'POSITION_UPDATED'; readonly has_open_position: boolean }
     | { readonly type: 'BACKEND_TRADING_STARTED' }
@@ -123,7 +126,7 @@ export function resolve_trading_start_unavailable_reason(
 
 /**
  * 함수 이름: create_trading_command_machine()
- * 기능: 자동매매 시작, 일반 중지, 강제 매도 후 중지의 확인·대기·성공·실패 전이를 생성한다.
+ * 기능: 자동매매 시작, 일반 중지, 강제 매도와 복구 Position 청산 전이를 생성한다.
  * 인자: command_port -> backend 명령을 수행할 UI port
  * 반환값: trading-control feature의 XState machine
  * 작성 날짜: 2026/08/12
@@ -147,6 +150,10 @@ export function create_trading_command_machine(
             force_sell_and_stop: fromPromise<TradingCommandReceipt>(async () => {
                 return command_port.force_sell_and_stop();
             }),
+            // startup 복구 Position은 정상 session stop과 분리된 공개 Operation으로만 청산한다.
+            liquidate_recovered_position: fromPromise<TradingCommandReceipt>(async () => {
+                return command_port.liquidate_recovered_position();
+            }),
         },
         guards: {
             snapshot_is_running: ({ event }) => {
@@ -155,6 +162,12 @@ export function create_trading_command_machine(
             },
             snapshot_is_awaiting_stop: ({ event }) => {
                 return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                    && (event.lifecycle_status === 'stopping'
+                        || event.lifecycle_status === 'reconciliation_required');
+            },
+            snapshot_is_recovery_awaiting_stop: ({ context, event }) => {
+                return context.is_recovery_liquidation
+                    && event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
                     && (event.lifecycle_status === 'stopping'
                         || event.lifecycle_status === 'reconciliation_required');
             },
@@ -197,6 +210,9 @@ export function create_trading_command_machine(
             has_open_position: ({ event }) => {
                 return event.type === 'STOP_BUTTON_CLICKED' && event.has_open_position;
             },
+            has_recovered_position: ({ context }) => {
+                return !context.is_trading && context.has_open_position;
+            },
         },
         actions: {
             synchronize_trading_snapshot: assign({
@@ -219,10 +235,13 @@ export function create_trading_command_machine(
                         : context.command_enabled;
                 },
                 is_trading: ({ context, event }) => {
-                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
-                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
-                        ? event.is_trading
-                        : context.is_trading;
+                    if (event.type !== 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        && event.type !== 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') {
+                        return context.is_trading;
+                    }
+
+                    // Recovery STOPPING은 backend lifecycle이 active여도 자동매매 실행으로 표시하지 않는다.
+                    return context.is_recovery_liquidation ? false : event.is_trading;
                 },
                 has_open_position: ({ context, event }) => {
                     return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
@@ -286,6 +305,18 @@ export function create_trading_command_machine(
                         : context.has_open_position;
                 },
                 notice: null,
+                is_recovery_liquidation: false,
+                error: null,
+            }),
+            remember_recovery_liquidation_request: assign({
+                has_open_position: ({ context, event }) => {
+                    return event.type === 'STOP_BUTTON_CLICKED'
+                        ? event.has_open_position
+                        : context.has_open_position;
+                },
+                is_trading: false,
+                is_recovery_liquidation: true,
+                notice: null,
                 error: null,
             }),
             synchronize_position: assign({
@@ -306,14 +337,23 @@ export function create_trading_command_machine(
             }),
             mark_trading_started: assign({
                 is_trading: true,
+                is_recovery_liquidation: false,
                 error: null,
             }),
             mark_trading_stopped: assign({
                 is_trading: false,
+                is_recovery_liquidation: false,
                 error: null,
             }),
             mark_stop_accepted: assign({
                 is_trading: true,
+                is_recovery_liquidation: false,
+                notice: null,
+                error: null,
+            }),
+            mark_recovery_liquidation_pending: assign({
+                is_trading: false,
+                is_recovery_liquidation: true,
                 notice: null,
                 error: null,
             }),
@@ -336,6 +376,7 @@ export function create_trading_command_machine(
             logic_coverage: options.logic_coverage ?? DEFAULT_TRADING_LOGIC_COVERAGE,
             command_enabled: options.command_enabled ?? false,
             is_trading: options.is_trading ?? false,
+            is_recovery_liquidation: false,
             has_open_position: options.has_open_position ?? false,
             regime_highlight_requested: false,
             notice: null,
@@ -344,6 +385,11 @@ export function create_trading_command_machine(
         },
         on: {
             TRADING_SNAPSHOT_SYNCHRONIZED: [
+                {
+                    guard: 'snapshot_is_recovery_awaiting_stop',
+                    target: '.awaiting_recovered_position_liquidation_completion',
+                    actions: 'synchronize_trading_snapshot',
+                },
                 {
                     guard: 'snapshot_is_awaiting_stop',
                     target: '.awaiting_stop_completion',
@@ -383,6 +429,9 @@ export function create_trading_command_machine(
                 on: {
                     START_BUTTON_CLICKED: [
                         {
+                            guard: 'has_recovered_position',
+                        },
+                        {
                             guard: 'is_regime_missing',
                             target: 'select_regime_notice',
                             actions: 'remember_start_request',
@@ -402,9 +451,16 @@ export function create_trading_command_machine(
                             actions: 'remember_start_request',
                         },
                     ],
-                    STOP_BUTTON_CLICKED: {
-                        actions: 'mark_not_running',
-                    },
+                    STOP_BUTTON_CLICKED: [
+                        {
+                            guard: 'has_recovered_position',
+                            target: 'recovered_position_liquidation_confirmation',
+                            actions: 'remember_recovery_liquidation_request',
+                        },
+                        {
+                            actions: 'mark_not_running',
+                        },
+                    ],
                 },
             },
             select_regime_notice: {
@@ -597,6 +653,68 @@ export function create_trading_command_machine(
                         target: 'force_sell_confirmation',
                         actions: 'remember_failure',
                     },
+                },
+            },
+            // stopped 상태의 복구 Position은 일반 force-sell 확인과 분리해 사용자 동의를 보존한다.
+            recovered_position_liquidation_confirmation: {
+                meta: {
+                    spec_ids: ['PHASE9-RECOVERED-POSITION-LIQUIDATION'],
+                },
+                on: {
+                    RECOVERED_POSITION_LIQUIDATION_CONFIRMED: [
+                        {
+                            guard: 'has_recovered_position',
+                            target: 'liquidating_recovered_position',
+                        },
+                        {
+                            target: 'stopped',
+                        },
+                    ],
+                    RECOVERED_POSITION_LIQUIDATION_CANCELED: {
+                        target: 'stopped',
+                    },
+                    API_DISCONNECTED: {
+                        target: 'api_connection_required',
+                    },
+                },
+            },
+            // 명시적 확인 뒤에도 strategy run 없이 recovery liquidation actor만 실행한다.
+            liquidating_recovered_position: {
+                meta: {
+                    spec_ids: ['PHASE9-RECOVERED-POSITION-LIQUIDATION'],
+                    pending: true,
+                },
+                entry: 'mark_recovery_liquidation_pending',
+                invoke: {
+                    id: 'recovered_position_liquidation_command',
+                    src: 'liquidate_recovered_position',
+                    onDone: [
+                        {
+                            guard: 'stop_result_is_terminal',
+                            target: 'stopped',
+                            actions: ['clear_open_position', 'mark_trading_stopped'],
+                        },
+                        {
+                            target: 'awaiting_recovered_position_liquidation_completion',
+                            actions: 'mark_recovery_liquidation_pending',
+                        },
+                    ],
+                    onError: {
+                        target: 'recovered_position_liquidation_confirmation',
+                        actions: 'remember_failure',
+                    },
+                },
+            },
+            // Recovery liquidation은 terminal snapshot 전까지 자동매매 실행 상태로 승격하지 않는다.
+            awaiting_recovered_position_liquidation_completion: {
+                meta: {
+                    spec_ids: ['PHASE9-RECOVERED-POSITION-LIQUIDATION'],
+                    pending: true,
+                },
+                entry: 'mark_recovery_liquidation_pending',
+                on: {
+                    START_BUTTON_CLICKED: {},
+                    STOP_BUTTON_CLICKED: {},
                 },
             },
             disconnect_stopping: {

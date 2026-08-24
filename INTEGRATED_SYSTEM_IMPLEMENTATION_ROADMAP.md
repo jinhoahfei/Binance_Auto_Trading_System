@@ -2,12 +2,12 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | 실행 기준 문서 / Phase 12 local 구현·자동 검증 완료, clean-machine·credential 검증 대기 |
+| 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 clean-machine·credential 검증 대기 |
 | 기준일 | 2026-08-24 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 11 CSV export를 완료했고 Phase 12의 fixed-FD sidecar handshake, exact-port CSP, 최소 capability, Keychain credential, safe shutdown/timeout/crash recovery와 macOS arm64 `.app`/`.dmg` local package를 구현·자동 검증했다. 실제 Keychain credential을 사용하는 packaged contract smoke, clean-machine 실행, Developer ID 서명·notarization은 수행하지 않았으므로 Phase 12 master는 `[ ] 부분 완료`다. Phase 9 master도 credential 기반 실제 Testnet 검증 전까지 계속 `[ ]`이며 live는 Phase 13 별도 승인 전까지 잠겨 있다. |
+| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 따라서 Phase 9 master는 `[x]`, Phase 12 master는 `[ ] 부분 완료`를 유지하고 live는 Phase 13 별도 승인 전까지 잠겨 있다. |
 
 ---
 
@@ -25,7 +25,8 @@
 - [x] 실패하거나 미확정인 정책을 임의 기본값으로 숨기지 않는다. Phase 0에서 `TRADING_LOGIC_INCOMPLETE`로 격리했던 상단 BB gap은 Phase 6에서 명시적 `SAFE_TERMINATION`으로 닫았고, 미지원 REGIME fallback은 없다.
 - [x] 실제 **live** Binance 주문은 Phase 13의 별도 승인 전까지 실행하지 않는다. Phase 9
   Spot Testnet 주문은 고정 endpoint, read-only opt-in, 별도 주문 opt-in과 양수
-  max-notional 상한을 모두 만족한 명시적 검증에서만 허용한다. 기본 mode는 `disabled`다.
+  BUY 진입 max-notional 상한을 모두 만족한 명시적 검증에서만 허용한다. 기본 mode는
+  `disabled`다.
 
 상태 표기는 다음처럼 사용한다.
 
@@ -84,15 +85,15 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 
 | 영역 | 실행 결과 | 판단 |
 |---|---|---|
-| 통합 backend | 표준 `unittest` 595개 실행, 591개 통과·credential 기반 4개 safe skip | 기존 Phase 0~11 회귀와 Phase 12 sidecar configuration, shutdown HTTP/process ACK, durability, actual-process 계약 검증 통과 |
-| Phase 9 집중 | adapter, bootstrap, pending journal, startup/reconnect, fee migration과 deterministic fault injection 검증 | timeout/5xx/429, `-2010` UNKNOWN, same-ID 복구, PREPARED ambiguity, 두 REST snapshot gap, reset provenance와 이중 opt-in 검증 |
+| 통합 backend | 표준 `unittest` 641개 실행, 635개 통과·외부 Testnet 6개 safe skip | 기존 Phase 0~12 회귀, verified closed/pending baseline, 공개 복구 청산, event worker, 수수료/dust와 unknown app-order fail-closed 계약 검증 통과 |
+| Phase 9 집중 | 복구/worker/transport 69개, Binance adapter 42개, architecture 57개와 deterministic fault injection 2개 통과 | same-ID 복구, PREPARED ambiguity, 전량 free·filter gate, BUY entry cap, STOP SELL 예외와 mutation owner, signed commission, process worker, 두 REST snapshot gap과 reset provenance 검증 |
 | Phase 10 집중 | architecture 49개, Case 3 backend/UI trace, 12개 filter, KST 자정·save/retry rollover, empty/failure/retry, load 중 체결, replay gap resync 검증 | filter는 rows만 교체하고 Account version/KST 날짜/Trade publication이 바뀐 summary만 재결합하며 event pair는 원자 발행 |
 | package/static | offline wheel build, `compileall`, generated contract drift와 `git diff --check` 최종 재검증 | Phase 12 sidecar entrypoint와 pinned desktop packaging extra를 wheel metadata에 포함 |
-| UI | Vitest 35개 파일, 264개 테스트 전부 통과 | 기존 화면 회귀와 one-shot descriptor, READY snapshot retry, close/Command-Q, shutdown timeout·crash recovery 포함 |
+| UI | Vitest 36개 파일, 280개 테스트 전부 통과 | 복구 Position 전용 확인/command, 종료 대기·receipt race와 기존 sidecar/shutdown 회귀 포함 |
 | UI typecheck/build | `tsc -b --pretty false`, Vite build 286 modules, Storybook static build 성공 | strict native IPC/HTTP shutdown 계약, production bundle과 fake Storybook 정상 |
 | process/HTTP 검증 | 실제 Python child와 loopback HTTP/CORS/query/shutdown tests를 통과 | fixed FD configuration, exact `202`/`409`, post-CLOSED process ACK와 기존 startup 메시지 `1 → 2 → 3 → 4 → 5` 검증 |
 | generated contract | Python schema v2 renderer와 `backendContracts.generated.ts` byte-for-byte 일치 | max 1,000 rows, details composite와 ORDER/PERFORMANCE event payload를 Python authoritative source로 유지 |
-| Git 범위 | Phase 12 backend bootstrap/transport, Tauri native lifecycle, UI exit/recovery, packaging/security test와 문서 변경 | Binance payload/client와 live enable은 변경하지 않음 |
+| Git 범위 | Phase 9 `TradingController`, Testnet adapter/bootstrap/transport, 복구 UI, Communication·ADR와 회귀 테스트 변경 | production/live endpoint와 live enable은 변경하지 않음 |
 | Tauri/Rust | `cargo fmt --check`, `cargo check --tests --locked`, native unit 27개 전부 통과 | random-port sidecar, runtime CSP rewrite, minimal capability, Keychain, late READY/pre-window child exit와 expected/abnormal exit 검증 |
 | macOS bundle | arm64 `.app`/`.dmg` 생성, DMG checksum과 DMG 내부 app/sidecar strict ad-hoc signature 검증 통과 | Developer ID 서명·notarization 및 clean-machine credential smoke는 미실행 |
 
@@ -167,6 +168,35 @@ runtime으로 봉인했지만 배포 인증서가 아니므로 Gatekeeper 배포
 - [x] pending-order sidecar v2가 `PREPARED` UPSERT와
   `SUBMISSION_REJECTED_CONFIRMED` TRANSITION을 각각 file+directory fsync하고, legacy v1
   UPSERT는 보수적으로 `PREPARED`로 읽는다.
+- [x] 제출 전 `PREPARED` UPSERT 예외는 fsync 완료 여부가 모호하므로 REST POST를 보내지
+  않되 session을 rollback하지 않고 `RECONCILIATION_REQUIRED` operator lock을 유지한다.
+  save-then-raise fault에서 POST 0회, journal 존재, command gate 폐쇄를 검증한다.
+- [x] startup에서 설명 가능하게 복원한 open Position은 일반 start/stop과 분리된
+  `liquidate_recovered_position()`으로만 인수한다. fresh STM에 `STOP_CONFIRMED`를 직접
+  전달해 `run()`과 BUY를 금지하고 G-06/G-06F/G-06R을 재사용한다.
+- [x] 복구 청산은 effective free ETH와 최신 symbol filter 뒤에도
+  `requested == submitted == Position.quantity`인 전량 한 주문만 PREPARED로 저장한다.
+  최초 무효 조건은 POST 0회·NOT_STARTED 원자 복원·same-command 재시도를 보장하고,
+  terminal partial 뒤 잔량 filter 실패는 operator reconciliation으로 닫는다.
+- [x] production bootstrap은 process당 단일 interruptible event runtime worker로 queue와 due
+  retry를 bounded 처리하고 authoritative trading lifecycle을 게시한다. 알 수 없는 `bat-`
+  주문 event도 command gate를 닫고 REST account/order recovery를 깨운다.
+- [x] signed `GET /api/v3/account/commission`의 standard/special/tax와 discount를 엄격
+  정규화한다. BNB 등 제3 수수료 자산은 모든 주문에서 차단하고, MARKET BUY 수신 ETH
+  수수료율 양수는 dust 회계가 생기기 전까지 신규 BUY 전에 fail closed한다. 실제 discount asset과 두 enable
+  flag가 있으면 할인율이 0이어도 tax/special 수수료가 그 자산으로 전환될 수 있어 제3 자산
+  가능성을 계속 차단한다. 공식 string schema와 다른 명시적 null은 12개 원시 수수료율과
+  discount가 모두 정확히 0인 관찰 조합에만 허용한다.
+- [x] 주문 opt-in 전에 실제 `ETHUSDT`의 `TRADING`, Spot·`MARKET` 허용과 `exchangeInfo`
+  filter를 조회했다. 최신 4시간봉 종가 `2461.41000000`, `LOT_SIZE` min/step
+  `0.00010000`, `MARKET_LOT_SIZE` min/step `0`, `NOTIONAL` min `5`와
+  `applyMinToMarket=true`에서 cap `10 USDT`의 raw 수량
+  `0.004062712022783689023770928045307364`를 `0.0040 ETH`로 내린 decision notional
+  `9.8456400000000000 USDT`가 모든 filter와 cap을 만족함을 확인했다.
+- [x] production Testnet runtime actual lifecycle과 process A durable BUY 후 `os._exit` →
+  fresh B recovery SELL → fresh C replay를 순차 실행했다. 마지막 authenticated read-only
+  startup에서 `READY`, history 6건, pending 0건, Position 0, matching open order 0건을
+  확인했으며 새 주문을 추가하지 않았다.
 - [x] REGIME/select/start/stop/split HTTP와 UI command가 command ID·expected version·Decimal string 계약으로 연결되고 lifecycle event/snapshot을 단조 version으로 동기화한다.
 - [x] production UI는 coherent ready snapshot을 먼저 적용한 뒤 actor와 event stream을 시작한다.
 - [x] duplicate/out-of-order/event ID 중복을 거르고 gap·session change에서는 snapshot-first full resync한다.
@@ -185,13 +215,15 @@ runtime으로 봉인했지만 배포 인증서가 아니므로 Gatekeeper 배포
 
 ### 3.3 현재 완료되지 않은 핵심
 
-- [ ] 부분 완료 — `TradingController`의 실제 Testnet Order Action, pending journal,
-  startup/reconnect reconciliation까지 연결됐다. credential 기반 lifecycle 증거는 아직 없다.
-- [ ] 부분 완료 — 공식 account/order REST와 signed user-data stream client 조립,
-  credential/signature/session 관리는 구현했지만 실제 credential parity 실행은 남아 있다.
+- [x] 완료 — `TradingController`의 실제 Testnet Order Action, pending journal,
+  startup/reconnect reconciliation과 10 USDT cap actual lifecycle/cold restart를 연결·검증했다.
+- [x] 완료 — 공식 account/order REST와 signed user-data stream client 조립,
+  credential/signature/session 관리, authenticated read-only와 actual order mutation parity를
+  통과했다.
 - [ ] 부분 완료 — backend `Account`, `Order`, mutable `Position`, `ExecutionSummary`,
   v1/v2 `Trade`, `TradeHistory`, `Performance`가 실제 Binance mapping까지 연결됐다.
-  credential 기반 외부 Testnet lifecycle과 열린 legacy lot migration 도구는 완료되지 않았다.
+  actual Testnet lifecycle은 완료했지만 열린 legacy v1 ETH-fee lot migration 도구는 후속
+  운영 과제다.
 - [x] 완료 — JSONL `TradeHistoryRepository`의 startup read/recovery/index, order ID 멱등
   append/flush/fsync/save-only retry와 byte snapshot `stream_trades`를 구현하고, native
   no-replace rename 기반 CSV writer까지 Phase 11에서 연결했다.
@@ -202,13 +234,20 @@ runtime으로 봉인했지만 배포 인증서가 아니므로 Gatekeeper 배포
   demo/Storybook/tests는 `FakeUiCommandAdapter`를 유지한다. Phase 11에서 Tauri native directory
   picker와 실제 streaming filesystem export receipt까지 production adapter에 연결했다.
 - [ ] 부분 완료 — authoritative backend market/regime/account/history/trading-session snapshot과
-  read-only Testnet composition을 packaged sidecar FD6 경로에 연결했다. 실제 credential parity와
-  capped order lifecycle은 아직 실행하지 않았고 UI 공개 차트는 parity 전 display-only로 유지한다.
+  read-only Testnet composition을 packaged sidecar FD6 경로에 연결했다. Python harness의 실제
+  credential read-only 및 capped lifecycle/cold restart는 통과했지만 packaged FD6 actual
+  credential contract는 아직 실행하지 않았고 UI 공개 차트는 market-event parity 전
+  display-only로 유지한다.
 - [x] 완료 — strict `TYPE_0`~`TYPE_4` ↔ `type0`~`type4` transport 변환, REGIME별 전략 coverage/start guard, G-07 상단 BB 안전 종료와 UI zero-command gate를 Phase 6에서 완료했다.
 - [x] 완료 — fake `APIGateway`에 주문을 제출하고 fill을 Position/History/Performance에 일관되게 반영한 뒤 durable 저장 이후에만 outcome을 내는 Case 2 pipeline을 Phase 8에서 완료했다.
 - [ ] 부분 완료 — 메시지 `1`~`5`, Case 2 `1`~`14`를 검증하고 actual adapter 기반
-  lifecycle harness를 구현했으며 local restart reconciliation을 검증했다. harness의
-  credential 기반 실행과 전체 UI Communication Case는 아직 남아 있다.
+  lifecycle harness, 공개 복구 UI/Operation과 실제 subprocess cold-restart harness를
+  구현했다. credential 기반 read-only와 actual order/cold restart를 통과했고 전체 UI
+  Communication E2E는 Phase 13에 남아 있다.
+- [ ] 부분 완료 — actual Testnet harness는 caught failure에서 새 runtime cleanup을 시도하지만,
+  parent `SIGKILL` 또는 host crash에는 외부 watchdog/orphan artifact scanner가 없다. 따라서
+  credential/승인 cap 외부 실행은 운영자가 같은 artifact의 cleanup owner를 유지하는 제한된
+  검증이다.
 
 ### 3.4 Phase 1~12에서 해소한 위험과 남은 계약 공백
 
@@ -268,8 +307,14 @@ execution만 crash 잔여물로 정리한다. reconnect는 REST → 새 stream �
 gap을 닫고 설명되지 않은 최근 fill·잔액 감소·Testnet reset을 차단한다. history 저장 뒤
 sidecar REMOVE가 실패하면 별도 durable marker와 실제 sidecar replay가 command gate를
 유지하며, 같은 ID 재조회와 REMOVE fsync가 끝난 뒤에만 해제한다. 신규 Trade는
-v2 실제 자산 흐름 회계를 사용하며 열린 v1 ETH-fee lot은 migration을 요구한다. 다만
-authenticated read-only와 capped lifecycle은 credential 부재로 아직 실행하지 않았다.
+v2 실제 자산 흐름 회계를 사용하며 열린 v1 ETH-fee lot은 migration을 요구한다.
+Authenticated read-only 뒤 10 USDT 승인 cap으로 actual lifecycle을 실행했다. 정식 lifecycle
+artifact `phase9-order-lifecycle-20260824T094039328340Z-01a7605bebf74ee38bddcd0462501092`는
+closed baseline 2건 위에 BUY/SELL 2건을 추가해 history 4건, pending 0건, Position 0으로
+끝났다. cold artifact
+`phase9-cold-restart-20260824T094110991260Z-edea774ca29f43ffbddb37fc88205b38`는 baseline
+4건 위에 process A BUY와 fresh B recovery SELL을 추가했고, fresh authenticated read-only
+replay에서 `READY`, history 6건, pending 0건, Position 0, matching open order 0건을 확인했다.
 
 Phase 10에서는 Case 3의 최초 `TODAY + ALL`과 모든 period/side 조합을 strict composite
 query로 연결했다. D-12의 filtered rows와 filter 독립 summary를 분리하고, backend Decimal을
@@ -328,12 +373,12 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 | [x] | `AppShellUI` | React `App`, `AppHeader`, modal host와 live snapshot/loading/typed failure Boundary를 구현 | 없음 |
 | [x] | `UIStateController` | `UiApplicationFacade`가 snapshot/event bridge, Phase 7 command, Phase 10 Trade History와 Phase 11 native picker/export lifecycle을 조정 | 없음 |
 | [x] | `UISTM` | root/feature XState actor와 Phase 5 snapshot 전체 동기화/reconnect를 구현 | 후속 command ack E2E 추가 |
-| [ ] | `TradingController` | account, strict selection, session start/stop, queue/scheduler, Phase 8 Order/Position/history/force-sell 실행과 Phase 9 pending journal·confirmed-rejection durability·startup/reconnect reconciliation을 구현 | credential 기반 실제 Testnet lifecycle 증거 |
+| [x] | `TradingController` | account, strict selection, session start/stop, queue/scheduler, Phase 8 Order/Position/history/force-sell 실행과 Phase 9 pending journal·confirmed-rejection durability·startup/reconnect reconciliation 및 actual lifecycle/cold restart를 구현·검증 | 없음; market-event→strategy 전체 E2E와 soak는 Phase 13 범위 |
 | [x] | `TradingSTM` | exact 109개 lower-BB transition·queue, 5-row immutable coverage, typed unsupported/no-fallback, G-07 안전 종료와 session `run` 연결을 구현 | 없음 |
 | [x] | `TradingContext` | mutable/versioned owner, `initialize`, ordered runtime patch 적용, typed mutation·split ratio·Position/pending Order publication을 구현 | 없음 |
 | [ ] | `MarketDataController` | backend authoritative WS-first/REST/merge/snapshot 초기화와 RegimeController 최초/full-resync 평가를 구현 | 4H/30m live event 발행과 후속 runtime 연결 |
-| [x] | `APIGateway` | Kline/Spot account 정규화, normalized 주문 Operation과 실제 Testnet authenticated REST client의 raw order/open/recent/same-ID mapping을 구현 | 없음; credential 기반 외부 parity 실행은 Phase 9 완료 증거로 별도 남음 |
-| [x] | `WebSocketGateway` | Kline·account/order event 정규화, stale·duplicate·generation 방어와 실제 Testnet signed session·disconnect reconciliation 연결을 구현 | 없음; credential 기반 외부 stream parity 실행은 Phase 9 완료 증거로 별도 남음 |
+| [x] | `APIGateway` | Kline/Spot account 정규화, normalized 주문 Operation과 실제 Testnet authenticated REST client의 raw order/open/recent/same-ID mapping을 구현하고 read-only 및 actual mutation parity를 통과 | 없음 |
+| [x] | `WebSocketGateway` | Kline·account/order event 정규화, stale·duplicate·generation 방어와 실제 Testnet signed session·disconnect reconciliation을 연결하고 signed stream 활성 상태의 actual lifecycle을 통과 | 장시간 disconnect/soak는 Phase 13 범위 |
 | [x] | `MarketSnapshot` | canonical Decimal/UTC Kline 4주기, current ETH price, monotonic version과 same-version 지표 파생을 구현 | 없음 |
 | [x] | `RegimeController` | 지표 계산, RegimeSTM Action 실행, 추천/선택 분리, dedup/stale/error trace와 sole-writer `set_regime_type`/TradingController 연결을 구현 | 없음 |
 | [x] | `IndicatorSnapshot` | Decimal EMA9 series/slope, strict swing, live EMA9과 source version/candle/time provenance를 구현 | 없음 |
@@ -361,14 +406,14 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 
 | Case | 현재 완료 범위 | 현재 끊기는 지점 | 완료 Phase |
 |---|---|---|---|
-| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, fake session branch와 실제 Testnet adapter 기반 local lifecycle harness를 구현 | credential 기반 실제 Testnet lifecycle 증거, Phase 12 packaged sidecar | Phase 7, 9, 12 |
-| Case 2 Buy/Sell | fake pipeline 메시지 `1`~`14`, 실제 Binance order mapping·pending journal·startup/reconnect reconciliation과 production-runtime lifecycle harness를 구현 | credential 기반 capped BUY/force-sell 실행; harness의 BUY trigger는 test-only private action seam이라 market-event→strategy E2E는 Phase 13에 남음 | Phase 8~9, 13 |
+| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, fake session branch와 실제 Testnet lifecycle/cold restart를 구현·검증 | Phase 12 packaged credential/clean-machine contract와 Phase 13 전체 trace | Phase 7, 9, 12~13 |
+| Case 2 Buy/Sell | fake pipeline 메시지 `1`~`14`, 실제 Binance order mapping·pending journal·startup/reconnect reconciliation, actual BUY/STOP SELL과 recovered-position 전량 SELL을 구현·검증 | harness의 BUY trigger가 test-only private action seam이므로 market-event→strategy E2E와 fault/soak는 Phase 13에 남음 | Phase 8~9, 13 |
 | Case 3 Trade History | `SHOW_TRADE_HISTORY` 최초 `TODAY + ALL`, 12개 결합 filter, backend composite details, D-12 summary/rows 분리, order/account/performance event와 gap resync/KST 자정 갱신을 구현 | 없음 | Phase 10 |
 | Case 4 CSV Export | popup, backend option/KST 검증, byte snapshot `stream_trades`, native picker, 실제 atomic file write와 typed receipt/failure를 구현 | 없음 | Phase 11 |
 
-현재 기준으로 live trading 준비 완료라고 볼 수 있는 Case는 **0개**다. startup read 경로,
-fake Trading Order pipeline과 실제 Binance Testnet adapter/reconciliation 구현은 연결됐지만
-credential 기반 외부 lifecycle 증거와 packaged sidecar가 남아 있기 때문이다.
+현재 기준으로 live trading 준비 완료라고 볼 수 있는 Case는 **0개**다. actual Testnet
+lifecycle/reconciliation은 완료했지만 Phase 12 external packaged 증거와 Phase 13 전체
+readiness·live 위험 한도가 남아 있기 때문이다.
 
 - [x] 네 Communication Case의 종단 간 중단 지점을 확인했다.
 
@@ -1384,16 +1429,51 @@ runtime을 즉시 종료한다. 이는 새 상단 전략이 아니라 lower-BB s
 **참조:** 외부 Actor 계약 9.1/9.2와 APIGateway/WebSocketGateway Operation.
 
 **현재 상태:** 실제 Testnet REST/WebSocket adapter, 안전 gate와 opt-in test harness는
-구현·로컬 검증했다. 다만 이 작업 환경에는 사용자 Testnet credential이 없어
-authenticated read-only, capped BUY/force-sell lifecycle과 open-order/position 실제
-restart scenario는 실행하지 않았다. 외부
-network를 사용하지 않는 deterministic timeout/partial-fill/disconnect fault injection은
-in-memory transport에서 2/2 통과했다.
-따라서 Phase 9와 실제 Testnet 완료 조건은 아직 완료로 판정하지 않는다.
+구현·로컬 검증했다. 공개 `liquidate_recovered_position()`과 전용 UI 경고/command를 추가해
+fresh runtime이 durable open lot의 REGIME·owner를 검증한 뒤 자동 resume 없이 G-06 전량
+청산만 수행한다. production의 단일 event runtime worker가 동기/WS outcome과 due retry를
+bounded 처리하고, true subprocess A의 durable BUY 직후 `os._exit` → fresh B 청산 → fresh C
+Position 0 replay harness를 구현했다. 복구 최초 주문은 free ETH와 최신 filter 뒤에도 정확한
+Position 전량이어야 하며 LOT_SIZE 내림은 journal/POST 전에 거부한다. 노출을 늘리는 BUY의
+진입 max-notional은 복구 SELL에 적용하지 않고, SELL은 authoritative Position과 free ETH를
+절대 넘지 않는다.
+
+공식 signed account commission 응답의 standard/special/tax `taker + buyer`와 discount도 매
+prepare 전에 확인한다. 제3 수수료 자산 또는 MARKET BUY 수신 ETH 수수료 가능성은 dust 회계가
+구현되기 전까지 fail closed한다. discount enable flag 둘이 참이고 실제 discount asset이 있으면
+숫자 할인율이 0이어도 tax/special 수수료는 그 자산으로 전환될 수 있으므로 제3 자산
+가능성으로 취급한다. 공식 Account Commission schema는 `discountAsset`을 string으로
+정의하지만, 2026-08-24 Spot Testnet은 두 enable flag가 참인 all-zero 수수료 계정에 명시적
+`discountAsset: null`을 반환했다. 이 schema drift는 standard/special/tax의 maker/taker/buyer/
+seller 12개 원시 비율과 discount가 모두 정확히 0일 때만 허용하며, 필드 누락이나 하나라도
+0이 아닌 조합은 mutation 전에 거부한다.
+
+같은 날 Keychain service `com.binance-auto.trader.testnet`의 `api-key`와 `api-secret`이 모두
+non-empty임을 값·길이 노출 없이 확인했다. credential을 한 read-only child process에만 전달하고
+`BINANCE_RUN_TESTNET_ORDERS=0`으로 account, 네 Kline interval, open/recent orders, signed account
+stream과 account commission parity 3/3을 통과했다. 이 read-only 실행의 주문은 0건이다.
+
+이후 사용자가 BUY 진입 cap `10 USDT`를 승인했다. mutation 전에 실제 `ETHUSDT`
+`exchangeInfo`를 다시 조회해 `TRADING`, Spot·`MARKET` 허용, `LOT_SIZE` min/max/step
+`0.00010000`/`9000.00000000`/`0.00010000`, `MARKET_LOT_SIZE` min/max/step
+`0.00000000`/`3539.96789708`/`0.00000000`, `NOTIONAL` min/max
+`5.00000000`/`9000000.00000000`, `applyMinToMarket=true`, `applyMaxToMarket=false`,
+`avgPriceMins=5`를 확인했다. 최신 4시간봉 종가 `2461.41000000`에서 raw 수량
+`0.004062712022783689023770928045307364 ETH`를 공통 격자 `0.0040 ETH`로 내린 decision
+notional `9.8456400000000000 USDT`가 cap 이내이고 모든 MARKET filter를 만족해 그때만
+actual suite를 진행했다. 현재 응답에는 별도 `MIN_NOTIONAL`이 아니라 `NOTIONAL`이 있었다.
+
+정식 lifecycle은 신규 BUY `0.00400000 ETH`/`9.8542800000000000 USDT`와 STOP SELL
+`0.00400000 ETH`/`9.8542400000000000 USDT`를 history에 저장하고 Position 0으로 끝났다.
+cold restart는 process A BUY `0.00400000 ETH`/`9.8491200000000000 USDT` 뒤 fresh B가
+동일 `0.00400000 ETH` 전량을 `9.8494800000000000 USDT`에 recovery SELL했다. fresh
+authenticated read-only startup은 `READY`, history 6건, pending 0건, Position 0, matching
+open order 0건을 확인했다. local deterministic timeout/partial-fill/disconnect fault injection도
+2/2 통과했다. 따라서 Phase 9 master와 두 actual Testnet 완료 조건을 `[x]`로 변경한다.
 
 **작업 체크리스트:**
 
-- [x] 2026-08-23 기준 공식 Binance Spot Testnet REST/WebSocket 문서를 다시 확인하고 고정 Testnet endpoint와 현재 payload schema를 adapter fixture test에 반영했다.
+- [x] 2026-08-24 기준 공식 Binance Spot Testnet REST/WebSocket 문서를 다시 확인하고 고정 Testnet endpoint와 현재 payload schema를 adapter fixture test에 반영했다.
 - [x] API key/secret을 renderer, URL, localStorage, source, 일반 log에 넣지 않고 configuration/client `repr`에서도 값과 길이를 redaction한다.
 - [x] server time offset과 `-1021` 단일 재동기화, percent-encoding 후 HMAC signature,
   timeout/5xx/`-1007` UNKNOWN, `429`/`418` 및 최대 30초 `Retry-After`, retryable/terminal
@@ -1403,9 +1483,11 @@ in-memory transport에서 2/2 통과했다.
   `LOT_SIZE`·`MARKET_LOT_SIZE` 수량 규칙과 `MIN_NOTIONAL`·`NOTIONAL`의 MARKET 적용
   flag를 Decimal로 주문 전에 검사한다. price/stopPrice가 없는 MARKET 주문에
   `PRICE_FILTER`를 로컬 적용한다고 가정하지 않는다.
-- [x] 별도 Testnet max-notional은 decision price × 준비 수량의 로컬 사전 상한으로
-  서명 전에 검사한다. 실제 MARKET 체결 금액과 거래소가 사용하는 평균/reference 가격 기반
-  notional filter 판정은 가격 변동·slippage를 포함한 거래소 결과가 최종 권위다.
+- [x] 별도 Testnet max-notional의 승인 의미는 노출을 늘리는 BUY의 decision price × 준비 수량
+  진입 상한이다. 일반 SELL에는 기존 local quote 방어를 유지하고, 가격 상승으로 청산이 막히면
+  안 되는 STOP/recovery SELL만 예외로 둔다. 실제 MARKET 체결 금액과 거래소가 사용하는
+  평균/reference 가격 기반 notional filter 판정은 가격 변동·slippage를 포함한 거래소 결과가
+  최종 권위다. 예외 SELL도 authoritative Position과 free base asset을 절대 상한으로 사용한다.
 - [x] session namespace를 포함한 `bat-` application client order ID를 한 session의 같은
   intent에서는 안정적으로 재사용하고, 다른 process session과는 충돌하지 않게 생성한다.
   durable pending record가 있는 재시작은 기록된 동일 ID로만 조회·취소·reconciliation한다.
@@ -1430,45 +1512,89 @@ in-memory transport에서 2/2 통과했다.
   drain 뒤에만 `true`가 되며 overflow·consumer/worker failure는 socket close와
   reconciliation-required를 발생시킨다. command/start/startup/reconnect와 주문 POST 직전
   gate는 단순 연결 flag가 아니라 이 readiness를 요구한다.
+- [x] Pending-order recovery를 사용하는 Testnet runtime은
+  `startup_reconciliation_complete=true` 전까지 공개 `command_enabled`, direct start Guard와
+  내부 주문 effect gate를 모두 닫는다. Account·stream만 준비된 상태의 start가
+  `POSITION_RECONCILIATION_REQUIRED`, Context 미초기화, 신규 submit 0회를 유지하는 회귀를
+  추가했다.
+- [x] recovered-position liquidation의 `PREPARED` UPSERT가 file·directory fsync 뒤 예외를
+  반환하는 모호한 cut-point에서도 `NOT_STARTED`로 위장하지 않고 session과 durable same-ID
+  근거를 보존하며, 신규 POST와 command/safe-shutdown을 operator reconciliation까지 막는다.
+- [x] 공개 recovered-position liquidation과 별도 UI 확인/route를 구현했다. durable open lot의
+  REGIME·owner만 사용하고 `TradingSTM.run()`/BUY 없이 `STOP_CONFIRMED`와 G-06을 직접 시작한다.
+- [x] 복구 전량의 free ETH·filter exact quantity를 PREPARED 전에 검증한다. BUY 진입 상한은
+  노출을 줄이는 복구 SELL을 막지 않으며, filter 내림과 zero/부족 free는 POST 0회다. same
+  command retry와 residual operator lock을 회귀 테스트로 고정했다.
+- [x] process당 하나의 interruptible event runtime worker가 동기/WS outcome과 due retry를
+  bounded 처리해 STOPPING을 TERMINATED까지 진행하고, 실패는 영구 reconciliation gate로 닫는다.
+- [x] signed account commission endpoint의 standard/special/tax와 discount를 엄격 정규화하고,
+  제3 fee asset은 모든 mutation 전에, MARKET BUY 수신 ETH 수수료율 양수는 신규 BUY 전에
+  차단한다. 이미 durable한 Position의 recovery SELL은 과거 BUY 정책 변화만으로 막지 않는다. 공식 string
+  schema와 다른 명시적 null은 12개 원시 수수료율과 discount가 모두 정확히 0인 관찰 조합에만
+  허용하고, 필드 누락·near-miss는 fail closed한다.
+- [x] 별도 process A가 durable capped BUY receipt를 fsync한 뒤 `os._exit`하고, fresh B가 공개
+  recovery liquidation, fresh C가 Position 0 replay를 수행하는 cold-restart harness를 구현했다.
 - [x] signed subscription의 non-200 ACK는 공식 integer `error.code`만 진단에 보존하고,
   문자열·bool 등 비정상 code는 `invalid`/`missing`으로 고정해 credential 반사를 막는다.
 - [x] 공개 combined Kline stream과 authenticated order stream에서 generation, source cursor, duplicate와 out-of-order fill을 처리하고 불명확한 gap은 reconciliation-required로 닫는다.
-- [ ] 부분 완료 — `test_binance_testnet_read_only.py`에 market/account/open/recent parity를 구현했지만 실제 credential 실행 증거가 없다.
-- [ ] 부분 완료 — fake 전체 suite와 Testnet 소액 주문 suite를 분리했지만 credential 기반 BUY/SELL suite를 아직 실행하지 않았다.
+- [x] 모르는 `bat-` execution report와 일반 account stream disconnect/dispatcher failure는
+  command gate를 즉시 닫고 authoritative lifecycle을 게시하며 REST recovery worker를 깨운다.
+- [x] account stream 복구 성공은 두 REST snapshot의 authoritative Account와 다시 열린
+  command gate/lifecycle을 재조정 commit과 같은 application RLock에서 순서대로 게시한다.
+  publication 실패는 backend-only 주문 재개 대신 영구 event-runtime reconciliation gate로 닫는다.
+- [x] `test_binance_testnet_read_only.py`의 market/account/open/recent/commission/signed stream
+  parity를 실제 credential과 주문 opt-in `0`으로 3/3 통과했다. standard/special/tax의
+  원시 비율 12개와 discount가 정확히 0인 명시적 null 정책임을 검증했고 주문은 0건이다.
+- [x] fake 전체 suite와 Testnet 소액 주문 suite를 분리하고, 사용자 승인 10 USDT BUY 진입
+  cap과 current `exchangeInfo` preflight 뒤 credential 기반 lifecycle/cold restart를 순차
+  실행했다.
 - [x] accepted-response timeout, partial cumulative fill과 disconnect fault injection을
   실제 network와 무관한 in-memory transport로 2/2 통과했다. 이는 외부 Testnet 장애나
   credential parity 증거가 아니다.
-- [x] Testnet test는 기본 suite에서 자동 실행하지 않고 `BINANCE_RUN_TESTNET=1`이 있어야 하며, 주문은 `BINANCE_RUN_TESTNET_ORDERS=1`과 양수 `BINANCE_TESTNET_MAX_NOTIONAL`을 추가로 요구한다.
+- [x] Testnet test는 기본 suite에서 자동 실행하지 않고 `BINANCE_RUN_TESTNET=1`이 있어야 하며,
+  주문은 `BINANCE_RUN_TESTNET_ORDERS=1`과 사용자가 승인한 양수 BUY 진입
+  `BINANCE_TESTNET_MAX_NOTIONAL`을 추가로 요구한다.
 - [x] 실제 주문 harness의 history와 pending sidecar는 run별
   `backend/.testnet-artifacts/phase9-order-lifecycle-*`에 보존한다. 실패·cleanup 오류에는
   credential 없는 경로와 관찰한 client ID를 표시하며 불명 주문이 남을 수 있는 artifact를
   자동 삭제하지 않는다.
+- [x] Testnet account의 이전 `bat-` 완료 주문이 recent history에 남은 후에는
+  `BINANCE_TESTNET_BASELINE_HISTORY_PATH`로 같은 account의 canonical closed history만 새
+  run artifact에 복사한다. source는 absolute path·pending 0·domain replay Position 0을
+  요구하고, 열린 baseline·상대 경로·기존 destination은 POST 전에 거부한다. production의
+  unknown app-order startup guard는 완화하지 않았다.
 
 **완료 조건:**
 
-- [ ] testnet에서 start → buy/sell 또는 force-sell → history 저장 → stop trace가 완성된다.
-- [ ] 재실행 시 open order/position reconciliation이 중복 주문 없이 완료된다.
+- [x] testnet에서 start → buy/sell 또는 force-sell → history 저장 → stop trace가 완성된다.
+- [x] 재실행 시 open order/position reconciliation이 중복 주문 없이 완료된다.
 - [x] `live` mode는 여전히 비활성이며 Testnet bootstrap에는 production endpoint를 선택하는 설정 surface가 없다.
 
 **구현·검증 증거:**
 
 | 항목 | 기록 |
 |---|---|
-| 공식 문서 | [Spot Testnet General Info](https://developers.binance.com/en/docs/products/spot/testnet/general-info), [REST API](https://developers.binance.com/en/docs/products/spot/testnet/rest-api), [WebSocket API user-data requests](https://developers.binance.com/en/docs/products/spot/testnet/web-socket-api#user-data-stream-requests), [User Data Stream](https://developers.binance.com/en/docs/products/spot/testnet/user-data-stream), [Filters](https://developers.binance.com/en/docs/products/spot/testnet/filters) 확인 |
-| 통합 backend | `cd backend && BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q` → 497개 실행, 493개 통과·credential 기반 4개 safe skip |
+| 공식 문서 | 2026-08-24에 [Spot Testnet General Info](https://developers.binance.com/en/docs/products/spot/testnet/general-info), [REST API](https://developers.binance.com/en/docs/products/spot/testnet/rest-api), [WebSocket API signed user-data stream](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/ws-api/user-data-stream), [User Data Stream events](https://developers.binance.com/en/docs/products/spot/testnet/user-data-stream), [Filters](https://developers.binance.com/en/docs/products/spot/testnet/filters), [Errors](https://developers.binance.com/en/docs/products/spot/testnet/errors), signed [Account Commission endpoint](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/account)와 [Commission FAQ](https://developers.binance.com/en/docs/products/spot/faqs/commission_faq) 확인 |
+| 통합 backend | `cd backend && BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q` → 641개 실행, 635개 통과·외부 Testnet 6개 safe skip |
 | 실제 adapter | `adapters/binance/{spot_rest_client.py,spot_websocket_client.py,mappers.py,api_gateway.py,websocket_gateway.py}` |
-| 안전 조립 | `bootstrap/testnet.py`의 고정 Testnet endpoint, credential redaction, read-only/order 이중 opt-in과 notional cap; `bootstrap/application.py`의 `live` order lock |
+| 안전 조립 | `bootstrap/testnet.py`의 고정 Testnet endpoint, credential redaction, read-only/order 이중 opt-in과 BUY entry notional cap; `bootstrap/application.py`의 `live` order lock |
 | 재시작 내구성 | `trade_history_repository.py`의 pending sidecar v2 `PREPARED` UPSERT/`SUBMISSION_REJECTED_CONFIRMED` TRANSITION file+directory fsync와 v1 호환 reader, `TradingController`의 open/recent/same-ID startup reconciliation. submit 거부 → query 전 crash → restart → exact absence 4회에서 재제출 0회·safe cleanup, 일반 PREPARED 차단, reset numeric-ID collision의 pre-Position 차단, exact terminal summary와 REMOVE 재시도 회귀를 검증 |
-| stream 자동 복구 | `cd backend && PYTHONPATH=src .venv/bin/python -m unittest -q tests.unit.bootstrap.test_account_stream_recovery tests.unit.bootstrap.test_application` → reconciliation worker·READY/startup guard·두 REST snapshot·backoff·close 13/13 통과. `tests.unit.binance.test_spot_websocket_client` → receive loop bounded FIFO·enqueue ready 차단·순서/drain·overflow/failure close barrier와 ACK error-code redaction 포함 17/17 통과 |
-| architecture | `cd backend && PYTHONPATH=src python3 -m unittest discover -s tests/architecture -p 'test_*.py' -v` → dependency/Communication/coding-convention 경계 49/49 통과 |
-| adapter unit | `cd backend && BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/unit/binance -p 'test_*.py' -q` → 39/39 통과 |
-| bootstrap/restart 집중 | `cd backend && BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest -q tests.unit.bootstrap.test_testnet_configuration tests.unit.history.test_pending_order_recovery_repository tests.integration.test_testnet_restart_reconciliation_flow` → rejection durability·read-only allowlist·ACK 주문 공백·numeric-ID reset·exact summary·REMOVE retry 포함 36/36 통과 |
-| opt-in gate | 같은 두 flag를 `0`으로 두고 `python3 -m unittest discover -s tests/testnet -p 'test_*.py' -v` → 4개 모두 의도대로 skip, network/order 0회 |
+| stream 자동 복구 | account recovery/application tests에서 READY/startup guard, 두 REST snapshot, backoff/close, unknown `bat-`와 일반 disconnect/overflow의 즉시 lifecycle publication·recovery wake, 복구 성공의 Account→열린 gate publication과 publication 실패 영구 fail-close를 검증. WebSocket client tests는 bounded FIFO·enqueue ready 차단·순서/drain·overflow/failure close barrier와 ACK error-code redaction을 검증 |
+| startup fail closed | `test_start_stays_disabled_until_startup_reconciliation_completes`가 Account·stream ready 상태에서도 startup 복구 전 `command_enabled=false`, 주문 effect gate=false, direct start의 `POSITION_RECONCILIATION_REQUIRED`, Context 미초기화와 submit 0회를 검증하고 복구 뒤에만 gate를 연다. |
+| architecture | `cd backend && BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/architecture -p 'test_*.py' -q` → dependency/Communication/coding-convention와 주문 mutation owner 경계 57/57 통과 |
+| adapter unit | `cd backend && BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/unit/binance -p 'test_*.py' -q` → 42/42 통과 |
+| bootstrap/restart 집중 | Testnet configuration, application/stream publication, event worker, pending repository, restart recovery, runtime flow와 recovery route 69/69 통과. startup fail-closed, 전량 free·filter, BUY entry cap, commission dust, ambiguous PREPARED, numeric-ID reset, exact summary와 REMOVE retry를 포함한다. |
+| opt-in gate | 두 Testnet flag를 `0`으로 두고 `python3 -m unittest discover -s tests/testnet -p 'test_*.py' -q` → 13개 실행, offline commission/baseline 7개 통과·credential/order 6개 safe skip, network/order 0회 |
 | deterministic fault injection | `BINANCE_RUN_TESTNET=1 BINANCE_RUN_TESTNET_ORDERS=0 BINANCE_TESTNET_API_KEY=local-fixture-key BINANCE_TESTNET_API_SECRET=local-fixture-secret PYTHONPATH=src .venv/bin/python -m unittest -v tests.testnet.test_binance_testnet_fault_injection` → in-memory accepted-timeout·partial/disconnect 2/2 통과, 외부 network/order 0회 |
-| lifecycle harness 범위 | `test_binance_testnet_order_lifecycle.py`는 production Testnet runtime·Controller·Gateway·history/pending persistence·public stop을 사용한다. run별 recovery artifact는 ignored `backend/.testnet-artifacts/`에 보존하고 실패에는 path·client ID를 남긴다. 다만 BUY trigger만 test 전용 private action seam을 사용하므로 market event → strategy signal E2E 증거는 아니다. |
-| 실제 Testnet | credential을 사용한 authenticated read-only 1개와 capped BUY/force-sell lifecycle 1개는 미실행했고, open-order/position 실제 restart 증거도 없다. 따라서 실제 lifecycle·restart 완료 조건과 Phase 9 master checkbox는 `[ ]` 유지 |
-| reset 운영 조건 | 공식 안내대로 Spot Testnet은 대략 월 1회 예고 없이 reset될 수 있으므로 reset 뒤 parity/reconciliation 재검증 필요 |
-| 작업 commit | 생성하지 않음 — 사용자 요청 범위에 commit은 포함되지 않음 |
+| lifecycle/cold-restart harness 범위 | lifecycle suite는 production Testnet runtime·Controller·Gateway·history/pending persistence·public stop을 사용한다. cold suite는 child A durable BUY 뒤 `os._exit`, fresh B 공개 liquidation과 fresh C Position 0 replay를 수행한다. BUY signal 생성만 test 전용 private action seam이므로 market event → strategy signal E2E 증거는 아니다. caught failure cleanup은 있으나 parent SIGKILL/host crash의 외부 watchdog은 없다. |
+| UI 회귀 | `cd UI && ./node_modules/.bin/vitest run --reporter=dot` → 36 files·280/280 통과, `./node_modules/.bin/tsc -b --pretty false`와 `./node_modules/.bin/vite build` → typecheck 및 286-module production build 통과 |
+| 실제 Testnet read-only | Keychain service `com.binance-auto.trader.testnet`의 `api-key`/`api-secret` 두 항목이 non-empty임을 값·길이 노출 없이 확인했다. credential을 한 child process에만 주입하고 `BINANCE_RUN_TESTNET_ORDERS=0`으로 `tests.testnet.test_binance_testnet_read_only` 3/3 통과: account, 네 Kline interval, open/recent orders, signed account stream READY/close와 commission parity를 검증했다. Testnet이 공식 string schema와 달리 `discountAsset: null`을 반환했지만 12개 원시 수수료율과 discount는 모두 정확히 0이었다. 이 read-only run의 주문은 0건이다. |
+| 실제 order preflight | 사용자 승인 cap `10 USDT`에서 실제 `ETHUSDT` status·Spot/MARKET와 `LOT_SIZE`·`MARKET_LOT_SIZE`·`NOTIONAL`을 먼저 조회했다. 최신 4시간봉 종가 `2461.41000000`, submitted `0.0040 ETH`, decision notional `9.8456400000000000 USDT`가 모든 filter와 cap을 만족해 주문을 허용했다. |
+| 실제 lifecycle | 정식 artifact `backend/.testnet-artifacts/phase9-order-lifecycle-20260824T094039328340Z-01a7605bebf74ee38bddcd0462501092`에서 closed baseline 2건 뒤 BUY `5579598`와 STOP SELL `5579599`가 각각 `0.00400000 ETH` 전량 체결됐다. history 4건, active pending 0건, Position 0으로 종료했다. |
+| 실제 cold restart | artifact `backend/.testnet-artifacts/phase9-cold-restart-20260824T094110991260Z-edea774ca29f43ffbddb37fc88205b38`에서 closed baseline 4건 뒤 process A BUY `5579715`를 durable 저장하고 fresh B가 recovery SELL `5579746`으로 정확히 `0.00400000 ETH` 전량을 청산했다. fresh authenticated read-only startup은 `READY`, history 6건, pending 0건, Position 0, matching open order 0건이다. |
+| actual 실행 중 안전 처리 | 첫 lifecycle run은 BUY/SELL과 durable 저장을 모두 끝낸 뒤 test-only postcondition이 존재하지 않는 `Trade.quantity`를 읽어 오류가 났다. 같은 artifact의 fresh startup에서 `READY`, history 2건, pending 0건, Position 0, open order 0건을 먼저 확인하고 assertion을 `executed_quantity`로 수정한 뒤 정식 lifecycle을 재실행했다. 전체 actual mutation은 BUY 3건·SELL 3건이며 최종 exposure는 0이다. |
+| reset 운영 조건 | 공식 안내대로 Spot Testnet은 대략 월 1회 예고 없이 reset될 수 있다. 2026-08-24 authenticated read-only session에서는 reset 발생 시각을 식별하는 증거를 수집하지 않았으므로 임의로 기록하지 않았다. |
+| 검증 기준 | 현재 HEAD 위 working tree를 검증했다. 작업 commit은 사용자 요청 범위가 아니므로 생성하지 않았다. |
 
 ---
 
@@ -1620,7 +1746,7 @@ in-memory transport에서 2/2 통과했다.
 |---|---|
 | Communication/ADR | startup `1`~`5`, Case 1 close/stop 경계, ADR-003 shutdown 안전 조건과 ADR-005 fixed-FD·random-port·token·CSP/capability 계약을 다시 확인 |
 | backend | `BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q` — 595개 실행, 591개 통과·credential 기반 4개 safe skip |
-| backend 집중 | sidecar exact 7-key FD6, strict shutdown `202`/`409`, CLOSED 뒤 FD5 ACK, durability와 actual Python process tests; architecture 56개 통과 |
+| backend 집중 | sidecar exact 7-key FD6, strict shutdown `202`/`409`, CLOSED 뒤 FD5 ACK, durability와 actual Python process tests; 현재 architecture 57개 통과 |
 | UI | `./node_modules/.bin/vitest run --reporter=dot` — 35 files·264/264; `tsc -b --pretty false`, Vite 286 modules와 Storybook static build 통과 |
 | Tauri/Rust | `cargo fmt --all --check`, `cargo check --tests --locked`, `cargo test --locked` — native unit 27/27 통과 |
 | sidecar package | pinned PyInstaller `6.22.2`로 `scripts/package_sidecar.sh` 실행; `binance-auto-sidecar-aarch64-apple-darwin` 생성, `.env`/credential을 build input에서 제외 |
@@ -1682,7 +1808,7 @@ in-memory transport에서 2/2 통과했다.
 | 6 | 0, 1 | 모든 사용자 REGIME의 TradingSTM 지원/missing 상태 |
 | 7 | 5, 6 | TradingController session lifecycle |
 | 8 | 4, 7 | fake exchange 완전 주문/체결/이력 pipeline |
-| 9 | 8 | 실제 Binance Testnet adapter와 local reconciliation; credential 기반 lifecycle 증거는 완료 전 필수 |
+| 9 | 8 | 실제 Binance Testnet adapter, local reconciliation, authenticated read-only와 10 USDT cap actual lifecycle/cold-restart 증거 |
 | 10 | 5, 8 | 실제 History 상세 UI |
 | 11 | 4, 5, 10 | 실제 CSV export |
 | 12 | 5, 7, 11 | packaged desktop/sidecar lifecycle |
@@ -1691,15 +1817,16 @@ in-memory transport에서 2/2 통과했다.
 Phase 2/3 경로와 Phase 4 경로를 선행 완료한 뒤 Phase 5를 구현했고, Phase 0/1의
 mapping 및 package를 선행한 뒤 Phase 6 coverage gate와 Phase 7 session lifecycle을
 완료했고, Phase 4/7 산출물 위에 Phase 8 fake exchange 주문/History pipeline을
-완성했다. Phase 9 production 구현과 local fault/restart 검증까지 완료했으며, 다음 작업은
-Phase 9의 credential 기반 실제 Testnet 검증이다. 사용자가 Phase 10을 명시적으로 요청했고
-그 기술 선행 Phase 5/8은 완료되어 있어, 외부 credential만 기다리는 Phase 9 master를
-완료 처리하지 않은 채 Phase 10의 독립 History read/UI 범위만 예외적으로 완료했다.
+완성했다. Phase 9 production 구현과 local fault/restart 검증, authenticated read-only,
+10 USDT cap actual lifecycle/cold restart를 모두 완료했다. 사용자가 Phase 10을 명시적으로
+요청했을 당시 기술 선행 Phase 5/8은 완료되어 있어, 그 시점에 실제 order 증거만 기다리던
+Phase 9 master를 완료 처리하지 않은 채 Phase 10의 독립 History read/UI 범위만 예외적으로
+완료했다.
 사용자가 Phase 11을 명시적으로 요청했고 기술 선행 Phase 4/5/10이 모두 완료되어 있어,
-같은 원칙으로 Phase 9 외부 credential 증거를 오표기하지 않은 채 독립 CSV 범위를 완료했다.
+같은 원칙으로 당시 남아 있던 Phase 9 외부 증거를 오표기하지 않은 채 독립 CSV 범위를 완료했다.
 사용자가 Phase 12를 명시적으로 요청했고 기술 선행 Phase 5/7/11이 완료되어 있어,
-같은 원칙으로 native sidecar와 package 범위를 구현했다. 실제 credential/clean-machine release
-증거가 없으므로 Phase 9와 Phase 12 master를 모두 완료로 오표기하지 않았다.
+같은 원칙으로 native sidecar와 package 범위를 구현했다. 이후 Phase 9 actual order 증거를
+완료했고, Phase 12 packaged credential/clean-machine release 증거만 남아 있다.
 이후에도 병렬 개발이 필요하면 같은 source 파일을 동시에 수정하지 않는다.
 
 - [x] Phase 9 local 구현까지 의존 순서를 지키고 선행 완료 조건을 건너뛰지 않았다.
@@ -1720,7 +1847,7 @@ Phase 9의 credential 기반 실제 Testnet 검증이다. 사용자가 Phase 10�
 | `4`~`5` | UIStateController, UISTM, AppShellUI | 5 | `createLiveUiApplication.process.test.mjs`, `createLiveUiApplication.test.tsx` |
 | `6`~`6.1.1.1.1` | AppShellUI, UIStateController, RegimeController, TradingController, TradingSTM | 6/7 | Phase 6 `test_message_6_1_1_1_selects_exact_trading_logic_without_fallback`, registry/mapper/RegimePanel/start-gate tests; Phase 7 `test_supported_selection_starts_exactly_once_and_rejects_active_swap`, `test_case1_select_split_start_duplicate_and_zero_position_stop` |
 | `7`~`7.1.1.2` | UIStateController, TradingController, TradingContext, TradingSTM | 7 | `test_supported_selection_starts_exactly_once_and_rejects_active_swap`, `test_unselected_unsupported_offline_and_disabled_start_fail_closed`, `test_case1_select_split_start_duplicate_and_zero_position_stop` |
-| `8`~`8.1.1.3` | UIStateController, TradingController, TradingSTM, Position, APIGateway | 7/8/9 | Phase 7 stop branch tests; Phase 8 `test_pending_stop_*`, `test_force_sell_zero_fill_retries_every_three_seconds_then_locks`, `test_stop_persistence_*`; Phase 9 production-adapter local lifecycle/restart trace와 credential lifecycle 대기 |
+| `8`~`8.1.1.3` | UIStateController, TradingController, TradingSTM, Position, APIGateway | 7/8/9 | Phase 7 stop branch tests; Phase 8 `test_pending_stop_*`, `test_force_sell_zero_fill_retries_every_three_seconds_then_locks`, `test_stop_persistence_*`; Phase 9 production-adapter local trace와 10 USDT cap actual lifecycle/cold restart artifacts |
 | Case 2 `1`~`10` | TradingController, TradingSTM, Context, MarketSnapshot, Order, APIGateway | 8 | `test_immediate_buy_filled_updates_all_phase8_outputs_and_trace`, `test_new_then_filled_queries_same_order_once`, `test_partials_then_filled_applies_only_fill_deltas` |
 | Case 2 `11`~`14` | Position, TradeHistoryController, Performance, Trade, Repository, TradingSTM | 8 | `test_terminal_partial_sell_records_cost_before_residual_retry`, `test_fsync_failure_keeps_position_and_retries_only_pending_trade`, `test_order_trace_invariants` |
 | Case 3 `1` 계열 | RecentOrderUI, UIStateController, TradeHistoryController/UI | 10 | backend `test_show_trade_details_and_filter_backend_message_trace`; UI `test_show_trade_details_message_trace`, `test_show_trade_details_initial_query`, `test_show_trade_details_adapter_contract` |
@@ -1832,7 +1959,7 @@ Communication message/operation:
 - [x] Phase 6 — REGIME별 TradingSTM coverage
 - [x] Phase 7 — Trading session start/stop
 - [x] Phase 8 — Buy/Sell execution pipeline
-- [ ] Phase 9 — Binance testnet adapter (구현 완료·credential 검증 대기)
+- [x] Phase 9 — Binance testnet adapter/recovery 및 10 USDT cap actual lifecycle/cold restart
 - [x] Phase 10 — Trade History live UI
 - [x] Phase 11 — CSV 실제 export
 - [ ] Phase 12 — Tauri sidecar/package/shutdown (local 구현·자동 검증 완료, external smoke 대기)
@@ -1844,29 +1971,35 @@ Communication message/operation:
 
 ## 16. 다음 작업
 
-Phase 9 production 구현은 완료되었고, 다음 작업은 **Phase 9의 credential 기반 실제
-Binance Spot Testnet 검증 완료**다. 고정 Testnet endpoint의 authenticated read-only
-parity를 먼저 실행하고, 기본·local fault suite 성공을 확인한 뒤 별도 주문 opt-in과
-양수 max-notional을 제공한 capped BUY/force-sell lifecycle을 실행한다. open-order 또는
-position이 있는 실제 restart도 중복 제출 없이 복구됨을 별도로 확인한다. 이 외부 검증의
-실행 명령·통과 수·reset 시각을 완료 증거에 기록하기 전에는 Phase 9 master checkbox를
-`[x]`로 바꾸지 않는다.
+Phase 9는 사용자 승인 BUY 진입 cap `10 USDT`, current `exchangeInfo` filter preflight,
+actual lifecycle과 cold restart까지 완료했다. 주문 전에 실제 `ETHUSDT`가 `TRADING`이며
+Spot·`MARKET`을 허용하는지 확인하고 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 모두
+적용했다. 최신 4시간봉 종가 `2461.41000000`에서 submitted quantity `0.0040 ETH`, decision
+notional `9.8456400000000000 USDT`가 cap과 filter를 만족했으므로 그때만 mutation을 허용했다.
 
-이미 구현된 Phase 9 범위는 HMAC/server-time, timeout/5xx/429 분류, MARKET symbol
-수량/notional 사전 검사, signed account/order stream, session-unique client order ID,
-pending journal과 startup/reconnect open/recent/same-ID reconciliation이다. local
-deterministic fault injection은 2/2 통과했다. lifecycle harness는 production runtime을
-사용하지만 BUY trigger가 test-only private action seam이므로 market-event→strategy E2E로
-과장하지 않는다. 실제 MARKET 체결 금액과 거래소 filter 판정도 decision-price local
-max-notional 사전 검사보다 authoritative하다.
+정식 lifecycle artifact는 BUY/STOP SELL 뒤 history 4건, pending 0건, Position 0을 보존한다.
+cold artifact는 process A durable BUY → `os._exit` → fresh B recovery SELL을 보존하며, fresh
+authenticated read-only replay는 `READY`, history 6건, pending 0건, Position 0, matching open
+order 0건이다. 이전 `bat-` 주문이 Testnet recent history에 남은 뒤에는 같은 account의
+verified closed history만 `BINANCE_TESTNET_BASELINE_HISTORY_PATH`로 복사했다. baseline helper는
+pending 0과 domain replay Position 0을 POST 전에 검증하고 production unknown-order guard를
+우회하지 않는다.
 
-Phase 11은 완료했고 Phase 12도 local implementation, 전체 자동 회귀, arm64 `.app`/`.dmg`
-생성까지 마쳤다. Phase 12의 다음 작업은 **실제 macOS Keychain credential을 사용하는 packaged
-contract smoke, clean machine 실행, Developer ID 서명·notarization**이다. 이 증거 전에는
-Phase 12 master checkbox를 `[x]`로 바꾸지 않는다. roadmap의 가장 앞선 미완료 완료 조건은
-계속 Phase 9의 credential 기반 외부 검증이다. CSV export는 strict details query의 1,000-row
-화면 한도를 재사용하지 않고 ADR-004/005와 `TradeHistoryRepository.stream_trades()`를 따르는
-별도 snapshot streaming 경계로 유지한다.
+남은 일반-session 정책 공백은 Phase 9 완료와 구분한다. max-notional은 BUY 주문 한 건당
+진입 cap이어서 여러 BUY의 누적 Position을 제한하지 않는다. STOP/recovery SELL은 entry cap
+때문에 막히지 않고 authoritative Position/free ETH로 제한되지만, 실패·partial을 포함한 한
+intent의 submit 예산은 5회다. caught failure 밖의 parent `SIGKILL`/host crash에는 외부
+watchdog이나 orphan artifact scanner가 없다. lifecycle BUY trigger도 test-only private action
+seam이므로 market-event→strategy E2E, 누적 max-position, retry 예산과 외부 watchdog은 Phase 13
+범위로 남긴다.
+
+이 문서 규칙상 가장 앞의 미완료 Phase는 **Phase 12**다. 다음 작업은 실제 macOS Keychain
+credential을 사용하는 packaged read-only contract smoke, clean-machine `.app`/`.dmg` 실행,
+Developer ID 서명·notarization 증거다. packaged configuration은
+`allow_testnet_orders=false`, `max_notional=null`로 고정되어 이 smoke는 주문을 실행하지
+않는다. 이 증거 전에는 Phase 12 master를 `[x]`로 바꾸거나 Phase 13/live로 넘어가지 않는다.
+CSV export는 strict details query의 1,000-row 화면 한도를 재사용하지 않고 ADR-004/005와
+`TradeHistoryRepository.stream_trades()`를 따르는 별도 snapshot streaming 경계로 유지한다.
 
 `TYPE_1`~`TYPE_4`는 해당 Event-Action Table과 state diagram이 생기기 전까지 계속
 `UNSUPPORTED_TRADING_LOGIC`이다. `stream_trades()`/CSV는 Phase 11에서 완료했고,
@@ -1892,7 +2025,8 @@ Tauri sidecar/package의 local 범위는 Phase 12에서 구현했다. live enabl
 - [x] Phase 8 완료 조건, fault matrix, 실행 명령, 통과 수와 시작 commit 증거를 기록했다.
 - [x] Phase 9를 시작하기 전 공식 Spot Testnet 문서, Communication 외부 Actor `9.1`/`9.2`, ADR-002/003/004와 normalized `OrderResult`·reconciliation 계약을 다시 확인했다.
 - [x] Phase 9 production adapter, 안전 gate, pending journal, local restart와 deterministic fault 증거를 기록했다.
-- [ ] Phase 9 authenticated read-only, capped BUY/force-sell lifecycle과 open-order/position restart의 실제 Testnet 통과 증거를 기록했다.
+- [x] Phase 9 authenticated read-only의 account/Kline/open/recent/commission/signed stream 실제 Testnet 통과와 해당 read-only run의 주문 0건 증거를 기록했다.
+- [x] Phase 9 capped BUY/force-sell lifecycle과 open-order/position restart의 실제 Testnet 통과 증거를 기록했다.
 - [x] Phase 10을 시작하기 전 Communication Case 3 `1`~`2.1.3`, D-12, ADR-004/005와 현재 UI/roadmap 구현을 다시 확인했다.
 - [x] Phase 10 controller/transport/event/UI 구현, Case 3 trace, fault·KST 경계와 전체 회귀 완료 증거를 기록했다.
 - [x] Phase 11을 시작하기 전 Communication Case 4 `1`~`4.1.6b`, D-13, ADR-004 검증 의무와 UI/roadmap 구현을 다시 확인했다.

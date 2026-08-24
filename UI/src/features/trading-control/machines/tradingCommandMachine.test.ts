@@ -106,6 +106,139 @@ describe('tradingCommandMachine', () => {
         actor.stop();
     });
 
+    it('Phase 9: 정지 상태의 복구 Position은 새 자동매매 시작을 차단한다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter, {
+            command_enabled: true,
+            has_open_position: true,
+        }));
+
+        actor.start();
+        actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
+
+        expect(actor.getSnapshot().matches('stopped')).toBe(true);
+        expect(actor.getSnapshot().context.has_open_position).toBe(true);
+        expect(command_adapter.command_records).toHaveLength(0);
+        actor.stop();
+    });
+
+    it('Phase 9: 복구 Position 확인은 recovery 전용 Operation만 호출한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter, {
+            has_open_position: true,
+        }));
+
+        actor.start();
+        actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+        expect(actor.getSnapshot().matches(
+            'recovered_position_liquidation_confirmation',
+        )).toBe(true);
+
+        actor.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
+        await wait_for_actor_settlement();
+
+        // 정상 session stop alias를 호출하지 않고 recovery endpoint 소유 명령만 정확히 한 번 수행한다.
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
+        ]);
+        expect(actor.getSnapshot().matches('stopped')).toBe(true);
+        expect(actor.getSnapshot().context.has_open_position).toBe(false);
+        actor.stop();
+    });
+
+    it('Phase 9: 복구 Position 청산 취소는 Position을 보존하고 명령을 보내지 않는다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_trading_command_machine(command_adapter, {
+            has_open_position: true,
+        }));
+
+        actor.start();
+        actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+        actor.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CANCELED' });
+
+        expect(actor.getSnapshot().matches('stopped')).toBe(true);
+        expect(actor.getSnapshot().context.has_open_position).toBe(true);
+        expect(command_adapter.command_records).toHaveLength(0);
+        actor.stop();
+    });
+
+    it.each(['stopping', 'reconciliation_required'] as const)(
+        'Phase 9: 복구 청산 receipt가 %s이면 authoritative terminal snapshot을 기다린다',
+        async (liquidation_status) => {
+            const command_adapter = new FakeUiCommandAdapter();
+            command_adapter.recovered_position_liquidation_receipt = {
+                status: liquidation_status,
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+                version: 3,
+            };
+            const actor = createActor(create_trading_command_machine(command_adapter, {
+                has_open_position: true,
+            }));
+
+            actor.start();
+            actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+            actor.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
+            await wait_for_actor_settlement();
+
+            expect(actor.getSnapshot().matches(
+                'awaiting_recovered_position_liquidation_completion',
+            )).toBe(true);
+            expect(actor.getSnapshot().context).toMatchObject({
+                is_trading: false,
+                is_recovery_liquidation: true,
+                has_open_position: true,
+            });
+
+            actor.send({
+                type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED',
+                selected_regime: 'type0',
+                logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+                command_enabled: false,
+                is_trading: true,
+                has_open_position: true,
+                lifecycle_status: liquidation_status,
+            });
+            expect(actor.getSnapshot().context.is_trading).toBe(false);
+
+            // Backend nonterminal snapshot의 일반 is_trading=true 해석도 recovery 상태를 되살리지 않는다.
+            actor.send({
+                type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
+                selected_regime: 'type0',
+                logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+                command_enabled: false,
+                is_trading: true,
+                has_open_position: true,
+                lifecycle_status: liquidation_status,
+            });
+            actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
+
+            expect(actor.getSnapshot().matches(
+                'awaiting_recovered_position_liquidation_completion',
+            )).toBe(true);
+            expect(actor.getSnapshot().context).toMatchObject({
+                is_trading: false,
+                is_recovery_liquidation: true,
+                has_open_position: true,
+            });
+            expect(command_adapter.command_records).toEqual([
+                { name: 'liquidate_recovered_position', payload: null },
+            ]);
+
+            actor.send({
+                type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
+                selected_regime: 'type0',
+                logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+                command_enabled: true,
+                is_trading: false,
+                has_open_position: false,
+                lifecycle_status: 'terminated',
+            });
+            expect(actor.getSnapshot().matches('stopped')).toBe(true);
+            expect(actor.getSnapshot().context.is_recovery_liquidation).toBe(false);
+            actor.stop();
+        },
+    );
+
     it('U2-03/U2-09: 강제 매도 실패는 확인 상태로 돌아가고 실행 상태를 유지한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.queue_failure('force_sell_and_stop', new Error('test sell failure'));

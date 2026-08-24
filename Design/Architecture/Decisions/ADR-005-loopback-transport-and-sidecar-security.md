@@ -95,6 +95,7 @@ trace를 넣지 않는다. 같은 `Idempotency-Key`와 같은 body의 재요청�
 | `POST` | `/v1/regime/selection` | `regime_type`, `expected_version` | selected/support 상태와 새 version | `RegimeController.setRegimeType` |
 | `POST` | `/v1/trading/start` | `expected_version` | command status, session/version | `TradingController.startTrading` |
 | `POST` | `/v1/trading/stop` | `expected_version` | `STOPPING`/`TERMINATED`/reconciliation 상태 | `TradingController.stopTrading` |
+| `POST` | `/v1/trading/recovered-position/liquidate` | `expected_version` | 복구 Position 청산의 `STOPPING`/`TERMINATED`/reconciliation 상태 | `TradingController.liquidateRecoveredPosition` |
 | `PATCH` | `/v1/trading/split-ratios` | Decimal string `scale_in`, `scale_out`, version | 적용 값과 새 version | `TradingContext`를 조정하는 `TradingController` |
 | `POST` | `/v1/csv-exports` | ADR-004의 option DTO | path, row count 또는 typed failure | `TradeHistoryController.exportCSV` |
 | `POST` | `/v1/shutdown` | `expected_version` | accepted/blocked와 안전 상태 | bootstrap lifecycle 함수가 기존 stop/flush Operation 조정 |
@@ -152,6 +153,13 @@ CSV는 별도 job/status endpoint가 없는 `exportCSV(): CSVExportResult` 계�
 - 알 수 없는 `type`은 연결을 죽이지 않고 기록·무시할 수 있지만, 알 수 없는 major
   `schema_version`은 `UNSUPPORTED_SCHEMA_VERSION`으로 fail closed한다.
 - payload의 Decimal과 ID는 string이며 raw credential/Binance response를 넣지 않는다.
+- 현재 process가 모르는 `bat-` 주문 event는 application callback 실패로 숨기지 않는다.
+  backend가 command gate를 닫은 authoritative trading lifecycle snapshot을 즉시 event stream에
+  게시하고, 별도 recovery worker가 REST 재조정을 수행한다.
+- account stream 복구 성공은 두 REST snapshot의 authoritative Account를 먼저 게시하고,
+  이어 다시 열린 command gate와 trading lifecycle을 게시한다. 재조정 commit부터 이
+  publication까지 같은 application RLock을 유지하며, publication 실패는 backend-only 주문
+  재개를 허용하지 않고 영구 reconciliation gate로 닫는다.
 
 ## 6. WebSocket 인증과 reconnect
 

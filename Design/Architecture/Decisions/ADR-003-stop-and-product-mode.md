@@ -47,6 +47,46 @@ liquidation, funding, leverage와 위험 한도를 별도로 명세해야 한다
 `submitOrder(SELL, ...)`을 호출하지 않는다. UI가 표시한 보유 여부가 아닌 backend
 Position snapshot을 최종 기준으로 삼는다.
 
+### 2.1 재시작 복구 포지션의 명시 청산
+
+startup reconciliation에서 설명 가능하게 복원한 열린 Position은 일반
+`stop_trading()`의 active-session 계약으로 위장하거나 자동매매로 resume하지 않는다.
+사용자가 별도 경고 UI에서 확인한 경우에만
+`TradingController.liquidate_recovered_position(*, command_id, expected_version)`
+(Communication alias `liquidateRecoveredPosition`)이 liquidation-only session을 만든다.
+
+이 Operation은 startup reconciliation과 account stream이 완료되고, normal session이
+`NOT_STARTED`이며, pending·dirty persistence·scheduled same-ID query가 없고, authoritative
+Position의 양수 수량·owner·snapshot 및 durable open lot의 단일 지원 REGIME과 owner가
+일치할 때만 허용한다. effective free ETH는 Position 전량 이상이어야 한다. 사용자가 승인한
+max-notional의 승인 의미는 노출을 늘리는 BUY entry cap이다. 일반 SELL의 기존 local cap은
+유지하고, 가격 상승 뒤 노출을 줄이는 STOP/recovery SELL의 quote 금액에는 적용하지 않는다.
+UI의 현재 선택 REGIME은 복구
+provenance로 사용하지 않는다.
+검증된 REGIME으로 fresh STM과 Context를 초기화하되 `TradingSTM.run()`을 호출하지 않고
+`STOP_CONFIRMED`를 직접 처리해 기존 `G-06`, `G-06F`, `G-06R`과 ADR-002 주문 경로만
+재사용한다. 이 세션에는 시장 event와 신규 BUY를 전달하지 않는다.
+
+동기 REST `FILLED`와 WebSocket terminal 결과도 먼저 기존 직렬 queue에 넣고, production
+bootstrap의 단일 event runtime worker가 Controller의 bounded cycle을 깨워 처리한다.
+따라서 HTTP route는 `drain_events()`를 직접 호출하지 않으며, Position·history 반영 뒤의
+`FORCE_SELL_FINISHED`가 다음 microstep에서 처리돼 `G-06F`와 `TERMINATED`를 게시한다.
+`UNKNOWN`과 active partial은 같은 ID의 due 조회만 예약하고, terminal partial
+force-sell은 실제 잔여 수량만 고정 3초 뒤 재제출한다.
+
+복구 Operation의 최초 주문은 최신 signed commission 정책과 symbol filter를 통과한 뒤에도
+`requested_quantity == submitted_quantity == authoritative Position.quantity`여야 한다.
+free balance 또는 LOT_SIZE 내림 때문에 이 등식이 깨지면 여러 부분 청산으로 확대하지
+않고 pending journal·REST POST 전에 거부한다. 최초 effect 전 실패는 같은 command ID로
+재시도할 수 있도록 `NOT_STARTED`로 원자 복원한다. 실제 terminal partial 뒤의 잔량이 filter를
+통과하지 못하면 이미 생긴 fill과 history를 보존하고 operator reconciliation으로 닫는다.
+
+같은 command ID와 payload는 최초 receipt를 재사용한다. 이미 이 청산이
+`STOPPING`, `RECONCILIATION_REQUIRED` 또는 `TERMINATED`이면 다른 command ID도 현재
+상태만 반환하며 새 force-sell intent를 만들지 않는다. 외부 POST 전 준비 실패는 원래
+`NOT_STARTED` 상태로 복원하고, durable journal 생성 이후의 실패나 모호한 응답은 상태를
+되돌리지 않고 same-ID reconciliation으로 닫는다.
+
 ## 3. 실행 중 REGIME 변경
 
 ADR-001에 따라 active session의 REGIME 변경을 거부한다. 사용자는 stop이 완전히
@@ -67,6 +107,18 @@ backend는 다음 네 값을 갖는 `ExecutionMode`를 사용한다.
 설정 누락, 알 수 없는 문자열, 설정 parsing 실패는 모두 `disabled`다. 다른 모드로
 fallback하지 않는다. Domain/STM은 mode를 알지 않으며 Gateway와 bootstrap이 외부 효과
 gate를 적용한다.
+
+Testnet의 실제 MARKET BUY는 dust 회계 정책이 추가되기 전까지 signed account commission
+응답의 standard/special/tax `taker + buyer` 합이 모두 0일 때만 허용한다. Binance 공식
+수수료 규칙상 BNB로 지불하지 않는 BUY의 수수료는 수신 base quantity에서 차감될 수 있어
+LOT_SIZE 밖 잔량을 만들기 때문이다. BNB 등 제3 수수료 자산 가능성도 현재 회계 범위 밖이므로
+주문 준비 전에 차단한다. 두 discount enable flag가 참이면 할인율이 0이어도 tax/special
+수수료는 discount asset으로 전환될 수 있으므로 검증된 string asset과 두 flag로 제3 자산
+가능성을 판정한다. 공식 schema는 `discountAsset` string을 요구하지만 2026-08-24 실제 Spot
+Testnet은 두 flag가 참인 all-zero 정책에서 explicit `null`을 반환했다. 이 schema drift는
+standard/special/tax의 maker/taker/buyer/seller 12개 비율과 discount가 모두 정확히 0일
+때만 수수료 자산 부재로 제한 수용하고, 필드 누락이나 하나라도 양수인 null 조합은 거부한다.
+이는 live enable 정책이 아니라 Phase 9 Testnet의 보수적 fail-closed 조건이다.
 
 ## 5. Live 승인 gate
 
@@ -95,6 +147,7 @@ mode를 효과적으로 `disabled`로 취급한다. 한도 값은 Phase 13의 �
 ## 6. 종료와 실패 표시
 
 - stop command는 command ID와 expected Context version으로 idempotent하게 처리하고 typed `TradingSessionResult`를 반환한다.
+- recovered-position liquidation은 일반 stop과 분리된 command namespace를 사용하고 typed `TradingSessionResult`를 반환한다.
 - 이미 `STOPPING` 또는 `RECONCILIATION_REQUIRED`이면 새 force-sell intent를 만들지 않고 현재 진행 상태를 반환한다.
 - `LOGIC_TERMINATED`에서 다시 stop하면 성공 no-op을 반환한다.
 - 강제 매도 실패 시 UI에는 order ID, 남은 수량, retry 횟수와 다음 조치가 표시되어야
@@ -109,6 +162,8 @@ mode를 효과적으로 `disabled`로 취급한다. 한도 값은 Phase 13의 �
 - [x] 네 실행 모드와 default `disabled`가 확정되었다.
 - [x] live 승인 gate는 값 누락 시 fail closed하도록 확정되었다.
 - [x] Phase 7에서 position 0 sell Action 0회와 세 stop branch를 테스트했다. 실제 Gateway 호출 검증은 Action executor가 구현되는 Phase 8/9 범위다.
+- [x] Phase 9에서 설명 가능한 복구 Position의 명시 청산만 허용하고 자동 resume를 금지하는 정책을 확정했다.
+- [x] Phase 9 복구 청산은 free·filter 뒤 정확한 Position 전량 한 주문만 허용하고, 신규 Testnet MARKET BUY의 수신 ETH 수수료 가능성을 dust 회계 전까지 차단한다. 이미 durable한 Position의 recovery SELL은 과거 BUY 정책 변화만으로 막지 않으며, max-notional의 승인 의미는 BUY entry이고 STOP/recovery SELL만 예외다.
 - [ ] Phase 13에서 사용자가 한도와 release 승인을 별도로 확정한다.
 
 ### Phase 7 완료 증거

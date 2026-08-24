@@ -97,17 +97,24 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
                     pending={viewModel.trading.is_pending}
                 />
             );
-        case 'force_sell_stop_confirmation':
+        case 'force_sell_stop_confirmation': {
+            const is_recovery_liquidation = viewModel.trading.is_recovery_liquidation;
+
             return (
                 <TradingConfirmationDialog
                     error={viewModel.trading.error?.message}
-                    kind="forceStop"
-                    onCancel={() => controller.dispatch({ type: 'FORCE_SELL_AND_STOP_CANCELED' })}
-                    onConfirm={() => controller.dispatch({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' })}
+                    kind={is_recovery_liquidation ? 'recoveryLiquidation' : 'forceStop'}
+                    onCancel={() => controller.dispatch(is_recovery_liquidation
+                        ? { type: 'RECOVERED_POSITION_LIQUIDATION_CANCELED' }
+                        : { type: 'FORCE_SELL_AND_STOP_CANCELED' })}
+                    onConfirm={() => controller.dispatch(is_recovery_liquidation
+                        ? { type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' }
+                        : { type: 'FORCE_SELL_AND_STOP_CONFIRMED' })}
                     open
                     pending={viewModel.trading.is_pending}
                 />
             );
+        }
         case 'regime_change_confirmation': {
             const candidate_regime = viewModel.regime.candidate;
 

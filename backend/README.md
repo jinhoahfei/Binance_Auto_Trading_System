@@ -51,8 +51,14 @@ snapshot을 commit합니다. 지속 live market stream consumer는 후속 Phase 
 Gateway는 네트워크 구현을 직접 선택하지 않고 주입된 client Protocol을 사용합니다.
 기본 suite는 fake/in-memory client로 network 없이 실행하고, Testnet 전용 bootstrap만
 고정 `testnet.binance.vision` REST·WebSocket client를 조립합니다. production adapter와
-fixture 계약은 로컬 검증했지만 사용자 credential을 사용한 외부 parity는 아직 실행하지
-않았습니다.
+fixture 계약을 로컬 검증했고 2026-08-24 사용자 credential로 주문 opt-in `0` 상태의
+authenticated account/Kline/open/recent/commission/signed stream parity 3/3도 통과했습니다.
+Testnet이 공식 string schema와 달리 명시적 `discountAsset: null`을 반환했지만, parser와
+실제 테스트가 standard/special/tax의 원시 비율 12개와 discount가 모두 정확히 0인 조합에만
+이를 허용합니다. 필드 누락이나 하나라도 0이 아닌 null 조합은 fail closed합니다.
+이후 사용자 승인 BUY 진입 cap `10 USDT`에서 actual lifecycle과 process 종료 뒤 recovery
+SELL/cold restart를 순차 실행했습니다. 마지막 fresh authenticated startup은 `READY`,
+history 6건, pending 0건, Position 0, matching open order 0건입니다.
 
 ## 계좌와 거래 이력 초기 로드 계약
 
@@ -134,8 +140,12 @@ MARKET 제출 전 symbol의 `TRADING` 상태, Spot·`MARKET` 허용 여부, base
 `LOT_SIZE`·`MARKET_LOT_SIZE` 수량 규칙과 `MIN_NOTIONAL`·`NOTIONAL`의 MARKET 적용
 flag를 Decimal로 검사합니다. price/stopPrice가 없는 MARKET 주문에 `PRICE_FILTER`를
 로컬 적용하지 않습니다. `BINANCE_TESTNET_MAX_NOTIONAL`도 decision price × 준비 수량의
-로컬 사전 상한일 뿐입니다. 실제 체결 금액과 거래소 average/reference 가격 filter가
-가격 변동·slippage를 포함한 최종 권위이므로 이를 예산의 하드 상한으로 사용하면 안 됩니다.
+BUY 진입 사전 상한일 뿐입니다. 일반 SELL에는 기존 local quote 방어를 유지하되,
+STOP/recovery SELL은 가격 상승으로 청산이 막히지 않게 예외로 두고 authoritative
+Position/free ETH 수량을 넘지 못하게 합니다. recovery는 free ETH가 Position 전량 이상이고
+filter 뒤에도 정확한 전량일 때만 허용합니다. 실제 체결 금액과 거래소 average/reference
+가격 filter가 가격 변동·slippage를 포함한 최종 권위이므로 이를 예산의 하드 상한으로
+사용하면 안 됩니다.
 
 주문을 준비한 뒤 exact order를 fsync한 `PREPARED` sidecar에 기록하고, account stream
 연결을 POST 직전에 다시 확인합니다. disconnect면 POST하지 않고 sidecar를 남겨 startup
@@ -196,17 +206,23 @@ BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 \
 
 deterministic accepted-timeout·partial/disconnect fault는 실제 Binance network 없이
 in-memory transport로 2/2 통과했습니다. `tests/testnet/test_binance_testnet_read_only.py`
-와 `test_binance_testnet_order_lifecycle.py`는 credential과 명시적 opt-in 없이는
-자동 skip됩니다. lifecycle harness는 production Testnet runtime을 사용하지만 BUY
+와 `test_binance_testnet_order_lifecycle.py`, `test_binance_testnet_cold_restart.py`의 actual
+case는 credential과 명시적 opt-in 없이는 자동 skip됩니다. lifecycle harness는 production Testnet runtime을 사용하지만 BUY
 trigger만 테스트 전용 private action seam이므로 market-event→strategy E2E 증거는
 아닙니다. 실제 주문 run의 history/pending artifact는 ignored `.testnet-artifacts/`의
 run별 directory에 남고, 실패에는 credential 없는 path와 client ID가 표시됩니다. 불명
 상태에서 이 artifact를 삭제하거나 새 lifecycle을 실행하지 마십시오. submit 거부 →
 query 전 crash → restart의 네 번 exact absence, 재제출 0회와
-safe journal cleanup은 local integration test로 검증했습니다. 사용자 credential이 없어
-authenticated read-only, capped BUY/force-sell과
-open-order/position 실제 restart scenario는 아직 실행하지 않았으며 Phase 9 master
-완료 조건도 열어 둡니다.
+safe journal cleanup은 local integration test로 검증했습니다. 사용자 credential 기반
+authenticated read-only 3/3과 10 USDT cap capped BUY/force-sell 및 durable open Position의
+actual recovery restart를 통과해 Phase 9 master 완료 조건을 닫았습니다.
+
+같은 Testnet account의 이전 `bat-` 완료 주문이 recent order에 남은 뒤 다음 actual suite를
+실행할 때는 `BINANCE_TESTNET_BASELINE_HISTORY_PATH`에 직전 정상 종료 canonical
+`history.jsonl`의 absolute path를 전달합니다. test helper는 non-empty history, active pending
+0건과 domain replay Position 0을 확인한 뒤 새 run artifact에 durable copy합니다. 열린
+baseline·상대 경로·기존 destination은 POST 전에 거부하며 production unknown app-order
+startup guard를 완화하지 않습니다.
 
 Trade History details와 live UI query/event 연결은 Phase 10에서 완료했습니다. CSV export는
 Phase 11, packaged Tauri sidecar는 Phase 12, market-event→strategy E2E와 live readiness는

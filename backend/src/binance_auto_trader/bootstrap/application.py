@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,6 +17,9 @@ from binance_auto_trader.adapters.binance import (
     BinanceRESTClient,
     BinanceWebSocketClient,
     WebSocketGateway,
+)
+from binance_auto_trader.adapters.binance.api_gateway import (
+    APP_CLIENT_ORDER_ID_PREFIX,
 )
 from binance_auto_trader.adapters.filesystem import CSVFileGateway
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
@@ -549,6 +553,205 @@ class _AccountStreamRecoveryWorker:
                     self._rerun_requested = False
 
 
+class _TradingEventRuntimeWorker:
+    """
+    클래스 이름: _TradingEventRuntimeWorker
+    기능: Controller의 bounded event cycle을 process당 단일 interruptible thread에서 구동한다.
+    작성 날짜: 2026/08/24
+    """
+
+    _POLL_INTERVAL_SECONDS = 0.25
+
+    def __init__(
+        self,
+        runtime_cycle: Callable[[], object],
+        fail_closed_operation: Callable[[], object],
+        processing_allowed: Callable[[], bool],
+        state_snapshot: Callable[[], object],
+        application_lock: RLock,
+        *,
+        state_update_observer: Callable[[], object] | None = None,
+        poll_interval_seconds: float = _POLL_INTERVAL_SECONDS,
+    ) -> None:
+        """
+        함수 이름: __init__()
+        기능: bounded cycle, lifecycle Guard, fail-close와 상태 publication callback을 보존한다.
+        인자: runtime_cycle -> awaitable bounded Controller cycle을 만드는 callable
+            fail_closed_operation -> cycle 실패를 typed reconciliation으로 잠그는 Operation
+            processing_allowed -> READY lifecycle에서만 work를 허용하는 Guard
+            state_snapshot -> cycle 전후 authoritative session snapshot을 만드는 callable
+            application_lock -> lifecycle, Controller와 publication이 공유하는 RLock
+            state_update_observer -> 상태 변경을 transport에 게시할 optional observer
+            poll_interval_seconds -> due 작업을 확인하는 양수 interruptible cadence
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Background thread를 만들기 전에 모든 callback과 shared lock 계약을 검증한다.
+        callbacks = (
+            runtime_cycle,
+            fail_closed_operation,
+            processing_allowed,
+            state_snapshot,
+        )
+        if any(not callable(callback) for callback in callbacks):
+            raise TypeError("trading event runtime callbacks must be callable")
+        if state_update_observer is not None and not callable(
+            state_update_observer
+        ):
+            raise TypeError("state_update_observer must be callable or None")
+        if not hasattr(application_lock, "__enter__"):
+            raise TypeError("application_lock must be a context manager")
+        if (
+            isinstance(poll_interval_seconds, bool)
+            or not isinstance(poll_interval_seconds, (int, float))
+            or poll_interval_seconds <= 0
+        ):
+            raise ValueError("poll_interval_seconds must be positive")
+
+        # Worker lock과 wake/stop Event는 application RLock과 분리해 join lock 순서를 고정한다.
+        self._runtime_cycle = runtime_cycle
+        self._fail_closed_operation = fail_closed_operation
+        self._processing_allowed = processing_allowed
+        self._state_snapshot = state_snapshot
+        self._application_lock = application_lock
+        self._state_update_observer = state_update_observer
+        self._poll_interval_seconds = float(poll_interval_seconds)
+        self._state_lock = Lock()
+        self._wake_event = Event()
+        self._stop_event = Event()
+        self._active_thread: Thread | None = None
+        self._closed = False
+        self._failed = False
+
+    @property
+    def failed(self) -> bool:
+        """
+        함수 이름: failed()
+        기능: runtime cycle이 실패해 worker가 fail closed됐는지 반환한다.
+        인자: 없음
+        반환값: worker failure 여부
+        작성 날짜: 2026/08/24
+        """
+        with self._state_lock:
+            return self._failed  # Raw 예외 대신 credential 없는 상태만 외부 진단에 제공한다.
+
+    def start(self) -> bool:
+        """
+        함수 이름: start()
+        기능: lifecycle READY 진입 뒤 단일 daemon event runtime thread를 멱등 시작한다.
+        인자: 없음
+        반환값: 새 thread를 시작했으면 True, 이미 실행·종료·실패 상태이면 False
+        작성 날짜: 2026/08/24
+        """
+        # Thread identity를 먼저 고정해 동시 start가 두 event loop를 만들지 못하게 한다.
+        with self._state_lock:
+            if self._closed or self._failed or self._active_thread is not None:
+                return False
+
+            runtime_thread = Thread(
+                target=self._run,
+                name="binance-trading-event-runtime",
+                daemon=True,
+            )
+            self._active_thread = runtime_thread
+            try:
+                runtime_thread.start()
+            except Exception:
+                self._active_thread = None
+                raise
+
+            return True
+
+    def request_processing(self) -> bool:
+        """
+        함수 이름: request_processing()
+        기능: queue 또는 scheduled work를 단일 coalescing wake Event로 worker에 알린다.
+        인자: 없음
+        반환값: wake를 수락했으면 True, 종료·실패 상태이면 False
+        작성 날짜: 2026/08/24
+        """
+        # Event.set은 호출 thread에서 drain이나 REST를 실행하지 않는 non-blocking 경계다.
+        with self._state_lock:
+            if self._closed or self._failed:
+                return False
+            if self._active_thread is current_thread():
+                return True  # 현재 bounded drain이 만든 내부 queue/schedule은 같은 cycle 또는 cadence가 잇는다.
+
+            self._wake_event.set()
+            return True  # 반복 wake는 Event 하나로 병합해 thread 수를 늘리지 않는다.
+
+    def close(self) -> None:
+        """
+        함수 이름: close()
+        기능: 새 wake를 차단하고 interruptible wait를 깨운 뒤 단일 worker thread를 회수한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Stop과 현재 thread identity를 worker lock 아래에서 원자적으로 확정한다.
+        with self._state_lock:
+            self._closed = True
+            self._stop_event.set()
+            self._wake_event.set()
+            active_thread = self._active_thread
+
+        # Controller/application RLock을 기다리는 thread와 교착하지 않도록 lock 밖에서 join한다.
+        if active_thread is not None and active_thread is not current_thread():
+            active_thread.join()
+
+    def _run(self) -> None:
+        """
+        함수 이름: _run()
+        기능: explicit wake와 periodic due 확인을 bounded cycle 하나씩 직렬 실행한다.
+        인자: 없음
+        반환값: close 또는 최초 실패 뒤 없음
+        작성 날짜: 2026/08/24
+        """
+        try:
+            while not self._stop_event.is_set():
+                # Event.wait는 close와 enqueue wake에 즉시 반응하며 polling busy loop를 만들지 않는다.
+                self._wake_event.wait(self._poll_interval_seconds)
+                self._wake_event.clear()
+                if self._stop_event.is_set():
+                    return
+
+                try:
+                    # Lifecycle Guard, Controller cycle과 publication을 같은 application snapshot에 묶는다.
+                    with self._application_lock:
+                        if self._processing_allowed() is not True:
+                            continue
+
+                        state_before = self._state_snapshot()
+                        cycle_results = asyncio.run(self._runtime_cycle())
+                        state_after = self._state_snapshot()
+                        should_publish = (
+                            bool(cycle_results) or state_after != state_before
+                        )
+                        if (
+                            should_publish
+                            and self._state_update_observer is not None
+                        ):
+                            self._state_update_observer()
+                except BaseException:
+                    # 최초 runtime/publication 실패는 raw 오류를 노출하지 않고 같은 lock에서 잠근다.
+                    with self._application_lock:
+                        if self._processing_allowed() is True:
+                            self._fail_closed_operation()
+                            if self._state_update_observer is not None:
+                                try:
+                                    self._state_update_observer()
+                                except BaseException:
+                                    pass  # 실패한 publication을 재귀 재시도하거나 thread로 늘리지 않는다.
+                    with self._state_lock:
+                        self._failed = True
+                    return
+        finally:
+            # close와 failure 어느 경로에서도 현재 worker identity만 정확히 해제한다.
+            with self._state_lock:
+                if self._active_thread is current_thread():
+                    self._active_thread = None
+
+
 @dataclass(frozen=True, slots=True)
 class ApplicationRuntime:
     """
@@ -570,6 +773,10 @@ class ApplicationRuntime:
     trading_controller: TradingController
     trade_history_repository: TradeHistoryRepositoryPort
     trade_history_controller: TradeHistoryController
+    _trading_event_runtime_worker: _TradingEventRuntimeWorker | None = field(
+        repr=False,
+        compare=False,
+    )
     _account_stream_recovery_worker: _AccountStreamRecoveryWorker | None = field(
         repr=False,
         compare=False,
@@ -611,6 +818,16 @@ class ApplicationRuntime:
             raise TypeError("_state_store must be an application state store")
         if not isinstance(self._shutdown_store, _ApplicationShutdownStore):
             raise TypeError("_shutdown_store must be an application shutdown store")
+        if (
+            self._trading_event_runtime_worker is not None
+            and not isinstance(
+                self._trading_event_runtime_worker,
+                _TradingEventRuntimeWorker,
+            )
+        ):
+            raise TypeError(
+                "_trading_event_runtime_worker must be a trading event worker or None"
+            )
         if (
             self._account_stream_recovery_worker is not None
             and not isinstance(
@@ -782,6 +999,11 @@ def create_application_runtime(
     account_update_observer: Callable[[Account], object] | None = None,
     trade_history_update_observer: Callable[[Trade, Performance], object]
     | None = None,
+    trading_session_update_observer: Callable[
+        [TradingController, ExecutionMode],
+        object,
+    ]
+    | None = None,
     clock: Callable[[], datetime] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
 ) -> ApplicationRuntime:
@@ -794,11 +1016,12 @@ def create_application_runtime(
         history_repository -> 주입할 TradeHistory repository port 또는 None
         execution_mode -> fail-closed parser에 전달할 외부 mode 값
         allow_testnet_orders -> testnet mode 주문을 명시적으로 허용하는 별도 opt-in
-        testnet_maximum_order_notional -> 주문 허용 testnet에 필수인 decision-notional 상한
+        testnet_maximum_order_notional -> 주문 허용 testnet에 필수인 BUY decision-notional 진입 상한
         _fake_order_capability -> 검증된 in-process fake 조립기만 전달하는 내부 권한 표식
         _testnet_order_capability -> 고정 endpoint Testnet 조립기만 전달하는 내부 권한 표식
         account_update_observer -> 실제 Account 변경 뒤 호출할 optional observer
         trade_history_update_observer -> durable Trade와 전체 Performance 게시 후 호출할 observer
+        trading_session_update_observer -> event cycle 뒤 authoritative session을 게시할 observer
         clock -> market, gateway, repository와 performance가 공유할 optional UTC clock
         kline_limit -> 각 market interval에서 조회할 Kline 개수
     반환값: 동일 객체 identity와 단일 RLock을 보존하는 ApplicationRuntime
@@ -821,6 +1044,10 @@ def create_application_runtime(
         raise TypeError(
             "trade_history_update_observer must be callable"
         )  # Durable publication 후에 실행할 호출 경계만 허용한다.
+    if trading_session_update_observer is not None and not callable(
+        trading_session_update_observer
+    ):
+        raise TypeError("trading_session_update_observer must be callable")
     if clock is not None and not callable(clock):
         raise TypeError("clock must be callable")
     if type(allow_testnet_orders) is not bool:
@@ -922,7 +1149,23 @@ def create_application_runtime(
 
     # WebSocket callback은 생성 뒤 할당될 Controller와 recovery worker를 안전하게 참조한다.
     trading_controller: TradingController
+    trading_event_runtime_worker: _TradingEventRuntimeWorker | None = None
     account_stream_recovery_worker: _AccountStreamRecoveryWorker | None = None
+
+    def request_trading_event_processing() -> bool:
+        """
+        함수 이름: request_trading_event_processing()
+        기능: Controller queue·schedule 변경을 조립된 단일 runtime worker wake로 전달한다.
+        인자: 없음
+        반환값: worker가 wake를 수락했으면 True
+        작성 날짜: 2026/08/24
+        """
+        # Controller 생성 중에는 worker가 아직 없으므로 신호만 안전하게 생략한다.
+        runtime_worker = trading_event_runtime_worker
+        if runtime_worker is None:
+            return False
+
+        return runtime_worker.request_processing()
 
     def apply_order_stream_result(result: OrderResult) -> bool:
         """
@@ -940,7 +1183,28 @@ def create_application_runtime(
             ):
                 return False  # 종료 snapshot 뒤 도착한 executionReport를 새 pending으로 만들지 않는다.
 
-            return trading_controller.observe_order_result(result)
+            result_accepted = trading_controller.observe_order_result(result)
+            unknown_application_order = (
+                not result_accepted
+                and result.client_order_id.startswith(
+                    APP_CLIENT_ORDER_ID_PREFIX
+                )
+            )
+            if unknown_application_order:
+                # 알 수 없는 app 주문은 정상 callback으로 삼키지 않고 full REST 재조정 worker를 깨운다.
+                require_stream_reconciliation(
+                    "unknown_application_order_result"
+                )
+            if (
+                result_accepted
+                and trading_session_update_observer is not None
+            ):
+                trading_session_update_observer(
+                    trading_controller,
+                    selected_execution_mode,
+                )  # 수락 결과만 여기서 게시하고 unknown app-order는 공통 reconciliation 경로가 게시한다.
+
+            return result_accepted
 
     def require_stream_reconciliation(reason: str) -> None:
         """
@@ -961,6 +1225,11 @@ def create_application_runtime(
             trading_controller.mark_account_stream_reconciliation_required(
                 reason
             )
+            if trading_session_update_observer is not None:
+                trading_session_update_observer(
+                    trading_controller,
+                    selected_execution_mode,
+                )  # 모든 stream 장애의 authoritative fail-close를 recovery 시작 전에 정확히 한 번 게시한다.
             recovery_can_start = (
                 selected_execution_mode is ExecutionMode.TESTNET
                 and application_state_store.state.status
@@ -1019,7 +1288,59 @@ def create_application_runtime(
             selected_execution_mode is ExecutionMode.TESTNET
         ),
         maximum_order_notional=testnet_maximum_order_notional,
+        event_runtime_notifier=request_trading_event_processing,
     )
+
+    async def run_trading_event_runtime_cycle() -> object:
+        """
+        함수 이름: run_trading_event_runtime_cycle()
+        기능: worker가 Controller의 단일 bounded runtime-cycle Operation을 await하도록 연결한다.
+        인자: 없음
+        반환값: 이번 cycle에서 처리한 STM result tuple
+        작성 날짜: 2026/08/24
+        """
+        return await trading_controller.run_event_runtime_cycle()
+
+    def trading_event_processing_allowed() -> bool:
+        """
+        함수 이름: trading_event_processing_allowed()
+        기능: worker cycle과 publication을 READY lifecycle에서만 허용한다.
+        인자: 없음
+        반환값: application이 READY이면 True
+        작성 날짜: 2026/08/24
+        """
+        return (
+            application_state_store.state.status
+            is ApplicationStatus.READY
+        )  # Caller가 application RLock을 보유하므로 한 lifecycle snapshot만 읽는다.
+
+    def publish_trading_session_update() -> object | None:
+        """
+        함수 이름: publish_trading_session_update()
+        기능: transport observer가 있으면 Controller와 execution mode의 authoritative 상태를 게시한다.
+        인자: 없음
+        반환값: observer 결과 또는 observer가 없으면 None
+        작성 날짜: 2026/08/24
+        """
+        # Bootstrap은 DTO를 만들지 않고 transport가 제공한 publication 경계만 호출한다.
+        if trading_session_update_observer is None:
+            return None
+
+        return trading_session_update_observer(
+            trading_controller,
+            selected_execution_mode,
+        )
+
+    # Transport publication이 있는 production 조립에만 process당 단일 worker를 만든다.
+    if trading_session_update_observer is not None:
+        trading_event_runtime_worker = _TradingEventRuntimeWorker(
+            run_trading_event_runtime_cycle,
+            trading_controller.mark_event_runtime_failed,
+            trading_event_processing_allowed,
+            trading_controller.snapshot_session,
+            application_lock,
+            state_update_observer=publish_trading_session_update,
+        )
 
     def account_stream_recovery_allowed() -> bool:
         """
@@ -1038,15 +1359,60 @@ def create_application_runtime(
                 and trading_controller.startup_reconciliation_complete
             )
 
+    def publish_account_stream_recovery_success() -> None:
+        """
+        함수 이름: publish_account_stream_recovery_success()
+        기능: Controller의 gate 재개와 같은 RLock에서 Account와 trading 상태를 게시한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # 종료 owner가 시작된 뒤에는 이미 진행한 재조정으로 새 transport event를 만들지 않는다.
+        if (
+            application_state_store.state.status
+            is not ApplicationStatus.READY
+        ):
+            return
+
+        try:
+            if account_update_observer is not None:
+                account_update_observer(
+                    account
+                )  # 두 번째 REST snapshot의 authoritative Account를 trading 상태보다 먼저 보낸다.
+            if trading_session_update_observer is not None:
+                trading_session_update_observer(
+                    trading_controller,
+                    selected_execution_mode,
+                )  # Fail-close event 뒤 다시 열린 command gate와 lifecycle을 반드시 이어 게시한다.
+        except Exception as error:
+            # Publication 일부가 실패하면 backend만 주문 가능 상태로 남지 않도록 영구 gate를 닫는다.
+            trading_controller.mark_event_runtime_failed()
+            if trading_session_update_observer is not None:
+                try:
+                    trading_session_update_observer(
+                        trading_controller,
+                        selected_execution_mode,
+                    )
+                except Exception:
+                    pass  # 실패한 transport를 재귀 호출하지 않고 기존 fail-close event를 신뢰한다.
+            raise AccountStreamRecoveryBlockedError(
+                "account stream recovery publication failed"
+            ) from error
+
     def recover_account_stream() -> object:
         """
         함수 이름: recover_account_stream()
-        기능: worker thread에서 Controller의 full REST reconciliation과 새 구독을 실행한다.
+        기능: worker thread에서 full REST reconciliation을 실행하고 복구 snapshot을 게시한다.
         인자: 없음
         반환값: 새 account stream subscription
         작성 날짜: 2026/08/22
         """
-        return trading_controller.reconnect_account_stream_after_reconciliation()
+        # Worker는 lock을 선점하지 않고 Controller가 commit hook까지 동일한 session RLock로 소유한다.
+        return trading_controller.reconnect_account_stream_after_reconciliation(
+            recovery_commit_observer=(
+                publish_account_stream_recovery_success
+            ),
+        )  # UI가 Account와 열린 gate를 관찰한 뒤에만 Controller Operation이 반환한다.
 
     # 실제 authenticated stream을 사용하는 testnet에만 자동 복구 owner를 조립한다.
     if selected_execution_mode is ExecutionMode.TESTNET:
@@ -1085,6 +1451,7 @@ def create_application_runtime(
         trading_controller=trading_controller,
         trade_history_repository=selected_history_repository,
         trade_history_controller=trade_history_controller,
+        _trading_event_runtime_worker=trading_event_runtime_worker,
         _account_stream_recovery_worker=account_stream_recovery_worker,
         _state_store=application_state_store,
         _shutdown_store=_ApplicationShutdownStore(),

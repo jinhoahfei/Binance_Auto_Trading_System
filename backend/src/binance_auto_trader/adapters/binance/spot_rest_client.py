@@ -24,6 +24,7 @@ from binance_auto_trader.domain.trading.order import (
     OrderResultFailureKind,
     OrderStatus,
 )
+from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 from .mappers import (
     BinancePayloadError,
@@ -530,7 +531,7 @@ class BinanceSpotRESTClient:
             result_clock -> fallback OrderResult UTC clock
             request_timeout_seconds -> 양수 HTTP timeout
             recv_window_milliseconds -> 1~60000ms signed request window
-            maximum_order_notional -> filter 외에 적용할 선택 Testnet 주문 금액 상한
+            maximum_order_notional -> STOP cleanup 외 주문에 적용할 선택 Testnet quote 금액 상한
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -651,6 +652,30 @@ class BinanceSpotRESTClient:
 
         return response.payload  # APIGateway가 raw account를 AccountSnapshot으로 정규화한다.
 
+    def get_account_commission(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_commission()
+        기능: 공식 signed GET /api/v3/account/commission의 한 symbol JSON을 반환한다.
+        인자: symbol -> 수수료 정책을 조회할 Spot symbol
+        반환값: 해석된 Binance account commission JSON object
+        작성 날짜: 2026/08/24
+        """
+        normalized_symbol = self._normalize_symbol(symbol)
+
+        # USER_DATA endpoint는 server-time 보정과 기존 HMAC signing 경계를 그대로 사용한다.
+        response = self._request_json(
+            method="GET",
+            endpoint="/v3/account/commission",
+            parameters={"symbol": normalized_symbol},
+            signed=True,
+        )
+        if not isinstance(response.payload, Mapping):
+            raise BinancePayloadError(
+                "account commission response must be an object"
+            )
+
+        return response.payload  # APIGateway가 raw rate를 할인 가능성 정책으로 축약한다.
+
     def get_server_timestamp_milliseconds(self) -> int:
         """
         함수 이름: get_server_timestamp_milliseconds()
@@ -707,8 +732,14 @@ class BinanceSpotRESTClient:
 
         prepared_order = prepare_market_order(order, rules)
 
-        # Bootstrap opt-in cap은 거래소 filter보다 작을 수 있으므로 실제 내림 수량에 추가 적용한다.
-        if self._maximum_order_notional is not None:
+        # Bootstrap cap은 일반 주문에 유지하되 STOP/recovery SELL cleanup만 가격 상승으로 막지 않는다.
+        if (
+            self._maximum_order_notional is not None
+            and not (
+                prepared_order.side is OrderSide.SELL
+                and prepared_order.exit_reason is ExitReason.STOP
+            )
+        ):
             with localcontext() as decimal_context:
                 decimal_context.prec = 34
                 prepared_notional = (
@@ -718,7 +749,7 @@ class BinanceSpotRESTClient:
             if prepared_notional > self._maximum_order_notional:
                 raise SymbolFilterError("FILTER_CONFIGURED_MAXIMUM_NOTIONAL")
 
-        # 모든 filter와 local cap을 통과한 뒤에만 journal/submit 사이의 불변 표식을 만든다.
+        # 모든 filter와 적용 대상 local cap을 통과한 뒤에만 journal/submit 불변 표식을 만든다.
         self._prepared_orders_by_client_id[prepared_order.client_order_id] = (
             self._order_preparation_fingerprint(prepared_order)
         )

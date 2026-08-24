@@ -406,6 +406,134 @@ describe('UiApplicationFacade', () => {
         facade.stop();
     });
 
+    it('Phase 9: 복구 Position은 별도 확인 modal과 liquidation command로 조정한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-24',
+            applied_regime: 'type0',
+            command_enabled: true,
+            is_trading: false,
+            has_open_position: true,
+        });
+
+        facade.start();
+
+        // 열린 복구 Position이 있는 동안 facade도 새 자동매매 시작 intent를 fail closed한다.
+        expect(facade.dispatch({ type: 'START_TRADING_CLICKED' })).toBe(false);
+        expect(facade.get_view_model().active_modal).toBeNull();
+        expect(facade.dispatch({
+            type: 'STOP_TRADING_CLICKED',
+            has_open_position: true,
+        })).toBe(true);
+        expect(facade.get_view_model().active_modal).toBe('force_sell_stop_confirmation');
+        expect(facade.get_view_model().trading.is_recovery_liquidation).toBe(true);
+
+        facade.dispatch({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
+        await wait_for_trade_history_settlement();
+
+        expect(command_adapter.command_records).toEqual([{
+            name: 'liquidate_recovered_position',
+            payload: null,
+        }]);
+        expect(facade.get_view_model().trading).toMatchObject({
+            is_trading: false,
+            is_pending: false,
+            is_recovery_liquidation: false,
+            has_open_position: false,
+        });
+        expect(facade.get_view_model().active_modal).toBeNull();
+        facade.stop();
+    });
+
+    it('Phase 9: STOPPING 복구 청산은 실행 상태를 되살리지 않고 start를 계속 차단한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.recovered_position_liquidation_receipt = {
+            status: 'stopping',
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            version: 3,
+        };
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-24',
+            command_enabled: true,
+            is_trading: false,
+            has_open_position: true,
+        });
+
+        facade.start();
+        facade.dispatch({
+            type: 'STOP_TRADING_CLICKED',
+            has_open_position: true,
+        });
+        facade.dispatch({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
+        await wait_for_trade_history_settlement();
+
+        expect(facade.get_view_model().trading).toMatchObject({
+            is_trading: false,
+            is_pending: true,
+            is_recovery_liquidation: true,
+            has_open_position: true,
+        });
+        expect(facade.dispatch({ type: 'START_TRADING_CLICKED' })).toBe(false);
+        expect(command_adapter.command_records).toEqual([{
+            name: 'liquidate_recovered_position',
+            payload: null,
+        }]);
+        facade.stop();
+    });
+
+    it('Phase 9 exit: STOPPING 복구 청산은 lifecycle terminal event 뒤에만 shutdown한다', async () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        command_adapter.recovered_position_liquidation_receipt = {
+            status: 'stopping',
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            version: 3,
+        };
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-24',
+            is_trading: false,
+            has_open_position: true,
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'APP_EXIT_CLICKED' });
+        facade.dispatch({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
+        await wait_for_trade_history_settlement();
+
+        // HTTP STOPPING 수락 직후에는 exit processing을 유지하고 shutdown command를 보내지 않는다.
+        expect(facade.get_view_model().app_exit.status).toBe(
+            'awaiting_liquidation_terminal',
+        );
+        expect(facade.get_view_model().active_modal).toBe('exit_processing');
+        expect(command_adapter.command_records).toEqual([{
+            name: 'liquidate_recovered_position',
+            payload: null,
+        }]);
+
+        facade.dispatch({
+            type: 'TRADING_SESSION_SYNCHRONIZED',
+            status: 'terminated',
+            version: 4,
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            command_enabled: true,
+            scale_in: '0.5',
+            scale_out: '0.5',
+            scale_in_percentage: 50,
+            scale_out_percentage: 50,
+            has_open_position: false,
+            logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+            strategy_status: '자동매매 종료',
+            strategy_status_tone: 'neutral',
+        });
+        await wait_for_trade_history_settlement();
+
+        expect(facade.get_view_model().app_exit.is_final).toBe(true);
+        expect(command_adapter.command_records).toEqual([
+            { name: 'liquidate_recovered_position', payload: null },
+            { name: 'shutdown_application', payload: null },
+        ]);
+        facade.stop();
+    });
+
     it('메시지 4~5: coherent backend snapshot을 한 번만 발행하고 UI-local 상태를 보존한다', () => {
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-21',

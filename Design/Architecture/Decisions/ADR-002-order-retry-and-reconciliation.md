@@ -40,6 +40,27 @@
    사용하지 않는다.
 8. Matching Engine의 `-2010`은 `Duplicate order sent.`를 포함할 수 있으므로 일반
    4xx rejection으로 terminal 확정하지 않고 `UNKNOWN`으로 같은 ID만 조회한다.
+9. Production 조립은 process당 하나의 interruptible event runtime worker만 사용한다.
+   worker는 `TradingController`의 bounded runtime cycle을 깨울 뿐이며, cycle이
+   `RETRY_BACKOFF` due 작업과 직렬 event queue를 순서대로 처리한다. route별 drain,
+   retry별 timer/thread와 busy loop는 사용하지 않는다.
+10. bounded cycle 또는 terminal 상태 publication이 실패하면 worker는 재시작하지 않고
+    해당 process의 event-runtime gate를 `RECONCILIATION_REQUIRED`로 영구 잠근다. queue,
+    pending journal과 same-ID 주문 사실은 보존하고 새 주문과 안전 종료는 차단한다.
+11. 제출 전 pending-order `PREPARED` UPSERT가 예외를 반환하면 REST POST는 보내지 않지만,
+    file 또는 parent-directory fsync가 이미 끝난 뒤 예외가 발생했는지는 호출자가 판별할 수
+    없다. 이 모호한 durability cut-point에서는 청산 세션을 `NOT_STARTED`로 rollback하거나
+    동일 intent를 다시 만들지 않고 `RECONCILIATION_REQUIRED`와 operator lock을 유지한다.
+    sidecar가 실제로 존재하면 same client ID 복구 근거로 보존하고, 존재하지 않아도 현재
+    process에서는 비어 있다고 추측해 command gate를 다시 열지 않는다.
+12. 복구 Position의 최초 force-sell은 free balance와 exchange filter 적용 뒤에도
+    requested/submitted 수량이 authoritative Position 전량과 정확히 같을 때만 PREPARED를
+    저장한다. max-notional의 승인 의미는 노출을 늘리는 BUY entry cap이다. 일반 SELL의 기존
+    local cap은 유지하되, 가격 상승 뒤 노출을 줄이는 STOP/recovery SELL에는 적용하지 않는다.
+    filter 내림으로 부분 청산을 시작하지 않는다.
+13. 현재 process가 모르는 `bat-` execution report는 callback 실패로 조용히 버리지 않는다.
+    즉시 `RECONCILIATION_REQUIRED`를 게시하고 account recovery worker를 깨워 open/recent와
+    account snapshot barrier를 다시 수행한다.
 
 ## 3. 조회와 제출 retry 예산
 
@@ -77,6 +98,10 @@
 - 예산 소진 시 `*_BUY_FAILED`, `*_SELL_FAILED` 또는 `FORCE_SELL_FAILED`를 전달하고
   Position이 남아 있으면 `RECONCILIATION_REQUIRED`를 유지한다.
 
+Worker의 interruptible 주기 wake는 due 시각을 앞당기는 정책이 아니다. Controller가
+주입 clock으로 정확한 due 여부를 다시 검사하므로 same-ID `1·2·4·8초`와 force-sell
+고정 `3초`는 그대로 유지되고, wake 지연만 worker poll 상한 안에서 발생할 수 있다.
+
 ## 4. 상태별 처리 표
 
 | 관찰 결과 | Controller 처리 | 신규 제출 허용 | 완료 event |
@@ -89,6 +114,7 @@
 | terminal + partial BUY | 실제 fill을 최종 진입량으로 확정하고 자동 top-up 금지 | 아니오 | `CASE_*_POSITION_OPENED` |
 | terminal + partial SELL | 실제 fill 반영, owner와 동일 exit intent 유지, 잔여량만 retry | 예, 이전 주문 terminal 확인 후 | 수량 0일 때만 `CASE_*_SELL_FILLED` |
 | terminal + partial force-sell | 실제 fill 반영, 잔여 Position만 3초 정책으로 retry | 예, 이전 주문 terminal 확인 후 | 수량 0일 때만 `FORCE_SELL_FINISHED` |
+| 복구 force-sell prepare가 잔량 전량을 보존하지 못함 | 최초 effect 전이면 NOT_STARTED 원자 복원, terminal partial 뒤면 operator reconciliation | 아니오 | 없음 |
 | 조회 4회 뒤 불명 | 운영자 개입이 필요한 lock 상태 | 아니오 | 없음 |
 | Position 반영 실패 | 거래소 사실 보존, session lock 및 재구성 | 아니오 | 없음 |
 | history append/fsync 실패 | 같은 order/fill의 저장만 재시도 | 아니오 | 없음 |
@@ -157,7 +183,10 @@ backend startup은 trading start를 받기 전에 다음 reconciliation을 완�
 9. history 저장과 sidecar REMOVE 내구성은 서로 다른 marker로 추적한다. reconnect는 실제
    sidecar를 다시 읽고 REMOVE fsync가 끝나지 않았으면 signed stream을 유지하더라도
    외부 command gate를 열지 않는다.
-10. open order와 Position이 모두 설명되면 session을 `IDLE`로 연다.
+10. open order와 Position이 모두 설명되면 application command barrier를 READY로 열되,
+   일반 trading session은 `NOT_STARTED`로 유지한다. Position이 0이면 이후 명시 start를,
+   Position이 양수면 ADR-003의 명시적 recovered-position liquidation만 허용한다. 자동
+   resume나 startup 중 전략 event 전달은 금지한다.
 11. 설명할 수 없는 주문·fill·잔액 차이가 있으면 `RECONCILIATION_REQUIRED`를 유지하고
    운영자에게 order ID와 차이를 표시한다.
 
@@ -184,6 +213,9 @@ account user-data stream이 비정상 종료되면 transport 연결 여부와 �
 6. queue overflow, consumer/worker failure, disconnect, REST/rebase 검증 실패는 모두 새
    subscription을 닫고 `RECONCILIATION_REQUIRED`를 유지한다. 조용한 barrier가 완결되고
    현재 subscription이 connected·caught-up일 때만 command gate를 다시 연다.
+7. gate commit 직후 optional application observer를 같은 Controller/application RLock에서
+   호출해 authoritative Account와 열린 trading lifecycle을 순서대로 게시한다. observer
+   실패는 event runtime failure로 영구 fail closed해 backend-only 주문 재개를 금지한다.
 
 이 순서는 마지막 주문 REST 조회 전에 stream을 먼저 여므로 subscribe ACK 직전의 체결은
 REST에서, ACK 이후의 체결은 stream backlog 또는 REST 결과에서 관찰된다. callback을
@@ -233,5 +265,15 @@ Guard, retry 예산과 Action 순서는 `TradingController`가 소유하고 Gate
   confirmed-rejection 전이, session별 client ID 고유성, subscribe-ACK 이후 주문 snapshot과
   두 account REST snapshot, 설명되지 않은 최근 fill, dispatcher barrier와 Testnet reset
   provenance를 local integration test로 검증했다.
-- [ ] 실제 Testnet credential로 read-only parity, 소액 BUY/force-sell lifecycle과 process
-  재시작 복구를 통과한다.
+- [x] Phase 9 recovered-position liquidation에서 `PREPARED` UPSERT가 file·directory fsync 뒤
+  예외를 반환하는 fault를 주입해 REST POST 0회, durable journal 보존, session rollback 금지,
+  `RECONCILIATION_REQUIRED`와 command gate 폐쇄를 검증했다.
+- [x] Phase 9에서 복구 Position의 free·filter 전량 preflight와 terminal partial 뒤
+  residual filter 실패의 operator lock, 알 수 없는 `bat-` execution report의 recovery wake와
+  authoritative lifecycle publication을 검증했다.
+- [x] 실제 Testnet credential와 주문 opt-in `0`으로 account/Kline/open/recent/commission/
+  signed stream read-only parity를 통과한다.
+- [x] 사용자 승인 BUY entry cap `10 USDT`에서 current `ETHUSDT` `LOT_SIZE`,
+  `MARKET_LOT_SIZE`, `NOTIONAL`을 mutation 전에 조회하고 유효한 `0.0040 ETH` MARKET BUY만
+  허용했다. actual BUY/force-sell lifecycle과 process A 종료 뒤 fresh recovery SELL/fresh
+  Position 0 replay를 통과했으며 최종 pending과 matching open order는 0건이다.

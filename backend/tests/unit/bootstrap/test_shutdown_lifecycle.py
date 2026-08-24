@@ -1,5 +1,6 @@
 """Phase 12 application shutdown의 exposure Guard와 fsync lifecycle을 검증한다."""
 
+from collections.abc import Callable
 from decimal import Decimal
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,11 +32,17 @@ from tests.unit.bootstrap.test_application import (
 )
 
 
-def _create_ready_runtime(history_path: Path) -> object:
+def _create_ready_runtime(
+    history_path: Path,
+    *,
+    trading_session_update_observer: Callable[[object, object], object]
+    | None = None,
+) -> object:
     """
     함수 이름: _create_ready_runtime()
     기능: network startup 없이 shutdown owner를 검증할 READY application runtime을 만든다.
     인자: history_path -> 종료 fsync가 생성할 JSONL 경로
+        trading_session_update_observer -> production event worker를 조립할 optional observer
     반환값: startup reconciliation 완료 상태의 ApplicationRuntime
     작성 날짜: 2026/08/24
     """
@@ -43,6 +50,7 @@ def _create_ready_runtime(history_path: Path) -> object:
         _StubRestClient(),
         _StubWebSocketClient(),
         history_path=history_path,
+        trading_session_update_observer=trading_session_update_observer,
     )
     with runtime.application_lock:
         # 실제 start lifecycle의 shutdown 관련 사후조건만 명시해 network fixture를 만들지 않는다.
@@ -87,6 +95,54 @@ class ShutdownLifecycleTests(unittest.TestCase):
             self.assertTrue(history_path.is_file())
             self.assertIs(runtime.state.status, ApplicationStatus.CLOSED)
             self.assertFalse(runtime.ready)
+
+    def test_shutdown_interrupts_active_event_worker_before_final_close(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_shutdown_interrupts_active_event_worker_before_final_close()
+        기능: READY event worker가 있는 zero-exposure runtime도 교착 없이 CLOSED로 회수되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            published_states: list[tuple[object, object]] = []
+
+            def observe_trading_state(
+                controller: object,
+                execution_mode: object,
+            ) -> None:
+                """
+                함수 이름: observe_trading_state()
+                기능: shutdown test에서 unexpected background publication을 기록한다.
+                인자: controller -> publication 대상 TradingController
+                    execution_mode -> runtime ExecutionMode
+                반환값: 없음
+                작성 날짜: 2026/08/24
+                """
+                published_states.append((controller, execution_mode))
+
+            runtime = _create_ready_runtime(
+                Path(temporary_directory) / "history.jsonl",
+                trading_session_update_observer=observe_trading_state,
+            )
+            event_worker = runtime._trading_event_runtime_worker
+            if event_worker is None:
+                raise AssertionError("observer must compose the production worker")
+            self.assertTrue(event_worker.start())
+
+            # Worker가 interruptible cadence에서 대기하는 동안 safe shutdown owner를 실행한다.
+            receipt = request_application_shutdown(
+                runtime,
+                command_id="shutdown-active-event-worker",
+                expected_version=0,
+            )
+
+            self.assertTrue(receipt.accepted)
+            self.assertIs(runtime.state.status, ApplicationStatus.CLOSED)
+            self.assertFalse(event_worker.request_processing())
+            self.assertEqual(published_states, [])
 
     def test_open_position_blocks_without_lowering_ready_state(self) -> None:
         """

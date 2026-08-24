@@ -64,6 +64,7 @@ export function App({ applicationFactory }: AppProps) {
     return (
         <div className={styles.application}>
             <AppHeader
+                hasOpenPosition={view_model.trading.has_open_position}
                 isCommandPending={view_model.trading.is_pending}
                 isConnected={view_model.connection.is_online}
                 isTrading={view_model.trading.is_trading}

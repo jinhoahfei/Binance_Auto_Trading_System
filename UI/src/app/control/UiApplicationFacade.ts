@@ -179,6 +179,8 @@ export type UiApplicationIntent =
     | { readonly type: 'STOP_TRADING_CANCELED' }
     | { readonly type: 'FORCE_SELL_AND_STOP_CONFIRMED' }
     | { readonly type: 'FORCE_SELL_AND_STOP_CANCELED' }
+    | { readonly type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' }
+    | { readonly type: 'RECOVERED_POSITION_LIQUIDATION_CANCELED' }
     | { readonly type: 'BACKEND_TRADING_STARTED' }
     | { readonly type: 'BACKEND_TRADING_STOPPED' }
     | { readonly type: 'POSITION_UPDATED'; readonly has_open_position: boolean }
@@ -321,6 +323,7 @@ export interface AppViewModel {
         readonly command_enabled: boolean;
         readonly is_trading: boolean;
         readonly is_pending: boolean;
+        readonly is_recovery_liquidation: boolean;
         readonly has_open_position: boolean;
         readonly unavailable_reason: TradingUnavailableReason | null;
         readonly error: UiCommandFailure | null;
@@ -396,7 +399,7 @@ export interface AppViewModel {
         readonly receipt_path: string | null;
     };
     readonly app_exit: {
-        readonly status: 'awaiting_exit' | 'force_sell_exit_confirmation' | 'force_selling' | 'exit_confirmation' | 'shutting_down' | 'shutdown_exit_recovery' | 'shutdown_outcome_recovery' | 'sidecar_exit_failure' | 'ui_final_state';
+        readonly status: 'awaiting_exit' | 'force_sell_exit_confirmation' | 'force_selling' | 'awaiting_liquidation_terminal' | 'exit_confirmation' | 'shutting_down' | 'shutdown_exit_recovery' | 'shutdown_outcome_recovery' | 'sidecar_exit_failure' | 'ui_final_state';
         readonly is_pending: boolean;
         readonly is_final: boolean;
         readonly error: UiCommandFailure | null;
@@ -438,8 +441,13 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
             is_pending: snapshot.trading.matches('starting')
                 || snapshot.trading.matches('stopping')
                 || snapshot.trading.matches('force_selling')
+                || snapshot.trading.matches('liquidating_recovered_position')
+                || snapshot.trading.matches(
+                    'awaiting_recovered_position_liquidation_completion',
+                )
                 || snapshot.trading.matches('disconnect_stopping')
                 || snapshot.trading.matches('awaiting_stop_completion'),
+            is_recovery_liquidation: snapshot.trading.context.is_recovery_liquidation,
             has_open_position: snapshot.trading.context.has_open_position,
             unavailable_reason: snapshot.trading.context.unavailable_reason,
             error: snapshot.trading.context.error,
@@ -518,6 +526,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
         app_exit: {
             status: exit_status,
             is_pending: snapshot.app_exit.matches('force_selling')
+                || snapshot.app_exit.matches('awaiting_liquidation_terminal')
                 || snapshot.app_exit.matches('shutting_down'),
             is_final: snapshot.app_exit.matches('ui_final_state'),
             error: snapshot.app_exit.context.error,
@@ -729,6 +738,12 @@ export class UiApplicationFacade {
                 const regime = this.actors.regime.getSnapshot().context.applied_regime;
                 const is_online = this.actors.connection.getSnapshot().matches('api_online');
                 const trading_context = this.actors.trading.getSnapshot().context;
+
+                // 정지 상태의 열린 Position은 복구 청산 전까지 새 전략 session 시작을 허용하지 않는다.
+                if (!trading_context.is_trading && trading_context.has_open_position) {
+                    return false;
+                }
+
                 const unavailable_reason = resolve_trading_start_unavailable_reason(
                     trading_context.logic_coverage,
                     trading_context.command_enabled,
@@ -802,6 +817,12 @@ export class UiApplicationFacade {
             case 'FORCE_SELL_AND_STOP_CANCELED':
                 this.actors.trading.send({ type: 'FORCE_SELL_AND_STOP_CANCELED' });
                 break;
+            case 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED':
+                this.actors.trading.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
+                break;
+            case 'RECOVERED_POSITION_LIQUIDATION_CANCELED':
+                this.actors.trading.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CANCELED' });
+                break;
             case 'BACKEND_TRADING_STARTED':
             case 'BACKEND_TRADING_STOPPED':
             case 'POSITION_UPDATED':
@@ -825,6 +846,13 @@ export class UiApplicationFacade {
                     is_trading,
                     has_open_position: intent.has_open_position,
                     lifecycle_status: intent.status,
+                });
+                // 종료 actor도 같은 authoritative lifecycle과 Position 조합을 받아 shutdown barrier를 판정한다.
+                this.actors.app_exit.send({
+                    type: 'TRADING_SESSION_UPDATED',
+                    version: intent.version,
+                    status: intent.status,
+                    has_open_position: intent.has_open_position,
                 });
                 this.actors.chart.send({
                     type: 'TRADING_LOGIC_STATE_CHANGED',
@@ -1099,12 +1127,16 @@ export class UiApplicationFacade {
             case 'CSV_EXPORT_COMPLETE_CONFIRMED':
                 this.actors.csv_export.send({ type: 'ACCEPT_CLOSE_ALL_POPUP' });
                 break;
-            case 'APP_EXIT_CLICKED':
+            case 'APP_EXIT_CLICKED': {
+                // 종료 시점의 lifecycle로 정상 stop과 recovered-position liquidation을 구분한다.
+                const trading_snapshot = this.actors.trading.getSnapshot().context;
                 this.actors.app_exit.send({
                     type: 'EXIT_CLICKED',
-                    has_open_position: this.actors.trading.getSnapshot().context.has_open_position,
+                    has_open_position: trading_snapshot.has_open_position,
+                    is_trading: trading_snapshot.is_trading,
                 });
                 break;
+            }
             case 'APP_EXIT_CONFIRMED':
                 this.actors.app_exit.send({ type: 'EXIT_CONFIRMED' });
                 break;
@@ -1303,6 +1335,13 @@ export class UiApplicationFacade {
                 has_open_position: synchronized_snapshot.has_open_position,
                 lifecycle_status: synchronized_snapshot.trading_state_label,
             });
+            // Event 유실 뒤 full resync도 app-exit의 동일 terminal·Position barrier를 열 수 있어야 한다.
+            this.actors.app_exit.send({
+                type: 'TRADING_SESSION_UPDATED',
+                version: synchronized_snapshot.trading_version,
+                status: synchronized_snapshot.trading_state_label,
+                has_open_position: synchronized_snapshot.has_open_position,
+            });
             this.actors.chart.send({
                 type: 'TRADING_LOGIC_STATE_CHANGED',
                 state_label: synchronized_snapshot.trading_state_label,
@@ -1390,7 +1429,9 @@ export class UiApplicationFacade {
         if (exit_snapshot.matches('sidecar_exit_failure')) {
             return 'sidecar_exit_failure';
         }
-        if (exit_snapshot.matches('force_selling') || exit_snapshot.matches('shutting_down')) {
+        if (exit_snapshot.matches('force_selling')
+            || exit_snapshot.matches('awaiting_liquidation_terminal')
+            || exit_snapshot.matches('shutting_down')) {
             return 'exit_processing';
         }
         if (trading_snapshot.matches('select_regime_notice')) {
@@ -1411,6 +1452,10 @@ export class UiApplicationFacade {
         }
         if (trading_snapshot.matches('force_sell_confirmation')
             || trading_snapshot.matches('force_selling')) {
+            return 'force_sell_stop_confirmation';
+        }
+        if (trading_snapshot.matches('recovered_position_liquidation_confirmation')
+            || trading_snapshot.matches('liquidating_recovered_position')) {
             return 'force_sell_stop_confirmation';
         }
         if (regime_snapshot.matches('type_change_confirmation') || regime_snapshot.matches('applying')) {

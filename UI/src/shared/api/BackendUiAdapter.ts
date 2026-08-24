@@ -1067,6 +1067,40 @@ export class BackendUiAdapter implements UiCommandPort {
     }
 
     /**
+     * 함수 이름: liquidate_recovered_position()
+     * 기능: startup에서 복구한 Position을 자동 재개 없이 청산하는 versioned command를 전달한다.
+     * 인자: 없음
+     * 반환값: backend recovery liquidation lifecycle 결과 Promise
+     * 작성 날짜: 2026/08/24
+     */
+    async liquidate_recovered_position(): Promise<TradingCommandReceipt> {
+        const expected_version = this.require_trading_version();
+        const result = await this.request_json(
+            'POST',
+            '/v1/trading/recovered-position/liquidate',
+            validate_trading_command_result,
+            {
+                schema_version: BACKEND_SCHEMA_VERSION,
+                expected_version,
+            },
+            true,
+        );
+
+        // 복구 청산은 전략 session을 RUNNING으로 재개하지 않고 종료 계열 상태만 반환해야 한다.
+        if (result.status === 'running') {
+            throw new BackendContractError(
+                'MALFORMED_BACKEND_PAYLOAD',
+                'Backend recovered-position liquidation returned a running state',
+            );
+        }
+
+        this.require_current_command_response(result.version, expected_version);
+        this.#trading_version = result.version;  // 다음 명령은 청산 수락 뒤 authoritative version을 사용한다.
+        this.#trading_status = result.status;
+        return result;
+    }
+
+    /**
      * 함수 이름: apply_regime()
      * 기능: canonical REGIME과 expected context version을 selection endpoint에 전달한다.
      * 인자: regime_type -> 사용자가 선택한 canonical UI REGIME

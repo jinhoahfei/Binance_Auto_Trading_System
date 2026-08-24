@@ -10,6 +10,7 @@ import unittest
 import urllib.request
 
 from binance_auto_trader.adapters.binance import (
+    APIGateway,
     BinanceSpotRESTClient,
     BinanceSpotWebSocketClient,
 )
@@ -79,6 +80,43 @@ class _FakeRESTClient:
         작성 날짜: 2026/08/22
         """
         return {}  # factory unit test는 실제 Gateway account parsing을 호출하지 않는다.
+
+    def get_account_commission(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_commission()
+        기능: permission proxy 위임 검증용 비활성 할인 payload를 반환한다.
+        인자: symbol -> proxy가 전달한 canonical Spot symbol
+        반환값: 제3 자산 할인이 비활성인 account commission mapping
+        작성 날짜: 2026/08/24
+        """
+        # 실제 network 없이 symbol identity와 read-only 위임 surface만 검증한다.
+        return {
+            "symbol": symbol,
+            "standardCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "specialCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "taxCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "discount": {
+                "enabledForAccount": False,
+                "enabledForSymbol": True,
+                "discountAsset": "BNB",
+                "discount": "0.75000000",
+            },
+        }
 
 
 class _FakeWebSocketClient:
@@ -227,6 +265,238 @@ class TestnetConfigurationTests(unittest.TestCase):
         self.assertNotIn(API_KEY_CANARY, runtime_representation)
         self.assertNotIn(API_SECRET_CANARY, runtime_representation)
 
+    def test_permission_proxy_allows_read_only_commission_preflight(self) -> None:
+        """
+        함수 이름: test_permission_proxy_allows_read_only_commission_preflight()
+        기능: 주문 권한이 없어도 normalized commission preflight를 위임하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        environment = _read_only_environment()
+
+        # Generic runtime factory 호출을 가로채 실제 socket 없이 permission proxy만 조립한다.
+        with patch.object(
+            testnet_module,
+            "_load_testnet_client_types",
+            return_value=(_FakeRESTClient, _FakeWebSocketClient),
+        ), patch.object(
+            testnet_module,
+            "create_application_runtime",
+            return_value=sentinel.runtime,
+        ) as runtime_factory, TemporaryDirectory() as temporary_directory:
+            runtime = testnet_module.create_testnet_application_runtime(
+                history_path=Path(temporary_directory) / "history.jsonl",
+                environment=environment,
+            )
+        permission_client = runtime_factory.call_args.args[0]
+
+        # Read-only runtime도 실제 주문 전에 BNB 등 제3 수수료 자산 가능성을 확인할 수 있어야 한다.
+        self.assertIs(runtime, sentinel.runtime)
+        policy = APIGateway(
+            permission_client
+        ).fetch_commission_discount_policy(
+            "ethusdt"
+        )
+        self.assertEqual(policy.symbol, "ETHUSDT")
+        self.assertEqual(policy.discount_asset, "BNB")
+        self.assertFalse(policy.can_charge_discount_asset)
+
+    def test_permission_proxy_blocks_unsupported_commission_before_prepare(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_permission_proxy_blocks_unsupported_commission_before_prepare()
+        기능: BNB 할인 가능 계정의 Testnet 주문을 delegate prepare 전에 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        delegate = Mock(name="testnet_rest_delegate")
+        delegate.get_account_commission.return_value = {
+            "symbol": "ETHUSDT",
+            "standardCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "specialCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "taxCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "discount": {
+                "enabledForAccount": True,
+                "enabledForSymbol": True,
+                "discountAsset": "BNB",
+                "discount": "0.75000000",
+            },
+        }
+        permission_client = (
+            testnet_module._TestnetOrderPermissionRESTClient(
+                delegate,
+                allow_orders=True,
+            )
+        )
+        blocked_order = Order(
+            intent_id="commission-preflight-intent",
+            client_order_id="bat-commission-preflight",
+            submission_attempt=0,
+            symbol="ETHUSDT",
+            side=OrderSide.BUY,
+            strategy=StrategyType.CASE_B,
+            regime_type=RegimeType.TYPE_0,
+            requested_quantity=Decimal("0.01"),
+            submitted_quantity=Decimal("0.01"),
+            market_price_at_decision=Decimal("100"),
+        )
+
+        # Unsupported policy 오류가 난 뒤 mutation 준비 호출은 단 한 번도 실행되지 않아야 한다.
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "unsupported fee asset",
+        ):
+            permission_client.prepare_order(order=blocked_order)
+        delegate.prepare_order.assert_not_called()
+
+    def test_permission_proxy_delegates_prepare_for_supported_commission(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_permission_proxy_delegates_prepare_for_supported_commission()
+        기능: 실제 Testnet all-zero null 정책은 signed preflight 뒤 prepare를 위임하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        delegate = Mock(name="supported_testnet_rest_delegate")
+        delegate.get_account_commission.return_value = {
+            "symbol": "ETHUSDT",
+            "standardCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "specialCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "taxCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "discount": {
+                "enabledForAccount": True,
+                "enabledForSymbol": True,
+                "discountAsset": None,
+                "discount": "0.00000000",
+            },
+        }
+        permission_client = (
+            testnet_module._TestnetOrderPermissionRESTClient(
+                delegate,
+                allow_orders=True,
+            )
+        )
+        prepared_order = Mock(spec=Order)
+        delegate.prepare_order.return_value = prepared_order
+        candidate_order = Order(
+            intent_id="supported-commission-preflight-intent",
+            client_order_id="bat-supported-commission-preflight",
+            submission_attempt=0,
+            symbol="ETHUSDT",
+            side=OrderSide.BUY,
+            strategy=StrategyType.CASE_B,
+            regime_type=RegimeType.TYPE_0,
+            requested_quantity=Decimal("0.01"),
+            submitted_quantity=Decimal("0.01"),
+            market_price_at_decision=Decimal("100"),
+        )
+
+        # 관찰된 exact all-zero 정책은 MARKET BUY에도 매 attempt 다시 읽은 뒤 위임한다.
+        result = permission_client.prepare_order(order=candidate_order)
+        self.assertIs(result, prepared_order)
+        delegate.get_account_commission.assert_called_once_with(
+            symbol="ETHUSDT"
+        )
+        delegate.prepare_order.assert_called_once_with(order=candidate_order)
+
+    def test_permission_proxy_blocks_market_buy_received_asset_commission(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_permission_proxy_blocks_market_buy_received_asset_commission()
+        기능: MARKET BUY 수신 ETH 수수료 가능성을 delegate filter 준비 전에 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        delegate = Mock(name="market_buy_commission_delegate")
+        delegate.get_account_commission.return_value = {
+            "symbol": "ETHUSDT",
+            "standardCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00100000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "specialCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "taxCommission": {
+                "maker": "0.00000000",
+                "taker": "0.00000000",
+                "buyer": "0.00000000",
+                "seller": "0.00000000",
+            },
+            "discount": {
+                "enabledForAccount": False,
+                "enabledForSymbol": True,
+                "discountAsset": "BNB",
+                "discount": "0.75000000",
+            },
+        }
+        permission_client = testnet_module._TestnetOrderPermissionRESTClient(
+            delegate,
+            allow_orders=True,
+        )
+        blocked_order = Order(
+            intent_id="market-buy-dust-preflight-intent",
+            client_order_id="bat-market-buy-dust-preflight",
+            submission_attempt=0,
+            symbol="ETHUSDT",
+            side=OrderSide.BUY,
+            strategy=StrategyType.CASE_B,
+            regime_type=RegimeType.TYPE_0,
+            requested_quantity=Decimal("0.01"),
+            submitted_quantity=Decimal("0.01"),
+            market_price_at_decision=Decimal("100"),
+        )
+
+        # BUY fee가 수신 ETH를 줄일 수 있으면 filter 준비나 주문 POST에 도달하지 않는다.
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "base-asset dust",
+        ):
+            permission_client.prepare_order(order=blocked_order)
+        delegate.prepare_order.assert_not_called()
+
     def test_read_only_requires_exact_opt_in_and_both_credentials(self) -> None:
         """
         함수 이름: test_read_only_requires_exact_opt_in_and_both_credentials()
@@ -360,8 +630,11 @@ class TestnetConfigurationTests(unittest.TestCase):
         trade_history_update_observer = Mock(
             name="trade_history_update_observer"
         )
+        trading_session_update_observer = Mock(
+            name="trading_session_update_observer"
+        )
 
-        # Transport runtime factory와 동일하게 두 observer를 위치 인자로 주입한다.
+        # Transport runtime factory와 동일하게 세 observer를 위치 인자로 주입한다.
         with patch.object(
             testnet_module,
             "_load_testnet_client_types",
@@ -374,6 +647,7 @@ class TestnetConfigurationTests(unittest.TestCase):
             runtime = testnet_module.create_testnet_application_runtime(
                 account_update_observer,
                 trade_history_update_observer,
+                trading_session_update_observer,
                 history_path=Path("test-history.jsonl"),
                 environment=environment,
                 kline_limit=17,
@@ -421,7 +695,11 @@ class TestnetConfigurationTests(unittest.TestCase):
         self.assertIs(
             runtime_keywords["trade_history_update_observer"],
             trade_history_update_observer,
-        )  # Testnet 조립기가 observer identity를 generic runtime에 그대로 전달한다.
+        )
+        self.assertIs(
+            runtime_keywords["trading_session_update_observer"],
+            trading_session_update_observer,
+        )  # Testnet 조립기가 세 observer identity를 generic runtime에 그대로 전달한다.
         self.assertEqual(runtime_keywords["kline_limit"], 17)
 
         fixed_endpoints = (

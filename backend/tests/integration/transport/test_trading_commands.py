@@ -545,6 +545,50 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
         self.assertEqual(valid_id, split_event.correlation_id)
         self.assertEqual(1, split_event.aggregate_version)  # 정상 DTO만 하나의 Context mutation event를 낸다.
 
+    def test_recovered_position_liquidation_endpoint_is_distinct_and_strict(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_position_liquidation_endpoint_is_distinct_and_strict()
+        기능: fake runtime에서 recovery endpoint의 exact DTO와 별도 mode gate를 실제 HTTP로 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Fake runtime에는 pending-order recovery가 없으므로 정상 DTO도 owner에서 fail closed한다.
+        disabled_status, disabled_payload, _ = self._send_command(
+            "POST",
+            "/v1/trading/recovered-position/liquidate",
+            {
+                "schema_version": 2,
+                "expected_version": 0,
+            },
+        )
+
+        # Unknown field는 Controller 진입 전 transport exact-shape 검증에서 거부한다.
+        malformed_status, malformed_payload, _ = self._send_command(
+            "POST",
+            "/v1/trading/recovered-position/liquidate",
+            {
+                "schema_version": 2,
+                "expected_version": 0,
+                "unexpected": True,
+            },
+        )
+
+        self.assertEqual(403, disabled_status)
+        self.assertEqual(
+            "COMMAND_DISABLED",
+            disabled_payload["error"]["code"],
+        )
+        self.assertEqual(400, malformed_status)
+        self.assertEqual(
+            "MALFORMED_REQUEST",
+            malformed_payload["error"]["code"],
+        )
+        self.assertEqual(0, self.runtime.trading_controller.context.version)
+        self.assertEqual(0, self.event_stream.last_sequence)  # 실패 route는 lifecycle event를 발행하지 않는다.
+
 
 if __name__ == "__main__":
     unittest.main()

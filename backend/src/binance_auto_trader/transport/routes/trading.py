@@ -151,6 +151,63 @@ def stop_trading(
     )
 
 
+def liquidate_recovered_position(
+    request_id: str,
+    context: RouteContext,
+    request_body: JsonObject,
+    command_id: str,
+) -> TransportResponse:
+    """
+    함수 이름: liquidate_recovered_position()
+    기능: 명시 확인된 startup 복구 Position을 별도 liquidation-only command로 전달한다.
+    인자: request_id -> 검증을 마친 요청 UUID
+        context -> application runtime과 event stream route context
+        request_body -> schema와 expected_version command DTO
+        command_id -> Idempotency-Key에서 얻은 stable command ID
+    반환값: stopping, terminated 또는 reconciliation 상태 응답
+    작성 날짜: 2026/08/24
+    """
+    # Recovery DTO도 일반 stop과 같은 exact body와 optimistic version 계약을 사용한다.
+    require_command_fields(request_body, ("expected_version",))
+    expected_version = require_expected_version(
+        request_body
+    )  # 별도 command namespace에도 최신 Context version을 그대로 전달한다.
+
+    # Provenance 검증, G-06 적용과 authoritative publication을 한 application lock에 묶는다.
+    with context.runtime.application_lock:
+        readiness_response = require_ready_runtime(request_id, context)
+        if readiness_response is not None:
+            return readiness_response
+
+        trading_controller = context.runtime.trading_controller
+        try:
+            result = trading_controller.liquidate_recovered_position(
+                command_id=command_id,
+                expected_version=expected_version,
+            )
+        except Exception as error:
+            return application_error_response(request_id, error)
+
+        _publish_trading_session(context, command_id)
+
+    # 장기 same-ID cleanup은 202, durable zero Position의 동기 종료는 200으로 응답한다.
+    status_text = getattr(result.status, "value", result.status)
+    response_status = (
+        202
+        if status_text in ("stopping", "reconciliation_required")
+        else 200
+    )
+    return success_response(
+        request_id,
+        {
+            "status": result.status,
+            "session_id": result.session_id,
+            "version": result.version,
+        },
+        status=response_status,
+    )
+
+
 def update_split_ratios(
     request_id: str,
     context: RouteContext,

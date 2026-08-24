@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
+from threading import Event, RLock
 import unittest
 from unittest.mock import patch as mock_patch
 
@@ -25,13 +27,19 @@ from binance_auto_trader.application.trading_controller import (
     AccountStreamRecoveryBlockedError,
     StartupOrderReconciliationError,
     TradingController,
+    TradingSessionError,
+    TradingSessionFailureCode,
     TradingSessionStatus,
 )
 from binance_auto_trader.bootstrap.application import (
     _AccountStreamRecoveryWorker,
 )
 from binance_auto_trader.domain.common import RegimeType
-from binance_auto_trader.domain.trading.account import Account
+from binance_auto_trader.domain.trading.account import (
+    Account,
+    AccountSnapshot,
+    AssetBalance,
+)
 from binance_auto_trader.domain.trading.events import (
     TradingEvent,
     TradingEventType,
@@ -55,6 +63,7 @@ from binance_auto_trader.domain.trading.states import (
     PositionReturnState,
     StrategyType,
 )
+from binance_auto_trader.domain.trading.stm import TradingSTM
 from binance_auto_trader.domain.trading.transitions.helpers import (
     create_exit_order_actions,
 )
@@ -72,7 +81,7 @@ from tests.integration.test_order_reconciliation_flow import (
     _create_started_controller,
     _submit_case_b_buy,
 )
-from tests.unit.history.factories import make_trade
+from tests.unit.history.factories import make_order_execution, make_trade
 
 
 FIXED_TIME = datetime(2026, 8, 22, 5, 0, tzinfo=timezone.utc)
@@ -346,16 +355,64 @@ class _FilledSubmissionTestnetRESTClient(
         self.include_recent_result = startup_result is not None
         self.submission_exchange_order_id = submission_exchange_order_id
         self.submission_trade_id = submission_trade_id
+        self.reject_prepare_order = False
+        self.prepared_quantity_override: Decimal | None = None
+        self.terminal_partial_quantity: Decimal | None = None
+
+    def prepare_order(self, *, order: Order) -> Order:
+        """
+        함수 이름: prepare_order()
+        기능: 복구 청산 사전검증 실패를 선택적으로 주입하거나 원 Order를 보존한다.
+        인자: order -> filter 적용 전 주문
+        반환값: 실패가 비활성화되어 있으면 원 Order
+        작성 날짜: 2026/08/24
+        """
+        # 사전검증 예외는 journal 저장과 submit 호출보다 먼저 발생한다.
+        if self.reject_prepare_order:
+            raise RuntimeError("injected order preflight failure")
+
+        # Exchange filter의 LOT_SIZE 내림을 독립 Order로 재현해 원 requested 수량을 보존한다.
+        if self.prepared_quantity_override is not None:
+            return replace(
+                order,
+                submitted_quantity=self.prepared_quantity_override,
+            )
+
+        return order  # 정상 경로에서는 fake가 수량과 identity를 변경하지 않는다.
 
     def submit_order(self, *, order: Order) -> OrderResult:
         """
         함수 이름: submit_order()
-        기능: runtime 주문을 한 번 FILLED 처리하고 이후 same-ID 조회의 authoritative 결과로 보존한다.
+        기능: runtime 주문을 FILLED 또는 선택한 terminal partial로 만들고 same-ID 결과로 보존한다.
         인자: order -> Controller가 생성해 durable journal에 먼저 기록한 BUY
         반환값: 동일 client ID와 고정 exchange ID의 terminal FILLED 결과
         작성 날짜: 2026/08/23
         """
         self.submit_count += 1
+        if self.terminal_partial_quantity is not None:
+            # CANCELED terminal의 실제 fill만 반영해 recovery residual retry를 결정론적으로 만든다.
+            partial_fill = Fill(
+                exchange_order_id=self.submission_exchange_order_id,
+                trade_id=self.submission_trade_id,
+                quantity=self.terminal_partial_quantity,
+                price=Decimal("2500.00"),
+                fee_amount=Decimal("0"),
+                fee_asset="USDT",
+                fee_quote_amount=Decimal("0"),
+                executed_at=FIXED_TIME,
+            )
+            self.result = OrderResult(
+                symbol=order.symbol,
+                client_order_id=order.client_order_id,
+                exchange_order_id=partial_fill.exchange_order_id,
+                status=OrderStatus.CANCELED,
+                processed_at=FIXED_TIME,
+                fills=(partial_fill,),
+            )
+            self.include_recent_result = True
+            return self.result
+
+        # 기본 fake는 제출 수량 전체를 한 terminal FILLED 결과로 정규화한다.
         self.result = _make_filled_result(
             order,
             exchange_order_id=self.submission_exchange_order_id,
@@ -373,6 +430,9 @@ def _create_recovery_controller(
     command_gate: bool = False,
     order_retry_waiter: Callable[[timedelta], object] | None = None,
     web_socket_client: SynchronousAccountWebSocketClient | None = None,
+    event_runtime_notifier: Callable[[], object] | None = None,
+    application_lock: RLock | None = None,
+    maximum_order_notional: Decimal | None = None,
 ) -> tuple[TradingController, TradeHistoryController, Position]:
     """
     함수 이름: _create_recovery_controller()
@@ -382,6 +442,9 @@ def _create_recovery_controller(
         command_gate -> 복구 전후 주문 gate를 관찰할지 결정하는 실행 mode 값
         order_retry_waiter -> same-ID 조회 전 deterministic 대기 대체 함수 또는 None
         web_socket_client -> ACK 시점 주입이 필요한 account WebSocket fake 또는 None
+        event_runtime_notifier -> queue와 retry schedule wake를 받을 optional callback
+        application_lock -> production worker와 공유할 optional application RLock
+        maximum_order_notional -> 신규 BUY에만 적용할 optional quote 진입 상한
     반환값: Controller, history Controller와 mutable Position tuple
     작성 날짜: 2026/08/22
     """
@@ -411,7 +474,10 @@ def _create_recovery_controller(
         trade_history_controller=history_controller,
         pending_order_recovery_enabled=True,
         order_retry_waiter=order_retry_waiter,
+        event_runtime_notifier=event_runtime_notifier,
         clock=lambda: FIXED_TIME,
+        application_lock=application_lock,
+        maximum_order_notional=maximum_order_notional,
     )
     controller.load_account()
 
@@ -424,6 +490,1078 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
     기능: crash recovery와 다음 process restart의 주문·Position·history 멱등성을 검증한다.
     작성 날짜: 2026/08/22
     """
+
+    def test_recovered_position_is_liquidated_without_strategy_resume_or_duplicate_submit(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_position_is_liquidated_without_strategy_resume_or_duplicate_submit()
+        기능: cold restart Position을 public 복구 청산으로 한 번만 정리하고 다음 process가 0을 복원하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+
+            # 첫 process는 정상 startup 뒤 terminal BUY와 durable history만 남기고 crash로 간주한다.
+            first_client = _FilledSubmissionTestnetRESTClient(
+                submission_exchange_order_id="94001",
+                submission_trade_id="54001",
+            )
+            first_controller, first_history, first_position = (
+                _create_recovery_controller(
+                    history_path,
+                    first_client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            first_controller.reconcile_startup_state()
+            selected_stm = first_controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = first_controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-before-recovery-crash",
+                expected_version=0,
+            )
+            first_controller.start_trading(
+                command_id="start-before-recovery-crash",
+                expected_version=selection.version,
+            )
+            buy_outcomes = _submit_case_b_buy(
+                first_controller,
+                intent_id="buy-before-recovery-crash",
+            )
+            buy_result = first_client.result  # 둘째 process가 대조할 exact exchange execution이다.
+
+            self.assertEqual(len(buy_outcomes), 1)
+            self.assertGreater(first_position.quantity, Decimal("0"))
+            self.assertEqual(len(first_history.trade_history.trades), 1)
+            self.assertEqual(
+                first_history.get_pending_order_recovery_records(),
+                (),
+            )
+
+            # 둘째 process는 BUY를 재제출하지 않고 durable lot과 exchange provenance를 복원한다.
+            liquidation_client = _FilledSubmissionTestnetRESTClient(
+                startup_result=buy_result,
+                submission_exchange_order_id="94002",
+                submission_trade_id="54002",
+            )
+            recovered_controller, recovered_history, recovered_position = (
+                _create_recovery_controller(
+                    history_path,
+                    liquidation_client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            recovered_controller.reconcile_startup_state()
+            recovered_snapshot = recovered_controller.snapshot_session()
+            expected_version = recovered_snapshot.version
+
+            self.assertTrue(recovered_snapshot.has_open_position)
+            self.assertFalse(recovered_controller.context.initialized)
+            self.assertEqual(liquidation_client.submit_count, 0)
+
+            # Public Operation은 run 없이 G-06 SELL 하나만 만들고 terminal outcome을 queue에 둔다.
+            with mock_patch.object(
+                TradingSTM,
+                "run",
+                autospec=True,
+                side_effect=AssertionError("recovery liquidation must not run"),
+            ) as forbidden_run:
+                liquidation = (
+                    recovered_controller.liquidate_recovered_position(
+                        command_id="liquidate-recovered-position",
+                        expected_version=expected_version,
+                    )
+                )
+
+            forbidden_run.assert_not_called()
+            self.assertIs(
+                liquidation.status,
+                TradingSessionStatus.STOPPING,
+            )
+            self.assertEqual(liquidation.transition_ids, ("G-06",))
+            self.assertEqual(liquidation_client.submit_count, 1)
+            sell_result = liquidation_client.result  # 셋째 process가 대조할 durable SELL 사실이다.
+
+            # STOPPING 진행 조회와 stale·command-ID 충돌도 두 번째 force-sell을 만들지 않는다.
+            stopping_progress = (
+                recovered_controller.liquidate_recovered_position(
+                    command_id="observe-recovered-liquidation-progress",
+                    expected_version=liquidation.version,
+                )
+            )
+            with self.assertRaises(TradingSessionError) as stale_progress:
+                recovered_controller.liquidate_recovered_position(
+                    command_id="stale-recovered-liquidation-progress",
+                    expected_version=expected_version,
+                )
+            with self.assertRaises(TradingSessionError) as reused_command:
+                recovered_controller.liquidate_recovered_position(
+                    command_id="liquidate-recovered-position",
+                    expected_version=liquidation.version,
+                )
+            self.assertIs(
+                stopping_progress.status,
+                TradingSessionStatus.STOPPING,
+            )
+            self.assertIs(
+                stale_progress.exception.code,
+                TradingSessionFailureCode.STALE_CONTEXT_VERSION,
+            )
+            self.assertIs(
+                reused_command.exception.code,
+                TradingSessionFailureCode.COMMAND_ID_REUSED,
+            )
+            self.assertEqual(liquidation_client.submit_count, 1)
+
+            # FORCE_SELL_FINISHED는 Position과 history 저장 뒤에만 G-06F로 종료된다.
+            drained_results = asyncio.run(recovered_controller.drain_events())
+            self.assertEqual(
+                tuple(
+                    transition_id
+                    for result in drained_results
+                    for transition_id in result.transition_ids
+                ),
+                ("G-06F",),
+            )
+            self.assertIs(
+                recovered_controller.status,
+                TradingSessionStatus.TERMINATED,
+            )
+            self.assertEqual(recovered_position.quantity, Decimal("0"))
+            self.assertEqual(
+                tuple(
+                    trade.side
+                    for trade in recovered_history.trade_history.trades
+                ),
+                (OrderSide.BUY, OrderSide.SELL),
+            )
+            self.assertEqual(
+                recovered_history.get_pending_order_recovery_records(),
+                (),
+            )
+
+            # Exact duplicate는 최초 receipt를 replay하고 최신-version 새 command는 종료 no-op이다.
+            duplicate = recovered_controller.liquidate_recovered_position(
+                command_id="liquidate-recovered-position",
+                expected_version=expected_version,
+            )
+            progress = recovered_controller.liquidate_recovered_position(
+                command_id="observe-recovered-liquidation-terminal",
+                expected_version=recovered_controller.context.version,
+            )
+            self.assertEqual(duplicate, liquidation)
+            self.assertIs(progress.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(liquidation_client.submit_count, 1)
+
+            # 셋째 process는 BUY와 SELL을 모두 재생해 Position 0을 만들고 어떤 주문도 제출하지 않는다.
+            final_client = RestartReconciliationRESTClient(buy_result)
+            final_client.additional_recent_results = (sell_result,)
+            final_controller, final_history, final_position = (
+                _create_recovery_controller(
+                    history_path,
+                    final_client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            final_controller.reconcile_startup_state()
+
+            self.assertFalse(final_controller.snapshot_session().has_open_position)
+            self.assertEqual(final_position.quantity, Decimal("0"))
+            self.assertEqual(len(final_history.trade_history.trades), 2)
+            self.assertEqual(final_client.submit_count, 0)
+
+    def test_recovered_liquidation_gate_race_rolls_back_before_submit(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_liquidation_gate_race_rolls_back_before_submit()
+        기능: 청산 Guard 직후 effect gate가 닫히면 주문 없이 NOT_STARTED로 복원되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order(
+            intent_id="recovery-gate-race-buy",
+            client_order_id="bat-recovery-gate-race-buy-1",
+        )
+        seed_result = _make_filled_result(
+            seed_order,
+            exchange_order_id="94501",
+            trade_id="54501",
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            TradeHistoryRepository(history_path).save_pending_order(seed_order)
+            client = _FilledSubmissionTestnetRESTClient(
+                startup_result=seed_result,
+                submission_exchange_order_id="94502",
+                submission_trade_id="54502",
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            controller.reconcile_startup_state()
+
+            # Prerequisite 통과 뒤 ForceSellAll 직전 gate close를 직접 주입한다.
+            with mock_patch.object(
+                TradingController,
+                "_order_pipeline_enabled",
+                False,
+            ):
+                with self.assertRaises(TradingSessionError) as gate_closed:
+                    controller.liquidate_recovered_position(
+                        command_id="liquidate-after-gate-race",
+                        expected_version=0,
+                    )
+
+            self.assertIs(
+                gate_closed.exception.code,
+                TradingSessionFailureCode.CONNECTION_NOT_READY,
+            )
+            self.assertIs(controller.status, TradingSessionStatus.NOT_STARTED)
+            self.assertIsNone(controller.session_id)
+            self.assertFalse(controller.context.initialized)
+            self.assertTrue(controller.snapshot_session().has_open_position)
+            self.assertGreater(position.quantity, Decimal("0"))
+            self.assertEqual(client.submit_count, 0)
+            self.assertEqual(
+                history_controller.get_pending_order_recovery_records(),
+                (),
+            )
+
+            # 실패 command는 cache되지 않아 동일 ID 재시도가 정확히 한 SELL만 만든다.
+            retry_result = controller.liquidate_recovered_position(
+                command_id="liquidate-after-gate-race",
+                expected_version=0,
+            )
+            self.assertIs(retry_result.status, TradingSessionStatus.STOPPING)
+            self.assertEqual(client.submit_count, 1)
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(position.quantity, Decimal("0"))
+
+    def test_recovered_liquidation_preflight_failure_is_retryable(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_liquidation_preflight_failure_is_retryable()
+        기능: filter·commission 사전검증 실패를 원자 복원하고 동일 명령 ID로 한 SELL만 재시도하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order(
+            intent_id="recovery-preflight-buy",
+            client_order_id="bat-recovery-preflight-buy-1",
+        )
+        seed_result = _make_filled_result(
+            seed_order,
+            exchange_order_id="94601",
+            trade_id="54601",
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            TradeHistoryRepository(history_path).save_pending_order(seed_order)
+            client = _FilledSubmissionTestnetRESTClient(
+                startup_result=seed_result,
+                submission_exchange_order_id="94602",
+                submission_trade_id="54602",
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            controller.reconcile_startup_state()
+            client.reject_prepare_order = True
+
+            # Preflight 예외은 journal·REST effect 전이므로 세션·Context를 명령 전으로 복원한다.
+            with self.assertRaises(TradingSessionError) as preflight_failed:
+                controller.liquidate_recovered_position(
+                    command_id="liquidate-after-preflight-failure",
+                    expected_version=0,
+                )
+
+            self.assertIs(
+                preflight_failed.exception.code,
+                TradingSessionFailureCode.COMMAND_DISABLED,
+            )
+            self.assertIs(controller.status, TradingSessionStatus.NOT_STARTED)
+            self.assertIsNone(controller.session_id)
+            self.assertFalse(controller.context.initialized)
+            self.assertTrue(controller.snapshot_session().has_open_position)
+            self.assertGreater(position.quantity, Decimal("0"))
+            self.assertEqual(client.submit_count, 0)
+            self.assertEqual(
+                history_controller.get_pending_order_recovery_records(),
+                (),
+            )
+
+            # 실패 command는 cache되지 않아 사전조건 해소 후 동일 ID가 SELL 하나만 생성한다.
+            client.reject_prepare_order = False
+            retry_result = controller.liquidate_recovered_position(
+                command_id="liquidate-after-preflight-failure",
+                expected_version=0,
+            )
+            self.assertIs(retry_result.status, TradingSessionStatus.STOPPING)
+            self.assertEqual(client.submit_count, 1)
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(position.quantity, Decimal("0"))
+
+    def test_recovered_liquidation_ignores_entry_cap_and_closes_full_position(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_liquidation_ignores_entry_cap_and_closes_full_position()
+        기능: 가격 상승으로 평가액이 entry cap을 넘어도 복구 Position 정확한 전량만 청산하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order(
+            intent_id="recovery-cap-buy",
+            client_order_id="bat-recovery-cap-buy-1",
+        )
+        seed_result = _make_filled_result(
+            seed_order,
+            exchange_order_id="94611",
+            trade_id="54611",
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            TradeHistoryRepository(history_path).save_pending_order(seed_order)
+            client = _FilledSubmissionTestnetRESTClient(
+                startup_result=seed_result,
+                submission_exchange_order_id="94612",
+                submission_trade_id="54612",
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                    maximum_order_notional=Decimal("100"),
+                )
+            )
+            controller.reconcile_startup_state()
+
+            # 0.25 ETH × 2,500 USDT는 100 USDT entry cap보다 크지만 SELL은 노출을 늘리지 않는다.
+            recovered_quantity = position.quantity
+            self.assertGreater(
+                recovered_quantity * Decimal("2500"),
+                Decimal("100"),
+            )
+            liquidation_result = controller.liquidate_recovered_position(
+                command_id="liquidate-after-cap-increase",
+                expected_version=0,
+            )
+            self.assertIs(
+                liquidation_result.status,
+                TradingSessionStatus.STOPPING,
+            )
+            self.assertEqual(client.submit_count, 1)
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(position.quantity, Decimal("0"))
+            liquidation_trade = history_controller.trade_history.trades[-1]
+            self.assertIs(liquidation_trade.side, OrderSide.SELL)
+            self.assertEqual(
+                liquidation_trade.requested_quantity,
+                recovered_quantity,
+            )
+            self.assertEqual(
+                history_controller.get_pending_order_recovery_records(),
+                (),
+            )
+
+    def test_recovered_liquidation_rejects_filter_rounded_dust(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_liquidation_rejects_filter_rounded_dust()
+        기능: exchange filter가 전량 수량을 내리면 PREPARED 저장과 SELL POST 전에 원자 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order(
+            intent_id="recovery-filter-dust-buy",
+            client_order_id="bat-recovery-filter-dust-buy-1",
+        )
+        seed_result = _make_filled_result(
+            seed_order,
+            exchange_order_id="94621",
+            trade_id="54621",
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            TradeHistoryRepository(history_path).save_pending_order(seed_order)
+            client = _FilledSubmissionTestnetRESTClient(
+                startup_result=seed_result,
+                submission_exchange_order_id="94622",
+                submission_trade_id="54622",
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            controller.reconcile_startup_state()
+            client.prepared_quantity_override = (
+                position.quantity - Decimal("0.001")
+            )
+
+            # LOT_SIZE 내림 수량은 전량과 다르므로 journal이나 submit 횟수를 만들지 않는다.
+            with self.assertRaises(TradingSessionError) as rounded_quantity:
+                controller.liquidate_recovered_position(
+                    command_id="liquidate-after-filter-resync",
+                    expected_version=0,
+                )
+
+            self.assertIs(
+                rounded_quantity.exception.code,
+                TradingSessionFailureCode.COMMAND_DISABLED,
+            )
+            self.assertIs(controller.status, TradingSessionStatus.NOT_STARTED)
+            self.assertIsNone(controller.session_id)
+            self.assertFalse(controller.context.initialized)
+            self.assertGreater(position.quantity, Decimal("0"))
+            self.assertEqual(client.submit_count, 0)
+            self.assertEqual(
+                history_controller.get_pending_order_recovery_records(),
+                (),
+            )
+
+            # Filter 재동기화를 모사한 뒤 같은 command ID가 정확한 전량 SELL 하나만 제출한다.
+            client.prepared_quantity_override = None
+            retry_result = controller.liquidate_recovered_position(
+                command_id="liquidate-after-filter-resync",
+                expected_version=0,
+            )
+            self.assertIs(retry_result.status, TradingSessionStatus.STOPPING)
+            self.assertEqual(client.submit_count, 1)
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(position.quantity, Decimal("0"))
+
+    def test_recovered_residual_filter_failure_enters_reconciliation(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_residual_filter_failure_enters_reconciliation()
+        기능: terminal partial 뒤 잔량 filter 실패가 private 예외 대신 operator lock으로 닫히는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order(
+            intent_id="recovery-residual-buy",
+            client_order_id="bat-recovery-residual-buy-1",
+        )
+        seed_result = _make_filled_result(
+            seed_order,
+            exchange_order_id="94631",
+            trade_id="54631",
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            TradeHistoryRepository(history_path).save_pending_order(seed_order)
+            client = _FilledSubmissionTestnetRESTClient(
+                startup_result=seed_result,
+                submission_exchange_order_id="94632",
+                submission_trade_id="54632",
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            controller.reconcile_startup_state()
+            client.terminal_partial_quantity = Decimal("0.249")
+
+            # 첫 전량 SELL은 terminal partial로 끝나고 G-06R이 3초 residual retry를 예약한다.
+            liquidation_result = controller.liquidate_recovered_position(
+                command_id="liquidate-before-residual-filter-failure",
+                expected_version=0,
+            )
+            self.assertIs(
+                liquidation_result.status,
+                TradingSessionStatus.STOPPING,
+            )
+            self.assertEqual(client.submit_count, 1)
+            asyncio.run(controller.drain_events())
+            self.assertEqual(position.quantity, Decimal("0.001"))
+            self.assertIs(controller.status, TradingSessionStatus.STOPPING)
+
+            # 잔량이 exchange step에 맞지 않는 상황을 주입해 due worker 경계가 fail closed되는지 본다.
+            client.prepared_quantity_override = Decimal("0.0005")
+            controller.trigger_order_reconciliation(
+                occurred_at=FIXED_TIME + timedelta(seconds=3),
+            )
+
+            self.assertIs(
+                controller.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+            self.assertFalse(controller.command_enabled)
+            self.assertEqual(client.submit_count, 1)
+            self.assertEqual(position.quantity, Decimal("0.001"))
+            self.assertEqual(
+                history_controller.get_pending_order_recovery_records(),
+                (),
+            )  # Filter 실패 attempt는 PREPARED journal을 만들지 않는다.
+
+    def test_recovered_liquidation_zero_free_balance_is_retryable(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_liquidation_zero_free_balance_is_retryable()
+        기능: 복원 Position과 free ETH 불일치를 effect 없이 복원하고 재동기화 후 동일 ID로 재시도한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order(
+            intent_id="recovery-zero-free-buy",
+            client_order_id="bat-recovery-zero-free-buy-1",
+        )
+        seed_result = _make_filled_result(
+            seed_order,
+            exchange_order_id="94701",
+            trade_id="54701",
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            TradeHistoryRepository(history_path).save_pending_order(seed_order)
+            client = _FilledSubmissionTestnetRESTClient(
+                startup_result=seed_result,
+                submission_exchange_order_id="94702",
+                submission_trade_id="54702",
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            controller.reconcile_startup_state()
+
+            # 최신 account stream 사실을 모사해 durable Position은 열려 있지만 free ETH는 0으로 만든다.
+            controller._account.apply_stream_snapshot(
+                AccountSnapshot(
+                    balances=(
+                        AssetBalance(
+                            asset="ETH",
+                            free=Decimal("0"),
+                            locked=Decimal("0"),
+                        ),
+                    ),
+                    updated_at=FIXED_TIME + timedelta(seconds=1),
+                    is_full_snapshot=False,
+                )
+            )
+            with self.assertRaises(TradingSessionError) as zero_quantity:
+                controller.liquidate_recovered_position(
+                    command_id="liquidate-after-zero-free-balance",
+                    expected_version=0,
+                )
+
+            self.assertIs(
+                zero_quantity.exception.code,
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+            )
+            self.assertIs(controller.status, TradingSessionStatus.NOT_STARTED)
+            self.assertIsNone(controller.session_id)
+            self.assertFalse(controller.context.initialized)
+            self.assertTrue(controller.snapshot_session().has_open_position)
+            self.assertGreater(position.quantity, Decimal("0"))
+            self.assertEqual(client.submit_count, 0)
+            self.assertEqual(
+                history_controller.get_pending_order_recovery_records(),
+                (),
+            )
+
+            # Account 재동기화 후 실패 command ID를 재사용해 SELL 하나만 제출한다.
+            controller._account.apply_stream_snapshot(
+                AccountSnapshot(
+                    balances=(
+                        AssetBalance(
+                            asset="ETH",
+                            free=position.quantity,
+                            locked=Decimal("0"),
+                        ),
+                    ),
+                    updated_at=FIXED_TIME + timedelta(seconds=2),
+                    is_full_snapshot=False,
+                )
+            )
+            retry_result = controller.liquidate_recovered_position(
+                command_id="liquidate-after-zero-free-balance",
+                expected_version=0,
+            )
+            self.assertIs(retry_result.status, TradingSessionStatus.STOPPING)
+            self.assertEqual(client.submit_count, 1)
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(position.quantity, Decimal("0"))
+
+    def test_recovered_liquidation_save_then_raise_keeps_operator_lock(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_liquidation_save_then_raise_keeps_operator_lock()
+        기능: PREPARED fsync 뒤 예외의 모호한 cut-point를 rollback하지 않고 제출 없이 잠그는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order(
+            intent_id="recovery-ambiguous-journal-buy",
+            client_order_id="bat-recovery-ambiguous-journal-buy-1",
+        )
+        seed_result = _make_filled_result(
+            seed_order,
+            exchange_order_id="94801",
+            trade_id="54801",
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            TradeHistoryRepository(history_path).save_pending_order(seed_order)
+            client = _FilledSubmissionTestnetRESTClient(
+                startup_result=seed_result,
+                submission_exchange_order_id="94802",
+                submission_trade_id="54802",
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            controller.reconcile_startup_state()
+            repository = history_controller._repository
+            original_save_pending = repository.save_pending_order
+
+            def save_pending_then_raise(
+                selected_repository: TradeHistoryRepository,
+                order: Order,
+            ) -> None:
+                """
+                함수 이름: save_pending_then_raise()
+                기능: 실제 PREPARED file·directory fsync를 끝낸 직후 호출자에게 I/O 예외를 주입한다.
+                인자: selected_repository -> class patch가 전달한 실제 repository
+                    order -> 복구 청산의 제출 전 canonical SELL Order
+                반환값: 반환하지 않음
+                작성 날짜: 2026/08/24
+                """
+                if selected_repository is not repository:
+                    raise AssertionError("unexpected pending repository")
+
+                # Durable 성공 뒤 예외는 호출자가 저장 성공 여부를 판별할 수 없는 모호한 경계다.
+                original_save_pending(order)
+                raise OSError("injected post-fsync pending journal failure")
+
+            # 저장 전 상태로 되돌리면 durable PREPARED를 숨길 수 있으므로 session lock을 유지해야 한다.
+            with mock_patch.object(
+                TradeHistoryRepository,
+                "save_pending_order",
+                autospec=True,
+                side_effect=save_pending_then_raise,
+            ):
+                liquidation = controller.liquidate_recovered_position(
+                    command_id="liquidate-after-ambiguous-journal",
+                    expected_version=0,
+                )
+
+            self.assertIs(
+                liquidation.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+            self.assertIs(
+                controller.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+            self.assertIsNotNone(controller.session_id)
+            self.assertTrue(controller.context.initialized)
+            self.assertFalse(controller.command_enabled)
+            self.assertTrue(controller.snapshot_session().has_open_position)
+            self.assertGreater(position.quantity, Decimal("0"))
+            self.assertEqual(client.submit_count, 0)
+            pending_records = (
+                history_controller.get_pending_order_recovery_records()
+            )
+            self.assertEqual(len(pending_records), 1)
+            self.assertIs(
+                pending_records[0].lifecycle,
+                PendingOrderRecoveryLifecycle.PREPARED,
+            )
+            self.assertIs(pending_records[0].order.side, OrderSide.SELL)
+
+            # Exact replay와 새 command 모두 현재 operator lock만 반환하고 두 번째 POST를 만들지 않는다.
+            duplicate = controller.liquidate_recovered_position(
+                command_id="liquidate-after-ambiguous-journal",
+                expected_version=0,
+            )
+            progress = controller.liquidate_recovered_position(
+                command_id="observe-ambiguous-journal-lock",
+                expected_version=controller.context.version,
+            )
+            self.assertEqual(duplicate, liquidation)
+            self.assertIs(
+                progress.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+            self.assertEqual(client.submit_count, 0)
+
+    def test_recovered_position_liquidation_guards_submit_zero_times(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_position_liquidation_guards_submit_zero_times()
+        기능: startup 미완료, Position 없음과 staged REGIME에서 복구 청산을 fail closed로 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        seed_order = _make_pending_order()
+        client = RestartReconciliationRESTClient(
+            _make_filled_result(seed_order)
+        )
+        client.include_recent_result = False
+
+        with TemporaryDirectory() as temporary_directory:
+            empty_history_path = Path(temporary_directory) / "empty.jsonl"
+            controller, _, _ = _create_recovery_controller(
+                empty_history_path,
+                client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+
+            # Account와 stream만 준비된 상태는 startup reconciliation을 대신할 수 없다.
+            with self.assertRaises(TradingSessionError) as before_startup:
+                controller.liquidate_recovered_position(
+                    command_id="liquidate-before-startup",
+                    expected_version=0,
+                )
+            self.assertIs(
+                before_startup.exception.code,
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+            )
+
+            # 정상 empty startup 뒤에는 청산할 Position이 없다는 typed failure를 반환한다.
+            controller.reconcile_startup_state()
+            with self.assertRaises(TradingSessionError) as without_position:
+                controller.liquidate_recovered_position(
+                    command_id="liquidate-without-position",
+                    expected_version=0,
+                )
+            self.assertIs(
+                without_position.exception.code,
+                TradingSessionFailureCode.TRADING_NOT_STARTED,
+            )
+            self.assertEqual(client.submit_count, 0)
+
+            # 실행 중인 정상 session은 recovery takeover보다 우선해 별도 active 오류로 거부한다.
+            active_stm = controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            active_selection = controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                active_stm,
+                command_id="select-before-active-recovery-request",
+                expected_version=0,
+            )
+            active_session = controller.start_trading(
+                command_id="start-before-active-recovery-request",
+                expected_version=active_selection.version,
+            )
+            with self.assertRaises(TradingSessionError) as active_request:
+                controller.liquidate_recovered_position(
+                    command_id="liquidate-active-normal-session",
+                    expected_version=active_session.version,
+                )
+            self.assertIs(
+                active_request.exception.code,
+                TradingSessionFailureCode.TRADING_ALREADY_ACTIVE,
+            )
+            controller.stop_trading(
+                command_id="stop-after-active-recovery-request",
+                expected_version=active_session.version,
+            )
+            self.assertEqual(client.submit_count, 0)
+
+            # 복구 Position이 있어도 staged UI REGIME을 durable provenance로 덮어쓰지 않는다.
+            recovered_history_path = (
+                Path(temporary_directory) / "recovered.jsonl"
+            )
+            repository = TradeHistoryRepository(recovered_history_path)
+            repository.save_pending_order(seed_order)
+            recovered_client = RestartReconciliationRESTClient(
+                _make_filled_result(seed_order)
+            )
+            recovered_controller, _, _ = _create_recovery_controller(
+                recovered_history_path,
+                recovered_client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            recovered_controller.reconcile_startup_state()
+            staged_stm = recovered_controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            staged_selection = recovered_controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                staged_stm,
+                command_id="stage-regime-before-recovery-liquidation",
+                expected_version=0,
+            )
+
+            with self.assertRaises(TradingSessionError) as staged_regime:
+                recovered_controller.liquidate_recovered_position(
+                    command_id="liquidate-with-staged-regime",
+                    expected_version=staged_selection.version,
+                )
+            self.assertIs(
+                staged_regime.exception.code,
+                TradingSessionFailureCode.INVALID_SESSION_STATE,
+            )
+            self.assertEqual(recovered_client.submit_count, 0)
+
+    def test_recovered_position_liquidation_rejects_mixed_or_unsupported_regime(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovered_position_liquidation_rejects_mixed_or_unsupported_regime()
+        기능: open lot의 durable REGIME이 혼합되거나 미지원이면 SELL 없이 청산 인수를 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        with TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+
+            # 같은 owner의 TYPE_0과 TYPE_1 BUY를 한 open lot에 저장해 기존 Position replay는 통과시킨다.
+            mixed_history_path = temporary_path / "mixed-regime.jsonl"
+            mixed_repository = TradeHistoryRepository(mixed_history_path)
+            mixed_history = TradeHistoryController(
+                mixed_repository,
+                clock=lambda: FIXED_TIME,
+            )
+            mixed_history.load_trade_history()
+            type_zero_order, type_zero_summary = make_order_execution(
+                exchange_order_id="95001",
+                side=OrderSide.BUY,
+                quantity=Decimal("0.10"),
+                fee_quote_amount=Decimal("0"),
+                regime_type=RegimeType.TYPE_0,
+            )
+            type_one_order, type_one_summary = make_order_execution(
+                exchange_order_id="95002",
+                side=OrderSide.BUY,
+                quantity=Decimal("0.10"),
+                fee_quote_amount=Decimal("0"),
+                regime_type=RegimeType.TYPE_1,
+            )
+            mixed_history.record_order_execution(
+                type_zero_order,
+                type_zero_summary,
+            )
+            mixed_history.record_order_execution(
+                type_one_order,
+                type_one_summary,
+            )
+            latest_mixed_result = OrderResult(
+                symbol=type_one_order.symbol,
+                client_order_id=type_one_order.client_order_id,
+                exchange_order_id=type_one_order.exchange_order_id,
+                status=OrderStatus.FILLED,
+                processed_at=FIXED_TIME,
+                fills=type_one_order.fills,
+            )
+            mixed_client = RestartReconciliationRESTClient(
+                latest_mixed_result
+            )
+            mixed_controller, _, _ = _create_recovery_controller(
+                mixed_history_path,
+                mixed_client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            mixed_controller.reconcile_startup_state()
+
+            with self.assertRaises(TradingSessionError) as mixed_regime:
+                mixed_controller.liquidate_recovered_position(
+                    command_id="liquidate-mixed-regime-position",
+                    expected_version=0,
+                )
+            self.assertIs(
+                mixed_regime.exception.code,
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+            )
+            self.assertEqual(mixed_client.submit_count, 0)
+
+            # 단일 TYPE_1 lot도 provenance는 명확하지만 registry가 미지원이므로 별도 typed 거부다.
+            unsupported_history_path = temporary_path / "unsupported-regime.jsonl"
+            unsupported_repository = TradeHistoryRepository(
+                unsupported_history_path
+            )
+            unsupported_history = TradeHistoryController(
+                unsupported_repository,
+                clock=lambda: FIXED_TIME,
+            )
+            unsupported_history.load_trade_history()
+            unsupported_order, unsupported_summary = make_order_execution(
+                exchange_order_id="95003",
+                side=OrderSide.BUY,
+                quantity=Decimal("0.10"),
+                fee_quote_amount=Decimal("0"),
+                regime_type=RegimeType.TYPE_1,
+            )
+            unsupported_history.record_order_execution(
+                unsupported_order,
+                unsupported_summary,
+            )
+            unsupported_result = OrderResult(
+                symbol=unsupported_order.symbol,
+                client_order_id=unsupported_order.client_order_id,
+                exchange_order_id=unsupported_order.exchange_order_id,
+                status=OrderStatus.FILLED,
+                processed_at=FIXED_TIME,
+                fills=unsupported_order.fills,
+            )
+            unsupported_client = RestartReconciliationRESTClient(
+                unsupported_result
+            )
+            unsupported_controller, _, _ = _create_recovery_controller(
+                unsupported_history_path,
+                unsupported_client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            unsupported_controller.reconcile_startup_state()
+
+            with self.assertRaises(TradingSessionError) as unsupported_regime:
+                unsupported_controller.liquidate_recovered_position(
+                    command_id="liquidate-unsupported-regime-position",
+                    expected_version=0,
+                )
+            self.assertIs(
+                unsupported_regime.exception.code,
+                TradingSessionFailureCode.UNSUPPORTED_TRADING_LOGIC,
+            )
+            self.assertEqual(unsupported_client.submit_count, 0)
+
+    def test_start_stays_disabled_until_startup_reconciliation_completes(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_start_stays_disabled_until_startup_reconciliation_completes()
+        기능: Testnet startup 복구 전 공개 start와 내부 주문 effect gate가 모두 닫히는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Exchange recent 목록이 비어 있는 정상 fresh-start fixture를 준비한다.
+        seed_order = _make_pending_order()  # Client/result identity 생성에만 쓰는 제출 전 주문이다.
+        client = RestartReconciliationRESTClient(
+            _make_filled_result(seed_order)
+        )
+        client.include_recent_result = False  # Startup exchange order 목록은 비워 둔다.
+
+        # Account와 stream이 준비돼도 startup order·Position 복구 전에는 command를 열지 않는다.
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            controller, _, _ = _create_recovery_controller(
+                history_path,
+                client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            self.assertFalse(controller.startup_reconciliation_complete)
+            self.assertFalse(controller.command_enabled)
+            self.assertFalse(
+                controller._order_pipeline_enabled
+            )  # Direct effect seam도 startup 복구 전에는 닫혀 있어야 한다.
+
+            # 지원 REGIME 선택 뒤 직접 start를 호출해도 Context와 외부 주문은 변경되지 않아야 한다.
+            selected_stm = controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-before-startup-reconciliation",
+                expected_version=0,
+            )
+            with self.assertRaises(TradingSessionError) as blocked_start:
+                controller.start_trading(
+                    command_id="start-before-startup-reconciliation",
+                    expected_version=selection.version,
+                )
+
+            self.assertIs(
+                blocked_start.exception.code,
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+            )
+            self.assertFalse(controller.context.initialized)
+            self.assertEqual(client.submit_count, 0)
+
+            # 동일 runtime에서 startup reconciliation을 완료하면 새 command만 정상 실행한다.
+            controller.reconcile_startup_state()
+            self.assertTrue(controller.startup_reconciliation_complete)
+            self.assertTrue(controller.command_enabled)
+            self.assertTrue(
+                controller._order_pipeline_enabled
+            )  # 복구 완료 뒤에만 정상 session의 주문 effect가 활성화된다.
+            started = controller.start_trading(
+                command_id="start-after-startup-reconciliation",
+                expected_version=selection.version,
+            )
+            stopped = controller.stop_trading(
+                command_id="stop-after-startup-reconciliation",
+                expected_version=started.version,
+            )
+
+            self.assertIs(started.status, TradingSessionStatus.RUNNING)
+            self.assertIs(stopped.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(client.submit_count, 0)
 
     def test_disconnect_after_journal_blocks_post_and_keeps_recovery_record(
         self,

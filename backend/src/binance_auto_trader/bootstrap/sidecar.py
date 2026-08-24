@@ -276,14 +276,18 @@ def read_sidecar_configuration_from_fd(
 def _create_sidecar_runtime_factory(
     configuration: SidecarConfiguration,
 ) -> Callable[
-    [Callable[[object], object], Callable[[object, object], object]],
+    [
+        Callable[[object], object],
+        Callable[[object, object], object],
+        Callable[[object, object], object],
+    ],
     ApplicationRuntime,
 ]:
     """
     함수 이름: _create_sidecar_runtime_factory()
     기능: secure FD 설정을 기존 Testnet runtime factory의 주입 mapping으로 닫아 보존한다.
     인자: configuration -> 검증된 read-only sidecar 설정
-    반환값: transport observer 두 개를 받는 application runtime factory
+    반환값: transport observer 세 개를 받는 application runtime factory
     작성 날짜: 2026/08/24
     """
     if not isinstance(configuration, SidecarConfiguration):
@@ -292,12 +296,14 @@ def _create_sidecar_runtime_factory(
     def runtime_factory(
         account_update_observer: Callable[[object], object],
         trade_history_update_observer: Callable[[object, object], object],
+        trading_session_update_observer: Callable[[object, object], object],
     ) -> ApplicationRuntime:
         """
         함수 이름: runtime_factory()
         기능: shared transport observer와 FD 설정으로 고정 Testnet application runtime을 조립한다.
         인자: account_update_observer -> Account publication 뒤 호출할 transport observer
             trade_history_update_observer -> durable Trade publication 뒤 호출할 transport observer
+            trading_session_update_observer -> background cycle 뒤 호출할 transport observer
         반환값: read-only Testnet ApplicationRuntime
         작성 날짜: 2026/08/24
         """
@@ -305,6 +311,7 @@ def _create_sidecar_runtime_factory(
         return create_testnet_application_runtime(
             account_update_observer,
             trade_history_update_observer,
+            trading_session_update_observer,
             history_path=configuration.history_path,
             environment=configuration.to_testnet_environment(),
         )

@@ -132,6 +132,61 @@ class LoopbackCsvExportDispatchTests(unittest.TestCase):
         )  # Parser owner가 exact key/value를 검증하도록 body와 identity를 그대로 보존한다.
 
 
+class LoopbackRecoveredPositionLiquidationDispatchTests(unittest.TestCase):
+    """
+    클래스 이름: LoopbackRecoveredPositionLiquidationDispatchTests
+    기능: 복구 Position 청산 endpoint가 별도 owner route에 body와 command ID를 전달하는지 검증한다.
+    작성 날짜: 2026/08/24
+    """
+
+    def test_recovery_liquidation_route_receives_exact_body_and_command_id(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovery_liquidation_route_receives_exact_body_and_command_id()
+        기능: recovery liquidation POST의 version body와 stable identity를 변형 없이 전달한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Socket 없이 새 endpoint의 dispatcher mapping만 독립 검증한다.
+        server = object.__new__(LoopbackTransportServer)
+        route_context = object()
+        server._route_context = route_context  # type: ignore[assignment]
+        expected_response = TransportResponse(
+            status=202,
+            payload={"ok": True},
+        )
+        request_id = "9f9408c9-c9a3-4e80-82b3-3573054aeb40"
+        command_id = "recovered-position-liquidation-command"
+        request_body = {
+            "schema_version": SCHEMA_VERSION,
+            "expected_version": 7,
+        }
+
+        with patch(
+            "binance_auto_trader.transport.app.liquidate_recovered_position",
+            return_value=expected_response,
+        ) as liquidate_recovered_position:
+            response = server._route_http_request(
+                (
+                    "POST",
+                    "/v1/trading/recovered-position/liquidate",
+                ),
+                request_id,
+                request_body=request_body,
+                command_id=command_id,
+            )
+
+        self.assertIs(response, expected_response)
+        liquidate_recovered_position.assert_called_once_with(
+            request_id,
+            route_context,
+            request_body,
+            command_id,
+        )  # Route owner가 exact DTO와 별도 idempotency namespace를 최종 검증한다.
+
+
 class _CommandHandler:
     """
     클래스 이름: _CommandHandler

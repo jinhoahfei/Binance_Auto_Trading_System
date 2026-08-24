@@ -1,8 +1,9 @@
 """Spot market/account payload와 fake·testnet 주문 결과를 정규화한다."""
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from typing import Protocol
 
 from binance_auto_trader.domain.trading.account import (
@@ -30,6 +31,128 @@ _INTERVAL_MILLISECONDS_BY_INTERVAL = {
     Interval.FOUR_HOURS: 14_400_000,
     Interval.ONE_DAY: 86_400_000,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class CommissionDiscountPolicy:
+    """
+    클래스 이름: CommissionDiscountPolicy
+    기능: 한 Spot symbol의 할인과 MARKET BUY 수신 자산 수수료 가능성을 raw payload 없이 보존한다.
+    작성 날짜: 2026/08/24
+    """
+
+    symbol: str
+    enabled_for_account: bool
+    enabled_for_symbol: bool
+    discount_asset: str | None
+    discount_rate: Decimal
+    standard_market_buy_rate: Decimal
+    special_market_buy_rate: Decimal
+    tax_market_buy_rate: Decimal
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: symbol, exact boolean, 할인 자산과 0~1 Decimal 비율을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Symbol은 REST identity와 같은 trimmed ASCII 대문자 형식을 사용한다.
+        if (
+            not isinstance(self.symbol, str)
+            or not self.symbol
+            or self.symbol != self.symbol.strip().upper()
+            or not self.symbol.isascii()
+            or not self.symbol.isalnum()
+        ):
+            raise ValueError("symbol must be canonical uppercase ASCII")
+
+        # 공식 string asset은 canonical하게 검증하고 all-zero Testnet absence만 None으로 보존한다.
+        if self.discount_asset is not None and (
+            not isinstance(self.discount_asset, str)
+            or not self.discount_asset
+            or self.discount_asset != self.discount_asset.strip().upper()
+            or not self.discount_asset.isascii()
+            or not self.discount_asset.isalnum()
+        ):
+            raise ValueError(
+                "discount_asset must be canonical uppercase ASCII or None"
+            )
+
+        # JSON truthy 값을 허용하지 않고 두 공식 flag와 Decimal 할인 범위를 고정한다.
+        if type(self.enabled_for_account) is not bool:
+            raise TypeError("enabled_for_account must be a bool")
+        if type(self.enabled_for_symbol) is not bool:
+            raise TypeError("enabled_for_symbol must be a bool")
+        if (
+            not isinstance(self.discount_rate, Decimal)
+            or not self.discount_rate.is_finite()
+            or not Decimal("0") <= self.discount_rate <= Decimal("1")
+        ):
+            raise ValueError("discount_rate must be a finite Decimal from 0 to 1")
+
+        # 공식 taker+buyer 합산은 음수·NaN을 허용하지 않고 각 수수료 유형을 분리한다.
+        for field_name in (
+            "standard_market_buy_rate",
+            "special_market_buy_rate",
+            "tax_market_buy_rate",
+        ):
+            field_value = getattr(self, field_name)
+            if (
+                not isinstance(field_value, Decimal)
+                or not field_value.is_finite()
+                or field_value < Decimal("0")
+            ):
+                raise ValueError(
+                    f"{field_name} must be a non-negative finite Decimal"
+                )
+
+        # 정책 객체의 null asset은 할인율과 세 MARKET BUY 합도 0인 안전 부재만 허용한다.
+        if self.discount_asset is None and (
+            self.discount_rate != Decimal("0")
+            or self.standard_market_buy_rate != Decimal("0")
+            or self.special_market_buy_rate != Decimal("0")
+            or self.tax_market_buy_rate != Decimal("0")
+        ):
+            raise ValueError(
+                "discount_asset may be None only for an all-zero policy"
+            )
+
+    @property
+    def can_charge_discount_asset(self) -> bool:
+        """
+        함수 이름: can_charge_discount_asset()
+        기능: 계정과 symbol 양쪽에서 별도 discount asset 수수료가 적용 가능한지 반환한다.
+        인자: 없음
+        반환값: 별도 할인 자산이 실제 수수료 자산이 될 수 있으면 True
+        작성 날짜: 2026/08/24
+        """
+        # String asset은 할인율 0이어도 tax/special 전환 가능성이 있어 두 flag로 판단한다.
+        return (
+            self.enabled_for_account
+            and self.enabled_for_symbol
+            and self.discount_asset is not None
+        )  # Raw parser는 이 null 예외 전에 12개 공식 비율 전부가 0인지도 확인한다.
+
+    @property
+    def market_buy_received_asset_commission_rate(self) -> Decimal:
+        """
+        함수 이름: market_buy_received_asset_commission_rate()
+        기능: MARKET BUY의 수신 base 자산에 적용될 수 있는 전체 taker+buyer 수수료율을 반환한다.
+        인자: 없음
+        반환값: standard, special과 tax 수수료율의 Decimal 합
+        작성 날짜: 2026/08/24
+        """
+        # 전역 Decimal context와 무관하게 프로젝트 Decimal128 정밀도로 세 유형을 합산한다.
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            return (
+                self.standard_market_buy_rate
+                + self.special_market_buy_rate
+                + self.tax_market_buy_rate
+            )
 
 
 class BinanceRESTClient(Protocol):
@@ -64,6 +187,16 @@ class BinanceRESTClient(Protocol):
         인자: 없음
         반환값: JSON으로 해석된 Binance REST account payload
         작성 날짜: 2026/08/21
+        """
+        ...
+
+    def get_account_commission(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_commission()
+        기능: 공식 GET /api/v3/account/commission payload를 반환한다.
+        인자: symbol -> 수수료 할인 설정을 조회할 Spot symbol
+        반환값: JSON으로 해석된 Binance commission payload
+        작성 날짜: 2026/08/24
         """
         ...
 
@@ -443,6 +576,136 @@ def _parse_account_snapshot(
     )
 
 
+def _parse_commission_rate_group(
+    payload: object,
+    field_name: str,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """
+    함수 이름: _parse_commission_rate_group()
+    기능: 공식 commission 유형의 maker·taker·buyer·seller 비음수 Decimal을 엄격히 해석한다.
+    인자: payload -> standard, special 또는 tax commission object
+        field_name -> 오류에 사용할 공식 상위 필드 이름
+    반환값: maker, taker, buyer, seller 순서의 Decimal tuple
+    작성 날짜: 2026/08/24
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"Binance {field_name} must be an object")
+
+    # 일부 필드 누락을 0으로 추측하지 않고 공식 네 비율을 모두 요구한다.
+    rates = tuple(
+        _read_decimal_string(
+            payload.get(rate_name),
+            f"{field_name}.{rate_name}",
+        )
+        for rate_name in ("maker", "taker", "buyer", "seller")
+    )
+    if any(rate < Decimal("0") for rate in rates):
+        raise ValueError(f"{field_name} rates must not be negative")
+
+    return rates
+
+
+def _sum_market_buy_commission_rate(
+    rates: tuple[Decimal, Decimal, Decimal, Decimal],
+) -> Decimal:
+    """
+    함수 이름: _sum_market_buy_commission_rate()
+    기능: MARKET BUY에 적용되는 공식 taker와 buyer 비율을 Decimal128로 합산한다.
+    인자: rates -> maker, taker, buyer, seller 순서의 commission tuple
+    반환값: taker + buyer Decimal 비율
+    작성 날짜: 2026/08/24
+    """
+    # 수신 base 수량 수수료에는 order role의 taker와 side의 buyer 비율이 함께 적용된다.
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decimal_context.rounding = ROUND_HALF_EVEN
+        return rates[1] + rates[2]
+
+
+def _parse_commission_discount_policy(
+    payload: object,
+    expected_symbol: str,
+) -> CommissionDiscountPolicy:
+    """
+    함수 이름: _parse_commission_discount_policy()
+    기능: 공식 account commission 응답의 할인과 MARKET BUY 수신 자산 비율을 엄격 정규화한다.
+    인자: payload -> GET /api/v3/account/commission JSON object
+        expected_symbol -> 요청에 사용한 canonical Spot symbol
+    반환값: raw 수수료율을 노출하지 않는 CommissionDiscountPolicy
+    작성 날짜: 2026/08/24
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError("Binance commission payload must be an object")
+    if payload.get("symbol") != expected_symbol:
+        raise ValueError("Binance commission symbol does not match request")
+
+    # 공식 네 비율을 먼저 보존해 Testnet null asset compatibility도 전체 12개로 검증한다.
+    standard_rates = _parse_commission_rate_group(
+        payload.get("standardCommission"),
+        "standardCommission",
+    )
+    special_rates = _parse_commission_rate_group(
+        payload.get("specialCommission"),
+        "specialCommission",
+    )
+    tax_rates = _parse_commission_rate_group(
+        payload.get("taxCommission"),
+        "taxCommission",
+    )
+
+    # 공식 FAQ의 MARKET BUY 산식에 필요한 세 유형의 taker+buyer 비율을 각각 계산한다.
+    standard_market_buy_rate = _sum_market_buy_commission_rate(
+        standard_rates
+    )
+    special_market_buy_rate = _sum_market_buy_commission_rate(special_rates)
+    tax_market_buy_rate = _sum_market_buy_commission_rate(tax_rates)
+
+    # 제3 자산 가능성을 결정하는 공식 discount object와 네 필드를 모두 요구한다.
+    discount_payload = payload.get("discount")
+    if not isinstance(discount_payload, Mapping):
+        raise TypeError("Binance commission discount must be an object")
+    enabled_for_account = discount_payload.get("enabledForAccount")
+    enabled_for_symbol = discount_payload.get("enabledForSymbol")
+    if type(enabled_for_account) is not bool:
+        raise TypeError("discount.enabledForAccount must be a bool")
+    if type(enabled_for_symbol) is not bool:
+        raise TypeError("discount.enabledForSymbol must be a bool")
+    if "discountAsset" not in discount_payload:
+        raise TypeError("discount.discountAsset is required")
+    discount_asset = discount_payload.get("discountAsset")
+    if discount_asset is not None and not isinstance(discount_asset, str):
+        raise TypeError("discount.discountAsset must be a string or null")
+    discount_rate = _read_decimal_string(
+        discount_payload.get("discount"),
+        "discount.discount",
+    )
+
+    # 공식 schema 밖의 Testnet null은 12개 수수료와 할인율이 모두 0일 때만 무수수료 부재로 받는다.
+    if discount_asset is None and (
+        discount_rate != Decimal("0")
+        or any(
+            rate != Decimal("0")
+            for rates in (standard_rates, special_rates, tax_rates)
+            for rate in rates
+        )
+    ):
+        raise ValueError(
+            "null discountAsset requires every commission rate to be zero"
+        )
+
+    # Dataclass가 canonical asset과 공식 0~1 할인율 범위를 마지막으로 검증한다.
+    return CommissionDiscountPolicy(
+        symbol=expected_symbol,
+        enabled_for_account=enabled_for_account,
+        enabled_for_symbol=enabled_for_symbol,
+        discount_asset=discount_asset,
+        discount_rate=discount_rate,
+        standard_market_buy_rate=standard_market_buy_rate,
+        special_market_buy_rate=special_market_buy_rate,
+        tax_market_buy_rate=tax_market_buy_rate,
+    )
+
+
 class APIGateway:
     """
     클래스 이름: APIGateway
@@ -567,6 +830,34 @@ class APIGateway:
         return _parse_account_snapshot(
             get_account(),
             normalized_asset,
+        )
+
+    def fetch_commission_discount_policy(
+        self,
+        symbol: str,
+    ) -> CommissionDiscountPolicy:
+        """
+        함수 이름: fetch_commission_discount_policy()
+        기능: signed account commission 응답을 수수료 할인 가능성 정책으로 정규화한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: credential과 raw 전체 payload가 없는 할인 정책
+        작성 날짜: 2026/08/24
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        get_account_commission = getattr(
+            self._rest_client,
+            "get_account_commission",
+            None,
+        )
+        if not callable(get_account_commission):
+            raise TypeError(
+                "rest_client must provide get_account_commission"
+            )
+
+        # REST client에는 canonical symbol만 전달하고 raw response는 이 adapter 안에서 소비한다.
+        return _parse_commission_discount_policy(
+            get_account_commission(symbol=normalized_symbol),
+            normalized_symbol,
         )
 
     def submit_order(self, order: Order) -> OrderResult:

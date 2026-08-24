@@ -1,6 +1,10 @@
 """Binance REST와 WebSocket payload 정규화 Gateway를 공개한다."""
 
-from .api_gateway import APIGateway, BinanceRESTClient
+from .api_gateway import (
+    APIGateway,
+    BinanceRESTClient,
+    CommissionDiscountPolicy,
+)
 from .mappers import (
     BinancePayloadError,
     SymbolFilterError,
@@ -26,6 +30,7 @@ __all__ = [
     "BinanceSpotRESTClient",
     "BinanceSpotWebSocketClient",
     "BinanceWebSocketClient",
+    "CommissionDiscountPolicy",
     "KlineBufferStateError",
     "Subscription",
     "SymbolFilterError",

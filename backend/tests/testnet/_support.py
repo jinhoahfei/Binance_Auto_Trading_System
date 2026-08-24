@@ -3,9 +3,11 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
 import os
+from pathlib import Path
 import time
 from uuid import uuid4
 
+from binance_auto_trader.adapters.persistence import TradeHistoryRepository
 from binance_auto_trader.bootstrap.testnet import (
     BINANCE_RUN_TESTNET_ENV,
     BINANCE_RUN_TESTNET_ORDERS_ENV,
@@ -13,10 +15,12 @@ from binance_auto_trader.bootstrap.testnet import (
     BINANCE_TESTNET_API_SECRET_ENV,
 )
 from binance_auto_trader.domain.common import RegimeType
+from binance_auto_trader.domain.history import Trade
 from binance_auto_trader.domain.trading.order import (
     Order,
     OrderResult,
 )
+from binance_auto_trader.domain.trading.position import Position
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
     OrderSide,
@@ -48,6 +52,59 @@ ORDER_SKIP_REASON = (
     f"{BINANCE_RUN_TESTNET_ORDERS_ENV}=1 with a max notional to run"
 )
 _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+TESTNET_BASELINE_HISTORY_PATH_ENV = "BINANCE_TESTNET_BASELINE_HISTORY_PATH"
+
+
+def seed_verified_closed_history(
+    destination_history_path: Path,
+) -> tuple[Trade, ...]:
+    """
+    함수 이름: seed_verified_closed_history()
+    기능: 선택한 실제 Testnet closed history를 새 run artifact에 durable baseline으로 복제한다.
+    인자: destination_history_path -> 새 lifecycle 또는 cold-restart history 파일
+    반환값: 검증하고 destination에 저장한 canonical Trade tuple
+    작성 날짜: 2026/08/24
+    """
+    # 호출 경계와 optional environment 원문을 파일 접근 전에 strict하게 검증한다.
+    if not isinstance(destination_history_path, Path):
+        raise TypeError("destination_history_path must be a Path")
+    raw_source_path = os.environ.get(TESTNET_BASELINE_HISTORY_PATH_ENV)
+    if raw_source_path is None:
+        return ()  # 최초 clean Testnet run은 기존과 같이 빈 history에서 시작한다.
+    if not raw_source_path or raw_source_path != raw_source_path.strip():
+        raise RuntimeError("Testnet baseline history path must be non-empty and trimmed")
+
+    # 외부 account 이력을 임의 신뢰하지 않고 durable source와 pending 부재를 먼저 검증한다.
+    source_history_path = Path(raw_source_path)
+    if not source_history_path.is_absolute():
+        raise RuntimeError("Testnet baseline history path must be absolute")
+    if source_history_path.resolve() == destination_history_path.resolve():
+        raise RuntimeError("Testnet baseline source and destination must differ")
+    if destination_history_path.exists():
+        raise RuntimeError("Testnet baseline destination must not already exist")
+    source_repository = TradeHistoryRepository(source_history_path)
+    baseline_trades = source_repository.get_trade_history()
+    if not baseline_trades:
+        raise RuntimeError("Testnet baseline history must contain durable trades")
+    if source_repository.get_pending_order_recovery_records():
+        raise RuntimeError("Testnet baseline history must not contain pending orders")
+
+    # Domain Position replay가 정확히 0인 history만 새 주문 run의 닫힌 provenance로 허용한다.
+    baseline_position = Position("ETHUSDT")
+    for baseline_trade in baseline_trades:
+        baseline_position.apply_historical_trade(baseline_trade)
+    if baseline_position.quantity != Decimal("0"):
+        raise RuntimeError("Testnet baseline history must close Position to zero")
+
+    # Repository의 canonical append와 fsync를 재사용해 child os._exit 전에도 baseline을 보존한다.
+    destination_repository = TradeHistoryRepository(destination_history_path)
+    for baseline_trade in baseline_trades:
+        destination_repository.save_this_trade_by_order_id(
+            baseline_trade.order_id,
+            baseline_trade,
+        )
+
+    return baseline_trades  # Startup이 Binance recent orders와 다시 대조할 closed provenance다.
 
 
 def create_test_client_order_id(side: OrderSide) -> str:

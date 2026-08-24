@@ -24,7 +24,11 @@ from binance_auto_trader.domain.trading.order import (
     OrderResultFailureKind,
     OrderStatus,
 )
-from binance_auto_trader.domain.trading.states import OrderSide, StrategyType
+from binance_auto_trader.domain.trading.states import (
+    ExitReason,
+    OrderSide,
+    StrategyType,
+)
 
 
 FIXED_TIME = datetime(2026, 8, 22, 5, 0, tzinfo=timezone.utc)
@@ -254,7 +258,7 @@ def _client(
     함수 이름: _client()
     기능: 고정 clock과 주입 transport를 사용하는 credential-safe REST client를 만든다.
     인자: transport -> response queue와 request 기록을 가진 fake transport
-        maximum_order_notional -> 선택 local opt-in 금액 상한
+        maximum_order_notional -> 선택 local BUY 진입 금액 상한
     반환값: 테스트 대상 BinanceSpotRESTClient
     작성 날짜: 2026/08/22
     """
@@ -453,6 +457,51 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
 
         self.assertEqual(len(transport.requests), 1)
         self.assertIn("/v3/exchangeInfo", transport.requests[0]["url"])
+
+    def test_account_commission_uses_signed_symbol_endpoint(self) -> None:
+        """
+        함수 이름: test_account_commission_uses_signed_symbol_endpoint()
+        기능: commission preflight가 공식 signed path와 canonical symbol만 전송하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        commission_payload = {
+            "symbol": "ETHUSDT",
+            "discount": {
+                "enabledForAccount": False,
+                "enabledForSymbol": True,
+                "discountAsset": "BNB",
+                "discount": "0.75000000",
+            },
+        }
+        transport = QueueHTTPTransport(
+            [
+                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                _json_response(commission_payload),
+            ]
+        )
+        client = _client(transport)
+
+        # Lowercase 입력은 canonical symbol로 정규화되고 raw response는 client 경계까지만 반환된다.
+        result = client.get_account_commission(symbol="ethusdt")
+
+        self.assertEqual(result, commission_payload)
+        self.assertEqual(len(transport.requests), 2)
+        commission_request = transport.requests[1]
+        parsed_url = urlsplit(commission_request["url"])
+        request_parameters = parse_qs(parsed_url.query)
+        self.assertEqual(parsed_url.path, "/api/v3/account/commission")
+        self.assertEqual(request_parameters["symbol"], ["ETHUSDT"])
+        self.assertIn("timestamp", request_parameters)
+        self.assertIn("recvWindow", request_parameters)
+        self.assertIn("signature", request_parameters)
+        self.assertEqual(
+            commission_request["headers"]["X-MBX-APIKEY"],
+            API_KEY,
+        )
+        self.assertNotIn(SECRET_KEY, commission_request["url"])
+        self.assertIsNone(commission_request["body"])
 
     def test_invalid_timestamp_resynchronizes_once_then_retries(self) -> None:
         """
@@ -679,6 +728,92 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
 
         self.assertEqual(len(transport.requests), 1)
         self.assertIn("/v3/exchangeInfo", transport.requests[0]["url"])
+
+    def test_configured_entry_cap_allows_stop_sell_above_quote_cap(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_configured_entry_cap_allows_stop_sell_above_quote_cap()
+        기능: Position을 줄이는 STOP SELL은 BUY 진입 cap보다 평가액이 커도 prepare되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        transport = QueueHTTPTransport(
+            [_json_response(_exchange_info_payload(maximum_notional="100000"))]
+        )
+        client = _client(
+            transport,
+            maximum_order_notional=Decimal("100"),
+        )
+        stop_sell = Order(
+            intent_id="force-sell:entry-cap-regression",
+            client_order_id="bat-entry-cap-stop-sell",
+            submission_attempt=0,
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            strategy=StrategyType.CASE_B,
+            regime_type=RegimeType.TYPE_0,
+            requested_quantity=Decimal("1.234"),
+            submitted_quantity=Decimal("1.234"),
+            market_price_at_decision=Decimal("100"),
+            exit_reason=ExitReason.STOP,
+        )
+
+        # Exchange filter는 유지하되 local quote cap은 exposure-reducing SELL을 거부하지 않는다.
+        prepared_sell = client.prepare_order(stop_sell)
+
+        self.assertIs(prepared_sell.side, OrderSide.SELL)
+        self.assertEqual(
+            prepared_sell.submitted_quantity,
+            Decimal("1.234"),
+        )
+        self.assertGreater(
+            prepared_sell.submitted_quantity
+            * prepared_sell.market_price_at_decision,
+            Decimal("100"),
+        )
+        self.assertEqual(len(transport.requests), 1)
+
+    def test_configured_entry_cap_still_blocks_non_stop_sell(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_configured_entry_cap_still_blocks_non_stop_sell()
+        기능: STOP cleanup이 아닌 일반 SELL은 기존 local quote cap을 우회하지 못하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        transport = QueueHTTPTransport(
+            [_json_response(_exchange_info_payload(maximum_notional="100000"))]
+        )
+        client = _client(
+            transport,
+            maximum_order_notional=Decimal("100"),
+        )
+        take_profit_sell = Order(
+            intent_id="case-b:entry-cap-regression",
+            client_order_id="bat-entry-cap-take-profit",
+            submission_attempt=0,
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            strategy=StrategyType.CASE_B,
+            regime_type=RegimeType.TYPE_0,
+            requested_quantity=Decimal("1.234"),
+            submitted_quantity=Decimal("1.234"),
+            market_price_at_decision=Decimal("100"),
+            exit_reason=ExitReason.TAKE_PROFIT,
+        )
+
+        # STOP provenance가 없는 SELL은 direct adapter 호출에서도 cap을 우회하지 못한다.
+        with self.assertRaisesRegex(
+            SymbolFilterError,
+            "FILTER_CONFIGURED_MAXIMUM_NOTIONAL",
+        ):
+            client.prepare_order(take_profit_sell)
+
+        self.assertEqual(len(transport.requests), 1)
 
     def test_query_hydrates_partial_fill_from_my_trades(self) -> None:
         """

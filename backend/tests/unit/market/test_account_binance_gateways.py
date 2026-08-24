@@ -48,6 +48,73 @@ def _official_account_payload() -> dict[str, object]:
     }
 
 
+def _official_commission_payload() -> dict[str, object]:
+    """
+    함수 이름: _official_commission_payload()
+    기능: Binance Spot account commission의 BNB discount fixture를 만든다.
+    인자: 없음
+    반환값: symbol과 공식 discount object를 가진 payload
+    작성 날짜: 2026/08/24
+    """
+    return {
+        "symbol": "ETHUSDT",
+        "standardCommission": {
+            "maker": "0.00010000",
+            "taker": "0.00020000",
+            "buyer": "0.00030000",
+            "seller": "0.00040000",
+        },
+        "specialCommission": {
+            "maker": "0.00100000",
+            "taker": "0.00200000",
+            "buyer": "0.00300000",
+            "seller": "0.00400000",
+        },
+        "taxCommission": {
+            "maker": "0.01000000",
+            "taker": "0.02000000",
+            "buyer": "0.03000000",
+            "seller": "0.04000000",
+        },
+        "discount": {
+            "enabledForAccount": True,
+            "enabledForSymbol": True,
+            "discountAsset": "BNB",
+            "discount": "0.75000000",
+        },
+    }
+
+
+def _zero_commission_payload_with_null_discount_asset() -> dict[str, object]:
+    """
+    함수 이름: _zero_commission_payload_with_null_discount_asset()
+    기능: 실제 Spot Testnet에서 관찰한 all-zero와 null discount asset payload를 만든다.
+    인자: 없음
+    반환값: 세 수수료 유형의 12개 비율과 할인이 모두 0인 commission payload
+    작성 날짜: 2026/08/24
+    """
+    zero_rate_group = {
+        "maker": "0.00000000",
+        "taker": "0.00000000",
+        "buyer": "0.00000000",
+        "seller": "0.00000000",
+    }
+
+    # 각 group은 독립 dictionary로 만들어 malformed subtest의 mutation이 서로 전파되지 않게 한다.
+    return {
+        "symbol": "ETHUSDT",
+        "standardCommission": dict(zero_rate_group),
+        "specialCommission": dict(zero_rate_group),
+        "taxCommission": dict(zero_rate_group),
+        "discount": {
+            "enabledForAccount": True,
+            "enabledForSymbol": True,
+            "discountAsset": None,
+            "discount": "0.00000000",
+        },
+    }
+
+
 def _official_account_event(
     *,
     update_time_milliseconds: int = FIRST_STREAM_UPDATE_MILLISECONDS,
@@ -130,6 +197,8 @@ class FakeBinanceClient:
         """
         self.account_payload: object = _official_account_payload()
         self.get_account_call_count = 0
+        self.commission_payload: object = _official_commission_payload()
+        self.commission_symbols: list[str] = []
         self.account_message_callbacks: list[Callable[[object], None]] = []
         self.account_disconnect_callbacks: list[Callable[[], None]] = []
         self.account_subscriptions: list[FakeSubscription] = []
@@ -152,6 +221,20 @@ class FakeBinanceClient:
             raise self.account_payload
 
         return self.account_payload
+
+    def get_account_commission(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_commission()
+        기능: 요청 symbol을 기록하고 설정된 commission payload 또는 예외를 반환한다.
+        인자: symbol -> APIGateway가 정규화한 Spot symbol
+        반환값: JSON으로 해석된 Binance account commission payload
+        작성 날짜: 2026/08/24
+        """
+        self.commission_symbols.append(symbol)
+        if isinstance(self.commission_payload, BaseException):
+            raise self.commission_payload
+
+        return self.commission_payload
 
     def get_klines(
         self,
@@ -349,6 +432,235 @@ class APIGatewayAccountTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "account REST unavailable"):
             APIGateway(client).fetch_account_snapshot("ETH")
+
+    def test_fetch_commission_discount_policy_normalizes_official_flags(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_fetch_commission_discount_policy_normalizes_official_flags()
+        기능: account commission의 symbol·BNB flag·Decimal 비율을 정책 객체로 축약한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        client = FakeBinanceClient()
+        gateway = APIGateway(client)
+
+        # Raw payload 대신 할인 가능성과 MARKET BUY 수신 자산 수수료율만 공개한다.
+        policy = gateway.fetch_commission_discount_policy("ethusdt")
+
+        self.assertEqual(client.commission_symbols, ["ETHUSDT"])
+        self.assertEqual(policy.symbol, "ETHUSDT")
+        self.assertTrue(policy.enabled_for_account)
+        self.assertTrue(policy.enabled_for_symbol)
+        self.assertEqual(policy.discount_asset, "BNB")
+        self.assertEqual(policy.discount_rate, Decimal("0.75000000"))
+        self.assertTrue(policy.can_charge_discount_asset)
+        self.assertEqual(
+            policy.standard_market_buy_rate,
+            Decimal("0.00050000"),
+        )
+        self.assertEqual(
+            policy.special_market_buy_rate,
+            Decimal("0.00500000"),
+        )
+        self.assertEqual(
+            policy.tax_market_buy_rate,
+            Decimal("0.05000000"),
+        )
+        self.assertEqual(
+            policy.market_buy_received_asset_commission_rate,
+            Decimal("0.05550000"),
+        )
+
+    def test_fetch_commission_discount_policy_rejects_malformed_payload(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_fetch_commission_discount_policy_rejects_malformed_payload()
+        기능: symbol mismatch, truthy flag와 비정상 할인율을 raw fallback 없이 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        malformed_payloads: tuple[object, ...] = (
+            [],
+            {"symbol": "BTCUSDT", "discount": {}},
+            {
+                **_official_commission_payload(),
+                "discount": {
+                    "enabledForAccount": 1,
+                    "enabledForSymbol": True,
+                    "discountAsset": "BNB",
+                    "discount": "0.75",
+                },
+            },
+            {
+                "symbol": "ETHUSDT",
+                "standardCommission": {
+                    "maker": "0",
+                    "taker": "-0.1",
+                    "buyer": "0",
+                    "seller": "0",
+                },
+                "specialCommission": {
+                    "maker": "0",
+                    "taker": "0",
+                    "buyer": "0",
+                    "seller": "0",
+                },
+                "taxCommission": {
+                    "maker": "0",
+                    "taker": "0",
+                    "buyer": "0",
+                    "seller": "0",
+                },
+                "discount": {
+                    "enabledForAccount": True,
+                    "enabledForSymbol": True,
+                    "discountAsset": "BNB",
+                    "discount": "0.75",
+                },
+            },
+            {
+                **_official_commission_payload(),
+                "discount": {
+                    "enabledForAccount": True,
+                    "enabledForSymbol": True,
+                    "discountAsset": "BNB",
+                    "discount": "1.1",
+                },
+            },
+        )
+
+        # 각 malformed 응답은 별도 fake로 실행해 parser state 공유 가능성을 배제한다.
+        for malformed_payload in malformed_payloads:
+            with self.subTest(malformed_payload=malformed_payload):
+                client = FakeBinanceClient()
+                client.commission_payload = malformed_payload
+
+                with self.assertRaises((TypeError, ValueError)):
+                    APIGateway(client).fetch_commission_discount_policy(
+                        "ETHUSDT"
+                    )
+
+    def test_zero_standard_discount_still_permits_discount_asset_fee(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_zero_standard_discount_still_permits_discount_asset_fee()
+        기능: 할인율 0이어도 enabled flag가 켜진 제3 자산 수수료 가능성을 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        client = FakeBinanceClient()
+        commission_payload = _official_commission_payload()
+        commission_payload["discount"] = {
+            "enabledForAccount": True,
+            "enabledForSymbol": True,
+            "discountAsset": "BNB",
+            "discount": "0.00000000",
+        }
+        client.commission_payload = commission_payload
+
+        # Discount 값은 standard 절감률일 뿐 tax/special의 BNB 변환 가능성을 끄지 않는다.
+        policy = APIGateway(client).fetch_commission_discount_policy(
+            "ETHUSDT"
+        )
+
+        self.assertEqual(policy.discount_rate, Decimal("0.00000000"))
+        self.assertTrue(policy.can_charge_discount_asset)
+
+    def test_all_zero_testnet_null_discount_asset_is_safe_absence(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_all_zero_testnet_null_discount_asset_is_safe_absence()
+        기능: 실제 Testnet의 all-zero null asset만 수수료 자산 부재로 정규화하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        client = FakeBinanceClient()
+        client.commission_payload = (
+            _zero_commission_payload_with_null_discount_asset()
+        )
+
+        # Flags가 참이어도 공제할 수수료와 asset이 모두 없으면 제3 자산 가능성을 열지 않는다.
+        policy = APIGateway(client).fetch_commission_discount_policy(
+            "ETHUSDT"
+        )
+
+        self.assertIsNone(policy.discount_asset)
+        self.assertEqual(
+            policy.market_buy_received_asset_commission_rate,
+            Decimal("0"),
+        )
+        self.assertFalse(policy.can_charge_discount_asset)
+
+    def test_null_discount_asset_rejects_nonzero_rate_or_discount(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_null_discount_asset_rejects_nonzero_rate_or_discount()
+        기능: 공식 schema 밖 null asset이 비율을 숨기는 완화를 fail closed하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        nonzero_rate_payload = (
+            _zero_commission_payload_with_null_discount_asset()
+        )
+        nonzero_rate_payload["standardCommission"] = {
+            "maker": "0.00000000",
+            "taker": "0.00000000",
+            "buyer": "0.00000000",
+            "seller": "0.00000001",
+        }
+        nonzero_discount_payload = (
+            _zero_commission_payload_with_null_discount_asset()
+        )
+        nonzero_discount_payload["discount"] = {
+            "enabledForAccount": True,
+            "enabledForSymbol": True,
+            "discountAsset": None,
+            "discount": "0.00000001",
+        }
+
+        # Rate 또는 할인 하나만 양수여도 unknown fee asset을 안전 부재로 오인하지 않는다.
+        for malformed_payload in (
+            nonzero_rate_payload,
+            nonzero_discount_payload,
+        ):
+            with self.subTest(malformed_payload=malformed_payload):
+                client = FakeBinanceClient()
+                client.commission_payload = malformed_payload
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "null discountAsset requires every commission rate",
+                ):
+                    APIGateway(client).fetch_commission_discount_policy(
+                        "ETHUSDT"
+                    )
+
+        missing_asset_payload = (
+            _zero_commission_payload_with_null_discount_asset()
+        )
+        missing_discount = missing_asset_payload["discount"]
+        if not isinstance(missing_discount, dict):
+            self.fail("discount fixture must be a mutable dictionary")
+        missing_discount.pop("discountAsset")
+
+        # 누락을 explicit JSON null과 합치지 않아 공식 네 discount field 요구를 보존한다.
+        client = FakeBinanceClient()
+        client.commission_payload = missing_asset_payload
+        with self.assertRaisesRegex(
+            TypeError,
+            "discount.discountAsset is required",
+        ):
+            APIGateway(client).fetch_commission_discount_policy("ETHUSDT")
 
 
 class WebSocketGatewayAccountTests(unittest.TestCase):

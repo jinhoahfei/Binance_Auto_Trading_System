@@ -528,7 +528,10 @@ def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
         # 현재 lifecycle에 따라 duplicate, 동시 시작, 종료 후 시작과 이전 실패를 구분한다.
         current_state = runtime.state
         if current_state.status is ApplicationStatus.READY:
-            return current_state  # 성공한 runtime의 중복 startup은 멱등 no-op이다.
+            event_runtime_worker = runtime._trading_event_runtime_worker
+            if event_runtime_worker is not None:
+                event_runtime_worker.start()
+            return current_state  # 성공한 runtime의 중복 startup과 worker 시작은 멱등 no-op이다.
         if current_state.status is ApplicationStatus.STARTING:
             failure = _create_failure(
                 StartupStage.APPLICATION,
@@ -577,17 +580,21 @@ def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
             raise
 
         # 세 단계가 모두 성공한 이 지점에서만 transport 공개가 가능한 READY가 된다.
-        return runtime._publish_state(
+        ready_state = runtime._publish_state(
             status=ApplicationStatus.READY,
             failure=None,
             startup_trace=runtime.startup_trace,
         )
+        event_runtime_worker = runtime._trading_event_runtime_worker
+        if event_runtime_worker is not None:
+            event_runtime_worker.start()
+        return ready_state  # READY 뒤 단일 worker를 시작하되 startup thread에서 cycle을 직접 실행하지 않는다.
 
 
 def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     """
     함수 이름: close_application()
-    기능: account recovery worker와 subscription을 순서대로 회수하고 lifecycle을 멱등 종료한다.
+    기능: trading/account worker와 subscription을 순서대로 회수하고 lifecycle을 멱등 종료한다.
     인자: runtime -> 종료할 application runtime
     반환값: CLOSED ApplicationStateSnapshot
     작성 날짜: 2026/08/21
@@ -596,7 +603,10 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
 
-    # Worker stop/join은 application lock 밖에서 수행해 진행 중 Controller 복구와 교착하지 않는다.
+    # Worker stop/join은 application lock 밖에서 수행해 진행 중 Controller cycle과 교착하지 않는다.
+    event_runtime_worker = runtime._trading_event_runtime_worker
+    if event_runtime_worker is not None:
+        event_runtime_worker.close()
     recovery_worker = runtime._account_stream_recovery_worker
     if recovery_worker is not None:
         recovery_worker.close()
@@ -842,7 +852,10 @@ def request_application_shutdown(
         return _await_shutdown_flight(runtime)  # 다른 key도 owner tail과 fsync를 반복하지 않는다.
 
     try:
-        # Worker join은 application lock 밖에서 수행해 진행 중 recovery와 교착하지 않는다.
+        # Worker join은 application lock 밖에서 수행해 진행 중 event/recovery cycle과 교착하지 않는다.
+        event_runtime_worker = runtime._trading_event_runtime_worker
+        if event_runtime_worker is not None:
+            event_runtime_worker.close()
         recovery_worker = runtime._account_stream_recovery_worker
         if recovery_worker is not None:
             recovery_worker.close()

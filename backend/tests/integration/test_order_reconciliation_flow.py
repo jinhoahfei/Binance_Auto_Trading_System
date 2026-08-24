@@ -372,7 +372,7 @@ def _create_started_controller(
     기능: ready account/market/stream과 Phase 8 Position/history를 가진 RUNNING Controller를 만든다.
     인자: client -> order response script와 account payload를 제공할 fake REST client
         clock -> Controller와 fake 결과가 공유할 deterministic clock
-        maximum_order_notional -> Order 생성 전 적용할 선택 quote 결정금액 상한
+        maximum_order_notional -> BUY Order 생성 전 적용할 선택 quote 진입 상한
         order_retry_jitter -> ADR-002 delay에 적용할 결정론적 factor provider 또는 None
     반환값: Controller, Position, history Controller와 in-memory repository tuple
     작성 날짜: 2026/08/22
@@ -552,12 +552,12 @@ class OrderReconciliationFlowTests(unittest.TestCase):
         self.assertTrue(first_id.startswith("bat-"))
         self.assertLessEqual(len(first_id), 36)
 
-    def test_order_notional_ceiling_clamps_controller_buy_and_force_sell(
+    def test_entry_notional_ceiling_clamps_buy_but_force_sell_closes_position(
         self,
     ) -> None:
         """
-        함수 이름: test_order_notional_ceiling_clamps_controller_buy_and_force_sell()
-        기능: Testnet quote 상한이 Order 생성 전 BUY와 force SELL 승인 수량을 모두 제한하는지 검증한다.
+        함수 이름: test_entry_notional_ceiling_clamps_buy_but_force_sell_closes_position()
+        기능: Testnet 진입 상한은 BUY만 제한하고 force SELL은 Position 전량을 닫는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/23
@@ -587,7 +587,7 @@ class OrderReconciliationFlowTests(unittest.TestCase):
             maximum_notional,
         )
 
-        # 큰 기존 Position의 force SELL도 cap까지만 한 번 제출하고 잔량은 retry에 남긴다.
+        # 큰 기존 Position의 force SELL은 가격 상승으로 평가액이 cap을 넘어도 전량을 줄인다.
         sell_clock = MutableUtcClock()
         sell_client = ScriptedOrderRESTClient(
             sell_clock,
@@ -599,18 +599,46 @@ class OrderReconciliationFlowTests(unittest.TestCase):
             maximum_order_notional=maximum_notional,
         )
         _open_case_b_position(sell_controller, sell_position)
+        position_quantity_before_stop = sell_position.quantity
+
+        # 일반 scale-out SELL은 기존 quote cap과 Position/free ETH 상한을 함께 유지한다.
+        ordinary_sell_quantity = sell_controller._calculate_order_quantity(
+            OrderSide.SELL,
+            Decimal("1"),
+            Decimal("2500"),
+            None,
+            force_sell=False,
+        )
+        self.assertLessEqual(
+            ordinary_sell_quantity * Decimal("2500"),
+            maximum_notional,
+        )
+        self.assertLessEqual(
+            ordinary_sell_quantity,
+            position_quantity_before_stop,
+        )
+
         sell_controller.stop_trading(
             command_id="capped-testnet-stop",
             expected_version=sell_controller.context.version,
         )
-        capped_sell = sell_client.submitted_orders[0]
-        self.assertIs(capped_sell.side, OrderSide.SELL)
-        self.assertLessEqual(
-            capped_sell.requested_quantity
-            * capped_sell.market_price_at_decision,
+        liquidation_sell = sell_client.submitted_orders[0]
+        self.assertIs(liquidation_sell.side, OrderSide.SELL)
+        self.assertEqual(
+            liquidation_sell.requested_quantity,
+            position_quantity_before_stop,
+        )
+        self.assertGreater(
+            liquidation_sell.requested_quantity
+            * liquidation_sell.market_price_at_decision,
             maximum_notional,
         )
-        self.assertGreater(sell_position.quantity, Decimal("0"))
+        asyncio.run(sell_controller.drain_events())
+        self.assertEqual(sell_position.quantity, Decimal("0"))
+        self.assertIs(
+            sell_controller.status,
+            TradingSessionStatus.TERMINATED,
+        )
 
     def test_timeout_recovers_by_querying_the_same_client_order_id(self) -> None:
         """

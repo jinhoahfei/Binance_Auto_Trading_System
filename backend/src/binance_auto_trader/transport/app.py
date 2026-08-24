@@ -35,6 +35,7 @@ from .contracts import (
     map_account_snapshot,
     map_performance,
     map_trade,
+    map_trading_snapshot,
     parse_trade_history_query_parameters,
     validate_uuid_text,
 )
@@ -46,6 +47,7 @@ from .routes.snapshot import get_snapshot
 from .routes.system import get_health, request_shutdown
 from .routes.trade_history import get_trades
 from .routes.trading import (
+    liquidate_recovered_position,
     start_trading,
     stop_trading,
     update_split_ratios,
@@ -70,6 +72,7 @@ _COMMAND_ENDPOINTS = frozenset(
         ("POST", "/v1/regime/selection"),
         ("POST", "/v1/trading/start"),
         ("POST", "/v1/trading/stop"),
+        ("POST", "/v1/trading/recovered-position/liquidate"),
         ("PATCH", "/v1/trading/split-ratios"),
         ("POST", "/v1/csv-exports"),
         ("POST", "/v1/shutdown"),
@@ -80,6 +83,7 @@ _BODY_COMMAND_ENDPOINTS = frozenset(
         ("POST", "/v1/regime/selection"),
         ("POST", "/v1/trading/start"),
         ("POST", "/v1/trading/stop"),
+        ("POST", "/v1/trading/recovered-position/liquidate"),
         ("PATCH", "/v1/trading/split-ratios"),
         ("POST", "/v1/csv-exports"),
         ("POST", "/v1/shutdown"),
@@ -1120,6 +1124,10 @@ class LoopbackTransportServer:
             ("POST", "/v1/regime/selection"): select_regime,
             ("POST", "/v1/trading/start"): start_trading,
             ("POST", "/v1/trading/stop"): stop_trading,
+            (
+                "POST",
+                "/v1/trading/recovered-position/liquidate",
+            ): liquidate_recovered_position,
             ("PATCH", "/v1/trading/split-ratios"): update_split_ratios,
             ("POST", "/v1/csv-exports"): create_csv_export,
             ("POST", "/v1/shutdown"): request_shutdown,
@@ -1553,9 +1561,52 @@ def create_trade_history_update_observer(
     return publish_trade_history_updated
 
 
+def create_trading_session_update_observer(
+    event_stream: BackendEventStream,
+) -> Callable[[object, object], object]:
+    """
+    함수 이름: create_trading_session_update_observer()
+    기능: background event cycle 뒤 authoritative trading lifecycle snapshot을 발행한다.
+    인자: event_stream -> WebSocket server와 공유할 BackendEventStream
+    반환값: create_application_runtime에 주입할 trading session observer
+    작성 날짜: 2026/08/24
+    """
+    if not isinstance(event_stream, BackendEventStream):
+        raise TypeError("event_stream must be a BackendEventStream")
+
+    def publish_trading_session_updated(
+        trading_controller: object,
+        execution_mode: object,
+    ) -> object:
+        """
+        함수 이름: publish_trading_session_updated()
+        기능: Controller와 mode를 한 DTO로 변환해 TRADING_SESSION_UPDATED event를 게시한다.
+        인자: trading_controller -> cycle을 commit한 authoritative TradingController
+            execution_mode -> bootstrap이 검증한 current ExecutionMode
+        반환값: 발급된 BackendEventEnvelope
+        작성 날짜: 2026/08/24
+        """
+        # Worker가 application RLock을 보유하므로 mapping과 aggregate version이 같은 snapshot이다.
+        trading_snapshot = map_trading_snapshot(
+            trading_controller,
+            execution_mode,
+        )
+        return event_stream.publish(
+            "TRADING_SESSION_UPDATED",
+            {"trading": trading_snapshot},
+            aggregate_version=trading_snapshot["version"],
+        )  # Background completion은 새 HTTP command가 아니므로 correlation ID를 만들지 않는다.
+
+    return publish_trading_session_updated
+
+
 def create_loopback_transport_application(
     runtime_factory: Callable[
-        [Callable[[object], object], Callable[[object, object], object]],
+        [
+            Callable[[object], object],
+            Callable[[object, object], object],
+            Callable[[object, object], object],
+        ],
         RuntimeSnapshotSource,
     ],
     session_token: str,
@@ -1567,7 +1618,7 @@ def create_loopback_transport_application(
     """
     함수 이름: create_loopback_transport_application()
     기능: 동일 event stream observer를 runtime factory와 loopback server에 top-level 조립한다.
-    인자: runtime_factory -> account와 trade history observer를 받아 runtime을 만드는 factory
+    인자: runtime_factory -> account, trade history와 trading session observer를 받는 factory
         session_token -> inherited pipe 또는 memory로 받은 session token
         allowed_origins -> exact Tauri와 optional dev Origin 목록
         start_runtime -> runtime startup 함수 또는 bootstrap 기본 함수
@@ -1600,16 +1651,20 @@ def create_loopback_transport_application(
             raise TypeError("close_runtime must be callable")
         selected_close_runtime = close_runtime
 
-    # Event stream을 먼저 만들어 두 observer와 WebSocket이 같은 instance를 공유한다.
+    # Event stream을 먼저 만들어 세 observer와 WebSocket이 같은 instance를 공유한다.
     event_stream = BackendEventStream()
     account_observer = create_account_update_observer(event_stream)
     trade_history_observer = create_trade_history_update_observer(event_stream)
+    trading_session_observer = create_trading_session_update_observer(
+        event_stream
+    )
     runtime: RuntimeSnapshotSource | None = None
     try:
         runtime = runtime_factory(
             account_observer,
             trade_history_observer,
-        )  # Entity callback과 loopback replay가 하나의 sequence owner를 공유한다.
+            trading_session_observer,
+        )  # Entity와 worker publication이 loopback replay의 sequence owner를 공유한다.
         selected_start_runtime(runtime)
 
         # Startup 함수의 반환만 믿지 않고 descriptor 공개에 필요한 ready 사후조건을 확인한다.
@@ -1677,7 +1732,11 @@ def read_session_token_from_fd(token_fd: int) -> str:
 
 def run_transport_process(
     runtime_factory: Callable[
-        [Callable[[object], object], Callable[[object, object], object]],
+        [
+            Callable[[object], object],
+            Callable[[object, object], object],
+            Callable[[object, object], object],
+        ],
         RuntimeSnapshotSource,
     ],
     *,
@@ -1692,7 +1751,7 @@ def run_transport_process(
     """
     함수 이름: run_transport_process()
     기능: inherited token과 runtime factory로 단일 소유 application process를 실행한다.
-    인자: runtime_factory -> shared account와 trade history observer를 받아 runtime을 만드는 factory
+    인자: runtime_factory -> shared account, history와 trading observer를 받는 runtime factory
         token_fd -> session token을 한 번 읽을 inherited pipe FD
         ready_fd -> secret 없는 descriptor를 기록할 inherited pipe FD
         stop_fd -> 한 byte 또는 EOF로 종료를 알릴 inherited pipe FD

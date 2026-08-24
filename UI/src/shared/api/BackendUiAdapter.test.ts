@@ -903,6 +903,56 @@ describe('BackendUiAdapter HTTP contract', () => {
         ]);
     });
 
+    it('Phase 9: 복구 Position 청산을 전용 endpoint와 현재 version으로 요청한다', async () => {
+        const base_snapshot = create_backend_snapshot_fixture();
+        const recovered_snapshot = {
+            ...base_snapshot,
+            trading: {
+                ...base_snapshot.trading,
+                has_open_position: true,
+            },
+        };
+        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+            const path = new URL(input.toString()).pathname;
+
+            if (path === '/v1/snapshot') {
+                return create_success_response(request_id, recovered_snapshot);
+            }
+
+            return create_success_response(request_id, {
+                version: 1,
+                status: 'stopping',
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+        });
+
+        await adapter.load_snapshot();
+        const receipt = await adapter.liquidate_recovered_position();
+
+        // 정상 stop endpoint 대신 recovery 전용 경계에 optimistic version을 그대로 전달한다.
+        expect(receipt).toEqual({
+            version: 1,
+            status: 'stopping',
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+        });
+        expect(fetch_mock).toHaveBeenCalledTimes(2);
+        const command_call = fetch_mock.mock.calls[1]!;
+        expect(new URL(command_call[0].toString()).pathname).toBe(
+            '/v1/trading/recovered-position/liquidate',
+        );
+        expect(command_call[1]?.method).toBe('POST');
+        expect(JSON.parse(command_call[1]?.body as string)).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION,
+            expected_version: 0,
+        });
+        expect(request_headers(command_call[1])['Idempotency-Key']).toBeDefined();
+    });
+
     it('selection 응답이 요청 REGIME과 다르면 local selection/version을 전진시키지 않는다', async () => {
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
