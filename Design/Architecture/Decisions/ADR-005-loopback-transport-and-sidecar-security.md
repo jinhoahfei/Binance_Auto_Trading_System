@@ -215,4 +215,14 @@ backend는 최근 10,000개 또는 15분 중 먼저 도달하는 범위의 event
 - [x] sequence, replay, gap과 full resync 규칙이 확정되었다.
 - [x] schema version, Origin/Host, log와 resource 제한이 확정되었다.
 - [x] Phase 5에서 contract generation/drift와 reconnect integration test를 구현했다.
-- [ ] Phase 12에서 packaged sidecar lifecycle과 CSP/capability를 검증한다.
+- [ ] 부분 완료 — Phase 12의 sidecar lifecycle과 CSP/capability를 component/unit 및 local
+  bundle 정적 검증으로 확인했다. 실제 Keychain credential packaged process smoke는 남아 있다.
+
+2026-08-24 Phase 12 local contract 검증에서 Tauri native unit 27개, backend 전체 595개
+(credential 기반 4개 safe skip), UI 264개가 통과했다. arm64 `.app`/`.dmg`에 packaged
+sidecar가 포함됐고 runtime response CSP의 `127.0.0.1:0` sentinel을 READY가 검증한 exact
+random port로만 교체하는 경로, main-window 최소 capability, one-shot descriptor, expected와
+abnormal exit bridge를 검증했다. DMG를 read-only mount한 뒤 app/sidecar strict ad-hoc
+signature와 DMG checksum도 확인했다. actual Keychain credential, clean-machine 실행과
+Developer ID 서명·notarization은 이 ADR의 contract 구현 증거와 구분해 Phase 12 roadmap의
+남은 external release smoke로 유지한다.

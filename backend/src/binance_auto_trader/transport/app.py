@@ -17,8 +17,8 @@ import re
 import select
 import socket
 import struct
-from threading import RLock, Thread
-from time import monotonic
+from threading import Event, RLock, Thread
+from time import monotonic, sleep
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -82,6 +82,7 @@ _BODY_COMMAND_ENDPOINTS = frozenset(
         ("POST", "/v1/trading/stop"),
         ("PATCH", "/v1/trading/split-ratios"),
         ("POST", "/v1/csv-exports"),
+        ("POST", "/v1/shutdown"),
     }
 )
 _KNOWN_ENDPOINTS = frozenset(
@@ -630,6 +631,8 @@ class LoopbackTransportServer:
         self._idempotency_records: dict[str, _IdempotencyRecord] = {}
         self._idempotency_order: deque[str] = deque()
         self._idempotency_flights: dict[str, _IdempotencyFlight] = {}
+        self._shutdown_response_flushed = Event()
+        self._active_request_count = 0
         self._http_server = _LoopbackHttpServer(self)
         self._server_thread: Thread | None = None
         self._started = False
@@ -663,6 +666,21 @@ class LoopbackTransportServer:
         작성 날짜: 2026/08/21
         """
         return self._event_stream  # server lifetime 동안 stream identity를 유지한다.
+
+    @property
+    def shutdown_response_flushed(self) -> bool:
+        """
+        함수 이름: shutdown_response_flushed()
+        기능: accepted shutdown HTTP body가 client socket buffer까지 기록됐는지 반환한다.
+        인자: 없음
+        반환값: HTTP 202 response flush가 끝났으면 True
+        작성 날짜: 2026/08/24
+        """
+        with self._lifecycle_lock:
+            return (
+                self._shutdown_response_flushed.is_set()
+                and self._active_request_count == 0
+            )  # Accepted body와 이미 수락한 concurrent handler가 모두 끝나야 한다.
 
     def start(self) -> ServerDescriptor:
         """
@@ -717,16 +735,40 @@ class LoopbackTransportServer:
     def handle_request(self, handler: _LoopbackRequestHandler) -> None:
         """
         함수 이름: handle_request()
+        기능: process exit가 진행 중 handler를 자르지 않도록 request lifetime을 계수한다.
+        인자: handler -> 현재 stdlib HTTP request handler
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        with self._lifecycle_lock:
+            self._active_request_count += 1  # 첫 byte 검증 전부터 handler lifetime을 소유한다.
+
+        try:
+            self._handle_authenticated_request(handler)
+        finally:
+            with self._lifecycle_lock:
+                self._active_request_count -= 1
+                if self._active_request_count < 0:
+                    raise RuntimeError("active request count cannot be negative")
+
+    def _handle_authenticated_request(
+        self,
+        handler: _LoopbackRequestHandler,
+    ) -> None:
+        """
+        함수 이름: _handle_authenticated_request()
         기능: Host/Origin/auth/header/body 검증 뒤 HTTP route 또는 WebSocket을 실행한다.
         인자: handler -> 현재 stdlib HTTP request handler
         반환값: 없음
-        작성 날짜: 2026/08/21
+        작성 날짜: 2026/08/24
         """
         response_request_id = _safe_request_id(handler)
         response_origin: str | None = None
+        response_path: str | None = None
 
         try:
             request_target = _parse_request_target(handler.path)
+            response_path = request_target.path
             response_origin = self._validate_host_and_origin(handler)
             if request_target.path == "/v1/events":
                 self._handle_websocket_upgrade(handler, request_target)
@@ -761,6 +803,12 @@ class LoopbackTransportServer:
             response = error_response(response_request_id, internal_error)
 
         _send_http_response(handler, response, response_origin)
+        if (
+            response_path == "/v1/shutdown"
+            and response.status == 202
+            and response.payload.get("ok") is True
+        ):
+            self._shutdown_response_flushed.set()  # body flush 이후에만 process exit를 허용한다.
 
     def handle_options(self, handler: _LoopbackRequestHandler) -> None:
         """
@@ -1639,6 +1687,7 @@ def run_transport_process(
     allowed_origins: Sequence[str],
     start_runtime: Callable[[RuntimeSnapshotSource], object] | None = None,
     close_runtime: Callable[[RuntimeSnapshotSource], object] | None = None,
+    require_closed_before_stop: bool = False,
 ) -> None:
     """
     함수 이름: run_transport_process()
@@ -1650,6 +1699,7 @@ def run_transport_process(
         allowed_origins -> exact Origin allowlist
         start_runtime -> runtime startup 함수 또는 bootstrap 기본 함수
         close_runtime -> account subscription 등 bootstrap 자원을 닫는 함수
+        require_closed_before_stop -> stop pipe만으로 runtime을 강제 종료하지 않을지 여부
     반환값: stop 신호 뒤 server가 종료되면 없음
     작성 날짜: 2026/08/21
     """
@@ -1658,6 +1708,8 @@ def run_transport_process(
     _validate_file_descriptor(stop_fd, "stop_fd")
     if len({token_fd, ready_fd, stop_fd}) != 3:
         raise ValueError("token, ready and stop file descriptors must differ")
+    if type(require_closed_before_stop) is not bool:
+        raise TypeError("require_closed_before_stop must be a bool")
 
     transport_application: LoopbackTransportApplication | None = None
     session_token = ""
@@ -1682,8 +1734,15 @@ def run_transport_process(
         os.close(ready_fd)
         ready_fd_open = False
 
-        # 어떤 stop byte든 또는 parent pipe EOF든 process 종료 요청으로 취급한다.
-        os.read(stop_fd, 1)
+        # 기존 test runner는 pipe 신호를 유지하고 production sidecar는 CLOSED 전 강제 종료를 거부한다.
+        if not require_closed_before_stop:
+            os.read(stop_fd, 1)
+        else:
+            _wait_for_safe_process_ack(
+                transport_application.runtime,
+                transport_application.server,
+                stop_fd,
+            )
     finally:
         if token_fd_open:
             _close_file_descriptor_safely(token_fd)
@@ -1696,6 +1755,68 @@ def run_transport_process(
         if transport_application is not None:
             transport_application.stop()
         session_token = ""  # process runner도 shutdown 시 token 참조를 제거한다.
+
+
+def _wait_for_safe_process_ack(
+    runtime: RuntimeSnapshotSource,
+    server: LoopbackTransportServer,
+    stop_fd: int,
+) -> None:
+    """
+    함수 이름: _wait_for_safe_process_ack()
+    기능: CLOSED 뒤 수신한 FD5 ack를 latch하고 accepted response handler 완료 뒤에만 반환한다.
+    인자: runtime -> authoritative CLOSED publication을 제공하는 runtime
+        server -> shutdown response flush와 active handler 완료를 제공하는 server
+        stop_fd -> Tauri waiter가 acknowledgement를 쓰는 inherited read FD
+    반환값: post-CLOSED ack와 response 완료가 모두 충족되면 없음
+    작성 날짜: 2026/08/24
+    """
+    _validate_file_descriptor(stop_fd, "stop_fd")
+    stop_pipe_reached_eof = False
+    post_closed_ack_received = False
+
+    while True:
+        # Handler가 active-count를 내리기 전에 온 유효 ack도 잃지 않고 완료조건을 나중에 결합한다.
+        if post_closed_ack_received and server.shutdown_response_flushed:
+            return
+        if stop_pipe_reached_eof:
+            sleep(0.05)  # Parent crash EOF는 unsafe exit 권한 없이 process만 유지한다.
+            continue
+
+        readable_descriptors, _, _ = select.select(
+            (stop_fd,),
+            (),
+            (),
+            0.05,
+        )
+        if not readable_descriptors:
+            continue
+
+        stop_signal = os.read(stop_fd, 1)
+        if not stop_signal:
+            stop_pipe_reached_eof = True
+            continue
+
+        # READY 중 byte는 버리고 오직 읽은 시점에 CLOSED인 non-empty byte만 latch한다.
+        if _runtime_is_closed(runtime):
+            post_closed_ack_received = True
+
+
+def _runtime_is_closed(runtime: RuntimeSnapshotSource) -> bool:
+    """
+    함수 이름: _runtime_is_closed()
+    기능: production process가 unsafe pipe 신호 대신 application CLOSED publication을 기다리게 한다.
+    인자: runtime -> application state와 publication lock을 제공하는 runtime
+    반환값: authoritative lifecycle이 CLOSED이면 True
+    작성 날짜: 2026/08/24
+    """
+    if not hasattr(runtime, "application_lock"):
+        raise TypeError("runtime must expose application_lock")
+
+    # State와 closed 판정은 bootstrap publication과 동일한 application lock에서 읽는다.
+    with runtime.application_lock:
+        runtime_state = getattr(runtime, "state", None)
+        return getattr(runtime_state, "closed", False) is True
 
 
 def _require_runtime_ready(runtime: RuntimeSnapshotSource) -> None:
@@ -2132,6 +2253,7 @@ def _send_http_response(
     handler.end_headers()
     if handler.command != "HEAD":
         handler.wfile.write(encoded_payload)
+        handler.wfile.flush()  # accepted shutdown body가 process exit 전에 socket 경계로 내려가게 한다.
     handler.close_connection = True  # unread malformed body가 다음 HTTP request를 오염시키지 않는다.
 
 

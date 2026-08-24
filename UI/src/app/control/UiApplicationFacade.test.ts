@@ -634,4 +634,24 @@ describe('UiApplicationFacade', () => {
         expect(facade.get_view_model().account_summary.strategy.status).toBe('자동매매 종료');
         facade.stop();
     });
+
+    it('Phase 12 abnormal sidecar event는 command 없이 restart recovery modal을 우선한다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const facade = new UiApplicationFacade(command_adapter, {
+            today: '2026-08-24',
+        });
+
+        facade.start();
+        facade.dispatch({ type: 'BACKEND_SIDECAR_EXITED_ABNORMALLY' });
+        expect(facade.get_view_model().app_exit.status).toBe('sidecar_exit_failure');
+        expect(facade.get_view_model().active_modal).toBe('sidecar_exit_failure');
+
+        // Native·renderer close intent가 다시 와도 dead child에 shutdown command를 보내지 않는다.
+        facade.dispatch({ type: 'APP_EXIT_CLICKED' });
+        expect(facade.get_view_model().active_modal).toBe('sidecar_exit_failure');
+        facade.dispatch({ type: 'APP_EXIT_CONFIRMED' });
+        expect(facade.get_view_model().app_exit.is_final).toBe(true);
+        expect(command_adapter.command_records).toEqual([]);
+        facade.stop();
+    });
 });

@@ -2,12 +2,12 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | 실행 기준 문서 / Phase 10 완료·Phase 9 실제 Testnet 검증 대기 |
-| 기준일 | 2026-08-23 (Asia/Seoul) |
+| 문서 상태 | 실행 기준 문서 / Phase 12 local 구현·자동 검증 완료, clean-machine·credential 검증 대기 |
+| 기준일 | 2026-08-24 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 10의 strict `/v1/trades` composite query, `TradeHistoryController.get_trade_details`, D-12 summary/filtered rows 분리, 12개 filter 조합, live order/account/performance event, reconnect 교체, KST 자정 자동 summary refresh와 실제 UI 상태를 완료했다. 사용자가 Phase 10을 명시적으로 요청했고 Phase 9의 남은 항목은 credential이 필요한 외부 검증이어서, 기술 선행 Phase 5/8이 완료된 이 범위만 예외적으로 진행했다. Phase 9 master는 계속 `[ ]`이며 다음 작업은 credential 기반 실제 Testnet 검증이다. |
+| 현재 결론 | Phase 11 CSV export를 완료했고 Phase 12의 fixed-FD sidecar handshake, exact-port CSP, 최소 capability, Keychain credential, safe shutdown/timeout/crash recovery와 macOS arm64 `.app`/`.dmg` local package를 구현·자동 검증했다. 실제 Keychain credential을 사용하는 packaged contract smoke, clean-machine 실행, Developer ID 서명·notarization은 수행하지 않았으므로 Phase 12 master는 `[ ] 부분 완료`다. Phase 9 master도 credential 기반 실제 Testnet 검증 전까지 계속 `[ ]`이며 live는 Phase 13 별도 승인 전까지 잠겨 있다. |
 
 ---
 
@@ -78,30 +78,29 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 
 ---
 
-## 3. 2026-08-23 현재 검증된 상태
+## 3. 2026-08-24 현재 검증된 상태
 
 ### 3.1 자동 검증 결과
 
 | 영역 | 실행 결과 | 판단 |
 |---|---|---|
-| 통합 backend | 표준 `unittest` 527개 실행, 523개 통과·credential 기반 4개 safe skip | 기존 Phase 0~9 회귀와 Phase 10 controller/transport/event/Case 3 계약 검증 통과 |
+| 통합 backend | 표준 `unittest` 595개 실행, 591개 통과·credential 기반 4개 safe skip | 기존 Phase 0~11 회귀와 Phase 12 sidecar configuration, shutdown HTTP/process ACK, durability, actual-process 계약 검증 통과 |
 | Phase 9 집중 | adapter, bootstrap, pending journal, startup/reconnect, fee migration과 deterministic fault injection 검증 | timeout/5xx/429, `-2010` UNKNOWN, same-ID 복구, PREPARED ambiguity, 두 REST snapshot gap, reset provenance와 이중 opt-in 검증 |
 | Phase 10 집중 | architecture 49개, Case 3 backend/UI trace, 12개 filter, KST 자정·save/retry rollover, empty/failure/retry, load 중 체결, replay gap resync 검증 | filter는 rows만 교체하고 Account version/KST 날짜/Trade publication이 바뀐 summary만 재결합하며 event pair는 원자 발행 |
-| package/static | offline wheel build, `compileall`, generated contract drift와 `git diff --check` 최종 재검증 | Phase 10 controller/query/route/event public type을 wheel과 generated TypeScript 계약에 포함 |
-| UI | Vitest 31개 파일, 200개 테스트 전부 통과 | 실제 history loading/ready/empty/failed/retry, in-flight 취소·재진입, event race, KST 자정 timer, 12개 결합 filter와 reconnect 회귀 포함 |
-| UI typecheck/build | `tsc -b --pretty false`, Vite build 285 modules, Storybook static build 성공 | TypeScript strict schema v2 details/event 계약, production bundle과 fake Storybook 정상 |
-| process/HTTP 검증 | 실제 Python child UI test 1개와 loopback HTTP/CORS/query tests를 통과 | startup 메시지 `1 → 2 → 3 → 4 → 5` 뒤 `전체 보기`에서 Case 3 상세 heading과 실제 empty 응답까지 확인 |
+| package/static | offline wheel build, `compileall`, generated contract drift와 `git diff --check` 최종 재검증 | Phase 12 sidecar entrypoint와 pinned desktop packaging extra를 wheel metadata에 포함 |
+| UI | Vitest 35개 파일, 264개 테스트 전부 통과 | 기존 화면 회귀와 one-shot descriptor, READY snapshot retry, close/Command-Q, shutdown timeout·crash recovery 포함 |
+| UI typecheck/build | `tsc -b --pretty false`, Vite build 286 modules, Storybook static build 성공 | strict native IPC/HTTP shutdown 계약, production bundle과 fake Storybook 정상 |
+| process/HTTP 검증 | 실제 Python child와 loopback HTTP/CORS/query/shutdown tests를 통과 | fixed FD configuration, exact `202`/`409`, post-CLOSED process ACK와 기존 startup 메시지 `1 → 2 → 3 → 4 → 5` 검증 |
 | generated contract | Python schema v2 renderer와 `backendContracts.generated.ts` byte-for-byte 일치 | max 1,000 rows, details composite와 ORDER/PERFORMANCE event payload를 Python authoritative source로 유지 |
-| Git 범위 | Phase 10 History controller/domain query/transport/UI/test/docs 변경만 포함 | Binance payload/client, credential, CSV writer, Tauri와 live enable 변경 없음 |
-| Tauri/Rust | memory-only one-shot descriptor source와 unit test 3개 추가, Rust toolchain 명령은 미실행 | 현 환경에 `cargo`/`rustc`가 없으며 sidecar spawn/package/shutdown은 Phase 12에서 검증 |
+| Git 범위 | Phase 12 backend bootstrap/transport, Tauri native lifecycle, UI exit/recovery, packaging/security test와 문서 변경 | Binance payload/client와 live enable은 변경하지 않음 |
+| Tauri/Rust | `cargo fmt --check`, `cargo check --tests --locked`, native unit 27개 전부 통과 | random-port sidecar, runtime CSP rewrite, minimal capability, Keychain, late READY/pre-window child exit와 expected/abnormal exit 검증 |
+| macOS bundle | arm64 `.app`/`.dmg` 생성, DMG checksum과 DMG 내부 app/sidecar strict ad-hoc signature 검증 통과 | Developer ID 서명·notarization 및 clean-machine credential smoke는 미실행 |
 
-현재 환경에는 `pytest`가 설치되어 있지 않아 Python 검증은 프로젝트가 실제 사용하는
-표준 `unittest`로 수행했다. offline wheel을 clean venv에
-`--no-deps`로 설치한 Phase 9 wheel 검증을 유지하고, Phase 10에서는 수정된 package를
+Python 검증은 프로젝트가 사용하는 표준 `unittest`로 수행했고 수정 package를
 `uv build --wheel --offline`으로 다시 생성했다. UI는 설치된 `node_modules/.bin`으로
-실제 loopback child-process의 Trade History 상세 진입까지 다시 검증했다.
-Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는 실행하지 못했으며,
-이 사실을 Phase 12 인계 조건으로 유지한다.
+Vitest, TypeScript, Vite와 Storybook을 검증했다. 이 host에 Rust toolchain을 설치한 뒤
+locked Cargo check/test와 release Tauri package를 실행했다. local bundle은 ad-hoc hardened
+runtime으로 봉인했지만 배포 인증서가 아니므로 Gatekeeper 배포 증거로 사용하지 않는다.
 
 ### 3.2 현재 완료된 핵심
 
@@ -173,6 +172,16 @@ Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는
 - [x] duplicate/out-of-order/event ID 중복을 거르고 gap·session change에서는 snapshot-first full resync한다.
 - [x] 실제 Python child process의 read-only ETHUSDT/USDT snapshot을 React App에 표시하고 메시지 `1`~`5` 통합 trace를 검증했다.
 - [x] backend market event parity 전에는 공개 Binance chart를 교체하지 않고 display-only로 유지한다.
+- [x] Tauri native owner가 launch별 token과 credential/config를 argv·environment·filesystem 없이
+  fixed FD `3`/`6`으로 전달하고, FD `4` READY를 검증한 뒤에만 exact-port CSP로 main window를 만든다.
+- [x] backend shutdown은 exact `202 accepted` 뒤 신규 command 차단, trading/open exposure 검사,
+  history flush/fsync, stream close와 CLOSED publication을 끝낸 후에만 FD `5` process ACK를 인정한다.
+- [x] window close와 Command-Q는 같은 UI confirmation single-flight로 합쳐지고, timeout에는 child를
+  kill하지 않은 채 authoritative exposure와 운영자 선택을 표시한다. abnormal sidecar exit는 즉시
+  신규 주문을 차단하고 offline/recovery 상태로 전환한다.
+- [x] Testnet credential은 macOS Keychain의 `com.binance-auto.trader.testnet` service에서 native만
+  읽고 zeroize하며 renderer·URL·log에 전달하지 않는다. packaged configuration은 주문을
+  `allow_testnet_orders=false`, `max_notional=null`로 고정한다.
 
 ### 3.3 현재 완료되지 않은 핵심
 
@@ -186,20 +195,22 @@ Rust toolchain은 설치되어 있지 않아 native descriptor unit test 3개는
 - [x] 완료 — JSONL `TradeHistoryRepository`의 startup read/recovery/index, order ID 멱등
   append/flush/fsync/save-only retry와 byte snapshot `stream_trades`를 구현하고, native
   no-replace rename 기반 CSV writer까지 Phase 11에서 연결했다.
-- [ ] 부분 완료 — Python application bootstrap, loopback HTTP/WebSocket와 backend event stream은 구현됐다. Tauri sidecar spawn, descriptor stage, package와 안전 종료 lifecycle은 Phase 12 범위다.
+- [ ] 부분 완료 — Python application bootstrap, loopback HTTP/WebSocket, Tauri fixed-FD sidecar spawn,
+  one-shot descriptor, exact-port CSP, package와 안전 종료 lifecycle을 local에서 구현·자동 검증했다.
+  실제 Keychain credential을 사용한 packaged contract 및 clean-machine smoke는 남아 있다.
 - [x] 완료 — production read/command path는 `BackendUiAdapter`를 사용하고
   demo/Storybook/tests는 `FakeUiCommandAdapter`를 유지한다. Phase 11에서 Tauri native directory
   picker와 실제 streaming filesystem export receipt까지 production adapter에 연결했다.
 - [ ] 부분 완료 — authoritative backend market/regime/account/history/trading-session snapshot과
-  Testnet runtime은 구현됐지만 packaged UI가 Testnet composition을 선택하는 경로는 Phase 12
-  범위다. UI 공개 차트는 parity 전 display-only로 유지한다.
+  read-only Testnet composition을 packaged sidecar FD6 경로에 연결했다. 실제 credential parity와
+  capped order lifecycle은 아직 실행하지 않았고 UI 공개 차트는 parity 전 display-only로 유지한다.
 - [x] 완료 — strict `TYPE_0`~`TYPE_4` ↔ `type0`~`type4` transport 변환, REGIME별 전략 coverage/start guard, G-07 상단 BB 안전 종료와 UI zero-command gate를 Phase 6에서 완료했다.
 - [x] 완료 — fake `APIGateway`에 주문을 제출하고 fill을 Position/History/Performance에 일관되게 반영한 뒤 durable 저장 이후에만 outcome을 내는 Case 2 pipeline을 Phase 8에서 완료했다.
 - [ ] 부분 완료 — 메시지 `1`~`5`, Case 2 `1`~`14`를 검증하고 actual adapter 기반
   lifecycle harness를 구현했으며 local restart reconciliation을 검증했다. harness의
   credential 기반 실행과 전체 UI Communication Case는 아직 남아 있다.
 
-### 3.4 Phase 1~11에서 해소한 위험과 남은 계약 공백
+### 3.4 Phase 1~12에서 해소한 위험과 남은 계약 공백
 
 Phase 1에서 두 독립 distribution을 `backend/` 하나로 통합했다. root의
 `RegimeSTM/`·`TradingSTM/` source tree를 제거했고, clean environment에 설치한
@@ -276,6 +287,17 @@ JSONL byte snapshot iterator를 연결했다. ADR-004의 고정 21열을 UTF-8 B
 장기 write는 TradeHistory operation lock과 transport의 전역 idempotency lock 밖에서 실행해
 terminal Trade publication 및 서로 다른 stop/shutdown command를 차단하지 않는다. Binance API
 payload를 변경하지 않았으므로 이 Phase도 새 Binance 공식 문서 해석이 필요하지 않았다.
+
+Phase 12에서는 native Tauri가 OS pipe의 fixed FD `3`~`6`으로 token, READY, stop/ACK와
+exact 7-key configuration을 교환하게 했다. main window는 READY의 random port를 production
+CSP sentinel에 주입한 뒤에만 생성하고 renderer capability는 one-shot descriptor, native
+picker, exit bridge/wait와 final destroy로 제한했다. backend `202` shutdown 뒤 CLOSED와
+durability가 끝나기 전 process ACK를 무시하며, timeout과 ambiguous READY에는 child를 자동
+kill하지 않는다. Keychain credential은 native에서만 읽고 zeroize하며 packaged order opt-in은
+항상 꺼져 있다. 이 Phase는 Binance endpoint/payload를 변경하지 않았고 기존 Phase 9 read-only
+Testnet adapter만 조립했으므로 새 Binance 공식 문서 해석을 추가하지 않았다. local arm64
+bundle과 자동 회귀는 통과했지만 clean-machine credential smoke와 Developer ID/notarization은
+외부 release 검증으로 남겼다.
 
 남은 표현과 지원 상태는 다음과 같다.
 
@@ -1572,25 +1594,43 @@ in-memory transport에서 2/2 통과했다.
 
 **작업 체크리스트:**
 
-- [ ] Tauri가 Python sidecar를 random loopback port로 시작한다.
-- [ ] session token을 renderer source나 log에 노출하지 않고 handshake에만 사용한다.
-- [ ] CSP와 capability를 loopback, window destroy, dialog, sidecar 실행에 필요한 최소 범위로 제한한다.
-- [ ] production bundle에 맞는 Python executable/sidecar를 빌드한다.
-- [ ] backend ready 전 UI가 command를 보내지 않도록 connection state를 연결한다.
-- [ ] window close → UI confirmation → trading stop/force-sell → history flush → stream close → sidecar shutdown → window destroy 순서를 구현한다.
-- [ ] shutdown timeout에서 process를 즉시 kill하기 전에 open position/order 상태를 표시하고 운영자 결정을 요구한다.
-- [ ] sidecar crash를 감지해 신규 주문을 차단하고 UI를 offline/recovery 상태로 보낸다.
-- [ ] credential은 OS credential store 또는 renderer 밖의 안전한 mechanism으로 관리한다.
-- [ ] `.env` 값과 secret이 log, crash dump, test snapshot에 없는지 검사한다.
+- [x] Tauri가 Python sidecar를 random loopback port로 시작한다.
+- [x] session token을 renderer source나 log에 노출하지 않고 handshake에만 사용한다.
+- [x] CSP와 capability를 loopback, window destroy, dialog, sidecar 실행에 필요한 최소 범위로 제한한다.
+- [x] production bundle에 맞는 Python executable/sidecar를 빌드한다.
+- [x] backend ready 전 UI가 command를 보내지 않도록 connection state를 연결한다.
+- [x] window close → UI confirmation → trading stop/force-sell → history flush → stream close → sidecar shutdown → window destroy 순서를 구현한다.
+- [x] shutdown timeout에서 process를 즉시 kill하기 전에 open position/order 상태를 표시하고 운영자 결정을 요구한다.
+- [x] sidecar crash를 감지해 신규 주문을 차단하고 UI를 offline/recovery 상태로 보낸다.
+- [x] credential은 OS credential store 또는 renderer 밖의 안전한 mechanism으로 관리한다.
+- [ ] 부분 완료 — `.env` credential canary가 repository, bundle, 기존 DiagnosticReports와
+  test snapshot에 없는지 검사했다. 실제 credential-bearing packaged crash 재현은 남아 있다.
 - [ ] macOS clean machine bundle smoke test를 수행한다.
 
 **완료 조건:**
 
-- [ ] web dev mode와 packaged desktop mode가 같은 contract suite를 통과한다.
-- [ ] 정상 종료와 비정상 sidecar 종료에서 중복 주문 없이 복구 가능하다.
-- [ ] production UI는 fake adapter를 사용하지 않는다.
+- [ ] 부분 완료 — web/dev와 packaged composition이 같은 generated contract와 adapter suite를
+  공유하고 bundle을 생성했지만 실제 Keychain credential packaged smoke는 수행하지 않았다.
+- [x] 정상 종료와 비정상 sidecar 종료에서 중복 주문 없이 복구 가능하다.
+- [x] production UI는 fake adapter를 사용하지 않는다.
 
-**완료 증거:** 미기록
+**완료 증거:** `[ ] 부분 완료` — local 구현과 자동 검증은 완료했으며 외부 release smoke는 남아 있다.
+
+| 항목 | 2026-08-24 실행 증거 |
+|---|---|
+| Communication/ADR | startup `1`~`5`, Case 1 close/stop 경계, ADR-003 shutdown 안전 조건과 ADR-005 fixed-FD·random-port·token·CSP/capability 계약을 다시 확인 |
+| backend | `BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q` — 595개 실행, 591개 통과·credential 기반 4개 safe skip |
+| backend 집중 | sidecar exact 7-key FD6, strict shutdown `202`/`409`, CLOSED 뒤 FD5 ACK, durability와 actual Python process tests; architecture 56개 통과 |
+| UI | `./node_modules/.bin/vitest run --reporter=dot` — 35 files·264/264; `tsc -b --pretty false`, Vite 286 modules와 Storybook static build 통과 |
+| Tauri/Rust | `cargo fmt --all --check`, `cargo check --tests --locked`, `cargo test --locked` — native unit 27/27 통과 |
+| sidecar package | pinned PyInstaller `6.22.2`로 `scripts/package_sidecar.sh` 실행; `binance-auto-sidecar-aarch64-apple-darwin` 생성, `.env`/credential을 build input에서 제외 |
+| macOS local bundle | `tauri build --bundles app`으로 release compile과 arm64 `.app` bundling 완료. 동일 `.app`+`Applications` link를 GUI 비의존 `hdiutil` read-only UDZO DMG로 생성 |
+| bundle integrity | DMG `hdiutil verify` 통과; DMG를 read-only mount해 app/sidecar arm64와 `codesign --verify --deep --strict` 통과. local ad-hoc hardened runtime이며 Team ID·notarization은 없음 |
+| secret scan | `scripts/check_phase12_secrets.py --env .env ...` — `.env` canary 2개가 repository, sidecar, `.app`, `.dmg`, DiagnosticReports의 2,462 files에 없음을 확인; scanner fail-closed unit 3/3 통과 |
+| artifact | `UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader.app`; `UI/apps/desktop/src-tauri/target/release/bundle/dmg/Binance Auto Trader_0.1.0_aarch64.dmg` (`sha256=8f61bc9bfe2f99328da6fd6ad9a1b303b70b163c89e8e9706db1801959b733cb`) |
+| 공식 문서 | Tauri v2 sidecar, capabilities, CSP, core permissions, `WebviewWindowBuilder`/`AppManifest`와 Apple Security Keychain API를 확인. Binance API 동작은 변경하지 않고 Phase 9 adapter를 read-only로 재사용 |
+| 남은 외부 검증 | 실제 Keychain credential packaged contract smoke, macOS clean machine, Developer ID 서명·notarization·Gatekeeper 검증 |
+| 작업 commit | 생성하지 않음 — 사용자 요청 범위에 commit은 포함되지 않음 |
 
 ---
 
@@ -1657,11 +1697,15 @@ Phase 9의 credential 기반 실제 Testnet 검증이다. 사용자가 Phase 10�
 완료 처리하지 않은 채 Phase 10의 독립 History read/UI 범위만 예외적으로 완료했다.
 사용자가 Phase 11을 명시적으로 요청했고 기술 선행 Phase 4/5/10이 모두 완료되어 있어,
 같은 원칙으로 Phase 9 외부 credential 증거를 오표기하지 않은 채 독립 CSV 범위를 완료했다.
+사용자가 Phase 12를 명시적으로 요청했고 기술 선행 Phase 5/7/11이 완료되어 있어,
+같은 원칙으로 native sidecar와 package 범위를 구현했다. 실제 credential/clean-machine release
+증거가 없으므로 Phase 9와 Phase 12 master를 모두 완료로 오표기하지 않았다.
 이후에도 병렬 개발이 필요하면 같은 source 파일을 동시에 수정하지 않는다.
 
 - [x] Phase 9 local 구현까지 의존 순서를 지키고 선행 완료 조건을 건너뛰지 않았다.
 - [x] Phase 10은 완료된 Phase 5/8 산출물만 사용했고, Phase 9 외부 검증을 완료로 오표기하지 않았다.
 - [x] Phase 11은 완료된 Phase 4/5/10 산출물만 사용했고, Phase 9 외부 검증을 완료로 오표기하지 않았다.
+- [x] Phase 12는 완료된 Phase 5/7/11 산출물만 사용했고, Phase 9/12 외부 검증을 완료로 오표기하지 않았다.
 
 ---
 
@@ -1791,7 +1835,7 @@ Communication message/operation:
 - [ ] Phase 9 — Binance testnet adapter (구현 완료·credential 검증 대기)
 - [x] Phase 10 — Trade History live UI
 - [x] Phase 11 — CSV 실제 export
-- [ ] Phase 12 — Tauri sidecar/package/shutdown
+- [ ] Phase 12 — Tauri sidecar/package/shutdown (local 구현·자동 검증 완료, external smoke 대기)
 - [ ] Phase 13 — 장애 복구/E2E/live readiness
 - [ ] 모든 Communication message ↔ code ↔ test 추적성 완료
 - [ ] 별도 사용자 승인에 따른 live release 완료
@@ -1816,14 +1860,18 @@ deterministic fault injection은 2/2 통과했다. lifecycle harness는 producti
 과장하지 않는다. 실제 MARKET 체결 금액과 거래소 filter 판정도 decision-price local
 max-notional 사전 검사보다 authoritative하다.
 
-Phase 11은 완료했다. 다음 내부 구현 Phase는 Phase 12 Tauri sidecar/package/shutdown이지만,
-roadmap의 가장 앞선 미완료 완료 조건은 여전히 Phase 9의 credential 기반 외부 검증이다.
-CSV export는 strict details query의 1,000-row 화면 한도를 재사용하지 않고 ADR-004/005와
-`TradeHistoryRepository.stream_trades()`를 따르는 별도 snapshot streaming 경계로 구현했다.
+Phase 11은 완료했고 Phase 12도 local implementation, 전체 자동 회귀, arm64 `.app`/`.dmg`
+생성까지 마쳤다. Phase 12의 다음 작업은 **실제 macOS Keychain credential을 사용하는 packaged
+contract smoke, clean machine 실행, Developer ID 서명·notarization**이다. 이 증거 전에는
+Phase 12 master checkbox를 `[x]`로 바꾸지 않는다. roadmap의 가장 앞선 미완료 완료 조건은
+계속 Phase 9의 credential 기반 외부 검증이다. CSV export는 strict details query의 1,000-row
+화면 한도를 재사용하지 않고 ADR-004/005와 `TradeHistoryRepository.stream_trades()`를 따르는
+별도 snapshot streaming 경계로 유지한다.
 
 `TYPE_1`~`TYPE_4`는 해당 Event-Action Table과 state diagram이 생기기 전까지 계속
 `UNSUPPORTED_TRADING_LOGIC`이다. `stream_trades()`/CSV는 Phase 11에서 완료했고,
-Tauri sidecar/package는 Phase 12, live enable은 Phase 13의 별도 사용자 승인 범위로 남긴다.
+Tauri sidecar/package의 local 범위는 Phase 12에서 구현했다. live enable은 Phase 13의 별도
+사용자 승인 범위로 남긴다.
 
 - [x] Phase 0 완료 조건과 증거를 기록했다.
 - [x] Phase 1을 시작하기 전 Communication/ADR-001과 현재 git 상태를 다시 확인했다.
@@ -1849,3 +1897,6 @@ Tauri sidecar/package는 Phase 12, live enable은 Phase 13의 별도 사용자 �
 - [x] Phase 10 controller/transport/event/UI 구현, Case 3 trace, fault·KST 경계와 전체 회귀 완료 증거를 기록했다.
 - [x] Phase 11을 시작하기 전 Communication Case 4 `1`~`4.1.6b`, D-13, ADR-004 검증 의무와 UI/roadmap 구현을 다시 확인했다.
 - [x] Phase 11 option/streaming/native picker/atomic CSV 구현, golden·fault·경합·KST 경계와 전체 회귀 완료 증거를 기록했다.
+- [x] Phase 12를 시작하기 전 Communication startup `1`~`5`, Case 1 종료 경계, ADR-003/005 검증 의무와 UI/roadmap 구현을 다시 확인했다.
+- [x] Phase 12 fixed-FD sidecar, exact-port CSP/minimal capability, Keychain, safe shutdown/crash recovery와 local bundle 자동 검증 증거를 기록했다.
+- [ ] Phase 12 actual Keychain packaged contract, macOS clean-machine, Developer ID/notarization 통과 증거를 기록했다.

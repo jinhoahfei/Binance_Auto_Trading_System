@@ -300,7 +300,9 @@ export type UiApplicationIntent =
     | { readonly type: 'APP_EXIT_CONFIRMED' }
     | { readonly type: 'APP_EXIT_CANCELED' }
     | { readonly type: 'FORCE_SELL_EXIT_CONFIRMED' }
-    | { readonly type: 'FORCE_SELL_EXIT_CANCELED' };
+    | { readonly type: 'FORCE_SELL_EXIT_CANCELED' }
+    | { readonly type: 'BACKEND_SIDECAR_EXITED_NORMALLY' }
+    | { readonly type: 'BACKEND_SIDECAR_EXITED_ABNORMALLY' };
 
 /**
  * React 컴포넌트가 업무 분기 없이 바로 렌더링할 수 있는 애플리케이션 화면 모델이다.
@@ -394,7 +396,7 @@ export interface AppViewModel {
         readonly receipt_path: string | null;
     };
     readonly app_exit: {
-        readonly status: 'awaiting_exit' | 'force_sell_exit_confirmation' | 'force_selling' | 'exit_confirmation' | 'shutting_down' | 'ui_final_state';
+        readonly status: 'awaiting_exit' | 'force_sell_exit_confirmation' | 'force_selling' | 'exit_confirmation' | 'shutting_down' | 'shutdown_exit_recovery' | 'shutdown_outcome_recovery' | 'sidecar_exit_failure' | 'ui_final_state';
         readonly is_pending: boolean;
         readonly is_final: boolean;
         readonly error: UiCommandFailure | null;
@@ -1115,6 +1117,12 @@ export class UiApplicationFacade {
             case 'FORCE_SELL_EXIT_CANCELED':
                 this.actors.app_exit.send({ type: 'FORCE_SELL_EXIT_CANCELED' });
                 break;
+            case 'BACKEND_SIDECAR_EXITED_NORMALLY':
+                this.actors.app_exit.send({ type: 'SIDECAR_EXITED' });
+                break;
+            case 'BACKEND_SIDECAR_EXITED_ABNORMALLY':
+                this.actors.app_exit.send({ type: 'SIDECAR_EXITED_ABNORMALLY' });
+                break;
         }
 
         return true;
@@ -1372,6 +1380,15 @@ export class UiApplicationFacade {
         }
         if (exit_snapshot.matches('exit_confirmation')) {
             return 'exit_confirmation';
+        }
+        if (exit_snapshot.matches('shutdown_exit_recovery')) {
+            return 'shutdown_exit_recovery';
+        }
+        if (exit_snapshot.matches('shutdown_outcome_recovery')) {
+            return 'shutdown_outcome_recovery';
+        }
+        if (exit_snapshot.matches('sidecar_exit_failure')) {
+            return 'sidecar_exit_failure';
         }
         if (exit_snapshot.matches('force_selling') || exit_snapshot.matches('shutting_down')) {
             return 'exit_processing';

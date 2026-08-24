@@ -1,0 +1,5 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 기존 UI logo-frame과 logo-glyph를 macOS bundle icon 비율로 결합한다. -->
+  <rect width="1024" height="1024" rx="280" fill="#F0B90B"/>
+  <path d="M362 274V574C362 724 662 724 662 574V274" stroke="#0B0E11" stroke-width="90" stroke-linecap="round"/>
+</svg>

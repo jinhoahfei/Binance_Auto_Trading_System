@@ -1274,6 +1274,25 @@ class TradeHistoryRepository:
             history_file.flush()
             os.fsync(history_file.fileno())
 
+    def flush_durable_state(self) -> None:
+        """
+        함수 이름: flush_durable_state()
+        기능: history 파일과 존재하는 pending journal 및 directory entry를 종료 전에 fsync한다.
+        인자: 없음
+        반환값: 현재 보이는 local 거래 상태의 durability 확인이 끝나면 없음
+        작성 날짜: 2026/08/24
+        """
+        # 동일 repository mutation과 종료 장벽을 직렬화해 fsync 뒤 새 append가 끼어들지 않게 한다.
+        with self._lock:
+            self._confirm_storage_durability()
+            _fsync_parent_directory(
+                self._storage_path
+            )  # 기존 파일도 최초 append의 directory entry durability를 종료 시 다시 확정한다.
+
+            # Pending journal이 없다는 사실은 같은 directory fsync로 충분하고 빈 파일은 만들지 않는다.
+            if self._pending_order_storage_path.exists():
+                self._confirm_pending_order_storage_durability()
+
     def _read_history_file(
         self,
         history_file: BinaryIO,

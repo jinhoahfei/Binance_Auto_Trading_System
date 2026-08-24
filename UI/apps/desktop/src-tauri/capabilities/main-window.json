@@ -1,10 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "메인 창의 기본 UI API와 상태 머신 완료 후 창 제거를 허용합니다.",
+  "description": "메인 창의 one-shot backend 연결, native picker, exit wait와 최종 창 제거만 허용합니다.",
   "windows": ["main"],
+  "platforms": ["macOS"],
   "permissions": [
-    "core:default",
+    "allow-take-backend-connection-descriptor",
+    "allow-choose-csv-export-directory",
+    "allow-await-backend-sidecar-exit",
+    "allow-arm-native-exit-intent-bridge",
+    "allow-arm-sidecar-exit-event-bridge",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-destroy"
   ]
 }

@@ -16,6 +16,9 @@ export type UiModalKind =
     | 'csv_export_error'
     | 'exit_confirmation'
     | 'force_sell_exit_confirmation'
+    | 'shutdown_exit_recovery'
+    | 'shutdown_outcome_recovery'
+    | 'sidecar_exit_failure'
     | 'exit_processing';
 
 export interface UiShellMachineContext {

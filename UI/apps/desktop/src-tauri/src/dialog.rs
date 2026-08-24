@@ -29,9 +29,7 @@ impl CsvDirectoryPickerFailure {
 /// 인자: directory_path -> native picker가 선택한 filesystem path
 /// 반환값: absolute UTF-8 path 또는 경로를 노출하지 않는 typed failure
 /// 작성 날짜: 2026/08/23
-fn absolute_utf8_directory(
-    directory_path: PathBuf,
-) -> Result<String, CsvDirectoryPickerFailure> {
+fn absolute_utf8_directory(directory_path: PathBuf) -> Result<String, CsvDirectoryPickerFailure> {
     if !directory_path.is_absolute() {
         return Err(CsvDirectoryPickerFailure::invalid_selected_path());
     }

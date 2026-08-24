@@ -1044,6 +1044,25 @@ class TradingController:
         )  # 연결 backlog뿐 아니라 order/history reconciliation lifecycle도 command를 잠근다.
 
     @property
+    def reconciliation_required(self) -> bool:
+        """
+        함수 이름: reconciliation_required()
+        기능: 종료와 신규 command가 신뢰할 모든 주문·stream 재조정 blocker를 원자적으로 반환한다.
+        인자: 없음
+        반환값: 미해결 재조정 상태가 하나라도 있으면 True
+        작성 날짜: 2026/08/24
+        """
+        # 공개 lifecycle과 두 내부 gate를 같은 session lock 아래에서 한 번에 판정한다.
+        with self._session_lock:
+            return (
+                self._stream_reconciliation_required
+                or self._startup_reconciliation_blocked
+                or not self._startup_reconciliation_complete
+                or self._status
+                is TradingSessionStatus.RECONCILIATION_REQUIRED
+            )  # 종료 owner가 private flag를 직접 읽지 않게 authoritative 판정을 제공한다.
+
+    @property
     def _mode_command_enabled(self) -> bool:
         """
         함수 이름: _mode_command_enabled()

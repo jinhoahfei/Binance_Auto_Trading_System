@@ -104,6 +104,16 @@ class TradeHistoryRepositoryPort(Protocol):
         """
         ...
 
+    def flush_durable_state(self) -> None:
+        """
+        함수 이름: flush_durable_state()
+        기능: 현재 history와 pending-order journal을 명시적인 fsync 경계까지 내린다.
+        인자: 없음
+        반환값: 두 저장소의 durability 확인이 끝나면 없음
+        작성 날짜: 2026/08/24
+        """
+        ...
+
 
 class CSVExportWriterPort(Protocol):
     """
@@ -598,6 +608,33 @@ class TradeHistoryController:
             return frozenset(
                 self._pending_publications
             )  # caller가 retry 대기 index를 변경하지 못하게 복사한다.
+
+    def flush_durable_state(self) -> None:
+        """
+        함수 이름: flush_durable_state()
+        기능: 보류 publication이 없을 때 repository의 명시적 종료 fsync 장벽을 실행한다.
+        인자: 없음
+        반환값: 모든 local 거래 상태가 durable하면 없음
+        작성 날짜: 2026/08/24
+        """
+        # Pending publication이 있으면 disk와 공개 상태가 일치한다고 추측하지 않고 종료를 막는다.
+        with self._operation_lock:
+            if self._pending_publications:
+                raise TradeHistoryPersistencePendingError(
+                    "pending trade persistence blocks durable shutdown"
+                )
+
+            flush_operation = getattr(
+                self._repository,
+                "flush_durable_state",
+                None,
+            )
+            if not callable(flush_operation):
+                raise NotImplementedError(
+                    "repository does not provide a durable shutdown barrier"
+                )
+
+            flush_operation()  # operation lock은 terminal publication과 fsync 장벽을 직렬화한다.
 
     @property
     def supports_pending_order_recovery(self) -> bool:

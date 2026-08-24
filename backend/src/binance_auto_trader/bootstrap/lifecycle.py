@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
+
+from binance_auto_trader.application import (
+    TradingSessionError,
+    TradingSessionFailureCode,
+    TradingSessionStatus,
+)
 from binance_auto_trader.bootstrap.application import (
     ApplicationRuntime,
     ApplicationStartupError,
@@ -13,6 +21,120 @@ from binance_auto_trader.bootstrap.application import (
     StartupTraceEntry,
     StartupTraceResult,
 )
+
+
+class ShutdownReceiptStatus(str, Enum):
+    """
+    클래스 이름: ShutdownReceiptStatus
+    기능: 안전 종료 요청의 수락과 open exposure 차단 결과를 정규화한다.
+    작성 날짜: 2026/08/24
+    """
+
+    ACCEPTED = "accepted"
+    BLOCKED = "blocked"
+
+
+@dataclass(frozen=True, slots=True)
+class ShutdownSafetyReceipt:
+    """
+    클래스 이름: ShutdownSafetyReceipt
+    기능: credential 없이 종료 수락 여부와 authoritative exposure 판정을 불변으로 보존한다.
+    작성 날짜: 2026/08/24
+    """
+
+    accepted: bool
+    status: ShutdownReceiptStatus
+    version: int
+    position_open: bool
+    pending_order: bool
+    reconciliation_required: bool
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 종료 receipt의 타입, version과 accepted/status 조합을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # bool의 int 상속을 배제하고 외부 optimistic version과 같은 정수 계약을 유지한다.
+        if type(self.accepted) is not bool:
+            raise TypeError("accepted must be a bool")
+        if not isinstance(self.status, ShutdownReceiptStatus):
+            raise TypeError("status must be a ShutdownReceiptStatus")
+        if type(self.version) is not int:
+            raise TypeError("version must be an int")
+        if self.version < 0:
+            raise ValueError("version must not be negative")
+
+        # Exposure flag는 truthy 객체를 허용하지 않고 status와 accepted를 정확히 결합한다.
+        for flag_name in (
+            "position_open",
+            "pending_order",
+            "reconciliation_required",
+        ):
+            if type(getattr(self, flag_name)) is not bool:
+                raise TypeError(f"{flag_name} must be a bool")
+        expected_status = (
+            ShutdownReceiptStatus.ACCEPTED
+            if self.accepted
+            else ShutdownReceiptStatus.BLOCKED
+        )
+        if self.status is not expected_status:
+            raise ValueError("accepted and status must describe the same outcome")
+        if self.accepted and (
+            self.position_open
+            or self.pending_order
+            or self.reconciliation_required
+        ):
+            raise ValueError("accepted shutdown cannot retain open exposure")
+
+    def to_blocked_details(self) -> dict[str, object]:
+        """
+        함수 이름: to_blocked_details()
+        기능: HTTP 409 오류에 넣을 exact blocked safety receipt를 JSON object로 만든다.
+        인자: 없음
+        반환값: credential과 주문 ID가 없는 blocked detail dictionary
+        작성 날짜: 2026/08/24
+        """
+        if self.accepted:
+            raise ValueError("accepted receipt cannot be mapped as blocked details")
+
+        # 사용자가 종료 전 해소할 blocker 종류만 공개하고 symbol·수량·주문 ID는 숨긴다.
+        return {
+            "accepted": False,
+            "status": self.status.value,
+            "version": self.version,
+            "position_open": self.position_open,
+            "pending_order": self.pending_order,
+            "reconciliation_required": self.reconciliation_required,
+        }
+
+
+class ShutdownBlockedError(RuntimeError):
+    """
+    클래스 이름: ShutdownBlockedError
+    기능: open position·pending order·재조정 상태가 안전 종료를 차단했음을 전달한다.
+    작성 날짜: 2026/08/24
+    """
+
+    code = "SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE"
+
+    def __init__(self, receipt: ShutdownSafetyReceipt) -> None:
+        """
+        함수 이름: __init__()
+        기능: blocked 상태만 가진 secret-free safety receipt를 보존한다.
+        인자: receipt -> authoritative exposure 판정으로 만든 blocked receipt
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        if not isinstance(receipt, ShutdownSafetyReceipt):
+            raise TypeError("receipt must be a ShutdownSafetyReceipt")
+        if receipt.accepted:
+            raise ValueError("shutdown blocked error requires a blocked receipt")
+
+        super().__init__("Open exposure must be resolved before shutdown.")
+        self.receipt = receipt  # transport는 공개 가능한 bool과 version만 이 객체에서 읽는다.
 
 
 class _RegimeReadinessError(RuntimeError):
@@ -414,11 +536,14 @@ def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
                 "Application startup is already in progress.",
             )
             raise ApplicationStartupError(failure)
-        if current_state.status is ApplicationStatus.CLOSED:
+        if current_state.status in (
+            ApplicationStatus.SHUTTING_DOWN,
+            ApplicationStatus.CLOSED,
+        ):
             failure = _create_failure(
                 StartupStage.APPLICATION,
                 StartupFailureCode.APPLICATION_CLOSED,
-                "Closed application runtime cannot be started.",
+                "Closing or closed application runtime cannot be started.",
             )
             raise ApplicationStartupError(failure)
         if current_state.status is ApplicationStatus.FAILED:
@@ -495,3 +620,252 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
             failure=None,
             startup_trace=current_state.startup_trace,
         )
+
+
+def _read_shutdown_safety_receipt(
+    runtime: ApplicationRuntime,
+) -> ShutdownSafetyReceipt:
+    """
+    함수 이름: _read_shutdown_safety_receipt()
+    기능: Position, memory/durable pending 주문과 reconciliation을 한 종료 판정으로 모은다.
+    인자: runtime -> application lock을 이미 소유한 runtime
+    반환값: 현재 Context version의 accepted 또는 blocked safety receipt
+    작성 날짜: 2026/08/24
+    """
+    trading_controller = runtime.trading_controller
+    context_snapshot = trading_controller.context
+
+    # Context 이전 startup Position과 session Context를 함께 읽어 어느 쪽의 open 수량도 놓치지 않는다.
+    position = trading_controller.position
+    position_open = context_snapshot.position.is_open or (
+        position is not None and position.quantity > 0
+    )
+    pending_order = (
+        context_snapshot.pending_order is not None
+        or trading_controller.pending_order_query_count > 0
+    )
+    reconciliation_required = trading_controller.reconciliation_required
+    if trading_controller.status is TradingSessionStatus.STOPPING:
+        reconciliation_required = True  # 미완료 강제 청산 outcome도 안전한 terminal 상태가 아니다.
+
+    # Durable journal은 memory snapshot이 비어도 재시작 시 복원될 수 있으므로 별도로 검사한다.
+    history_controller = runtime.trade_history_controller
+    if history_controller.supports_pending_order_recovery:
+        try:
+            durable_pending_orders = (
+                history_controller.get_pending_order_recovery_records()
+            )
+        except Exception:
+            reconciliation_required = True  # 읽을 수 없는 journal을 비어 있다고 추측하지 않는다.
+        else:
+            pending_order = pending_order or bool(durable_pending_orders)
+
+    blocked = position_open or pending_order or reconciliation_required
+    return ShutdownSafetyReceipt(
+        accepted=not blocked,
+        status=(
+            ShutdownReceiptStatus.BLOCKED
+            if blocked
+            else ShutdownReceiptStatus.ACCEPTED
+        ),
+        version=context_snapshot.version,
+        position_open=position_open,
+        pending_order=pending_order,
+        reconciliation_required=reconciliation_required,
+    )
+
+
+def _require_shutdown_expected_version(
+    runtime: ApplicationRuntime,
+    expected_version: int,
+) -> None:
+    """
+    함수 이름: _require_shutdown_expected_version()
+    기능: shutdown의 optimistic version이 최신 TradingContext와 정확히 같은지 검사한다.
+    인자: runtime -> 최신 Context를 소유한 runtime
+        expected_version -> renderer가 관측한 non-negative Context version
+    반환값: version이 일치하면 없음
+    작성 날짜: 2026/08/24
+    """
+    if type(expected_version) is not int:
+        raise TypeError("expected_version must be an int")
+    if expected_version < 0:
+        raise ValueError("expected_version must not be negative")
+
+    # Exposure 판정보다 stale command를 먼저 거부해 과거 화면의 종료 의도를 실행하지 않는다.
+    current_version = runtime.trading_controller.context.version
+    if expected_version != current_version:
+        raise TradingSessionError(
+            TradingSessionFailureCode.STALE_CONTEXT_VERSION,
+            "Trading context version is stale",
+            current_version=current_version,
+            expected_version=expected_version,
+        )
+
+
+def _complete_shutdown_flight(
+    runtime: ApplicationRuntime,
+    *,
+    result: ShutdownSafetyReceipt | None = None,
+    error: BaseException | None = None,
+) -> None:
+    """
+    함수 이름: _complete_shutdown_flight()
+    기능: 단일 shutdown owner의 성공 또는 실패 하나를 waiter에게 원자적으로 게시한다.
+    인자: runtime -> shutdown single-flight store를 소유한 runtime
+        result -> 성공한 accepted receipt 또는 실패면 None
+        error -> owner가 받은 실패 또는 성공이면 None
+    반환값: terminal 결과 publication 뒤 없음
+    작성 날짜: 2026/08/24
+    """
+    if (result is None) == (error is None):
+        raise ValueError("shutdown flight requires exactly one result or error")
+
+    with runtime.application_lock:
+        shutdown_store = runtime._shutdown_store
+        if not shutdown_store.in_progress:
+            raise RuntimeError("shutdown flight is not in progress")
+
+        # Result metadata를 먼저 게시하고 Event를 마지막에 set해 waiter가 반쪽 상태를 읽지 않게 한다.
+        shutdown_store.result = result
+        shutdown_store.error = error
+        shutdown_store.in_progress = False
+        shutdown_store.completion_event.set()
+
+
+def _await_shutdown_flight(runtime: ApplicationRuntime) -> ShutdownSafetyReceipt:
+    """
+    함수 이름: _await_shutdown_flight()
+    기능: 기존 shutdown owner의 terminal 결과를 application lock 밖에서 기다려 재사용한다.
+    인자: runtime -> 진행 중 single-flight store를 소유한 runtime
+    반환값: owner가 게시한 accepted ShutdownSafetyReceipt
+    작성 날짜: 2026/08/24
+    """
+    completion_event = runtime._shutdown_store.completion_event
+    completion_event.wait()  # Owner는 BaseException 경로도 finally publication해 waiter를 깨운다.
+
+    with runtime.application_lock:
+        shutdown_result = runtime._shutdown_store.result
+        shutdown_error = runtime._shutdown_store.error
+    if shutdown_error is not None:
+        raise shutdown_error
+    if not isinstance(shutdown_result, ShutdownSafetyReceipt):
+        raise RuntimeError("shutdown flight completed without a typed result")
+
+    return shutdown_result
+
+
+def request_application_shutdown(
+    runtime: ApplicationRuntime,
+    *,
+    command_id: str,
+    expected_version: int,
+) -> ShutdownSafetyReceipt:
+    """
+    함수 이름: request_application_shutdown()
+    기능: exposure를 fail closed로 검사하고 command 차단, 거래 중지, fsync와 자원 종료를 조정한다.
+    인자: runtime -> 종료할 application runtime
+        command_id -> transport idempotency key에서 얻은 안정적인 command ID
+        expected_version -> renderer가 관측한 TradingContext version
+    반환값: CLOSED publication 뒤의 accepted safety receipt
+    작성 날짜: 2026/08/24
+    """
+    if not isinstance(runtime, ApplicationRuntime):
+        raise TypeError("runtime must be an ApplicationRuntime")
+    if (
+        not isinstance(command_id, str)
+        or not command_id
+        or command_id != command_id.strip()
+    ):
+        raise ValueError("command_id must be a non-empty trimmed string")
+
+    joins_existing_flight = False
+    with runtime.application_lock:
+        shutdown_store = runtime._shutdown_store
+        if shutdown_store.in_progress:
+            if expected_version != shutdown_store.expected_version:
+                _require_shutdown_expected_version(runtime, expected_version)
+            joins_existing_flight = True
+        else:
+            # 같은 Context version에서만 현재 exposure와 lifecycle을 판단한다.
+            _require_shutdown_expected_version(runtime, expected_version)
+            current_state = runtime.state
+            if current_state.status is ApplicationStatus.CLOSED:
+                return ShutdownSafetyReceipt(
+                    accepted=True,
+                    status=ShutdownReceiptStatus.ACCEPTED,
+                    version=runtime.trading_controller.context.version,
+                    position_open=False,
+                    pending_order=False,
+                    reconciliation_required=False,
+                )  # 다른 command ID의 안전한 중복 종료도 외부 effect 없는 accepted 결과다.
+            if current_state.status not in (
+                ApplicationStatus.READY,
+                ApplicationStatus.SHUTTING_DOWN,
+            ):
+                raise RuntimeError("application is not ready for safe shutdown")
+
+            safety_receipt = _read_shutdown_safety_receipt(runtime)
+            if not safety_receipt.accepted:
+                raise ShutdownBlockedError(safety_receipt)
+
+            # Single-flight owner를 READY publication보다 먼저 고정해 tail operation 중복을 막는다.
+            shutdown_store.in_progress = True
+            shutdown_store.expected_version = expected_version
+            shutdown_store.result = None
+            shutdown_store.error = None
+            shutdown_store.completion_event.clear()
+            try:
+                if current_state.status is ApplicationStatus.READY:
+                    runtime._publish_state(
+                        status=ApplicationStatus.SHUTTING_DOWN,
+                        failure=None,
+                        startup_trace=current_state.startup_trace,
+                    )
+
+                # 열린 exposure가 없는 RUNNING session만 정상 terminal 전이시킨다.
+                trading_controller = runtime.trading_controller
+                if trading_controller.status is TradingSessionStatus.RUNNING:
+                    stop_result = trading_controller.stop_trading(
+                        command_id=f"shutdown:{command_id}",
+                        expected_version=expected_version,
+                    )
+                    if stop_result.status is not TradingSessionStatus.TERMINATED:
+                        raise ShutdownBlockedError(
+                            _read_shutdown_safety_receipt(runtime)
+                        )
+            except BaseException as error:
+                _complete_shutdown_flight(runtime, error=error)
+                raise
+
+    if joins_existing_flight:
+        return _await_shutdown_flight(runtime)  # 다른 key도 owner tail과 fsync를 반복하지 않는다.
+
+    try:
+        # Worker join은 application lock 밖에서 수행해 진행 중 recovery와 교착하지 않는다.
+        recovery_worker = runtime._account_stream_recovery_worker
+        if recovery_worker is not None:
+            recovery_worker.close()
+
+        # Callback mutation을 동결하고 worker join 사이에 생긴 exposure도 마지막으로 재검사한다.
+        with runtime.application_lock:
+            final_safety_receipt = _read_shutdown_safety_receipt(runtime)
+            if not final_safety_receipt.accepted:
+                raise ShutdownBlockedError(final_safety_receipt)
+
+            runtime.trade_history_controller.flush_durable_state()
+            close_application(runtime)
+            accepted_receipt = ShutdownSafetyReceipt(
+                accepted=True,
+                status=ShutdownReceiptStatus.ACCEPTED,
+                version=runtime.trading_controller.context.version,
+                position_open=False,
+                pending_order=False,
+                reconciliation_required=False,
+            )
+    except BaseException as error:
+        _complete_shutdown_flight(runtime, error=error)
+        raise
+
+    _complete_shutdown_flight(runtime, result=accepted_receipt)
+    return accepted_receipt

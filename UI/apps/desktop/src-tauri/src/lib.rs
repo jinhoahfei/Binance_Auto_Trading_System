@@ -1,10 +1,15 @@
 mod dialog;
+mod exit_bridge;
+mod sidecar;
 
 use serde::Serialize;
+use std::error::Error;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use zeroize::Zeroize;
 
-const BACKEND_SCHEMA_VERSION: u32 = 2;  // Python transport schema와 native descriptor gate를 맞춘다.
+const BACKEND_SCHEMA_VERSION: u32 = 2; // Python transport schema와 native descriptor gate를 맞춘다.
 
 /// renderer에 한 번만 전달되는 loopback 연결 descriptor이다.
 #[derive(Serialize)]
@@ -28,7 +33,7 @@ impl BackendConnectionDescriptor {
         port: u16,
         session_id: String,
         schema_version: u32,
-        token: String,
+        mut token: String,
     ) -> Result<Self, BackendDescriptorFailure> {
         let has_valid_token = token.len() == 43
             && token
@@ -40,6 +45,7 @@ impl BackendConnectionDescriptor {
             || schema_version != BACKEND_SCHEMA_VERSION
             || !has_valid_token
         {
+            token.zeroize(); // 검증 실패 token도 allocator drop에만 맡기지 않고 즉시 덮어쓴다.
             return Err(BackendDescriptorFailure::invalid());
         }
 
@@ -49,6 +55,17 @@ impl BackendConnectionDescriptor {
             schema_version,
             token,
         })
+    }
+}
+
+impl Drop for BackendConnectionDescriptor {
+    /// 함수 이름: drop()
+    /// 기능: one-shot IPC 직렬화 또는 startup rollback 뒤 native token backing memory를 덮어쓴다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/24
+    fn drop(&mut self) {
+        self.token.zeroize();
     }
 }
 
@@ -113,10 +130,10 @@ impl BackendConnectionDescriptorState {
         &self,
         descriptor: BackendConnectionDescriptor,
     ) -> Result<(), BackendDescriptorFailure> {
-        let mut pending_descriptor = self
-            .pending_descriptor
-            .lock()
-            .map_err(|_| BackendDescriptorFailure::state_unavailable())?;
+        let mut pending_descriptor = match self.pending_descriptor.lock() {
+            Ok(pending_descriptor) => pending_descriptor,
+            Err(poisoned) => poisoned.into_inner(),
+        };
 
         if pending_descriptor.is_some() {
             return Err(BackendDescriptorFailure::unavailable());
@@ -180,6 +197,251 @@ fn take_backend_connection_descriptor(
     state.take()
 }
 
+/// Late READY recovery task 설치 결과를 native operator surface 경로와 분리한다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LateReadyStartupRoute {
+    AwaitWithNativeStatus,
+    FatalRecovery,
+}
+
+/// 함수 이름: select_late_ready_startup_route()
+/// 기능: recovery task가 시작되고 child가 live인 경우에만 waiting status를 허용한다.
+/// 인자: recovery_started -> FD4 background recovery scheduling 성공 여부,
+///      child_is_running -> scheduling 직후 lifecycle의 live child 여부
+/// 반환값: native waiting status 또는 fatal recovery route
+/// 작성 날짜: 2026/08/24
+fn select_late_ready_startup_route(
+    recovery_started: bool,
+    child_is_running: bool,
+) -> LateReadyStartupRoute {
+    if recovery_started && child_is_running {
+        LateReadyStartupRoute::AwaitWithNativeStatus
+    } else {
+        LateReadyStartupRoute::FatalRecovery
+    }
+}
+
+/// 함수 이름: setup_backend_and_window()
+/// 기능: core dump 차단, sidecar ready/stage/monitor를 완료한 뒤에만 deferred main window를 만든다.
+/// 인자: app -> startup 중인 trusted native Tauri application
+/// 반환값: startup 성공 또는 secret 없는 boxed native failure
+/// 작성 날짜: 2026/08/24
+fn setup_backend_and_window(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
+    if let Err(failure) = sidecar::disable_process_core_dumps() {
+        schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
+        return Ok(());
+    }
+    let preparation = match sidecar::prepare_backend_sidecar(app.handle()) {
+        Ok(preparation) => preparation,
+        Err(failure) => {
+            schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
+            return Ok(());
+        }
+    };
+    let prepared_sidecar = match preparation {
+        sidecar::BackendSidecarPreparation::Ready(prepared_sidecar) => prepared_sidecar,
+        sidecar::BackendSidecarPreparation::Ambiguous(ambiguous_sidecar) => {
+            let sidecar_state = app.state::<sidecar::SidecarProcessState>().inner().clone();
+            let sidecar::AmbiguousBackendSidecar {
+                child,
+                stop_writer,
+                late_ready_recovery,
+            } = ambiguous_sidecar;
+            if sidecar_state
+                .install(child, stop_writer, app.handle().clone())
+                .is_err()
+            {
+                schedule_ready_fatal_recovery(app.handle().clone());
+                return Ok(());
+            }
+            if let Some(recovery) = late_ready_recovery {
+                let recovery_started = sidecar::start_late_ready_recovery(
+                    recovery,
+                    app.handle().clone(),
+                    sidecar_state.clone(),
+                )
+                .is_ok();
+                let child_is_running = sidecar_state.is_running();
+
+                // Task 시작 failure나 child exit race는 headless return 없이 fatal surface가 안전 종료를 결정한다.
+                match select_late_ready_startup_route(recovery_started, child_is_running) {
+                    LateReadyStartupRoute::AwaitWithNativeStatus => {
+                        schedule_late_ready_status(app.handle().clone(), sidecar_state);
+                    }
+                    LateReadyStartupRoute::FatalRecovery => {
+                        schedule_ready_fatal_recovery(app.handle().clone());
+                    }
+                }
+            } else {
+                schedule_ready_fatal_recovery(app.handle().clone());
+            }
+            return Ok(());
+        }
+    };
+    let sidecar::PreparedBackendSidecar {
+        descriptor,
+        child,
+        stop_writer,
+        port,
+    } = prepared_sidecar;
+
+    // READY child를 먼저 native lifecycle에 유지해 후속 UI 실패가 process orphan/kill로 바뀌지 않게 한다.
+    let sidecar_state = app.state::<sidecar::SidecarProcessState>().inner().clone();
+    if sidecar_state
+        .install(child, stop_writer, app.handle().clone())
+        .is_err()
+    {
+        schedule_ready_fatal_recovery(app.handle().clone());
+        return Ok(());
+    }
+
+    // Ready 검증 결과를 one-shot native slot에 넣기 전에는 renderer window를 만들지 않는다.
+    let descriptor_state = app.state::<BackendConnectionDescriptorState>();
+    if descriptor_state.stage(descriptor).is_err() {
+        schedule_ready_fatal_recovery(app.handle().clone());
+        return Ok(());
+    }
+
+    // Window build 실패에는 READY process를 kill하지 않고 native dialog에서 복구를 계속 시도한다.
+    if sidecar::create_ready_main_window(app.handle(), port).is_err() {
+        schedule_ready_window_recovery(app.handle().clone(), port);
+    }
+
+    Ok(())
+}
+
+/// 함수 이름: pre_ready_failure_copy()
+/// 기능: credential 부재와 기타 pre-READY 실패를 secret/path 없는 native 안내로 변환한다.
+/// 인자: failure_code -> fixed native SidecarFailure code
+/// 반환값: dialog title/message pair
+/// 작성 날짜: 2026/08/24
+fn pre_ready_failure_copy(failure_code: &str) -> (&'static str, &'static str) {
+    if failure_code == "BACKEND_CREDENTIALS_UNAVAILABLE" {
+        return (
+            "Keychain 인증 정보가 필요합니다",
+            "macOS Keychain에 testnet API key와 secret을 안전하게 등록한 뒤 애플리케이션을 다시 시작하세요.",
+        );
+    }
+
+    (
+        "백엔드를 준비하지 못했습니다",
+        "보안 준비 단계에서 실패했습니다. 애플리케이션을 종료한 뒤 설치 상태를 확인하고 다시 시작하세요.",
+    )
+}
+
+/// 함수 이름: schedule_pre_ready_startup_failure()
+/// 기능: child가 없는 startup 실패를 native dialog로 보인 뒤 process를 안전하게 종료한다.
+/// 인자: app_handle -> dialog/exit owner, failure_code -> fixed failure discriminator
+/// 반환값: 없음
+/// 작성 날짜: 2026/08/24
+fn schedule_pre_ready_startup_failure(app_handle: AppHandle, failure_code: &'static str) {
+    let (title, message) = pre_ready_failure_copy(failure_code);
+    let exit_handle = app_handle.clone();
+
+    // Child가 시작되지 않은 경로이므로 dialog 확인 후 exit은 lifecycle/position을 우회하지 않는다.
+    app_handle
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Error)
+        .show(move |_| {
+            exit_handle.exit(1);
+        });
+}
+
+/// 함수 이름: schedule_ready_fatal_recovery()
+/// 기능: READY child를 안전하게 보존한 채 renderer startup을 금지하고 operator manual recovery 안내를 유지한다.
+/// 인자: app_handle -> nonblocking native dialog owner
+/// 반환값: 없음
+/// 작성 날짜: 2026/08/24
+pub(crate) fn schedule_ready_fatal_recovery(app_handle: AppHandle) {
+    let sidecar_state = app_handle
+        .state::<sidecar::SidecarProcessState>()
+        .inner()
+        .clone();
+    if !sidecar_state.is_running() {
+        app_handle.exit(1);
+        return;
+    }
+    let repeat_handle = app_handle.clone();
+    let repeat_state = sidecar_state.clone();
+
+    // READY exposure를 timed kill하거나 descriptor 없는 renderer를 열지 않고 native operator surface를 계속 유지한다.
+    app_handle
+        .dialog()
+        .message(
+            "백엔드는 실행 중이며 자동 종료되지 않았습니다. 애플리케이션을 강제 종료하지 말고 운영자에게 수동 복구를 요청하세요.",
+        )
+        .title("네이티브 안전 복구가 필요합니다")
+        .kind(MessageDialogKind::Error)
+        .show(move |_| {
+            if repeat_state.is_running() {
+                schedule_ready_fatal_recovery(repeat_handle);
+            } else {
+                repeat_handle.exit(1);
+            }
+        });
+}
+
+/// 함수 이름: schedule_late_ready_status()
+/// 기능: recoverable READY timeout 중 native status를 유지하고 valid late READY window가 생기면 반복을 멈춘다.
+/// 인자: app_handle -> native dialog/window owner, sidecar_state -> pending recovery guard
+/// 반환값: 없음
+/// 작성 날짜: 2026/08/24
+fn schedule_late_ready_status(app_handle: AppHandle, sidecar_state: sidecar::SidecarProcessState) {
+    let repeat_handle = app_handle.clone();
+    let repeat_state = sidecar_state.clone();
+
+    // 이 안내는 FD4 parser가 token/framing을 보존한 동안만 반복되며 fatal recovery와 동시에 반복되지 않는다.
+    app_handle
+        .dialog()
+        .message(
+            "백엔드의 안전 상태 확인이 예상보다 오래 걸리고 있습니다. 자동 종료하지 말고 이 창을 유지해 주세요. 준비가 완료되면 메인 창이 자동으로 열립니다.",
+        )
+        .title("백엔드 안전 상태 확인 중")
+        .kind(MessageDialogKind::Warning)
+        .show(move |_| {
+            if repeat_state.is_late_ready_terminal() {
+                schedule_ready_fatal_recovery(repeat_handle);
+            } else if repeat_state.is_late_ready_pending()
+                && repeat_handle.get_webview_window("main").is_none()
+            {
+                schedule_late_ready_status(repeat_handle, repeat_state);
+            } else if !repeat_state.is_running() {
+                repeat_handle.exit(1);
+            }
+        });
+}
+
+/// 함수 이름: schedule_ready_window_recovery()
+/// 기능: READY 후 main window build 실패를 operator에게 보이고 확인할 때마다 window를 kill 없이 재생성한다.
+/// 인자: app_handle -> native dialog/window manager, port -> validated backend loopback port
+/// 반환값: 없음
+/// 작성 날짜: 2026/08/24
+pub(crate) fn schedule_ready_window_recovery(app_handle: AppHandle, port: u16) {
+    let retry_handle = app_handle.clone();
+    let retry_state = app_handle
+        .state::<sidecar::SidecarProcessState>()
+        .inner()
+        .clone();
+
+    // Nonblocking native dialog는 event loop를 시작해 Command-Q guard와 child monitor가 계속 작동하게 한다.
+    app_handle
+        .dialog()
+        .message(
+            "백엔드는 안전하게 실행 중이며 자동 종료되지 않았습니다. 확인을 누르면 메인 창 복구를 다시 시도합니다.",
+        )
+        .title("메인 창을 준비하지 못했습니다")
+        .kind(MessageDialogKind::Error)
+        .show(move |_| {
+            if !retry_state.is_running() {
+                retry_handle.exit(1);
+            } else if sidecar::create_ready_main_window(&retry_handle, port).is_err() {
+                schedule_ready_window_recovery(retry_handle, port);
+            }
+        });
+}
+
 /// 함수 이름: run()
 /// 기능: 최소 권한으로 Tauri 데스크톱 셸을 시작한다.
 /// 인자: 없음
@@ -187,15 +449,55 @@ fn take_backend_connection_descriptor(
 /// 작성 날짜: 2026/08/12
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let sidecar_state = sidecar::SidecarProcessState::default();
+    let exit_guard_state = sidecar_state.clone();
+    let window_guard_state = sidecar_state.clone();
+    let exit_intent_bridge = exit_bridge::NativeExitIntentBridgeState::default();
+    let application_exit_bridge = exit_intent_bridge.clone();
+    let window_exit_bridge = exit_intent_bridge.clone();
+    let application_result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendConnectionDescriptorState::default())
+        .manage(sidecar_state)
+        .manage(exit_intent_bridge)
         .invoke_handler(tauri::generate_handler![
             take_backend_connection_descriptor,
             dialog::choose_csv_export_directory,
+            sidecar::await_backend_sidecar_exit,
+            exit_bridge::arm_native_exit_intent_bridge,
+            sidecar::arm_sidecar_exit_event_bridge,
         ])
-        .run(tauri::generate_context!())
-        .expect("Tauri 애플리케이션을 실행할 수 없습니다.");
+        .on_window_event(move |window, event| {
+            if window.label() != "main" || !window_guard_state.is_running() {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // JS listener 준비와 무관하게 live child 중 window teardown를 먼저 native에서 차단한다.
+                api.prevent_close();
+                let _ = window_exit_bridge.request(
+                    window.app_handle(),
+                    exit_bridge::NativeExitIntentSource::Window,
+                );
+            }
+        })
+        .setup(setup_backend_and_window)
+        .build(tauri::generate_context!());
+    let application = match application_result {
+        Ok(application) => application,
+        // Tauri는 event-loop Ready에서 setup을 호출하므로 build failure 시점에는 child/secret publication이 없다.
+        Err(_) => return,
+    };
+
+    // Live child가 남은 app-level quit은 자동 kill/고아 process 대신 UI shutdown lifecycle을 기다린다.
+    application.run(move |app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if exit_guard_state.is_running() {
+                api.prevent_exit();
+                let _ = application_exit_bridge
+                    .request(app_handle, exit_bridge::NativeExitIntentSource::Application);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -284,5 +586,70 @@ mod tests {
         };
 
         assert_eq!(failure.code, "INVALID_BACKEND_DESCRIPTOR");
+    }
+
+    /// 함수 이름: duplicate_descriptor_stage_preserves_existing_ready_slot()
+    /// 기능: unexpected duplicate stage가 기존 launch descriptor를 덮어쓰지 않고 fatal recovery 분기로 가는 불변식을 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/24
+    #[test]
+    fn duplicate_descriptor_stage_preserves_existing_ready_slot() {
+        let state = BackendConnectionDescriptorState::default();
+        if state.stage(create_descriptor()).is_err() {
+            panic!("first descriptor stage must succeed");
+        }
+
+        let failure = state
+            .stage(create_descriptor())
+            .expect_err("duplicate descriptor stage must fail closed");
+        let retained = match state.take() {
+            Ok(retained) => retained,
+            Err(_) => panic!("first staged descriptor must remain available"),
+        };
+
+        assert_eq!(failure.code, "BACKEND_DESCRIPTOR_UNAVAILABLE");
+        assert_eq!(retained.token, TEST_TOKEN);
+    }
+
+    /// 함수 이름: pre_ready_credential_failure_uses_secret_free_operator_copy()
+    /// 기능: Keychain item 부재가 panic 원문이 아닌 고정 native 재시작 안내로 변환되는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/24
+    #[test]
+    fn pre_ready_credential_failure_uses_secret_free_operator_copy() {
+        let (title, message) = pre_ready_failure_copy("BACKEND_CREDENTIALS_UNAVAILABLE");
+        let combined = format!("{title} {message}");
+
+        assert!(combined.contains("Keychain"));
+        assert!(!combined.contains("api-key"));
+        assert!(!combined.contains("api-secret"));
+        assert!(!combined.contains("BACKEND_CREDENTIALS_UNAVAILABLE"));
+    }
+
+    /// 함수 이름: late_ready_start_failure_never_returns_headless()
+    /// 기능: recovery scheduling failure와 child exit race 조합이 항상 fatal native recovery로 가는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/24
+    #[test]
+    fn late_ready_start_failure_never_returns_headless() {
+        assert_eq!(
+            select_late_ready_startup_route(false, false),
+            LateReadyStartupRoute::FatalRecovery
+        );
+        assert_eq!(
+            select_late_ready_startup_route(false, true),
+            LateReadyStartupRoute::FatalRecovery
+        );
+        assert_eq!(
+            select_late_ready_startup_route(true, false),
+            LateReadyStartupRoute::FatalRecovery
+        );
+        assert_eq!(
+            select_late_ready_startup_route(true, true),
+            LateReadyStartupRoute::AwaitWithNativeStatus
+        );
     }
 }

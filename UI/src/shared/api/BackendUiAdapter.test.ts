@@ -148,13 +148,17 @@ function create_uuid_factory(): () => string {
  * 반환값: JSON Response
  * 작성 날짜: 2026/08/21
  */
-function create_success_response(request_id: string, data: unknown): Response {
+function create_success_response(
+    request_id: string,
+    data: unknown,
+    status = 200,
+): Response {
     return new Response(JSON.stringify({
         schema_version: BACKEND_SCHEMA_VERSION,
         request_id,
         ok: true,
         data,
-    }), { status: 200 });
+    }), { status });
 }
 
 /**
@@ -170,6 +174,7 @@ function create_failure_response(
     code = 'FEATURE_NOT_AVAILABLE',
     retryable = false,
     status = 503,
+    details: Readonly<Record<string, unknown>> = {},
 ): Response {
     return new Response(JSON.stringify({
         schema_version: BACKEND_SCHEMA_VERSION,
@@ -179,7 +184,7 @@ function create_failure_response(
             code,
             message: 'This feature is not available in the current application phase.',
             retryable,
-            details: {},
+            details,
         },
     }), { status });
 }
@@ -950,25 +955,495 @@ describe('BackendUiAdapter HTTP contract', () => {
         });
     });
 
-    it('shutdown typed failure 뒤에는 token을 유지하고 명시 stop에서만 제거한다', async () => {
+    it('shutdown 503의 불명확한 결과는 token을 유지하고 동일 요청만 허용한다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            return create_failure_response(request_headers(init)['X-Request-Id']!);
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_failure_response(request_id);
         }) as typeof fetch;
         const adapter = new BackendUiAdapter(create_descriptor(), {
             fetch: fetch_mock,
             create_uuid: create_uuid_factory(),
         });
 
+        await adapter.load_snapshot();
         await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'FEATURE_NOT_AVAILABLE',
+            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
         });
         await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'FEATURE_NOT_AVAILABLE',
+            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
         });
 
         adapter.stop();
         await expect(adapter.load_snapshot()).rejects.toBeInstanceOf(BackendAdapterError);
         expect(JSON.stringify(adapter)).not.toContain(TEST_BACKEND_TOKEN);
+    });
+
+    it('Phase 12: expected version의 shutdown 202 뒤 native 정상 exit까지 기다리고 token을 폐기한다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const wait_for_sidecar_exit = vi.fn(async () => ({ exited: true, code: 0 }));
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_success_response(request_id, {
+                    accepted: true,
+                    status: 'accepted',
+                    version: 0,
+                }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            wait_for_sidecar_exit,
+        });
+
+        await adapter.load_snapshot();
+        await adapter.shutdown_application();
+
+        const shutdown_call = fetch_mock.mock.calls[1]!;
+        expect(new URL(shutdown_call[0].toString()).pathname).toBe('/v1/shutdown');
+        expect(JSON.parse(shutdown_call[1]?.body as string) as unknown).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION,
+            expected_version: 0,
+        });
+        expect(wait_for_sidecar_exit).toHaveBeenCalledOnce();
+        await expect(adapter.load_snapshot()).rejects.toMatchObject({ code: 'ADAPTER_STOPPED' });
+    });
+
+    it('Phase 12: shutdown 202보다 먼저 닫힌 event stream을 reconnect 실패로 오인하지 않는다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const callbacks = create_callbacks();
+        let event_socket: FakeBackendWebSocket | null = null;
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            if (init?.method === 'GET') {
+                return create_success_response(request_id, snapshot);
+            }
+
+            // Backend shutdown owner의 stream close가 HTTP handler body resolution보다 먼저 도착한다.
+            event_socket?.emit_close();
+            return create_success_response(request_id, {
+                accepted: true,
+                status: 'accepted',
+                version: 0,
+            }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            create_web_socket: (url) => {
+                event_socket = new FakeBackendWebSocket(url);
+                return event_socket;
+            },
+            wait_for_sidecar_exit: async () => ({ exited: true, code: 0 }),
+        });
+
+        await adapter.load_snapshot();
+        adapter.start_live_events(snapshot, callbacks);
+        await adapter.shutdown_application();
+
+        expect(fetch_mock).toHaveBeenCalledTimes(2);
+        expect(callbacks.on_reconnecting).not.toHaveBeenCalled();
+        expect(callbacks.on_failure).not.toHaveBeenCalled();
+    });
+
+    it('Phase 12: stream 종료 뒤 불명확한 shutdown 결과는 같은 key 재시도 외 command를 막는다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const callbacks = create_callbacks();
+        const wait_for_sidecar_exit = vi.fn(async () => ({ exited: true, code: 0 }));
+        let event_socket: FakeBackendWebSocket | null = null;
+        let shutdown_attempt_count = 0;
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            if (init?.method === 'GET') {
+                return create_success_response(request_id, snapshot);
+            }
+            shutdown_attempt_count += 1;
+            if (shutdown_attempt_count === 1) {
+                // Server commit 뒤 response가 유실된 모호한 transport 순서를 재현한다.
+                event_socket?.emit_close();
+                throw new TypeError('response lost after commit');
+            }
+            return create_success_response(request_id, {
+                accepted: true,
+                status: 'accepted',
+                version: 0,
+            }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            create_web_socket: (url) => {
+                event_socket = new FakeBackendWebSocket(url);
+                return event_socket;
+            },
+            wait_for_sidecar_exit,
+        });
+
+        await adapter.load_snapshot();
+        adapter.start_live_events(snapshot, callbacks);
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
+        });
+        await expect(adapter.load_snapshot()).rejects.toMatchObject({
+            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
+        });
+
+        // 동일 body와 idempotency key로 replay 202를 확인한 뒤에만 native 종료를 승인한다.
+        await expect(adapter.shutdown_application()).resolves.toBeUndefined();
+        const shutdown_calls = fetch_mock.mock.calls.filter((call) => {
+            return new URL(call[0].toString()).pathname === '/v1/shutdown';
+        });
+        expect(shutdown_calls).toHaveLength(2);
+        expect(request_headers(shutdown_calls[0]?.[1])['Idempotency-Key']).toBe(
+            request_headers(shutdown_calls[1]?.[1])['Idempotency-Key'],
+        );
+        expect(wait_for_sidecar_exit).toHaveBeenCalledOnce();
+        expect(callbacks.on_reconnecting).not.toHaveBeenCalled();
+    });
+
+    it('Phase 12: stale-version 202는 accepted로 승격하지 않고 같은 key로만 재검증한다', async () => {
+        const base_snapshot = create_backend_snapshot_fixture();
+        const snapshot = {
+            ...base_snapshot,
+            trading: {
+                ...base_snapshot.trading,
+                version: 2,
+            },
+        };
+        const wait_for_sidecar_exit = vi.fn();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_success_response(request_id, {
+                    accepted: true,
+                    status: 'accepted',
+                    version: 1,
+                }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            wait_for_sidecar_exit,
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
+        });
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
+        });
+
+        const shutdown_calls = fetch_mock.mock.calls.filter((call) => {
+            return new URL(call[0].toString()).pathname === '/v1/shutdown';
+        });
+        expect(shutdown_calls).toHaveLength(2);
+        expect(request_headers(shutdown_calls[0]?.[1])['Idempotency-Key']).toBe(
+            request_headers(shutdown_calls[1]?.[1])['Idempotency-Key'],
+        );
+        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
+    });
+
+    it('Phase 12: expected version보다 앞선 shutdown 202도 exact receipt로 수락하지 않는다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const wait_for_sidecar_exit = vi.fn();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_success_response(request_id, {
+                    accepted: true,
+                    status: 'accepted',
+                    version: 1,
+                }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            wait_for_sidecar_exit,
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
+        });
+        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
+    });
+
+    it('Phase 12: zero-position RUNNING도 stop 완료 후에만 shutdown을 요청한다', async () => {
+        const base_snapshot = create_backend_snapshot_fixture();
+        const running_snapshot = {
+            ...base_snapshot,
+            regime: { ...base_snapshot.regime, selected: 'type0' as const },
+            trading: {
+                ...base_snapshot.trading,
+                mode: 'testnet' as const,
+                status: 'running' as const,
+                version: 7,
+                command_enabled: true,
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            },
+        };
+        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+            const path = new URL(input.toString()).pathname;
+
+            if (path === '/v1/snapshot') {
+                return create_success_response(request_id, running_snapshot);
+            }
+            if (path === '/v1/trading/stop') {
+                return create_success_response(request_id, {
+                    status: 'terminated',
+                    session_id: running_snapshot.trading.session_id,
+                    version: 8,
+                });
+            }
+            return create_success_response(request_id, {
+                accepted: true,
+                status: 'accepted',
+                version: 8,
+            }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            wait_for_sidecar_exit: async () => ({ exited: true, code: 0 }),
+        });
+
+        await adapter.load_snapshot();
+        await adapter.shutdown_application();
+
+        // 포지션 표시가 false여도 실행 중인 session을 생략하지 않고 stop → shutdown을 지킨다.
+        expect(fetch_mock.mock.calls.map((call) => new URL(call[0].toString()).pathname)).toEqual([
+            '/v1/snapshot',
+            '/v1/trading/stop',
+            '/v1/shutdown',
+        ]);
+        expect(JSON.parse(fetch_mock.mock.calls[2]?.[1]?.body as string) as unknown).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION,
+            expected_version: 8,
+        });
+    });
+
+    it('Phase 12: stopping receipt 뒤 terminal snapshot을 기다린 다음 shutdown한다', async () => {
+        const base_snapshot = create_backend_snapshot_fixture();
+        const stopping_snapshot = {
+            ...base_snapshot,
+            trading: {
+                ...base_snapshot.trading,
+                mode: 'testnet' as const,
+                status: 'stopping' as const,
+                version: 5,
+                command_enabled: true,
+                has_open_position: true,
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            },
+        };
+        const terminated_snapshot = {
+            ...stopping_snapshot,
+            trading: {
+                ...stopping_snapshot.trading,
+                status: 'terminated' as const,
+                version: 6,
+                has_open_position: false,
+            },
+        };
+        let snapshot_count = 0;
+        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            if (new URL(input.toString()).pathname === '/v1/snapshot') {
+                snapshot_count += 1;
+                return create_success_response(
+                    request_id,
+                    snapshot_count === 1 ? stopping_snapshot : terminated_snapshot,
+                );
+            }
+            return create_success_response(request_id, {
+                accepted: true,
+                status: 'accepted',
+                version: 6,
+            }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            shutdown_poll_interval_ms: 1,
+            wait_for_sidecar_exit: async () => ({ exited: true, code: 0 }),
+        });
+
+        await adapter.load_snapshot();
+        await adapter.shutdown_application();
+
+        expect(fetch_mock.mock.calls.map((call) => new URL(call[0].toString()).pathname)).toEqual([
+            '/v1/snapshot',
+            '/v1/snapshot',
+            '/v1/shutdown',
+        ]);
+    });
+
+    it('Phase 12: reconciliation timeout은 exposure를 표시하고 shutdown/kill로 진행하지 않는다', async () => {
+        const base_snapshot = create_backend_snapshot_fixture();
+        const reconciliation_snapshot = {
+            ...base_snapshot,
+            trading: {
+                ...base_snapshot.trading,
+                mode: 'testnet' as const,
+                status: 'reconciliation_required' as const,
+                version: 4,
+                command_enabled: false,
+                has_open_position: true,
+                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
+            },
+        };
+        const wait_for_sidecar_exit = vi.fn();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return create_success_response(
+                request_headers(init)['X-Request-Id']!,
+                reconciliation_snapshot,
+            );
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            shutdown_wait_timeout_ms: 2,
+            shutdown_poll_interval_ms: 1,
+            wait_for_sidecar_exit,
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_SAFETY_TIMEOUT',
+            message: expect.stringContaining('열린 포지션: 있음'),
+        });
+        expect(fetch_mock.mock.calls.every((call) => {
+            return new URL(call[0].toString()).pathname === '/v1/snapshot';
+        })).toBe(true);
+        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
+    });
+
+    it('Phase 12: exposure 409 detail을 검증해 operator 판단 문구를 표시하고 창을 유지한다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const wait_for_sidecar_exit = vi.fn();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_failure_response(
+                    request_id,
+                    'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE',
+                    true,
+                    409,
+                    {
+                        accepted: false,
+                        status: 'blocked',
+                        version: 0,
+                        position_open: true,
+                        pending_order: true,
+                        reconciliation_required: false,
+                    },
+                );
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            wait_for_sidecar_exit,
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE',
+            message: expect.stringContaining('열린 포지션: 있음, 미체결 주문: 있음'),
+        });
+        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
+
+        // 실패 뒤에도 token이 남아 operator의 동일 안전 종료 재시도를 허용한다.
+        await expect(adapter.load_snapshot()).resolves.toBeDefined();
+    });
+
+    it('Phase 12: sidecar exit wait timeout에서 renderer를 닫거나 token을 지우지 않는다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        let native_wait_count = 0;
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_success_response(request_id, {
+                    accepted: true,
+                    status: 'accepted',
+                    version: 0,
+                }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            wait_for_sidecar_exit: async () => {
+                native_wait_count += 1;
+                if (native_wait_count === 1) {
+                    throw {
+                        code: 'BACKEND_SIDECAR_EXIT_TIMEOUT',
+                        message: 'Backend sidecar did not exit within the allowed time.',
+                    };
+                }
+                return { exited: true, code: 0 };
+            },
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SIDECAR_EXIT_TIMEOUT',
+        });
+        await expect(adapter.load_snapshot()).resolves.toBeDefined();
+
+        // HTTP 202를 다시 보내지 않고 native exit wait만 재시도해 중복 종료 command를 만들지 않는다.
+        await expect(adapter.shutdown_application()).resolves.toBeUndefined();
+        expect(fetch_mock.mock.calls.filter((call) => {
+            return new URL(call[0].toString()).pathname === '/v1/shutdown';
+        })).toHaveLength(1);
+    });
+
+    it('Phase 12: native nonzero exit을 timeout 재시도로 오분류하지 않는다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init)['X-Request-Id']!;
+
+            return init?.method === 'GET'
+                ? create_success_response(request_id, snapshot)
+                : create_success_response(request_id, {
+                    accepted: true,
+                    status: 'accepted',
+                    version: 0,
+                }, 202);
+        });
+        const adapter = new BackendUiAdapter(create_descriptor(), {
+            fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(),
+            wait_for_sidecar_exit: async () => {
+                throw {
+                    code: 'BACKEND_SIDECAR_EXIT_FAILED',
+                    message: 'Backend sidecar exited with a non-zero status.',
+                };
+            },
+        });
+
+        await adapter.load_snapshot();
+        await expect(adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SIDECAR_ABNORMAL_EXIT',
+            retryable: false,
+        });
     });
 });
 

@@ -11,8 +11,10 @@ export {
 export {
     create_live_ui_application,
     create_live_ui_application_factory,
+    hydrate_live_ui_application,
     type LiveBackendConnectionDescriptor,
     type LiveUiApplication,
+    type LiveUiHydrationOptions,
     type LiveUiApplicationOptions,
 } from './createLiveUiApplication';
 export type {

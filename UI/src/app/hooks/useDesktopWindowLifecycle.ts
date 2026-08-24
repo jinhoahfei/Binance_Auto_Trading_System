@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
     create_desktop_window_lifecycle,
@@ -40,7 +40,6 @@ export function use_desktop_window_lifecycle(
     is_final: boolean,
 ): void {
     const [window_lifecycle] = useState(create_window_lifecycle);
-    const close_was_requested = useRef(false);
 
     useEffect(() => {
         if (window_lifecycle === null) {
@@ -52,7 +51,6 @@ export function use_desktop_window_lifecycle(
 
         void window_lifecycle.on_close_requested((request) => {
             request.preventDefault();
-            close_was_requested.current = true;
             controller.dispatch({ type: 'APP_EXIT_CLICKED' });
         }).then((remove_listener) => {
             if (is_disposed) {
@@ -72,10 +70,11 @@ export function use_desktop_window_lifecycle(
     }, [controller, window_lifecycle]);
 
     useEffect(() => {
-        if (!is_final || !close_was_requested.current || window_lifecycle === null) {
+        if (!is_final || window_lifecycle === null) {
             return;
         }
 
+        // Window close, Command-Q와 sidecar crash recovery 모두 같은 final에서 native 창을 제거한다.
         void window_lifecycle.destroy().catch((error: unknown) => {
             report_window_lifecycle_error('창 제거', error);
         });

@@ -39,6 +39,8 @@ const MAX_TRACKED_EVENT_IDS = 10_000;
 const MAX_PENDING_IDEMPOTENCY_KEYS = 128;
 const NORMAL_CLIENT_CLOSE_CODE = 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
+const DEFAULT_SHUTDOWN_WAIT_TIMEOUT_MS = 30_000;
+const DEFAULT_SHUTDOWN_POLL_INTERVAL_MS = 250;
 const ADAPTER_STOP_ABORT_REASON = Symbol('ADAPTER_STOP_ABORT_REASON');
 const CALLER_REQUEST_ABORT_REASON = Symbol('CALLER_REQUEST_ABORT_REASON');
 const REQUEST_TIMEOUT_ABORT_REASON = Symbol('REQUEST_TIMEOUT_ABORT_REASON');
@@ -58,6 +60,13 @@ const BACKEND_REGIME_TYPES: ReadonlySet<RegimeType> = new Set([
     'type2',
     'type3',
     'type4',
+]);
+const NATIVE_SIDECAR_EXIT_FAILURE_CODES: ReadonlySet<string> = new Set([
+    'BACKEND_SIDECAR_EXITED_UNEXPECTEDLY',
+    'BACKEND_SIDECAR_EXIT_FAILED',
+    'BACKEND_SIDECAR_STATE_UNAVAILABLE',
+    'BACKEND_SIDECAR_UNAVAILABLE',
+    'INVALID_BACKEND_SIDECAR_EXIT_TIMEOUT',
 ]);
 
 /**
@@ -82,6 +91,14 @@ interface BackendSplitRatioCommandResult extends BackendVersionedCommandResult {
 interface BackendTradingCommandResult extends BackendVersionedCommandResult {
     readonly status: BackendTradingStatus;
     readonly session_id: string | null;
+}
+
+/**
+ * Phase 12 shutdown endpoint가 안전 종료 수락 시 반환하는 strict receipt이다.
+ */
+interface BackendShutdownReceipt extends BackendVersionedCommandResult {
+    readonly accepted: true;
+    readonly status: 'accepted';
 }
 
 /**
@@ -123,6 +140,9 @@ export interface BackendUiAdapterDependencies {
     readonly create_uuid?: () => string;
     readonly pick_csv_directory?: () => Promise<unknown>;
     readonly request_timeout_ms?: number;
+    readonly shutdown_wait_timeout_ms?: number;
+    readonly shutdown_poll_interval_ms?: number;
+    readonly wait_for_sidecar_exit?: () => Promise<unknown>;
 }
 
 /**
@@ -181,6 +201,17 @@ function create_default_web_socket(url: string): BackendWebSocket {
  */
 async function invoke_default_csv_directory_picker(): Promise<unknown> {
     return invoke<unknown>('choose_csv_export_directory');
+}
+
+/**
+ * 함수 이름: invoke_default_sidecar_exit_waiter()
+ * 기능: shutdown 202 수락 뒤 native owner가 관찰한 sidecar의 정상 프로세스 종료를 기다린다.
+ * 인자: 없음
+ * 반환값: secret을 포함하지 않는 native exit receipt Promise
+ * 작성 날짜: 2026/08/24
+ */
+async function invoke_default_sidecar_exit_waiter(): Promise<unknown> {
+    return invoke<unknown>('await_backend_sidecar_exit');
 }
 
 /**
@@ -338,6 +369,132 @@ function validate_trading_command_result(value: unknown): BackendTradingCommandR
     }
 
     return result as BackendTradingCommandResult;
+}
+
+/**
+ * 함수 이름: validate_shutdown_receipt()
+ * 기능: shutdown 202 data가 accepted/status/version exact 계약을 따르는지 검증한다.
+ * 인자: value -> shutdown success envelope의 data
+ * 반환값: 검증된 안전 종료 수락 receipt
+ * 작성 날짜: 2026/08/24
+ */
+function validate_shutdown_receipt(value: unknown): BackendShutdownReceipt {
+    const receipt = require_exact_record(
+        value,
+        ['accepted', 'status', 'version'],
+        'shutdown receipt',
+    );
+
+    if (receipt.accepted !== true
+        || receipt.status !== 'accepted'
+        || !Number.isSafeInteger(receipt.version)
+        || (receipt.version as number) < 0) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend shutdown receipt is invalid',
+        );
+    }
+
+    return receipt as unknown as BackendShutdownReceipt;
+}
+
+/**
+ * 함수 이름: validate_sidecar_exit_receipt()
+ * 기능: native owner가 보고한 exact exit receipt와 정상 exit code를 검증한다.
+ * 인자: value -> Tauri await command의 미검증 반환값
+ * 반환값: 정상 종료이면 void, 비정상 또는 malformed 결과이면 typed 오류 발생
+ * 작성 날짜: 2026/08/24
+ */
+function validate_sidecar_exit_receipt(value: unknown): void {
+    const receipt = require_exact_record(
+        value,
+        ['exited', 'code'],
+        'native sidecar exit receipt',
+    );
+
+    if (receipt.exited !== true || receipt.code !== 0) {
+        throw new BackendAdapterError(
+            'SIDECAR_ABNORMAL_EXIT',
+            '백엔드 프로세스가 정상 종료되지 않았습니다. 창을 유지한 채 상태를 확인해 주세요.',
+            true,
+        );
+    }
+}
+
+/**
+ * 함수 이름: classify_native_sidecar_wait_failure()
+ * 기능: Tauri invoke Err의 allowlisted code만 timeout 또는 abnormal exit로 분류한다.
+ * 인자: error -> native await command가 reject한 unknown 값
+ * 반환값: operator wait 재시도가 가능한 timeout 또는 offline 복구가 필요한 abnormal
+ * 작성 날짜: 2026/08/24
+ */
+function classify_native_sidecar_wait_failure(
+    error: unknown,
+): 'timeout' | 'abnormal' {
+    if (typeof error !== 'object' || error === null || !('code' in error)) {
+        return 'abnormal';
+    }
+
+    const native_code = error.code;
+    if (native_code === 'BACKEND_SIDECAR_EXIT_TIMEOUT') {
+        return 'timeout';
+    }
+    if (typeof native_code === 'string'
+        && NATIVE_SIDECAR_EXIT_FAILURE_CODES.has(native_code)) {
+        return 'abnormal';
+    }
+
+    return 'abnormal';
+}
+
+/**
+ * 함수 이름: format_shutdown_blocked_error()
+ * 기능: shutdown 409의 exposure detail을 strict 검증해 운영자가 판단할 정적 문구로 바꾼다.
+ * 인자: error -> backend typed shutdown failure
+ * 반환값: position/order/reconciliation 상태가 포함된 안전한 typed 오류
+ * 작성 날짜: 2026/08/24
+ */
+function format_shutdown_blocked_error(error: BackendCommandError): BackendCommandError {
+    const details = require_exact_record(
+        error.details,
+        [
+            'accepted',
+            'status',
+            'version',
+            'position_open',
+            'pending_order',
+            'reconciliation_required',
+        ],
+        'shutdown blocked details',
+    );
+    const booleans_are_valid = details.accepted === false
+        && details.status === 'blocked'
+        && typeof details.position_open === 'boolean'
+        && typeof details.pending_order === 'boolean'
+        && typeof details.reconciliation_required === 'boolean';
+
+    if (!booleans_are_valid
+        || !Number.isSafeInteger(details.version)
+        || (details.version as number) < 0) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'Backend shutdown blocked details are invalid',
+        );
+    }
+
+    const exposure_summary = [
+        `열린 포지션: ${details.position_open === true ? '있음' : '없음'}`,
+        `미체결 주문: ${details.pending_order === true ? '있음' : '없음'}`,
+        `조정 필요: ${details.reconciliation_required === true ? '있음' : '없음'}`,
+    ].join(', ');
+
+    // Backend의 임의 detail을 그대로 반사하지 않고 검증한 세 가지 안전 상태만 사용자에게 노출한다.
+    return new BackendCommandError(
+        error.code,
+        `안전 종료가 보류되었습니다. ${exposure_summary}. 상태를 확인한 뒤 다시 시도하거나 취소해 주세요.`,
+        true,
+        details,
+    );
 }
 
 /**
@@ -667,6 +824,9 @@ export class BackendUiAdapter implements UiCommandPort {
     readonly #create_uuid: () => string;
     readonly #invoke_csv_directory_picker: () => Promise<unknown>;
     readonly #request_timeout_ms: number;
+    readonly #shutdown_wait_timeout_ms: number;
+    readonly #shutdown_poll_interval_ms: number;
+    readonly #wait_for_sidecar_exit: () => Promise<unknown>;
     readonly #http_origin: string;
     readonly #web_socket_url: string;
 
@@ -677,8 +837,14 @@ export class BackendUiAdapter implements UiCommandPort {
     #callbacks: BackendUiAdapterCallbacks | null = null;
     #is_stopped = true;
     #is_resynchronizing = false;
+    #shutdown_is_in_flight = false;
+    #shutdown_was_accepted = false;
+    #shutdown_outcome_is_ambiguous = false;
+    #shutdown_stream_closed_during_request = false;
     #connection_generation = 0;
     #trading_version: number | null = null;
+    #trading_status: BackendTradingStatus | null = null;
+    #has_open_position = false;
     #selected_regime: RegimeType | null = null;
     #scale_in_ratio: string | null = null;
     #scale_out_ratio: string | null = null;
@@ -702,8 +868,16 @@ export class BackendUiAdapter implements UiCommandPort {
         const validated_descriptor = validate_connection_descriptor(descriptor);
         const request_timeout_ms = dependencies.request_timeout_ms
             ?? DEFAULT_REQUEST_TIMEOUT_MS;
+        const shutdown_wait_timeout_ms = dependencies.shutdown_wait_timeout_ms
+            ?? DEFAULT_SHUTDOWN_WAIT_TIMEOUT_MS;
+        const shutdown_poll_interval_ms = dependencies.shutdown_poll_interval_ms
+            ?? DEFAULT_SHUTDOWN_POLL_INTERVAL_MS;
 
-        if (!Number.isSafeInteger(request_timeout_ms) || request_timeout_ms <= 0) {
+        if (!Number.isSafeInteger(request_timeout_ms) || request_timeout_ms <= 0
+            || !Number.isSafeInteger(shutdown_wait_timeout_ms)
+            || shutdown_wait_timeout_ms <= 0
+            || !Number.isSafeInteger(shutdown_poll_interval_ms)
+            || shutdown_poll_interval_ms <= 0) {
             throw new BackendAdapterError(
                 'INVALID_ADAPTER_CONFIGURATION',
                 'Backend request timeout is invalid',
@@ -721,6 +895,10 @@ export class BackendUiAdapter implements UiCommandPort {
         this.#invoke_csv_directory_picker = dependencies.pick_csv_directory
             ?? invoke_default_csv_directory_picker;
         this.#request_timeout_ms = request_timeout_ms;
+        this.#shutdown_wait_timeout_ms = shutdown_wait_timeout_ms;
+        this.#shutdown_poll_interval_ms = shutdown_poll_interval_ms;
+        this.#wait_for_sidecar_exit = dependencies.wait_for_sidecar_exit
+            ?? invoke_default_sidecar_exit_waiter;
         this.#http_origin = `http://127.0.0.1:${validated_descriptor.port}`;
         this.#web_socket_url = `ws://127.0.0.1:${validated_descriptor.port}/v1/events`;
     }
@@ -840,6 +1018,7 @@ export class BackendUiAdapter implements UiCommandPort {
 
         this.require_current_command_response(result.version, expected_version);
         this.#trading_version = result.version;  // 다음 command는 start가 확정한 새 version을 사용한다.
+        this.#trading_status = result.status;
         return result;
     }
 
@@ -872,6 +1051,7 @@ export class BackendUiAdapter implements UiCommandPort {
 
         this.require_current_command_response(result.version, expected_version);
         this.#trading_version = result.version;  // 중지 결과가 stopping이어도 반환 version이 다음 기준이다.
+        this.#trading_status = result.status;
         return result;
     }
 
@@ -988,6 +1168,8 @@ export class BackendUiAdapter implements UiCommandPort {
         const trading = snapshot.trading;
 
         this.#trading_version = trading.version;
+        this.#trading_status = trading.status;
+        this.#has_open_position = trading.has_open_position;
         this.#selected_regime = snapshot.regime.selected;
         this.#scale_in_ratio = trading.scale_in;
         this.#scale_out_ratio = trading.scale_out;
@@ -1115,25 +1297,137 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     async shutdown_application(): Promise<void> {
-        await this.request_command('/v1/shutdown', 'POST');
+        if (!this.#shutdown_was_accepted) {
+            await this.await_safe_trading_terminal_state();
+            const expected_version = this.require_trading_version();
+            let receipt: BackendShutdownReceipt;
 
-        // Backend가 종료를 수락한 뒤에만 renderer의 launch token 참조를 폐기한다.
+            this.#shutdown_is_in_flight = true;
+            try {
+                receipt = await this.request_json(
+                    'POST',
+                    '/v1/shutdown',
+                    (value) => {
+                        const validated_receipt = validate_shutdown_receipt(value);
+
+                        // Version 검증도 idempotency 결과 확정 전에 끝내 잘못된 202를 수락하지 않는다.
+                        this.require_current_command_response(
+                            validated_receipt.version,
+                            expected_version,
+                        );
+                        if (validated_receipt.version !== expected_version) {
+                            throw new BackendContractError(
+                                'MALFORMED_BACKEND_PAYLOAD',
+                                'Backend shutdown receipt version does not match the request',
+                            );
+                        }
+                        return validated_receipt;
+                    },
+                    {
+                        schema_version: BACKEND_SCHEMA_VERSION,
+                        expected_version,
+                    },
+                    true,
+                    undefined,
+                    this.#request_timeout_ms,
+                    202,
+                );
+            } catch (error) {
+                this.#shutdown_is_in_flight = false;
+                const stream_was_closed = this.#shutdown_stream_closed_during_request;
+                this.#shutdown_stream_closed_during_request = false;
+                if (error instanceof BackendCommandError
+                    && error.code === 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE') {
+                    this.#shutdown_outcome_is_ambiguous = false;
+                    if (stream_was_closed) {
+                        // 명시적 409 뒤 닫힌 stream은 정상 live resync 경로로 복구한다.
+                        void this.full_resynchronize('EVENT_STREAM_CLOSED');
+                    }
+                    throw format_shutdown_blocked_error(error);
+                }
+
+                // 응답이 불명확하면 동일 shutdown 재시도 외의 command를 차단한다.
+                this.#shutdown_outcome_is_ambiguous = true;
+                const position_label = this.#has_open_position ? '있음' : '없음';
+                throw new BackendAdapterError(
+                    'SHUTDOWN_OUTCOME_AMBIGUOUS',
+                    `종료 응답을 확인하지 못했습니다. 마지막 확인 위치의 열린 포지션: ${position_label}, 미체결 주문·조정 상태: 확인 필요. 프로세스를 강제 종료하지 말고 동일 종료 요청으로 결과를 다시 확인해 주세요.`,
+                    true,
+                );
+            }
+
+            this.#shutdown_was_accepted = true;
+            this.#shutdown_outcome_is_ambiguous = false;
+            this.#shutdown_is_in_flight = false;
+            this.#shutdown_stream_closed_during_request = false;
+            this.#trading_version = receipt.version;
+        }
+
+        let native_exit_receipt: unknown;
+        try {
+            // HTTP 202는 접수일 뿐이므로 child process의 정상 종료까지 창과 token을 유지한다.
+            native_exit_receipt = await this.#wait_for_sidecar_exit();
+        } catch (error) {
+            if (classify_native_sidecar_wait_failure(error) === 'timeout') {
+                throw new BackendAdapterError(
+                    'SIDECAR_EXIT_TIMEOUT',
+                    '종료 접수 시 열린 포지션: 없음, 미체결 주문: 없음, 조정 필요: 없음으로 확인했습니다. 프로세스를 강제 종료하지 않았으며 창을 유지한 채 종료 상태를 다시 확인해야 합니다.',
+                    true,
+                );
+            }
+
+            throw new BackendAdapterError(
+                'SIDECAR_ABNORMAL_EXIT',
+                '백엔드 프로세스가 비정상 종료되었거나 종료 상태를 검증할 수 없습니다. 새 주문을 차단하고 애플리케이션을 다시 시작해야 합니다.',
+                false,
+            );
+        }
+        validate_sidecar_exit_receipt(native_exit_receipt);
+
+        // Backend process가 정상 종료된 뒤에만 renderer의 launch token 참조를 폐기한다.
         this.stop();
     }
 
     /**
-     * 함수 이름: request_command()
-     * 기능: 구체 success DTO가 없는 Phase command를 공통 authenticated envelope로 실행한다.
-     * 인자: path -> exact `/v1/*` command path, method -> POST 또는 PATCH
-     * 반환값: 성공 시 void Promise
-     * 작성 날짜: 2026/08/21
+     * 함수 이름: await_safe_trading_terminal_state()
+     * 기능: 종료 전에 RUNNING을 authoritative stop하고 비동기 청산·조정의 terminal snapshot을 기다린다.
+     * 인자: 없음
+     * 반환값: not_started 또는 terminated에 도달하면 완료되는 Promise
+     * 작성 날짜: 2026/08/24
      */
-    private async request_command(path: string, method: 'POST' | 'PATCH'): Promise<void> {
-        await this.request_json(
-            method,
-            path,
-            validate_success_object,
-            { schema_version: BACKEND_SCHEMA_VERSION },
+    private async await_safe_trading_terminal_state(): Promise<void> {
+        if (this.#trading_status === null) {
+            throw new BackendCommandError(
+                'TRADING_SNAPSHOT_REQUIRED',
+                '프로그램 종료 전 최신 거래 상태가 필요합니다.',
+                true,
+            );
+        }
+        if (this.#trading_status === 'running') {
+            await this.stop_trading();
+        }
+        if (this.#trading_status === 'not_started'
+            || this.#trading_status === 'terminated') {
+            return;
+        }
+
+        const deadline = Date.now() + this.#shutdown_wait_timeout_ms;
+        while (Date.now() < deadline) {
+            await new Promise<void>((resolve) => {
+                globalThis.setTimeout(resolve, this.#shutdown_poll_interval_ms);
+            });
+            const snapshot = await this.load_snapshot();
+
+            if (snapshot.trading.status === 'not_started'
+                || snapshot.trading.status === 'terminated') {
+                return;
+            }
+        }
+
+        const position_label = this.#has_open_position ? '있음' : '없음';
+        throw new BackendAdapterError(
+            'SHUTDOWN_SAFETY_TIMEOUT',
+            `안전 종료 대기 시간이 초과되었습니다. 열린 포지션: ${position_label}, 미체결 주문 또는 조정 상태를 확인한 뒤 다시 시도해 주세요.`,
             true,
         );
     }
@@ -1145,6 +1439,7 @@ export class BackendUiAdapter implements UiCommandPort {
      *      validate_data -> success data validator, body -> optional JSON body
      *      is_command -> idempotency header 필요 여부, caller_signal -> optional 호출자 취소 신호
      *      timeout_ms -> 양수 timeout milliseconds, null이면 wall-clock timeout 미적용
+     *      expected_success_status -> 성공 envelope에서 요구할 HTTP status 또는 null
      * 반환값: 검증된 success data Promise
      * 작성 날짜: 2026/08/21
      */
@@ -1156,7 +1451,16 @@ export class BackendUiAdapter implements UiCommandPort {
         is_command = false,
         caller_signal?: AbortSignal,
         timeout_ms: number | null = this.#request_timeout_ms,
+        expected_success_status: number | null = null,
     ): Promise<Data> {
+        if (this.#shutdown_outcome_is_ambiguous && path !== '/v1/shutdown') {
+            throw new BackendAdapterError(
+                'SHUTDOWN_OUTCOME_AMBIGUOUS',
+                '백엔드 종료 결과를 확인 중입니다. 동일한 종료 요청만 다시 시도해 주세요.',
+                true,
+            );
+        }
+
         const token = this.#session_token;
         if (token === null) {
             throw new BackendAdapterError(
@@ -1235,6 +1539,13 @@ export class BackendUiAdapter implements UiCommandPort {
                 request_id,
                 validate_data,
             );
+            if (expected_success_status !== null
+                && response.status !== expected_success_status) {
+                throw new BackendContractError(
+                    'MALFORMED_BACKEND_RESPONSE',
+                    'Backend command returned an unexpected HTTP success status',
+                );
+            }
             if (command_fingerprint !== null) {
                 this.#pending_idempotency_keys.delete(command_fingerprint);
             }
@@ -1409,6 +1720,15 @@ export class BackendUiAdapter implements UiCommandPort {
             }
 
             this.#web_socket = null;
+            if (this.#shutdown_is_in_flight) {
+                // 202와 stream close 순서를 판별할 수 있도록 request-local 사실을 보존한다.
+                this.#shutdown_stream_closed_during_request = true;
+                return;
+            }
+            if (this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) {
+                // Backend는 202 body보다 stream을 먼저 닫을 수 있으므로 accepted 판정 전 resync도 억제한다.
+                return;
+            }
             void this.full_resynchronize('EVENT_STREAM_CLOSED');
         };
     }
@@ -1523,6 +1843,8 @@ export class BackendUiAdapter implements UiCommandPort {
 
         // Event의 같은 aggregate version에서 온 두 ratio를 함께 교체해 한쪽만 stale해지지 않게 한다.
         this.#trading_version = trading_intent.version;
+        this.#trading_status = trading_intent.status;
+        this.#has_open_position = trading_intent.has_open_position;
         this.#scale_in_ratio = trading_intent.scale_in;
         this.#scale_out_ratio = trading_intent.scale_out;
         return applicable_intents;

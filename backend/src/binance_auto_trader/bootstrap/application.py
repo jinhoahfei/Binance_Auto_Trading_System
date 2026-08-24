@@ -71,6 +71,7 @@ class ApplicationStatus(str, Enum):
     CREATED = "CREATED"
     STARTING = "STARTING"
     READY = "READY"
+    SHUTTING_DOWN = "SHUTTING_DOWN"
     FAILED = "FAILED"
     CLOSED = "CLOSED"
 
@@ -364,6 +365,25 @@ class _ApplicationStateStore:
     state: ApplicationStateSnapshot
 
 
+@dataclass(slots=True)
+class _ApplicationShutdownStore:
+    """
+    클래스 이름: _ApplicationShutdownStore
+    기능: 서로 다른 idempotency key의 동시 안전 종료를 한 owner와 terminal 결과로 합친다.
+    작성 날짜: 2026/08/24
+    """
+
+    in_progress: bool = False
+    expected_version: int | None = None
+    completion_event: Event = field(
+        default_factory=Event,
+        repr=False,
+        compare=False,
+    )
+    result: object | None = field(default=None, repr=False, compare=False)
+    error: BaseException | None = field(default=None, repr=False, compare=False)
+
+
 class _AccountStreamRecoveryWorker:
     """
     클래스 이름: _AccountStreamRecoveryWorker
@@ -558,6 +578,10 @@ class ApplicationRuntime:
         repr=False,
         compare=False,
     )
+    _shutdown_store: _ApplicationShutdownStore = field(
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         """
@@ -585,6 +609,8 @@ class ApplicationRuntime:
             )  # 상세 요약과 trading snapshot이 같은 Account owner를 보아야 한다.
         if not isinstance(self._state_store, _ApplicationStateStore):
             raise TypeError("_state_store must be an application state store")
+        if not isinstance(self._shutdown_store, _ApplicationShutdownStore):
+            raise TypeError("_shutdown_store must be an application shutdown store")
         if (
             self._account_stream_recovery_worker is not None
             and not isinstance(
@@ -882,6 +908,12 @@ def create_application_runtime(
         """
         # 부분 snapshot 적용과 observer 알림을 같은 application publication으로 묶는다.
         with application_lock:
+            if application_state_store.state.status in (
+                ApplicationStatus.SHUTTING_DOWN,
+                ApplicationStatus.CLOSED,
+            ):
+                return False  # 종료 gate 뒤 대기하던 callback은 Account를 다시 변경하지 못한다.
+
             account_changed = account.apply_stream_snapshot(snapshot)
             if account_changed and account_update_observer is not None:
                 account_update_observer(account)  # 변경된 동일 Account만 알린다.
@@ -902,6 +934,12 @@ def create_application_runtime(
         """
         # Account와 order callback이 동일 entity graph를 동시에 변경하지 않게 직렬화한다.
         with application_lock:
+            if application_state_store.state.status in (
+                ApplicationStatus.SHUTTING_DOWN,
+                ApplicationStatus.CLOSED,
+            ):
+                return False  # 종료 snapshot 뒤 도착한 executionReport를 새 pending으로 만들지 않는다.
+
             return trading_controller.observe_order_result(result)
 
     def require_stream_reconciliation(reason: str) -> None:
@@ -914,6 +952,12 @@ def create_application_runtime(
         """
         # Callback은 먼저 동일 application lock에서 command gate를 즉시 fail closed한다.
         with application_lock:
+            if application_state_store.state.status in (
+                ApplicationStatus.SHUTTING_DOWN,
+                ApplicationStatus.CLOSED,
+            ):
+                return  # 종료 owner가 recovery worker를 닫은 뒤 새 rerun latch를 만들지 않는다.
+
             trading_controller.mark_account_stream_reconciliation_required(
                 reason
             )
@@ -1043,4 +1087,5 @@ def create_application_runtime(
         trade_history_controller=trade_history_controller,
         _account_stream_recovery_worker=account_stream_recovery_worker,
         _state_store=application_state_store,
+        _shutdown_store=_ApplicationShutdownStore(),
     )

@@ -153,4 +153,45 @@ describe('create_live_ui_application', () => {
         expect(create_web_socket).not.toHaveBeenCalled();
         expect(document.body).not.toHaveTextContent('₩ 6,184,200');
     });
+
+    it('snapshot 뒤 React activation 전 sidecar exit는 activate 완료 후 recovery로 replay한다', async () => {
+        const lifecycle_order: Array<string> = [];
+        const snapshot = create_backend_snapshot_fixture();
+        const application = await create_live_ui_application(create_descriptor(), {
+            today: '2026-08-24',
+            adapter_dependencies: {
+                fetch: create_snapshot_fetch(snapshot),
+                create_uuid: () => TEST_REQUEST_ID,
+                create_web_socket: () => {
+                    lifecycle_order.push('web_socket');
+                    return new BootstrapFakeWebSocket();
+                },
+            },
+        });
+        const application_factory = create_live_ui_application_factory(application, () => {
+            lifecycle_order.push('native_exit_replay');
+            application.command_adapter.stop();
+            application.facade.dispatch({
+                type: 'API_DISCONNECTED',
+                reason: 'BACKEND_SIDECAR_EXITED',
+            });
+            application.facade.dispatch({
+                type: 'RECONNECT_FAILED',
+                reason: '백엔드 프로세스가 중단되었습니다.',
+            });
+            application.facade.dispatch({
+                type: 'BACKEND_SIDECAR_EXITED_ABNORMALLY',
+            });
+        });
+
+        const rendered = render(<App applicationFactory={application_factory} />);
+
+        // Facade/snapshot과 WebSocket 시작 뒤에만 buffered native event가 적용된다.
+        expect(await screen.findByText('백엔드 복구 필요')).toBeInTheDocument();
+        expect(lifecycle_order).toEqual(['web_socket', 'native_exit_replay']);
+        expect(application.facade.get_view_model().app_exit.status).toBe(
+            'sidecar_exit_failure',
+        );
+        rendered.unmount();
+    });
 });

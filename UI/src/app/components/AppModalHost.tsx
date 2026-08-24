@@ -193,6 +193,45 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
                     open
                 />
             );
+        case 'shutdown_exit_recovery':
+            return (
+                <OperationStatusDialog
+                    actionLabel="종료 상태 다시 확인"
+                    actionTone="negative"
+                    description="백엔드가 종료 요청을 수락했지만 프로세스 종료 확인이 지연되고 있습니다. 강제 종료하지 않고 운영자가 다시 확인할 때까지 창을 유지합니다."
+                    detail={viewModel.app_exit.error?.message}
+                    onConfirm={() => controller.dispatch({ type: 'APP_EXIT_CONFIRMED' })}
+                    open
+                    status="error"
+                    title="백엔드 종료 확인 필요"
+                />
+            );
+        case 'shutdown_outcome_recovery':
+            return (
+                <OperationStatusDialog
+                    actionLabel="동일 종료 요청 다시 확인"
+                    actionTone="negative"
+                    description="백엔드가 종료 요청을 처리했는지 응답으로 확정하지 못했습니다. 다른 명령과 정상 화면 복귀를 막고 같은 idempotency 요청으로만 결과를 확인합니다."
+                    detail={viewModel.app_exit.error?.message}
+                    onConfirm={() => controller.dispatch({ type: 'APP_EXIT_CONFIRMED' })}
+                    open
+                    status="error"
+                    title="종료 결과 확인 필요"
+                />
+            );
+        case 'sidecar_exit_failure':
+            return (
+                <OperationStatusDialog
+                    actionLabel="창 닫기"
+                    actionTone="negative"
+                    description="백엔드 프로세스가 중단되어 새 주문을 차단했습니다. 현재 창에서는 거래를 계속할 수 없습니다."
+                    detail={viewModel.app_exit.error?.message}
+                    onConfirm={() => controller.dispatch({ type: 'APP_EXIT_CONFIRMED' })}
+                    open
+                    status="error"
+                    title="백엔드 복구 필요"
+                />
+            );
         case 'exit_processing':
             return (
                 <OperationStatusDialog

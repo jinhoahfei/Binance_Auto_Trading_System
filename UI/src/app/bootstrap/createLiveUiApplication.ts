@@ -19,6 +19,11 @@ export interface LiveUiApplicationOptions {
 }
 
 /**
+ * 이미 생성한 live adapter를 재사용하는 snapshot hydration 옵션이다.
+ */
+export type LiveUiHydrationOptions = Pick<LiveUiApplicationOptions, 'today'>;
+
+/**
  * snapshot-first bootstrap이 생성한 facade와 실제 loopback adapter 묶음이다.
  */
 export interface LiveUiApplication extends UiApplicationRuntime {
@@ -60,17 +65,30 @@ export async function create_live_ui_application(
         options.adapter_dependencies,
     );
 
-    let initial_snapshot;
     try {
-        initial_snapshot = await command_adapter.load_snapshot();
+        return await hydrate_live_ui_application(command_adapter, options);
     } catch (error) {
         // Startup failure에서는 facade를 만들지 않으며 token도 즉시 폐기한다.
         command_adapter.stop();
         throw error;
     }
+}
 
-    if (initial_snapshot.session_id !== validated_descriptor.session_id) {
-        command_adapter.stop();
+/**
+ * 함수 이름: hydrate_live_ui_application()
+ * 기능: READY child의 같은 adapter로 snapshot hydration을 재시도하고 cold facade runtime을 만든다.
+ * 인자: command_adapter -> descriptor token을 계속 소유하는 live adapter
+ *      options -> 결정적 LocalDate source
+ * 반환값: cold hydration을 마친 live runtime Promise
+ * 작성 날짜: 2026/08/24
+ */
+export async function hydrate_live_ui_application(
+    command_adapter: BackendUiAdapter,
+    options: LiveUiHydrationOptions = {},
+): Promise<LiveUiApplication> {
+    const initial_snapshot = await command_adapter.load_snapshot();
+
+    if (initial_snapshot.session_id !== command_adapter.session_id) {
         throw new BackendAdapterError(
             'SESSION_MISMATCH',
             'Backend snapshot session does not match the launch descriptor',
@@ -153,11 +171,13 @@ export async function create_live_ui_application(
  * 함수 이름: create_live_ui_application_factory()
  * 기능: snapshot-first로 준비한 한 live runtime을 React store의 명시적 sync factory로 감싼다.
  * 인자: application -> create_live_ui_application이 준비한 runtime
+ *      on_activated -> facade와 event lifecycle이 시작된 직후 호출할 optional native replay hook
  * 반환값: App에 주입할 UiApplicationFactory
  * 작성 날짜: 2026/08/21
  */
 export function create_live_ui_application_factory(
     application: LiveUiApplication,
+    on_activated?: () => void,
 ): UiApplicationFactory {
     let has_activated = false;
     const strict_mode_safe_runtime: UiApplicationRuntime = {
@@ -170,6 +190,7 @@ export function create_live_ui_application_factory(
             // React commit에서 처음 activate될 때만 launch runtime을 소비한다.
             has_activated = true;
             application.activate();
+            on_activated?.();  // Bootstrap 중 native event는 facade가 시작된 이 경계 뒤에만 replay한다.
         },
         deactivate: () => application.deactivate(),
     };

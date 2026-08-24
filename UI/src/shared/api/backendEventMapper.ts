@@ -767,6 +767,7 @@ export function decode_backend_http_envelope<Data>(
         failure_envelope.error.code,
         failure_envelope.error.message,
         failure_envelope.error.retryable,
+        details,
     );
 }
 
@@ -778,6 +779,7 @@ export function decode_backend_http_envelope<Data>(
 export class BackendCommandError extends Error {
     readonly code: string;
     readonly retryable: boolean;
+    readonly details: Readonly<Record<string, unknown>>;
 
     /**
      * 함수 이름: BackendCommandError.constructor()
@@ -785,14 +787,21 @@ export class BackendCommandError extends Error {
      * 인자: code -> backend failure code
      *      message -> backend가 보장한 user-safe message
      *      retryable -> 동일 command를 재시도할 수 있는지 여부
+     *      details -> endpoint별로 검증하기 전인 secret 없는 구조화 세부 정보
      * 반환값: BackendCommandError 인스턴스
      * 작성 날짜: 2026/08/21
      */
-    constructor(code: string, message: string, retryable: boolean) {
+    constructor(
+        code: string,
+        message: string,
+        retryable: boolean,
+        details: Readonly<Record<string, unknown>> = {},
+    ) {
         super(message);
         this.name = 'BackendCommandError';
         this.code = code;
         this.retryable = retryable;
+        this.details = details;
     }
 }
 
