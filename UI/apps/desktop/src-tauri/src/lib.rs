@@ -1,5 +1,7 @@
 mod dialog;
 mod exit_bridge;
+#[cfg(target_os = "macos")]
+mod macos_quit_guard;
 mod sidecar;
 
 use serde::Serialize;
@@ -10,6 +12,17 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use zeroize::Zeroize;
 
 const BACKEND_SCHEMA_VERSION: u32 = 2; // Python transport schema와 native descriptor gate를 맞춘다.
+const RELEASE_PROVENANCE_MARKER: &str = env!("BINANCE_AUTO_RELEASE_PROVENANCE");
+
+/// 함수 이름: retain_release_provenance_marker()
+/// 기능: build-time clean Git commit marker가 최종 native executable에 남도록 linker-visible 참조를 유지한다.
+/// 인자: 없음
+/// 반환값: 없음
+/// 작성 날짜: 2026/08/24
+#[inline(never)]
+fn retain_release_provenance_marker() {
+    std::hint::black_box(RELEASE_PROVENANCE_MARKER);
+}
 
 /// renderer에 한 번만 전달되는 loopback 연결 descriptor이다.
 #[derive(Serialize)]
@@ -222,11 +235,19 @@ fn select_late_ready_startup_route(
 }
 
 /// 함수 이름: setup_backend_and_window()
-/// 기능: core dump 차단, sidecar ready/stage/monitor를 완료한 뒤에만 deferred main window를 만든다.
+/// 기능: AppKit quit gate, core dump 차단, sidecar ready/stage/monitor 뒤에만 deferred main window를 만든다.
 /// 인자: app -> startup 중인 trusted native Tauri application
 /// 반환값: startup 성공 또는 secret 없는 boxed native failure
 /// 작성 날짜: 2026/08/24
 fn setup_backend_and_window(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
+    #[cfg(target_os = "macos")]
+    if macos_quit_guard::install_macos_quit_guard(app.handle()).is_err() {
+        // Guard 없는 child를 시작하지 않고 기존 secret-free pre-READY operator surface로 종료한다.
+        schedule_pre_ready_startup_failure(app.handle().clone(), "BACKEND_SIDECAR_STARTUP_FAILED");
+        return Ok(());
+    }
+
+    // AppKit quit gate 설치가 확정된 뒤에만 credential 조회와 sidecar process 시작을 허용한다.
     if let Err(failure) = sidecar::disable_process_core_dumps() {
         schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
         return Ok(());
@@ -449,6 +470,9 @@ pub(crate) fn schedule_ready_window_recovery(app_handle: AppHandle, port: u16) {
 /// 작성 날짜: 2026/08/12
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Code signature로 봉인될 provenance를 실행 경로에서도 참조해 release 최적화의 제거를 막는다.
+    retain_release_provenance_marker();
+
     let sidecar_state = sidecar::SidecarProcessState::default();
     let exit_guard_state = sidecar_state.clone();
     let window_guard_state = sidecar_state.clone();
@@ -506,6 +530,24 @@ mod tests {
 
     const TEST_SESSION_ID: &str = "3c73d583-c1c8-4830-8393-cc31639a40fd";
     const TEST_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    /// 함수 이름: release_provenance_marker_has_fail_closed_shape()
+    /// 기능: local build는 UNVERIFIED, release build는 canonical lowercase commit만 native marker에 담는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/24
+    #[test]
+    fn release_provenance_marker_has_fail_closed_shape() {
+        let release_commit = RELEASE_PROVENANCE_MARKER
+            .strip_prefix("BINANCE_AUTO_RELEASE_COMMIT=")
+            .expect("release provenance marker prefix must be fixed");
+        let canonical_commit = release_commit.len() == 40
+            && release_commit
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+
+        assert!(release_commit == "UNVERIFIED" || canonical_commit);
+    }
 
     /// 함수 이름: create_descriptor()
     /// 기능: native one-shot state test에 사용할 valid descriptor를 생성한다.

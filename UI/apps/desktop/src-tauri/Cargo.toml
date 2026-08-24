@@ -23,4 +23,6 @@ tauri-plugin-dialog = "2"
 zeroize = "1.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSResponder", "std"] }
 security-framework = "3.7"

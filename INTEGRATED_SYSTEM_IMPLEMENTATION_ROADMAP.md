@@ -2,12 +2,12 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 clean-machine·credential 검증 대기 |
+| 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 개인용 ad-hoc desktop package·credential·shutdown 검증 완료 |
 | 기준일 | 2026-08-24 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 따라서 Phase 9 master는 `[x]`, Phase 12 master는 `[ ] 부분 완료`를 유지하고 live는 Phase 13 별도 승인 전까지 잠겨 있다. |
+| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. 따라서 Phase 9와 Phase 12 master는 `[x]`이며 live는 Phase 13 별도 승인 전까지 잠겨 있다. |
 
 ---
 
@@ -85,7 +85,7 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 
 | 영역 | 실행 결과 | 판단 |
 |---|---|---|
-| 통합 backend | 표준 `unittest` 641개 실행, 635개 통과·외부 Testnet 6개 safe skip | 기존 Phase 0~12 회귀, verified closed/pending baseline, 공개 복구 청산, event worker, 수수료/dust와 unknown app-order fail-closed 계약 검증 통과 |
+| 통합 backend | 표준 `unittest` 643개 실행, 637개 통과·외부 Testnet 6개 safe skip | 기존 Phase 0~12 회귀, verified closed/pending baseline, 공개 복구 청산, event worker, 수수료/dust와 unknown app-order fail-closed 계약 검증 통과 |
 | Phase 9 집중 | 복구/worker/transport 69개, Binance adapter 42개, architecture 57개와 deterministic fault injection 2개 통과 | same-ID 복구, PREPARED ambiguity, 전량 free·filter gate, BUY entry cap, STOP SELL 예외와 mutation owner, signed commission, process worker, 두 REST snapshot gap과 reset provenance 검증 |
 | Phase 10 집중 | architecture 49개, Case 3 backend/UI trace, 12개 filter, KST 자정·save/retry rollover, empty/failure/retry, load 중 체결, replay gap resync 검증 | filter는 rows만 교체하고 Account version/KST 날짜/Trade publication이 바뀐 summary만 재결합하며 event pair는 원자 발행 |
 | package/static | offline wheel build, `compileall`, generated contract drift와 `git diff --check` 최종 재검증 | Phase 12 sidecar entrypoint와 pinned desktop packaging extra를 wheel metadata에 포함 |
@@ -94,8 +94,9 @@ INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md를 기준으로 가장 앞의 미완
 | process/HTTP 검증 | 실제 Python child와 loopback HTTP/CORS/query/shutdown tests를 통과 | fixed FD configuration, exact `202`/`409`, post-CLOSED process ACK와 기존 startup 메시지 `1 → 2 → 3 → 4 → 5` 검증 |
 | generated contract | Python schema v2 renderer와 `backendContracts.generated.ts` byte-for-byte 일치 | max 1,000 rows, details composite와 ORDER/PERFORMANCE event payload를 Python authoritative source로 유지 |
 | Git 범위 | Phase 9 `TradingController`, Testnet adapter/bootstrap/transport, 복구 UI, Communication·ADR와 회귀 테스트 변경 | production/live endpoint와 live enable은 변경하지 않음 |
-| Tauri/Rust | `cargo fmt --check`, `cargo check --tests --locked`, native unit 27개 전부 통과 | random-port sidecar, runtime CSP rewrite, minimal capability, Keychain, late READY/pre-window child exit와 expected/abnormal exit 검증 |
-| macOS bundle | arm64 `.app`/`.dmg` 생성, DMG checksum과 DMG 내부 app/sidecar strict ad-hoc signature 검증 통과 | Developer ID 서명·notarization 및 clean-machine credential smoke는 미실행 |
+| Tauri/Rust | `cargo fmt --check`, `cargo check --tests --locked`, `cargo test --locked`, `cargo clippy --lib --locked -- -D warnings`, native unit 31개 전부 통과 | random-port sidecar, runtime CSP rewrite, minimal capability, Keychain, late READY/pre-window child exit, AppKit native Quit cancel, release commit marker와 expected/abnormal exit 검증 |
+| macOS bundle | arm64 fixed `.app`/`.dmg`, DMG checksum·mounted app/sidecar strict ad-hoc signature, current-host actual Keychain read-only READY와 native safe shutdown/orphan 0 검증 통과 | 친구 전달 전 대상 Mac architecture 확인과 최초 실행 수동 신뢰 허용 안내만 별도 수행; Developer ID/notarization은 선택 사항 |
+| Phase 12 release tooling | `backend/.venv/bin/python -m unittest discover -s scripts -p 'test_*.py' -q` → 114/114 통과 | release identity/notary profile preflight, commit-provenance signed app/DMG verifier, atomic fresh DMG builder, live-bound schema v2 evidence gate와 symlink/path-component secret scanner 회귀 검증 |
 
 Python 검증은 프로젝트가 사용하는 표준 `unittest`로 수행했고 수정 package를
 `uv build --wheel --offline`으로 다시 생성했다. UI는 설치된 `node_modules/.bin`으로
@@ -227,17 +228,18 @@ runtime으로 봉인했지만 배포 인증서가 아니므로 Gatekeeper 배포
 - [x] 완료 — JSONL `TradeHistoryRepository`의 startup read/recovery/index, order ID 멱등
   append/flush/fsync/save-only retry와 byte snapshot `stream_trades`를 구현하고, native
   no-replace rename 기반 CSV writer까지 Phase 11에서 연결했다.
-- [ ] 부분 완료 — Python application bootstrap, loopback HTTP/WebSocket, Tauri fixed-FD sidecar spawn,
-  one-shot descriptor, exact-port CSP, package와 안전 종료 lifecycle을 local에서 구현·자동 검증했다.
-  실제 Keychain credential을 사용한 packaged contract 및 clean-machine smoke는 남아 있다.
+- [x] 완료 — Python application bootstrap, loopback HTTP/WebSocket, Tauri fixed-FD sidecar spawn,
+  one-shot descriptor, exact-port CSP, package와 안전 종료 lifecycle을 local에서 구현·자동 검증하고,
+  실제 Keychain credential packaged read-only READY와 native Quit/orphan 0까지 current host에서 통과했다.
+  개인용 ad-hoc 배포 범위를 완료했으며 Developer ID/notarization은 선택적 외부 배포 hardening이다.
 - [x] 완료 — production read/command path는 `BackendUiAdapter`를 사용하고
   demo/Storybook/tests는 `FakeUiCommandAdapter`를 유지한다. Phase 11에서 Tauri native directory
   picker와 실제 streaming filesystem export receipt까지 production adapter에 연결했다.
 - [ ] 부분 완료 — authoritative backend market/regime/account/history/trading-session snapshot과
   read-only Testnet composition을 packaged sidecar FD6 경로에 연결했다. Python harness의 실제
-  credential read-only 및 capped lifecycle/cold restart는 통과했지만 packaged FD6 actual
-  credential contract는 아직 실행하지 않았고 UI 공개 차트는 market-event parity 전
-  display-only로 유지한다.
+  credential read-only 및 capped lifecycle/cold restart와 current-host packaged FD6 actual
+  credential read-only 계약은 통과했다. UI 공개 차트는 market-event parity 전 display-only로
+  유지하며 전체 market-event E2E는 Phase 13에 남아 있다.
 - [x] 완료 — strict `TYPE_0`~`TYPE_4` ↔ `type0`~`type4` transport 변환, REGIME별 전략 coverage/start guard, G-07 상단 BB 안전 종료와 UI zero-command gate를 Phase 6에서 완료했다.
 - [x] 완료 — fake `APIGateway`에 주문을 제출하고 fill을 Position/History/Performance에 일관되게 반영한 뒤 durable 저장 이후에만 outcome을 내는 Case 2 pipeline을 Phase 8에서 완료했다.
 - [ ] 부분 완료 — 메시지 `1`~`5`, Case 2 `1`~`14`를 검증하고 actual adapter 기반
@@ -341,8 +343,9 @@ durability가 끝나기 전 process ACK를 무시하며, timeout과 ambiguous RE
 kill하지 않는다. Keychain credential은 native에서만 읽고 zeroize하며 packaged order opt-in은
 항상 꺼져 있다. 이 Phase는 Binance endpoint/payload를 변경하지 않았고 기존 Phase 9 read-only
 Testnet adapter만 조립했으므로 새 Binance 공식 문서 해석을 추가하지 않았다. local arm64
-bundle과 자동 회귀는 통과했지만 clean-machine credential smoke와 Developer ID/notarization은
-외부 release 검증으로 남겼다.
+bundle, actual Keychain read-only READY, native safe shutdown/orphan 0과 자동 회귀를 통과해 개인용
+ad-hoc 배포 범위는 완료했다. Developer ID/notarization/Gatekeeper와 별도 clean-machine smoke는
+광범위한 외부 배포를 선택할 경우의 optional hardening으로 남겼다.
 
 남은 표현과 지원 상태는 다음과 같다.
 
@@ -406,13 +409,13 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 
 | Case | 현재 완료 범위 | 현재 끊기는 지점 | 완료 Phase |
 |---|---|---|---|
-| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, fake session branch와 실제 Testnet lifecycle/cold restart를 구현·검증 | Phase 12 packaged credential/clean-machine contract와 Phase 13 전체 trace | Phase 7, 9, 12~13 |
+| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, fake session branch와 실제 Testnet lifecycle/cold restart, Phase 12 packaged credential/safe shutdown을 구현·검증 | Phase 13 전체 trace와 fault/soak | Phase 7, 9, 12~13 |
 | Case 2 Buy/Sell | fake pipeline 메시지 `1`~`14`, 실제 Binance order mapping·pending journal·startup/reconnect reconciliation, actual BUY/STOP SELL과 recovered-position 전량 SELL을 구현·검증 | harness의 BUY trigger가 test-only private action seam이므로 market-event→strategy E2E와 fault/soak는 Phase 13에 남음 | Phase 8~9, 13 |
 | Case 3 Trade History | `SHOW_TRADE_HISTORY` 최초 `TODAY + ALL`, 12개 결합 filter, backend composite details, D-12 summary/rows 분리, order/account/performance event와 gap resync/KST 자정 갱신을 구현 | 없음 | Phase 10 |
 | Case 4 CSV Export | popup, backend option/KST 검증, byte snapshot `stream_trades`, native picker, 실제 atomic file write와 typed receipt/failure를 구현 | 없음 | Phase 11 |
 
-현재 기준으로 live trading 준비 완료라고 볼 수 있는 Case는 **0개**다. actual Testnet
-lifecycle/reconciliation은 완료했지만 Phase 12 external packaged 증거와 Phase 13 전체
+현재 기준으로 live trading 준비 완료라고 볼 수 있는 Case는 **0개**다. Actual Testnet
+lifecycle/reconciliation과 개인용 Phase 12 package는 완료했지만 Phase 13 전체
 readiness·live 위험 한도가 남아 있기 때문이다.
 
 - [x] 네 Communication Case의 종단 간 중단 지점을 확인했다.
@@ -1729,34 +1732,100 @@ open order 0건을 확인했다. local deterministic timeout/partial-fill/discon
 - [x] shutdown timeout에서 process를 즉시 kill하기 전에 open position/order 상태를 표시하고 운영자 결정을 요구한다.
 - [x] sidecar crash를 감지해 신규 주문을 차단하고 UI를 offline/recovery 상태로 보낸다.
 - [x] credential은 OS credential store 또는 renderer 밖의 안전한 mechanism으로 관리한다.
-- [ ] 부분 완료 — `.env` credential canary가 repository, bundle, 기존 DiagnosticReports와
-  test snapshot에 없는지 검사했다. 실제 credential-bearing packaged crash 재현은 남아 있다.
-- [ ] macOS clean machine bundle smoke test를 수행한다.
+- [x] 실제 Keychain credential 두 개를 exact-byte canary로 읽어 repository, bundle, mounted DMG,
+  Application Support와 credential-bearing packaged crash DiagnosticReport에 없는지 검사했다.
+- [x] 개인용 ad-hoc macOS bundle을 current host에서 실제 Keychain read-only READY, 주문 mutation 0,
+  native safe shutdown과 orphan 0까지 smoke test한다. 친구 Mac 최초 실행 확인은 배포 시점의
+  호환성 확인이며 Phase 12/13 선행 gate가 아니다.
 
 **완료 조건:**
 
-- [ ] 부분 완료 — web/dev와 packaged composition이 같은 generated contract와 adapter suite를
-  공유하고 bundle을 생성했지만 실제 Keychain credential packaged smoke는 수행하지 않았다.
+- [x] web/dev와 packaged composition이 같은 generated contract와 adapter suite를 공유하고,
+  current-host actual Keychain packaged read-only READY와 orders-disabled mutation 0을 검증했다.
 - [x] 정상 종료와 비정상 sidecar 종료에서 중복 주문 없이 복구 가능하다.
 - [x] production UI는 fake adapter를 사용하지 않는다.
 
-**완료 증거:** `[ ] 부분 완료` — local 구현과 자동 검증은 완료했으며 외부 release smoke는 남아 있다.
+**완료 증거:** `[x] 완료` — 개인용·친구용 ad-hoc 배포 범위의 local package, actual credential
+read-only smoke, 안전 종료, artifact integrity와 secret scan을 완료했다. Developer ID/notarization은
+정식 외부 배포를 선택할 경우에만 사용하는 선택적 hardening 경로다.
 
 | 항목 | 2026-08-24 실행 증거 |
 |---|---|
 | Communication/ADR | startup `1`~`5`, Case 1 close/stop 경계, ADR-003 shutdown 안전 조건과 ADR-005 fixed-FD·random-port·token·CSP/capability 계약을 다시 확인 |
-| backend | `BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q` — 595개 실행, 591개 통과·credential 기반 4개 safe skip |
+| backend | `BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q` — 643개 실행, 637개 통과·외부 Testnet 6개 safe skip |
 | backend 집중 | sidecar exact 7-key FD6, strict shutdown `202`/`409`, CLOSED 뒤 FD5 ACK, durability와 actual Python process tests; 현재 architecture 57개 통과 |
-| UI | `./node_modules/.bin/vitest run --reporter=dot` — 35 files·264/264; `tsc -b --pretty false`, Vite 286 modules와 Storybook static build 통과 |
-| Tauri/Rust | `cargo fmt --all --check`, `cargo check --tests --locked`, `cargo test --locked` — native unit 27/27 통과 |
-| sidecar package | pinned PyInstaller `6.22.2`로 `scripts/package_sidecar.sh` 실행; `binance-auto-sidecar-aarch64-apple-darwin` 생성, `.env`/credential을 build input에서 제외 |
-| macOS local bundle | `tauri build --bundles app`으로 release compile과 arm64 `.app` bundling 완료. 동일 `.app`+`Applications` link를 GUI 비의존 `hdiutil` read-only UDZO DMG로 생성 |
-| bundle integrity | DMG `hdiutil verify` 통과; DMG를 read-only mount해 app/sidecar arm64와 `codesign --verify --deep --strict` 통과. local ad-hoc hardened runtime이며 Team ID·notarization은 없음 |
-| secret scan | `scripts/check_phase12_secrets.py --env .env ...` — `.env` canary 2개가 repository, sidecar, `.app`, `.dmg`, DiagnosticReports의 2,462 files에 없음을 확인; scanner fail-closed unit 3/3 통과 |
-| artifact | `UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader.app`; `UI/apps/desktop/src-tauri/target/release/bundle/dmg/Binance Auto Trader_0.1.0_aarch64.dmg` (`sha256=8f61bc9bfe2f99328da6fd6ad9a1b303b70b163c89e8e9706db1801959b733cb`) |
+| UI | `./node_modules/.bin/vitest run --reporter=dot` — 36 files·280/280; `tsc -b --pretty false`, Vite 286 modules build 통과 |
+| Tauri/Rust | `cargo fmt --all --check`, `cargo check --tests --locked`, `cargo test --locked`, `cargo clippy --lib --locked -- -D warnings` — native unit 31/31 통과 |
+| sidecar package | pinned PyInstaller `6.22.2`로 `scripts/package_sidecar.sh` 실행; `binance-auto-sidecar-aarch64-apple-darwin` 생성, `.env`/credential을 build input에서 제외. Developer ID build에서는 explicit identity와 canonical SemVer/CFBundleVersion `TAURI_CONFIG`를 필수화 |
+| macOS local bundle | current-host actual Keychain fixed-FD read-only READY와 AppKit native Quit cancel → renderer safe shutdown → orphan 0을 검증한 arm64 fixed `.app`; 동일 app+`Applications` link로 GUI 비의존 read-only UDZO DMG 생성 |
+| bundle integrity | DMG `hdiutil verify` 통과; DMG를 read-only mount해 app/sidecar arm64, minOS 11.0과 `codesign --verify --deep --strict` 통과. local ad-hoc artifact라 Team ID·notarization은 없음 |
+| secret scan | 실제 Keychain canary 2개가 repository, fixed app, raw/mounted DMG, Application Support와 두 DiagnosticReport의 2,505 files에 없음을 확인. path-component substring·symlink entry 회귀를 보강한 뒤 repository/fixed app/raw DMG/app data/report 2,482 files를 재검사해 PASS |
+| release gate tooling | identity/notary profile preflight, commit-provenance/same-Team signed artifact verifier, stapled app 기반 atomic fresh signed DMG builder, schema v2 evidence validator와 package/secret scanner를 포함한 script unit 114/114, `compileall`, shell syntax 통과 |
+| artifact | `UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader Phase12 Local Fixed.app`; `UI/apps/desktop/src-tauri/target/release/bundle/dmg/Binance Auto Trader_0.1.0_aarch64_phase12-local-fixed.dmg` (`sha256=563136398d4d6544c0e1e585e67df66cf6f0d3ce61d6a7050eabe7c640964d05`) |
 | 공식 문서 | Tauri v2 sidecar, capabilities, CSP, core permissions, `WebviewWindowBuilder`/`AppManifest`와 Apple Security Keychain API를 확인. Binance API 동작은 변경하지 않고 Phase 9 adapter를 read-only로 재사용 |
-| 남은 외부 검증 | 실제 Keychain credential packaged contract smoke, macOS clean machine, Developer ID 서명·notarization·Gatekeeper 검증 |
+| 선택적 외부 배포 hardening | 경고 없는 광범위한 배포가 필요해질 때만 Developer ID/notarization, same-Team signed RC, stapling·Gatekeeper와 별도 clean-machine evidence gate를 수행. 현재 개인용 Phase 12/13 진입 조건은 아님 |
 | 작업 commit | 생성하지 않음 — 사용자 요청 범위에 commit은 포함되지 않음 |
+
+#### Phase 12 선택 부록 — Developer ID 정식 외부 배포 hardening
+
+이 부록은 개인용·친구용 ad-hoc 배포의 Phase 12 완료 조건이 아니다. 향후 macOS 최초 실행
+수동 허용 없이 더 넓게 배포하려는 경우에만 사용한다. 현재 구현된 release tooling은 삭제하지
+않고 선택 경로로 보존한다.
+
+| 선택 gate | 수행 내용 | 합격 기준 |
+|---|---|---|
+| R-01 | clean release commit에서 Developer ID Application identity와 notary Keychain profile preflight | exact identity 1개, non-empty Team ID, usable profile, dirty worktree 없음 |
+| R-02 | 같은 identity와 commit provenance로 app/sidecar 재빌드 | main marker와 PyInstaller provenance가 clean HEAD/version/build와 일치하고 같은 Team ID·runtime·minOS 계약 통과 |
+| R-03 | app 및 fresh atomic DMG notarization/stapling | 두 submission Accepted, stapler/Gatekeeper/`hdiutil`와 final verifier 통과 |
+| R-04 | 별도 clean macOS 설치 smoke | quarantine 우회 없이 설치, missing-Keychain fail closed, read-only READY, 주문 0, safe shutdown·orphan 0·재실행 |
+| R-05 | final regression과 artifact secret scan | backend/UI/Rust/script, mounted DMG, Keychain canary scan과 final SHA-256 일치 |
+| R-06 | schema v2 evidence 마감 | commit, identity, submission ID, native digest, clean-host 결과와 app/DMG byte를 live gate에 결합 |
+
+정식 외부 배포를 선택한 경우의 canonical 실행 순서는 다음과 같다. Certificate, password,
+notarization private key와 Binance credential 원문은 command line, log, manifest에 기록하지 않는다.
+
+```bash
+APPLE_SIGNING_IDENTITY="<exact Developer ID Application identity>" \
+NOTARY_PROFILE="<notarytool Keychain profile>" \
+    backend/.venv/bin/python scripts/check_phase12_release_identity.py
+
+cd UI
+RELEASE_COMMIT="<exact 40-character lowercase clean HEAD>"
+RELEASE_VERSION="<canonical SemVer>"
+RELEASE_BUILD_VERSION="<unique nonzero CFBundleVersion>"
+TAURI_CONFIG="{\"version\":\"${RELEASE_VERSION}\",\"bundle\":{\"macOS\":{\"bundleVersion\":\"${RELEASE_BUILD_VERSION}\"}}}" \
+PHASE12_RELEASE_COMMIT="${RELEASE_COMMIT}" \
+APPLE_SIGNING_IDENTITY="<exact Developer ID Application identity>" \
+    ./node_modules/.bin/tauri build \
+    --bundles app \
+    --config apps/desktop/src-tauri/tauri.conf.json
+```
+
+App notarization Accepted와 staple 뒤 `scripts/create_phase12_release_dmg.sh`로 존재하지 않는 새
+DMG path에 atomic publish하고, DMG도 별도 submission Accepted/staple을 완료한다. 최종 verifier는
+다음 non-secret 기대값을 모두 명시한다.
+
+```bash
+backend/.venv/bin/python scripts/verify_phase12_signed_artifacts.py \
+    --app "${APP_PATH}" \
+    --dmg "${DMG_PATH}" \
+    --expected-team-id "${TEAM_ID}" \
+    --expected-identity "${APPLE_SIGNING_IDENTITY}" \
+    --expected-version "${RELEASE_VERSION}" \
+    --expected-build-version "${RELEASE_BUILD_VERSION}" \
+    --expected-commit "${RELEASE_COMMIT}"
+
+backend/.venv/bin/python scripts/phase12_release_gate.py \
+    "${EVIDENCE_MANIFEST_PATH}" \
+    "${APP_PATH}" \
+    "${DMG_PATH}"
+```
+
+`phase12_release_gate.py` schema v2는 current clean HEAD, main/sidecar provenance, exact identity,
+notarization status, extracted native digest와 pinned DMG byte/inode를 검증한다. Regression count,
+secret scan과 clean-host smoke의 실제 실행 사실은 JSON boolean만 신뢰하지 않고 원본 log 또는
+operator attestation을 함께 검토한다. 이 선택 경로의 미완료 상태는 Phase 12 master나 Phase 13
+개발 상태를 되돌리지 않는다.
 
 ---
 
@@ -1825,14 +1894,17 @@ Phase 9 master를 완료 처리하지 않은 채 Phase 10의 독립 History read
 사용자가 Phase 11을 명시적으로 요청했고 기술 선행 Phase 4/5/10이 모두 완료되어 있어,
 같은 원칙으로 당시 남아 있던 Phase 9 외부 증거를 오표기하지 않은 채 독립 CSV 범위를 완료했다.
 사용자가 Phase 12를 명시적으로 요청했고 기술 선행 Phase 5/7/11이 완료되어 있어,
-같은 원칙으로 native sidecar와 package 범위를 구현했다. 이후 Phase 9 actual order 증거를
-완료했고, Phase 12 packaged credential/clean-machine release 증거만 남아 있다.
+같은 원칙으로 native sidecar와 package 범위를 구현했다. 이후 Phase 9 actual order 증거와
+Phase 12 개인용 ad-hoc package의 current-host credential/safe-shutdown/integrity 증거를 완료했다.
+Developer ID/notarization과 별도 clean-machine release evidence는 광범위한 외부 배포를 선택할
+경우의 optional hardening으로 분리했다.
 이후에도 병렬 개발이 필요하면 같은 source 파일을 동시에 수정하지 않는다.
 
 - [x] Phase 9 local 구현까지 의존 순서를 지키고 선행 완료 조건을 건너뛰지 않았다.
 - [x] Phase 10은 완료된 Phase 5/8 산출물만 사용했고, Phase 9 외부 검증을 완료로 오표기하지 않았다.
 - [x] Phase 11은 완료된 Phase 4/5/10 산출물만 사용했고, Phase 9 외부 검증을 완료로 오표기하지 않았다.
-- [x] Phase 12는 완료된 Phase 5/7/11 산출물만 사용했고, Phase 9/12 외부 검증을 완료로 오표기하지 않았다.
+- [x] Phase 12는 완료된 Phase 5/7/11 산출물만 사용했고 개인용 ad-hoc 배포 범위의 actual package
+  증거로 완료했으며, 선택적 Developer ID 배포 증거를 수행한 것으로 오표기하지 않았다.
 
 ---
 
@@ -1962,7 +2034,7 @@ Communication message/operation:
 - [x] Phase 9 — Binance testnet adapter/recovery 및 10 USDT cap actual lifecycle/cold restart
 - [x] Phase 10 — Trade History live UI
 - [x] Phase 11 — CSV 실제 export
-- [ ] Phase 12 — Tauri sidecar/package/shutdown (local 구현·자동 검증 완료, external smoke 대기)
+- [x] Phase 12 — Tauri sidecar/package/shutdown (개인용 ad-hoc package actual smoke 완료)
 - [ ] Phase 13 — 장애 복구/E2E/live readiness
 - [ ] 모든 Communication message ↔ code ↔ test 추적성 완료
 - [ ] 별도 사용자 승인에 따른 live release 완료
@@ -1971,66 +2043,172 @@ Communication message/operation:
 
 ## 16. 다음 작업
 
-Phase 9는 사용자 승인 BUY 진입 cap `10 USDT`, current `exchangeInfo` filter preflight,
-actual lifecycle과 cold restart까지 완료했다. 주문 전에 실제 `ETHUSDT`가 `TRADING`이며
-Spot·`MARKET`을 허용하는지 확인하고 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 모두
-적용했다. 최신 4시간봉 종가 `2461.41000000`에서 submitted quantity `0.0040 ETH`, decision
-notional `9.8456400000000000 USDT`가 cap과 filter를 만족했으므로 그때만 mutation을 허용했다.
+Phase 12 개인용 ad-hoc desktop package는 완료했다. 이제 구현할 범위는 **Phase 13 — 장애 복구,
+전체 E2E와 live readiness gate**다. Phase 13 개발은 Testnet과 fault harness에서만 수행하며,
+완료하더라도 live endpoint와 실제 live 주문은 별도 사용자 승인 전까지 활성화하지 않는다.
 
-정식 lifecycle artifact는 BUY/STOP SELL 뒤 history 4건, pending 0건, Position 0을 보존한다.
-cold artifact는 process A durable BUY → `os._exit` → fresh B recovery SELL을 보존하며, fresh
-authenticated read-only replay는 `READY`, history 6건, pending 0건, Position 0, matching open
-order 0건이다. 이전 `bat-` 주문이 Testnet recent history에 남은 뒤에는 같은 account의
-verified closed history만 `BINANCE_TESTNET_BASELINE_HISTORY_PATH`로 복사했다. baseline helper는
-pending 0과 domain replay Position 0을 POST 전에 검증하고 production unknown-order guard를
-우회하지 않는다.
+### 16.1 Phase 13 진입 상태와 범위 방어
 
-남은 일반-session 정책 공백은 Phase 9 완료와 구분한다. max-notional은 BUY 주문 한 건당
-진입 cap이어서 여러 BUY의 누적 Position을 제한하지 않는다. STOP/recovery SELL은 entry cap
-때문에 막히지 않고 authoritative Position/free ETH로 제한되지만, 실패·partial을 포함한 한
-intent의 submit 예산은 5회다. caught failure 밖의 parent `SIGKILL`/host crash에는 외부
-watchdog이나 orphan artifact scanner가 없다. lifecycle BUY trigger도 test-only private action
-seam이므로 market-event→strategy E2E, 누적 max-position, retry 예산과 외부 watchdog은 Phase 13
-범위로 남긴다.
+- [x] Phase 9 actual Testnet lifecycle/cold restart와 Phase 10/11/12 선행 산출물이 완료됐다.
+- [x] 개인용 packaged app의 Keychain read-only READY, 주문 mutation 0, safe shutdown과 orphan 0이
+  검증됐다.
+- [x] Backend 643개, UI 280개, Rust 31개, release script 114개와 Phase 12 architecture 5개
+  baseline이 통과했다.
+- [x] 현재 `live` mode는 disabled이며 Phase 13의 별도 승인 전 활성화하지 않는다.
 
-이 문서 규칙상 가장 앞의 미완료 Phase는 **Phase 12**다. 다음 작업은 실제 macOS Keychain
-credential을 사용하는 packaged read-only contract smoke, clean-machine `.app`/`.dmg` 실행,
-Developer ID 서명·notarization 증거다. packaged configuration은
-`allow_testnet_orders=false`, `max_notional=null`로 고정되어 이 smoke는 주문을 실행하지
-않는다. 이 증거 전에는 Phase 12 master를 `[x]`로 바꾸거나 Phase 13/live로 넘어가지 않는다.
-CSV export는 strict details query의 1,000-row 화면 한도를 재사용하지 않고 ADR-004/005와
-`TradeHistoryRepository.stream_trades()`를 따르는 별도 snapshot streaming 경계로 유지한다.
+Phase 13 작업은 기존 개인용 package 형식을 다시 설계하지 않는다. 발견된 package/security bug는
+수정할 수 있지만 Developer ID/notarization을 새 선행 조건으로 되돌리지 않는다. CSV export의
+ADR-004/005와 `TradeHistoryRepository.stream_trades()` 경계도 유지한다. `TYPE_1`~`TYPE_4`는
+각 Event-Action Table과 state diagram이 확정되기 전까지 계속
+`UNSUPPORTED_TRADING_LOGIC`으로 fail closed한다.
 
-`TYPE_1`~`TYPE_4`는 해당 Event-Action Table과 state diagram이 생기기 전까지 계속
-`UNSUPPORTED_TRADING_LOGIC`이다. `stream_trades()`/CSV는 Phase 11에서 완료했고,
-Tauri sidecar/package의 local 범위는 Phase 12에서 구현했다. live enable은 Phase 13의 별도
-사용자 승인 범위로 남긴다.
+### 16.2 구현 순서
 
-- [x] Phase 0 완료 조건과 증거를 기록했다.
-- [x] Phase 1을 시작하기 전 Communication/ADR-001과 현재 git 상태를 다시 확인했다.
-- [x] Phase 1 완료 조건과 증거를 기록했다.
-- [x] Phase 2를 시작하기 전 Communication 1.1~1.3과 market Operation을 다시 확인했다.
-- [x] Phase 2 완료 조건과 증거를 기록했다.
-- [x] Phase 3을 시작하기 전 Communication 1.4~1.5.1과 Regime Operation을 다시 확인했다.
-- [x] Phase 3 완료 조건과 증거를 기록했다.
-- [x] Phase 4를 시작하기 전 Communication 2~3.3과 Account/History/Performance Operation을 다시 확인했다.
-- [x] Phase 4 완료 조건과 증거를 기록했다.
-- [x] Phase 5를 시작하기 전 Communication 1~5, ADR-005와 startup/transport Operation을 다시 확인했다.
-- [x] Phase 5 완료 조건과 증거를 기록했다.
-- [x] Phase 6을 시작하기 전 Communication 6.1.1.1~6.1.1.1.1, ADR-001과 TradingSTM registry/start gate를 다시 확인했다.
-- [x] Phase 6 완료 조건과 증거를 기록했다.
-- [x] Phase 7을 시작하기 전 Communication 6~8, ADR-001/003과 Trading session/Action 적용 경계를 다시 확인했다.
-- [x] Phase 7 완료 조건과 증거를 기록했다.
-- [x] Phase 8을 시작하기 전 Communication Case 2 `1`~`14`, ADR-002/003/004와 Order/Position/History durable 경계를 다시 확인했다.
-- [x] Phase 8 완료 조건, fault matrix, 실행 명령, 통과 수와 시작 commit 증거를 기록했다.
-- [x] Phase 9를 시작하기 전 공식 Spot Testnet 문서, Communication 외부 Actor `9.1`/`9.2`, ADR-002/003/004와 normalized `OrderResult`·reconciliation 계약을 다시 확인했다.
-- [x] Phase 9 production adapter, 안전 gate, pending journal, local restart와 deterministic fault 증거를 기록했다.
-- [x] Phase 9 authenticated read-only의 account/Kline/open/recent/commission/signed stream 실제 Testnet 통과와 해당 read-only run의 주문 0건 증거를 기록했다.
-- [x] Phase 9 capped BUY/force-sell lifecycle과 open-order/position restart의 실제 Testnet 통과 증거를 기록했다.
-- [x] Phase 10을 시작하기 전 Communication Case 3 `1`~`2.1.3`, D-12, ADR-004/005와 현재 UI/roadmap 구현을 다시 확인했다.
-- [x] Phase 10 controller/transport/event/UI 구현, Case 3 trace, fault·KST 경계와 전체 회귀 완료 증거를 기록했다.
-- [x] Phase 11을 시작하기 전 Communication Case 4 `1`~`4.1.6b`, D-13, ADR-004 검증 의무와 UI/roadmap 구현을 다시 확인했다.
-- [x] Phase 11 option/streaming/native picker/atomic CSV 구현, golden·fault·경합·KST 경계와 전체 회귀 완료 증거를 기록했다.
-- [x] Phase 12를 시작하기 전 Communication startup `1`~`5`, Case 1 종료 경계, ADR-003/005 검증 의무와 UI/roadmap 구현을 다시 확인했다.
-- [x] Phase 12 fixed-FD sidecar, exact-port CSP/minimal capability, Keychain, safe shutdown/crash recovery와 local bundle 자동 검증 증거를 기록했다.
-- [ ] Phase 12 actual Keychain packaged contract, macOS clean-machine, Developer ID/notarization 통과 증거를 기록했다.
+| 순서 | 작업 | 핵심 산출물 | 완료 기준 |
+|---|---|---|---|
+| P13-01 | 누적 위험 한도와 kill switch | versioned `RiskPolicy`, cumulative position/daily loss/manual kill 결정표 | 단일 주문 cap과 누적 계정 위험이 분리되고 모든 신규 BUY 경로가 같은 gate를 사용 |
+| P13-02 | intent 예산과 crash reconciliation | 한 intent의 submit/retry budget, durable journal, startup/reconnect recovery | timeout·partial·unknown·confirmed rejection에서 중복 주문 0 |
+| P13-03 | process watchdog과 orphan recovery | main/sidecar/PyInstaller child ownership, heartbeat, restart/scan 정책 | parent crash 전후 orphan listener/process/artifact를 식별하고 신규 주문을 fail closed |
+| P13-04 | 실제 market-event→strategy→order E2E | test-only private BUY trigger를 사용하지 않는 Testnet trace | market snapshot부터 strategy Action, order, fill, Position, History까지 한 provenance로 연결 |
+| P13-05 | fault matrix와 deterministic replay | REST/WS/repository/process fault injector와 canonical trace fixture | 같은 입력 trace의 state/outcome이 반복 실행에서 일치 |
+| P13-06 | Communication·UI 종단 간 추적 | 네 Case message↔Operation↔test matrix, visual/a11y suite | 모든 message가 code owner와 최소 한 test로 역추적 |
+| P13-07 | 장시간 soak와 통합 실행기 | `scripts/check_all.sh`, 24시간 이상 Testnet soak report | memory/task/socket leak과 미회수 process가 없고 전체 gate 1회 실행 가능 |
+| P13-08 | live readiness 판정 | non-secret evidence와 명시적 go/no-go checklist | Phase 13 master 완료; live는 별도 사용자 승인 없이는 계속 disabled |
+
+### 16.3 P13-01 — 누적 위험 정책과 manual kill switch
+
+현재 `max_notional`은 BUY 한 건의 진입 cap일 뿐 여러 BUY가 만든 누적 Position 한도가 아니다.
+먼저 다음 값을 versioned policy로 분리한다.
+
+- cumulative ETH quantity 또는 USDT notional 상한
+- KST 거래일 기준 realized/unrealized loss 포함 범위와 daily loss 상한
+- open/pending/unknown order가 위험 예산을 점유·해제하는 시점
+- manual kill switch가 신규 주문만 차단할지, cancel·안전 청산까지 요청할지
+- policy 변경 중인 session과 restart 후 policy version mismatch 처리
+
+정책 숫자를 임의 기본값으로 만들지 않는다. 값이 미확정이면 신규 BUY는
+`RISK_POLICY_UNAVAILABLE`로 차단하되 read-only 조회, reconciliation과 안전 종료는 허용한다.
+Risk calculation은 `Decimal`과 authoritative Account/Position/Order snapshot만 사용하고 UI 값이나
+JavaScript number를 신뢰하지 않는다.
+
+**완료 기준:** 정상·pending·partial·unknown·restart 상태를 포함한 table-driven unit test가
+동일 위험 예산을 증명하고, 모든 production BUY entry가 risk gate를 우회할 수 없다.
+
+### 16.4 P13-02~03 — 주문 intent 예산, crash recovery와 watchdog
+
+한 사용자 intent는 하나의 durable command/client-order identity와 bounded submit 예산을 가진다.
+HTTP timeout을 주문 실패로 단정해 새 주문을 제출하지 않으며 REST 조회, signed stream과
+startup/reconnect reconciliation으로 기존 identity를 먼저 확정한다.
+
+- PREPARED → SUBMITTED → PARTIAL/UNKNOWN/TERMINAL journal 전이를 fsync한다.
+- confirmed rejection만 새 intent 가능 상태로 해제한다.
+- partial fill은 새 delta만 Position/History에 반영한다.
+- repository append 실패와 journal REMOVE 실패는 신규 주문 gate를 유지한다.
+- parent/main/sidecar/PyInstaller child의 PID·start identity·listener ownership을 구분한다.
+- watchdog은 position/order ambiguity에서 자동 kill이나 자동 재주문을 하지 않는다.
+- restart 뒤 orphan process 또는 app-owned unknown order가 있으면
+  `RECONCILIATION_REQUIRED`로 시작한다.
+
+**완료 기준:** submit 직전/직후 process crash, response loss, duplicate/out-of-order event,
+sidecar crash와 repository failure 조합에서 exchange order 1개 이하, durable Trade 1개 이하와
+정확한 recovery state를 검증한다.
+
+### 16.5 P13-04 — 실제 market-event→strategy→order E2E
+
+기존 actual lifecycle harness의 private BUY trigger를 production event path로 대체한다. 하나의
+Testnet scenario에서 다음 provenance가 끊기지 않아야 한다.
+
+1. REST/WS Kline과 account snapshot 수신
+2. versioned `MarketSnapshot`과 indicator/regime 평가
+3. 선택된 TradingSTM의 Action
+4. `TradingController` risk·session·intent gate
+5. APIGateway submit/query와 account/order event reconciliation
+6. Position, TradeHistory, Performance durable publication
+7. UI event batch, stop 또는 safe recovery 결과
+
+Harness 전용 seam은 외부 market/account event 주입과 clock/fault control에만 둔다. Production
+Controller의 private Action을 직접 호출해 성공 trace를 만드는 방식은 완료 증거로 사용하지 않는다.
+
+**완료 기준:** 즉시 fill, partial, unknown, confirmed failure와 STOP/recovery SELL trace가 모두
+Communication caller/receiver, message ID, state version, command/order ID로 역추적된다.
+
+### 16.6 P13-05 — fault matrix와 deterministic replay
+
+최소 fault matrix는 다음 조합을 포함한다.
+
+- REST timeout/5xx/rate limit과 response decode failure
+- WebSocket disconnect/reconnect, stale generation, sequence gap, duplicate/out-of-order event
+- submit 전후 crash, pending journal fsync/REMOVE 실패와 history append 실패
+- unknown recent app order, Testnet reset, balance 감소와 fee/dust mismatch
+- sidecar pre-READY/late-READY/abnormal exit, main crash와 listener orphan
+- shutdown 중 position/order drift와 CLOSED/ACK loss
+
+각 scenario는 secret 없는 canonical input trace와 expected state/outcome digest를 기록한다. Replay는
+network와 wall clock에 의존하지 않고 같은 trace를 여러 번 실행해 state, order mutation count,
+Trade와 UI event sequence가 일치하는지 비교한다.
+
+**완료 기준:** fault별 owner, expected state, 신규 주문 허용 여부와 recovery action이 표로 고정되고
+deterministic replay가 byte-stable 또는 명시적으로 정규화된 digest를 낸다.
+
+### 16.7 P13-06 — Communication 추적성과 UI 검증
+
+§12의 네 Communication Case를 실제 code/test와 닫는다.
+
+- Case 1: startup `1`~`5`, REGIME 선택/start/stop과 native safe shutdown
+- Case 2: market event, strategy, BUY/SELL, fill/partial/unknown/recovery
+- Case 3: history initial/filter/empty/failure와 account/performance event resync
+- Case 4: CSV validation/picker/success/I/O failure/경합
+
+UI는 16개 주요 상태의 visual regression, keyboard/focus, reduced motion, accessibility와
+offline/recovery/risk-blocked/operator-action 화면을 검증한다. Renderer는 credential, raw token,
+filesystem writer나 exchange SDK를 소유하지 않는다.
+
+**완료 기준:** 모든 Communication message가 정확히 한 owner Operation과 최소 한 positive/negative
+test로 역추적되고, UI가 backend authoritative state보다 앞서 성공이나 Position을 표시하지 않는다.
+
+### 16.8 P13-07 — 통합 실행기와 24시간 soak
+
+`scripts/check_all.sh`를 만들어 기본 실행은 외부 주문 없이 backend/UI/Rust/script, contract drift,
+typecheck/build, secret scanner와 deterministic E2E를 한 번에 수행하게 한다. 실제 Testnet order와
+24시간 soak는 명시 flag와 기존 order cap 없이는 실행되지 않게 분리한다.
+
+Soak 동안 최소 다음 값을 주기적으로 기록한다.
+
+- main/sidecar/Python process와 task/thread 수
+- open FD, loopback listener와 reconnect generation
+- memory high-water mark와 queue/replay buffer 크기
+- pending/unknown order, Position, History count와 sequence
+- shutdown/relaunch 뒤 orphan process/listener 수
+
+**완료 기준:** 24시간 이상 Testnet stream/reconnect와 승인된 제한 주문 scenario에서 memory/task/
+socket의 단조 누수, 중복 주문, unresolved pending과 orphan이 없고 종료 후 fresh READY가 재현된다.
+
+### 16.9 P13-08 — Phase 13 완료와 live 경계
+
+다음 항목이 모두 충족돼야 Phase 13 master를 `[x]`로 변경한다.
+
+- [ ] cumulative position, daily loss와 manual kill switch 정책·test 완료
+- [ ] intent budget, crash/reconnect reconciliation과 watchdog fault matrix 완료
+- [ ] private BUY trigger 없는 market-event→strategy→order Testnet E2E 완료
+- [ ] deterministic replay와 네 Communication Case 추적성 완료
+- [ ] UI visual/a11y/recovery 검증 완료
+- [ ] `scripts/check_all.sh`와 24시간 이상 soak 완료
+- [ ] secret/dependency/license/security scan과 non-secret evidence 기록 완료
+- [ ] default `disabled`, Testnet와 live endpoint/credential/order-enable 분리 재검증
+
+Phase 13 master 완료는 live 주문 승인이 아니다. Live mode는 사용자가 위험 한도와 release evidence를
+검토하고 별도로 명시 승인하기 전까지 configuration, UI와 backend 세 경계에서 모두 disabled다.
+
+### 16.10 바로 시작할 구현 작업
+
+가장 먼저 P13-01을 수행한다.
+
+1. 기존 `max_notional`, Position, pending/unknown order와 daily Performance 계산 owner를 감사한다.
+2. `RiskPolicy`/`RiskBudgetSnapshot`의 field, version과 fail-closed error를 명세한다.
+3. 아직 사용자 결정이 필요한 숫자는 `None`으로 숨기지 말고 명시적 미설정 상태로 표현한다.
+4. 한 BUY cap과 cumulative/daily/manual gate의 순서 및 atomic snapshot 경계를 table test로 고정한다.
+5. production BUY entry와 recovery SELL이 각각 어떤 gate를 사용하는지 분리 검증한다.
+
+P13-01의 정책 구조와 fail-closed test는 외부 credential 없이 구현할 수 있다. 실제 cumulative/daily
+한도 숫자와 manual kill 동작은 코드가 임의로 정하지 않고 사용자 확인을 받아 versioned policy에
+고정한다.

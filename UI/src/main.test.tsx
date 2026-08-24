@@ -205,10 +205,16 @@ describe('production main bootstrap recovery', () => {
             // Window close와 Command-Q 모두 native trap을 유지하며 operator 안전 종료를 요구한다.
             act(() => {
                 native_exit_listener({ payload: { source: native_source } });
+                if (native_source === 'application') {
+                    // 연속 application-source native event도 즉시 destroy나 별도 workflow를 만들지 않는다.
+                    native_exit_listener({ payload: { source: native_source } });
+                }
             });
             expect(screen.getByText(
                 '창 닫기 또는 Command-Q 요청을 감지했습니다. 아래 안전 종료를 확인해 주세요.',
             )).toBeInTheDocument();
+            expect(screen.getAllByRole('button', { name: '안전 종료' })).toHaveLength(1);
+            expect(destroy_window_mock).not.toHaveBeenCalled();
             fireEvent.click(screen.getByRole('button', { name: '안전 종료' }));
 
             // 첫 response loss는 child를 강제 종료하지 않고 같은 command 재시도만 허용한다.

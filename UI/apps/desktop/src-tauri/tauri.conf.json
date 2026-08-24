@@ -34,6 +34,9 @@
     "active": true,
     "targets": ["app", "dmg"],
     "icon": ["icons/icon.icns"],
-    "externalBin": ["binaries/binance-auto-sidecar"]
+    "externalBin": ["binaries/binance-auto-sidecar"],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }
