@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 import fcntl
 import hashlib
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -22,17 +23,22 @@ from unittest.mock import Mock, patch
 from uuid import UUID, uuid4
 
 from binance_auto_trader.adapters.binance import (
+    AccountAssetFilter,
+    AccountOrderCountFilter,
+    AccountRelevantFilters,
     CommissionDiscountPolicy,
     OrderPreparationFilterEvidence,
     OrderSubmissionAttemptEvidence,
     Phase13OrderSubmissionAttempt,
     Phase13OrderSubmissionGuardSnapshot,
+    ReferencePrice,
     SymbolTradingRules,
 )
 from binance_auto_trader.adapters.binance.mappers import (
     NotionalFilter,
     QuantityFilter,
     floor_market_quantity,
+    validate_account_relevant_filters,
     validate_market_notional,
 )
 from binance_auto_trader.application import TradingSessionStatus
@@ -60,6 +66,7 @@ from binance_auto_trader.domain.market import Kline
 from binance_auto_trader.domain.trading import (
     DailyLossScope,
     ExitReason,
+    Fill,
     ManualKillBehavior,
     OrderResult,
     OrderSide,
@@ -85,8 +92,11 @@ from tests.testnet._phase13_trace import (
 from tests.testnet._support import (
     PHASE13_PUBLIC_CASE2_REQUESTED,
     PHASE13_PUBLIC_CASE2_SKIP_REASON,
+    require_empty_all_client_open_orders,
     seed_verified_closed_history,
+    verify_exact_recent_order_baseline,
 )
+from tests.unit.history.factories import make_trade
 
 
 # 실제 주문 target은 자연 market signal과 same-ID reconciliation을 기다리되 무한 대기는 허용하지 않는다.
@@ -155,6 +165,12 @@ _ORDER_TRACE_MESSAGE_ORDER = (
     "13.5",
     "13.5.1",
     "14",
+)
+_ZERO_POSITION_FAILURE_MESSAGE = (
+    "Phase 13 requires a verified zero Position"
+)
+_ZERO_MARKET_BUY_COMMISSION_FAILURE_MESSAGE = (
+    "Phase 13 requires zero MARKET BUY commission"
 )
 _BUY_ORDER_TRACE_PREFIX = (
     "1",
@@ -973,6 +989,11 @@ def _normalize_symbol_filter_rules(
             if effective_maximum is None
             else _decimal_to_wire(effective_maximum)
         ),
+        "maximum_position": (
+            None
+            if rules.maximum_position is None
+            else _decimal_to_wire(rules.maximum_position)
+        ),
     }
 
 
@@ -996,6 +1017,186 @@ def _normalize_fresh_filters(
     }
 
 
+def _normalize_account_asset_filters(
+    account_asset_filters: Sequence[AccountAssetFilter],
+) -> list[dict[str, object]]:
+    """
+    함수 이름: _normalize_account_asset_filters()
+    기능: signed myFilters의 normalized MAX_ASSET tuple을 exact secret-free trace array로 변환한다.
+    인자: account_asset_filters -> APIGateway가 엄격 해석한 account filter sequence
+    반환값: filter type·asset·Decimal 상한만 담은 dictionary list
+    작성 날짜: 2026/08/31
+    """
+    normalized_filters: list[dict[str, object]] = []
+
+    # Raw signed payload와 query는 버리고 adapter value object의 안전 필드만 순서대로 보존한다.
+    for account_filter in account_asset_filters:
+        if type(account_filter) is not AccountAssetFilter:
+            raise TypeError("account filters must contain exact AccountAssetFilter values")
+        normalized_filters.append(
+            {
+                "filter_type": account_filter.filter_type,
+                "asset": account_filter.asset,
+                "maximum_quantity": _decimal_to_wire(
+                    account_filter.maximum_quantity
+                ),
+            }
+        )
+
+    return normalized_filters  # Credential, request signature와 raw response는 artifact에 포함하지 않는다.
+
+
+def _normalize_account_relevant_filters(
+    account_filters: AccountRelevantFilters,
+) -> dict[str, object]:
+    """
+    함수 이름: _normalize_account_relevant_filters()
+    기능: signed myFilters의 full composite DTO를 exact secret-free trace object로 변환한다.
+    인자: account_filters -> symbol에 결속된 strict AccountRelevantFilters
+    반환값: scope별 filter 요약과 적용 집합을 담은 dictionary
+    작성 날짜: 2026/08/31
+    """
+    if type(account_filters) is not AccountRelevantFilters:
+        raise TypeError(
+            "account_filters must be an exact AccountRelevantFilters"
+        )
+
+    # Count filter는 scope를 혼합하지 않고 공식 type과 integer limit만 보존한다.
+    def normalize_count_filters(
+        filter_values: Sequence[AccountOrderCountFilter],
+    ) -> list[dict[str, object]]:
+        """
+        함수 이름: normalize_count_filters()
+        기능: 하나의 count-filter scope를 JSON-safe exact entry 목록으로 축약한다.
+        인자: filter_values -> AccountOrderCountFilter sequence
+        반환값: filter type과 maximum count dictionary list
+        작성 날짜: 2026/08/31
+        """
+        # Scope 내부 exact DTO만 순서대로 JSON-safe count entry로 축약한다.
+        normalized_counts: list[dict[str, object]] = []
+        for filter_value in filter_values:
+            if type(filter_value) is not AccountOrderCountFilter:
+                raise TypeError(
+                    "count filters must contain strict normalized values"
+                )
+            normalized_counts.append(
+                {
+                    "filter_type": filter_value.filter_type,
+                    "maximum_count": filter_value.maximum_count,
+                }
+            )
+
+        return normalized_counts  # Signed raw mapping은 어떤 scope에서도 trace로 넘기지 않는다.
+
+    # Quantity와 notional DTO는 Decimal을 canonical string으로 변환해 float 오차를 막는다.
+    normalized_quantities = [
+        {
+            "filter_type": filter_value.filter_type,
+            "minimum_quantity": _decimal_to_wire(
+                filter_value.minimum_quantity
+            ),
+            "maximum_quantity": _decimal_to_wire(
+                filter_value.maximum_quantity
+            ),
+            "step_size": _decimal_to_wire(filter_value.step_size),
+        }
+        for filter_value in account_filters.symbol_quantity_filters
+    ]
+    normalized_notionals = [
+        {
+            "filter_type": filter_value.filter_type,
+            "minimum_notional": (
+                None
+                if filter_value.minimum_notional is None
+                else _decimal_to_wire(filter_value.minimum_notional)
+            ),
+            "maximum_notional": (
+                None
+                if filter_value.maximum_notional is None
+                else _decimal_to_wire(filter_value.maximum_notional)
+            ),
+            "apply_minimum_to_market": (
+                filter_value.apply_minimum_to_market
+            ),
+            "apply_maximum_to_market": (
+                filter_value.apply_maximum_to_market
+            ),
+            "average_price_minutes": filter_value.average_price_minutes,
+        }
+        for filter_value in account_filters.symbol_notional_filters
+    ]
+
+    return {
+        "symbol": account_filters.symbol,
+        "exchange_order_count_filters": normalize_count_filters(
+            account_filters.exchange_order_count_filters
+        ),
+        "symbol_order_count_filters": normalize_count_filters(
+            account_filters.symbol_order_count_filters
+        ),
+        "symbol_quantity_filters": normalized_quantities,
+        "symbol_notional_filters": normalized_notionals,
+        "symbol_maximum_position": (
+            None
+            if account_filters.symbol_maximum_position is None
+            else _decimal_to_wire(
+                account_filters.symbol_maximum_position
+            )
+        ),
+        "passive_symbol_filter_types": sorted(
+            account_filters.passive_symbol_filter_types
+        ),
+        "asset_filters": _normalize_account_asset_filters(
+            account_filters.asset_filters
+        ),
+    }  # Symbol context와 검증된 값만 남기고 credential·signature·raw payload는 배제한다.
+
+
+def _normalize_public_relevant_filters(
+    rules: SymbolTradingRules,
+) -> dict[str, object]:
+    """
+    함수 이름: _normalize_public_relevant_filters()
+    기능: exchangeInfo의 public relevant filter union을 signed overlap 검증용 trace object로 만든다.
+    인자: rules -> raw exchangeInfo와 public relevant projection을 함께 보존한 symbol rules
+    반환값: asset scope가 비어 있는 exact AccountRelevantFilters shape dictionary
+    작성 날짜: 2026/08/31
+    """
+    if type(rules) is not SymbolTradingRules:
+        raise TypeError("rules must be an exact SymbolTradingRules")
+    public_filters = rules.public_relevant_filters
+    if public_filters is None:
+        raise ValueError("public relevant filters must be available")
+
+    # Public exchangeInfo에는 asset scope가 없으므로 empty projection만 trace에 결속한다.
+    normalized_filters = _normalize_account_relevant_filters(public_filters)
+    if normalized_filters["asset_filters"]:
+        raise ValueError("public relevant filters must not contain asset filters")
+
+    return normalized_filters  # Raw exchangeInfo 대신 runtime overlap에 사용한 typed union만 남긴다.
+
+
+def _normalize_reference_price(
+    reference_price: ReferencePrice,
+) -> dict[str, object]:
+    """
+    함수 이름: _normalize_reference_price()
+    기능: public referencePrice value object를 MARKET notional 검증용 exact trace object로 변환한다.
+    인자: reference_price -> APIGateway가 엄격 해석한 public reference price
+    반환값: symbol·Decimal price·exchange timestamp dictionary
+    작성 날짜: 2026/08/31
+    """
+    if type(reference_price) is not ReferencePrice:
+        raise TypeError("reference_price must be an exact ReferencePrice")
+
+    # Local observed_at은 caller가 별도 보존하므로 official 응답 사실만 이 object에 남긴다.
+    return {
+        "symbol": reference_price.symbol,
+        "price": _decimal_to_wire(reference_price.price),
+        "exchange_timestamp": reference_price.exchange_timestamp,
+    }  # Raw response 없이 evaluator가 사용한 exact public 값만 보존한다.
+
+
 def _normalize_submit_time_filter_evidence(
     evidence: OrderPreparationFilterEvidence,
     *,
@@ -1013,8 +1214,16 @@ def _normalize_submit_time_filter_evidence(
         raise TypeError("evidence must be an exact OrderPreparationFilterEvidence")
     if type(sequence) is not int or sequence < 1:
         raise ValueError("sequence must be a positive integer")
+    if (
+        not evidence.account_open_state_verified_empty
+        or evidence.account_open_orders_observed_at is None
+        or evidence.account_open_order_lists_observed_at is None
+    ):
+        raise ValueError(
+            "submit-time account open-state evidence must be complete"
+        )
 
-    # Side와 correlation identity는 pending UPSERT/attempt 결속을 위해 원 DTO 그대로 보존한다.
+    # Side·correlation identity와 두 empty observation은 pending UPSERT/attempt 결속을 위해 원 DTO를 보존한다.
     return {
         "sequence": sequence,
         "intent_id": evidence.intent_id,
@@ -1022,6 +1231,36 @@ def _normalize_submit_time_filter_evidence(
         "side": evidence.side.value,
         "observed_at": _datetime_to_wire(evidence.observed_at),
         "rules": _normalize_symbol_filter_rules(evidence.rules),
+        "account_asset_filters": _normalize_account_asset_filters(
+            evidence.account_asset_filters
+        ),
+        "account_relevant_filters": _normalize_account_relevant_filters(
+            evidence.account_filters
+        ),
+        "public_relevant_filters": _normalize_public_relevant_filters(
+            evidence.rules
+        ),
+        "account_filters_observed_at": _datetime_to_wire(
+            evidence.account_filters_observed_at
+        ),
+        "account_open_orders_observed_at": _datetime_to_wire(
+            evidence.account_open_orders_observed_at
+        ),
+        "account_open_orders_verified_empty": (
+            evidence.account_open_state_verified_empty
+        ),
+        "account_open_order_lists_observed_at": _datetime_to_wire(
+            evidence.account_open_order_lists_observed_at
+        ),
+        "account_open_order_lists_verified_empty": (
+            evidence.account_open_state_verified_empty
+        ),
+        "reference_price": _normalize_reference_price(
+            evidence.reference_price
+        ),
+        "reference_price_observed_at": _datetime_to_wire(
+            evidence.reference_price_observed_at
+        ),
     }
 
 
@@ -1032,6 +1271,12 @@ def _create_preflight_evidence(
     commission_policy: CommissionDiscountPolicy,
     symbol_rules: SymbolTradingRules,
     filters_observed_at: datetime,
+    account_filters: AccountRelevantFilters,
+    account_filters_observed_at: datetime,
+    account_open_orders_observed_at: datetime,
+    account_open_order_lists_observed_at: datetime,
+    reference_price: ReferencePrice,
+    reference_price_observed_at: datetime,
 ) -> dict[str, object]:
     """
     함수 이름: _create_preflight_evidence()
@@ -1041,6 +1286,12 @@ def _create_preflight_evidence(
         commission_policy -> signed read-only commission 정책
         symbol_rules -> fresh public exchangeInfo rule
         filters_observed_at -> exchangeInfo 응답 관찰 UTC 시각
+        account_filters -> fresh signed myFilters의 full composite DTO
+        account_filters_observed_at -> signed myFilters 응답 관찰 UTC 시각
+        account_open_orders_observed_at -> all-symbol openOrders empty 확인 UTC 시각
+        account_open_order_lists_observed_at -> all-symbol openOrderList empty 확인 UTC 시각
+        reference_price -> fresh public MARKET notional reference price
+        reference_price_observed_at -> referencePrice 응답 관찰 UTC 시각
     반환값: Phase 13 exact preflight dictionary
     작성 날짜: 2026/08/31
     """
@@ -1062,6 +1313,30 @@ def _create_preflight_evidence(
         "fresh_filters": _normalize_fresh_filters(
             symbol_rules,
             observed_at=filters_observed_at,
+        ),
+        "account_asset_filters": _normalize_account_asset_filters(
+            account_filters.asset_filters
+        ),
+        "account_relevant_filters": _normalize_account_relevant_filters(
+            account_filters
+        ),
+        "public_relevant_filters": _normalize_public_relevant_filters(
+            symbol_rules
+        ),
+        "account_filters_observed_at": _datetime_to_wire(
+            account_filters_observed_at
+        ),
+        "account_open_orders_observed_at": _datetime_to_wire(
+            account_open_orders_observed_at
+        ),
+        "account_open_orders_verified_empty": True,
+        "account_open_order_lists_observed_at": _datetime_to_wire(
+            account_open_order_lists_observed_at
+        ),
+        "account_open_order_lists_verified_empty": True,
+        "reference_price": _normalize_reference_price(reference_price),
+        "reference_price_observed_at": _datetime_to_wire(
+            reference_price_observed_at
         ),
         "position_quantity": "0",
         "pending_order_count": 0,
@@ -2363,12 +2638,289 @@ def _metadata_decimal(order_metadata: Mapping[str, object], field_name: str) -> 
     return decimal_value  # Trace에는 아래 canonical plain serializer를 거친 값만 사용한다.
 
 
+def _require_zero_position_quantity(position_quantity: object) -> None:
+    """
+    함수 이름: _require_zero_position_quantity()
+    기능: 실제 Position 수량을 출력하지 않고 exact Decimal zero인지 검증한다.
+    인자: position_quantity -> runtime Position에서 읽은 수량
+    반환값: exact Decimal zero이면 없음
+    작성 날짜: 2026/08/31
+    """
+    # Type drift와 non-zero exposure를 같은 고정 문장으로 닫아 balance repr를 숨긴다.
+    if (
+        type(position_quantity) is not Decimal
+        or position_quantity != Decimal("0")
+    ):
+        raise AssertionError(_ZERO_POSITION_FAILURE_MESSAGE)
+
+    return None  # 검증한 실제 수량은 unittest result나 trace에 새로 복제하지 않는다.
+
+
+def _require_zero_market_buy_commission(
+    commission_policy: CommissionDiscountPolicy,
+) -> None:
+    """
+    함수 이름: _require_zero_market_buy_commission()
+    기능: 실제 account MARKET BUY 수수료율을 출력하지 않고 모두 zero인지 검증한다.
+    인자: commission_policy -> signed account 응답에서 정규화한 수수료 정책
+    반환값: 네 MARKET BUY 관련 비율이 모두 zero이면 없음
+    작성 날짜: 2026/08/31
+    """
+    # Exact policy와 네 derived Decimal 비율을 한 번에 검사해 어느 실제 값도 실패문에 넣지 않는다.
+    if type(commission_policy) is not CommissionDiscountPolicy or any(
+        commission_rate != Decimal("0")
+        for commission_rate in (
+            commission_policy.standard_market_buy_rate,
+            commission_policy.special_market_buy_rate,
+            commission_policy.tax_market_buy_rate,
+            commission_policy.market_buy_received_asset_commission_rate,
+        )
+    ):
+        raise AssertionError(_ZERO_MARKET_BUY_COMMISSION_FAILURE_MESSAGE)
+
+    return None  # 성공 여부만 남기고 account-specific rate 원문은 출력하지 않는다.
+
+
 class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
     """
     클래스 이름: PhaseThirteenPublicHarnessHelperTests
     기능: network 없이 actual harness의 source, journal, UI와 NO_SIGNAL evidence 경계를 검증한다.
     작성 날짜: 2026/08/31
     """
+
+    def test_all_client_preflight_canaries_block_actual_without_repr(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_all_client_preflight_canaries_block_actual_without_repr()
+        기능: manual open/recent canary가 actual 진입 전에 막히고 unittest 출력에 identity를 남기지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        canary_instant = datetime(
+            2026, 8, 31, tzinfo=timezone.utc
+        )  # 출력 redaction을 반복 검증할 공개 가능한 고정 시각이다.
+        canary_fill = Fill(
+            exchange_order_id="99887766",
+            trade_id="manual-fill-canary",
+            quantity=Decimal("0.01"),
+            price=Decimal("4321.12345678"),
+            fee_amount=Decimal("0"),
+            fee_asset="USDT",
+            fee_quote_amount=Decimal("0"),
+            executed_at=canary_instant,
+        )
+        canary_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id="manual-client-canary",
+            status=OrderStatus.FILLED,
+            processed_at=canary_instant,
+            exchange_order_id=canary_fill.exchange_order_id,
+            fills=(canary_fill,),
+        )
+        baseline_trade = make_trade(order_id="7401")
+        matching_baseline_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id=baseline_trade.client_order_id,
+            status=OrderStatus.FILLED,
+            processed_at=canary_instant,
+            exchange_order_id=baseline_trade.order_id,
+        )
+        preflight_cases = (
+            (
+                "open",
+                (canary_result,),
+                (matching_baseline_result,),
+                "Testnet preflight requires zero open orders",
+                False,
+            ),
+            (
+                "recent",
+                (),
+                (matching_baseline_result, canary_result),
+                "Testnet recent orders do not match verified closed history",
+                True,
+            ),
+        )
+        for (
+            case_name,
+            open_results,
+            recent_results,
+            fixed_message,
+            recent_query_expected,
+        ) in preflight_cases:
+            with self.subTest(case_name=case_name):
+                update_split_ratios = Mock()
+                start_trading = Mock()
+                set_regime_type = Mock()
+                controller = SimpleNamespace(
+                    position=SimpleNamespace(quantity=Decimal("0")),
+                    reconciliation_required=False,
+                    context=SimpleNamespace(version=0),
+                    update_split_ratios=update_split_ratios,
+                    start_trading=start_trading,
+                )
+                api_gateway = Mock()
+                api_gateway.list_all_open_order_results.return_value = (
+                    open_results
+                )
+                api_gateway.list_all_recent_order_results.return_value = (
+                    recent_results
+                )
+                runtime = SimpleNamespace(
+                    market_snapshot=SimpleNamespace(ready=True, version=1),
+                    account=SimpleNamespace(ready=True),
+                    market_data_controller=SimpleNamespace(
+                        market_available=True
+                    ),
+                    web_socket_gateway=SimpleNamespace(
+                        kline_live_ready=True,
+                        account_ready=True,
+                    ),
+                    trading_controller=controller,
+                    trade_history_controller=SimpleNamespace(
+                        get_pending_orders=Mock(return_value=())
+                    ),
+                    trade_history=SimpleNamespace(trades=(baseline_trade,)),
+                    api_gateway=api_gateway,
+                    regime_controller=SimpleNamespace(
+                        set_regime_type=set_regime_type
+                    ),
+                )
+                harness = (
+                    BinanceTestnetPhaseThirteenPublicMarketCase2Tests(
+                        "test_actual_public_market_case2_buy_and_exact_stop_recovery"
+                    )
+                )
+                harness.runtime = runtime
+                harness.baseline_trades = (baseline_trade,)
+                harness.baseline_recent_exchange_order_ids = None
+                harness.public_account_events = []
+                harness.run_id = "00000000-0000-4000-8000-000000000041"
+
+                def run_production_actual_entry() -> None:
+                    """
+                    함수 이름: run_production_actual_entry()
+                    기능: production actual orchestration을 canary preflight 결과로 실행한다.
+                    인자: 없음
+                    반환값: 없음
+                    작성 날짜: 2026/08/31
+                    """
+                    # Production 순서를 직접 지나 all-client gate 뒤 mutation seam이 닫히는지 확인한다.
+                    harness._execute_actual_public_market_case2()  # 실제 preflight 순서를 호출한다.
+
+                # 독립 unittest failure를 캡처해 fixed 문장과 production mutation-before-gate 부재를 증명한다.
+                failure_output = StringIO()
+                with patch(
+                    f"{__name__}.start_application",
+                    return_value=SimpleNamespace(
+                        status=ApplicationStatus.READY
+                    ),
+                ), patch(
+                    f"{__name__}._create_account_event_from_runtime",
+                    return_value=SimpleNamespace(),
+                ):
+                    failure_result = unittest.TextTestRunner(
+                        stream=failure_output,
+                        verbosity=2,
+                        failfast=True,
+                    ).run(
+                        unittest.FunctionTestCase(
+                            run_production_actual_entry
+                        )
+                    )
+                self.assertFalse(failure_result.wasSuccessful())
+                set_regime_type.assert_not_called()
+                update_split_ratios.assert_not_called()
+                start_trading.assert_not_called()
+
+                # Controller 우회 direct REST mutation도 all-client gate 전에 한 번도 허용하지 않는다.
+                api_gateway.submit_order.assert_not_called()
+                api_gateway.sell_all_position.assert_not_called()
+                api_gateway.cancel_order.assert_not_called()  # 세 mutation surface를 모두 0회로 고정한다.
+                self.assertEqual(
+                    int(recent_query_expected),
+                    api_gateway.list_all_recent_order_results.call_count,
+                )
+                rendered_failure = failure_output.getvalue()
+                self.assertIn(fixed_message, rendered_failure)
+                for sensitive_canary in (
+                    "manual-client-canary",
+                    "99887766",
+                    "manual-fill-canary",
+                    "4321.12345678",
+                    baseline_trade.client_order_id,
+                    baseline_trade.order_id,
+                ):
+                    self.assertNotIn(sensitive_canary, rendered_failure)
+
+    def test_sensitive_actual_numeric_guards_use_fixed_failure_output(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_sensitive_actual_numeric_guards_use_fixed_failure_output()
+        기능: Position과 commission 실패가 실제 Decimal 값을 unittest 출력에 반사하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        nonzero_commission_policy = CommissionDiscountPolicy(
+            symbol="ETHUSDT",
+            enabled_for_account=False,
+            enabled_for_symbol=False,
+            discount_asset="USDT",
+            discount_rate=Decimal("0"),
+            standard_market_buy_rate=Decimal("0.87654321"),
+            special_market_buy_rate=Decimal("0"),
+            tax_market_buy_rate=Decimal("0"),
+        )
+
+        # 두 민감 Decimal canary를 독립 failure로 실행해 traceback 전체의 고정 문장 경계를 확인한다.
+        guarded_cases = (
+            (
+                lambda: _require_zero_position_quantity(
+                    Decimal("7654.321098")
+                ),
+                _ZERO_POSITION_FAILURE_MESSAGE,
+                "7654.321098",
+            ),
+            (
+                lambda: _require_zero_market_buy_commission(
+                    nonzero_commission_policy
+                ),
+                _ZERO_MARKET_BUY_COMMISSION_FAILURE_MESSAGE,
+                "0.87654321",
+            ),
+        )
+        for guarded_check, fixed_message, forbidden_value in guarded_cases:
+            with self.subTest(fixed_message=fixed_message):
+
+                def run_guarded_check() -> None:
+                    """
+                    함수 이름: run_guarded_check()
+                    기능: 민감 수치 guard 하나를 독립 unittest failure 경계에서 호출한다.
+                    인자: 없음
+                    반환값: 없음
+                    작성 날짜: 2026/08/31
+                    """
+                    guarded_check()  # Production과 같은 fixed-message helper를 직접 실행한다.
+
+                failure_output = StringIO()
+                failure_result = unittest.TextTestRunner(
+                    stream=failure_output,
+                    verbosity=2,
+                    failfast=True,
+                ).run(unittest.FunctionTestCase(run_guarded_check))
+                captured_output = failure_output.getvalue()
+
+                # 실패 사실과 generic message만 관찰하고 Position·rate canary는 출력 전체에서 금지한다.
+                self.assertFalse(failure_result.wasSuccessful())
+                self.assertIn(fixed_message, captured_output)
+                self.assertNotIn(
+                    forbidden_value,
+                    captured_output,
+                )  # Synthetic Decimal 원문조차 stderr contract 밖으로 내보내지 않는다.
 
     def test_public_market_command_parser_accepts_single_and_atomic_sources(self) -> None:
         """
@@ -2940,6 +3492,41 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             special_market_buy_rate=Decimal("0"),
             tax_market_buy_rate=Decimal("0"),
         )
+        lot_size_filter = QuantityFilter(
+            filter_type="LOT_SIZE",
+            minimum_quantity=Decimal("0.0001"),
+            maximum_quantity=Decimal("100"),
+            step_size=Decimal("0.0001"),
+        )
+        market_lot_size_filter = QuantityFilter(
+            filter_type="MARKET_LOT_SIZE",
+            minimum_quantity=Decimal("0.001"),
+            maximum_quantity=Decimal("100"),
+            step_size=Decimal("0.001"),
+        )
+        notional_filter = NotionalFilter(
+            filter_type="NOTIONAL",
+            minimum_notional=Decimal("10"),
+            maximum_notional=Decimal("100000"),
+            apply_minimum_to_market=True,
+            apply_maximum_to_market=True,
+            average_price_minutes=5,
+        )
+        public_filters = AccountRelevantFilters(
+            symbol="ETHUSDT",
+            exchange_order_count_filters=(),
+            symbol_order_count_filters=(),
+            symbol_quantity_filters=(
+                lot_size_filter,
+                market_lot_size_filter,
+            ),
+            symbol_notional_filters=(notional_filter,),
+            symbol_maximum_position=None,
+            passive_symbol_filter_types=frozenset(),
+            asset_filters=(),
+        )
+
+        # Public scalar rules와 full union은 같은 DTO instance를 공유해 trace overlap을 재현한다.
         symbol_rules = SymbolTradingRules(
             symbol="ETHUSDT",
             status="TRADING",
@@ -2948,28 +3535,32 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             base_asset_precision=8,
             order_types=frozenset({"MARKET"}),
             is_spot_trading_allowed=True,
-            lot_size=QuantityFilter(
-                filter_type="LOT_SIZE",
-                minimum_quantity=Decimal("0.0001"),
-                maximum_quantity=Decimal("100"),
-                step_size=Decimal("0.0001"),
-            ),
-            market_lot_size=QuantityFilter(
-                filter_type="MARKET_LOT_SIZE",
-                minimum_quantity=Decimal("0.001"),
-                maximum_quantity=Decimal("100"),
-                step_size=Decimal("0.001"),
-            ),
-            notional_filters=(
-                NotionalFilter(
-                    filter_type="NOTIONAL",
-                    minimum_notional=Decimal("10"),
-                    maximum_notional=Decimal("100000"),
-                    apply_minimum_to_market=True,
-                    apply_maximum_to_market=True,
-                    average_price_minutes=5,
+            lot_size=lot_size_filter,
+            market_lot_size=market_lot_size_filter,
+            notional_filters=(notional_filter,),
+            maximum_position=None,
+            public_relevant_filters=public_filters,
+        )
+        account_filters = AccountRelevantFilters(
+            symbol="ETHUSDT",
+            exchange_order_count_filters=(),
+            symbol_order_count_filters=(),
+            symbol_quantity_filters=(),
+            symbol_notional_filters=(),
+            symbol_maximum_position=None,
+            passive_symbol_filter_types=frozenset(),
+            asset_filters=(
+                AccountAssetFilter(
+                    filter_type="MAX_ASSET",
+                    asset="ETH",
+                    maximum_quantity=Decimal("100"),
                 ),
             ),
+        )
+        reference_price = ReferencePrice(
+            symbol="ETHUSDT",
+            price=Decimal("2500"),
+            exchange_timestamp=int(started_at.timestamp() * 1000),
         )
         preflight = _create_preflight_evidence(
             account_version=1,
@@ -2977,6 +3568,12 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             commission_policy=commission_policy,
             symbol_rules=symbol_rules,
             filters_observed_at=started_at,
+            account_filters=account_filters,
+            account_filters_observed_at=started_at,
+            account_open_orders_observed_at=started_at,
+            account_open_order_lists_observed_at=started_at,
+            reference_price=reference_price,
+            reference_price_observed_at=started_at,
         )
         trace_body = _create_non_mutating_trace_body(
             outcome="NO_SIGNAL",
@@ -3760,6 +4357,41 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
         harness._wait_for_effective_free_eth.assert_not_called()
         harness._wait_for_session_termination.assert_not_called()
 
+    def test_module_suite_runs_helper_regression_before_actual_mutation(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_module_suite_runs_helper_regression_before_actual_mutation()
+        기능: Standalone actual module이 모든 network-free helper 뒤에 mutation class를 배치하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        ordered_suite = load_tests(
+            unittest.TestLoader(),
+            unittest.TestSuite(),
+            None,
+        )
+        suite_groups = tuple(ordered_suite)
+
+        # 첫 group은 helper만, 마지막 group은 exact actual class만 포함해야 순서가 이름 정렬과 무관하다.
+        self.assertEqual(2, len(suite_groups))
+        self.assertTrue(
+            all(
+                isinstance(test_case, PhaseThirteenPublicHarnessHelperTests)
+                for test_case in suite_groups[0]
+            )
+        )
+        self.assertTrue(
+            all(
+                isinstance(
+                    test_case,
+                    BinanceTestnetPhaseThirteenPublicMarketCase2Tests,
+                )
+                for test_case in suite_groups[1]
+            )
+        )  # Actual class가 network-free helper group 뒤에만 오는 순서를 고정한다.
+
 @unittest.skipUnless(
     PHASE13_PUBLIC_CASE2_REQUESTED,
     PHASE13_PUBLIC_CASE2_SKIP_REASON,
@@ -4126,32 +4758,33 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             self.assertTrue(fresh_runtime.web_socket_gateway.account_ready)
             position = fresh_runtime.trading_controller.position
             self.assertIsNotNone(position)
-            self.assertEqual(Decimal("0"), position.quantity)
-            self.assertEqual(
-                (),
-                fresh_runtime.trade_history_controller.get_pending_orders(),
-            )
+            _require_zero_position_quantity(position.quantity)
+            if fresh_runtime.trade_history_controller.get_pending_orders():
+                raise AssertionError(
+                    "fresh verification requires zero pending orders"
+                )
             self.assertFalse(
                 fresh_runtime.trading_controller.reconciliation_required
             )
 
-            # Fresh read-only restart에서는 run-owned뿐 아니라 전체 application open order가 0이어야 한다.
-            open_results = fresh_runtime.api_gateway.list_open_order_results("ETHUSDT")
-            self.assertEqual((), open_results)
-            matching_open_results = tuple(
-                result
-                for result in open_results
-                if result.client_order_id in run_client_order_ids
+            # Fresh read-only restart에서는 application·manual client ID 전체 open order가 0이어야 한다.
+            open_results = fresh_runtime.api_gateway.list_all_open_order_results(
+                "ETHUSDT"
             )
-            self.assertEqual((), matching_open_results)
-            recent_results = fresh_runtime.api_gateway.list_recent_order_results(
+            require_empty_all_client_open_orders(open_results)
+            recent_results = fresh_runtime.api_gateway.list_all_recent_order_results(
                 "ETHUSDT",
-                limit=100,
+                limit=1000,
             )
             if self.baseline_recent_exchange_order_ids is None:
                 raise AssertionError("exchange recent-order baseline was not captured")
-            if any(result.exchange_order_id is None for result in recent_results):
-                raise AssertionError("recent exchange order lacks a stable identity")
+
+            # Fresh durable Trade 전체와 all-client recent identity가 같아야 manual delta를 숨기지 않는다.
+            fresh_trades = fresh_runtime.trade_history.trades
+            verify_exact_recent_order_baseline(
+                fresh_trades,
+                recent_results,
+            )
 
             # Baseline 이후 새 exchange identity 전체가 정확히 이번 run client 집합이어야 외부 주문을 숨기지 않는다.
             matching_recent_results = tuple(
@@ -4164,13 +4797,14 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 len(run_client_order_ids),
                 len(matching_recent_results),
             )
-            self.assertEqual(
-                run_client_order_ids,
-                frozenset(
-                    result.client_order_id
-                    for result in matching_recent_results
-                ),
+            matching_recent_client_order_ids = frozenset(
+                result.client_order_id
+                for result in matching_recent_results
             )
+            if matching_recent_client_order_ids != run_client_order_ids:
+                raise AssertionError(
+                    "fresh recent orders do not match current run identity"
+                )
             self.assertEqual(
                 len(matching_recent_results),
                 len(
@@ -4180,7 +4814,6 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                     }
                 ),
             )
-            fresh_trades = fresh_runtime.trade_history.trades
             self.assertEqual(
                 len(fresh_trades),
                 len({trade.trade_id for trade in fresh_trades}),
@@ -4310,16 +4943,16 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             reconciliation_required = (
                 fresh_runtime.trading_controller.reconciliation_required
             )
-            open_results = fresh_runtime.api_gateway.list_open_order_results(
+            open_results = fresh_runtime.api_gateway.list_all_open_order_results(
                 "ETHUSDT"
             )
             matching_open_order_count = sum(
                 result.client_order_id in run_client_order_ids
                 for result in open_results
             )
-            recent_results = fresh_runtime.api_gateway.list_recent_order_results(
+            recent_results = fresh_runtime.api_gateway.list_all_recent_order_results(
                 "ETHUSDT",
-                limit=100,
+                limit=1000,
             )
             run_exchange_order_count: int | None = None
             if self.baseline_recent_exchange_order_ids is not None and all(
@@ -4724,15 +5357,16 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             len(self.baseline_trades),
             len(self.runtime.trade_history.trades),
         )
-        self.assertEqual(
-            (),
-            _extract_pending_order_upserts(
-                self.runtime.trade_history_repository.pending_order_storage_path
-            ),
+        pending_upserts = _extract_pending_order_upserts(
+            self.runtime.trade_history_repository.pending_order_storage_path
         )
+        if pending_upserts:
+            raise AssertionError(
+                "NO_SIGNAL requires zero pending order submissions"
+            )  # Pending metadata와 client ID를 unittest failure repr에 반사하지 않는다.
         position = controller.position
         self.assertIsNotNone(position)
-        self.assertEqual(Decimal("0"), position.quantity)
+        _require_zero_position_quantity(position.quantity)
 
         # Position 없는 RUNNING session도 public stop으로 TERMINATED한 뒤 network resources를 닫는다.
         self._stop_current_run_for_safety()
@@ -4746,7 +5380,10 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             fresh_runtime_session_id,
             final_verified_at,
         ) = self._fresh_read_only_verification(frozenset())
-        self.assertEqual((), matching_results)
+        if matching_results:
+            raise AssertionError(
+                "NO_SIGNAL fresh verification found unexpected run orders"
+            )  # Fresh OrderResult identity와 fill은 고정 문장 뒤에 숨긴다.
         outcome = (
             "BLOCKED" if controller.order_execution_trace else "NO_SIGNAL"
         )
@@ -5078,6 +5715,10 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 or filter_evidence.client_order_id != trade.client_order_id
                 or filter_evidence.side is not trade.side
                 or filter_evidence.rules.symbol != order_metadata["symbol"]
+                or filter_evidence.account_filters.symbol
+                != order_metadata["symbol"]
+                or filter_evidence.reference_price.symbol
+                != order_metadata["symbol"]
                 or submission_evidence.intent_id != order_metadata["intent_id"]
                 or submission_evidence.client_order_id != trade.client_order_id
                 or submission_evidence.side is not trade.side
@@ -5093,11 +5734,47 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 raise AssertionError("submit-time rules do not reproduce pending final quantity")
             validate_market_notional(
                 submitted_quantity,
-                decision_price,
+                filter_evidence.reference_price.price,
                 filter_evidence.rules,
             )
-            if filter_evidence.observed_at > submission_evidence.attempted_at:
-                raise AssertionError("submission started before its filter observation")
+            validate_account_relevant_filters(
+                submitted_quantity,
+                filter_evidence.reference_price.price,
+                filter_evidence.rules,
+                filter_evidence.account_filters,
+                side=filter_evidence.side,
+                account_open_state_verified_empty=(
+                    filter_evidence.account_open_state_verified_empty
+                ),
+            )
+            if (
+                trade.side is OrderSide.BUY
+                and filter_evidence.rules.maximum_position is not None
+            ):
+                raise AssertionError("actual BUY submit-time rules contain MAX_POSITION")
+            if not all(
+                type(account_filter) is AccountAssetFilter
+                for account_filter in filter_evidence.account_asset_filters
+            ):
+                raise AssertionError("submit-time account filters changed normalized type")
+            if (
+                not filter_evidence.account_open_state_verified_empty
+                or filter_evidence.account_open_orders_observed_at is None
+                or filter_evidence.account_open_order_lists_observed_at is None
+            ):
+                raise AssertionError(
+                    "submit-time account open-state evidence is incomplete"
+                )
+
+            # Signed account filter와 두 empty snapshot은 REST POST 시작보다 늦게 생성될 수 없다.
+            if max(
+                filter_evidence.observed_at,
+                filter_evidence.account_filters_observed_at,
+                filter_evidence.account_open_orders_observed_at,
+                filter_evidence.account_open_order_lists_observed_at,
+                filter_evidence.reference_price_observed_at,
+            ) > submission_evidence.attempted_at:
+                raise AssertionError("submission started before its safety observations")
             submit_time_filter_evidence.append(
                 _normalize_submit_time_filter_evidence(
                     filter_evidence,
@@ -5305,65 +5982,123 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         )
         self.last_market_version = self.runtime.market_snapshot.version
 
-        # Fresh preflight는 local replay, pending, Position과 application-owned ETHUSDT open order가 zero다.
+        # Fresh preflight는 local replay, pending, Position과 모든 client ID의 ETHUSDT open order가 zero다.
         controller = self.runtime.trading_controller
         position = controller.position
         self.assertIsNotNone(position)
-        self.assertEqual(Decimal("0"), position.quantity)
-        self.assertEqual((), self.runtime.trade_history_controller.get_pending_orders())
-        self.assertEqual(tuple(self.baseline_trades), self.runtime.trade_history.trades)
-        self.assertEqual(
-            (),
-            self.runtime.api_gateway.list_open_order_results("ETHUSDT"),
-            "actual target requires no application-owned ETHUSDT open order",
+        _require_zero_position_quantity(position.quantity)
+        pending_orders = (
+            self.runtime.trade_history_controller.get_pending_orders()
         )
+        if pending_orders:
+            raise AssertionError(
+                "actual preflight requires zero pending orders"
+            )
+        if tuple(self.baseline_trades) != self.runtime.trade_history.trades:
+            raise AssertionError(
+                "actual preflight history differs from verified baseline"
+            )
+        open_results = self.runtime.api_gateway.list_all_open_order_results(
+            "ETHUSDT"
+        )
+        require_empty_all_client_open_orders(open_results)
         baseline_recent_results = (
-            self.runtime.api_gateway.list_recent_order_results(
+            self.runtime.api_gateway.list_all_recent_order_results(
                 "ETHUSDT",
-                limit=100,
+                limit=1000,
             )
         )
-        if any(
-            result.exchange_order_id is None
-            for result in baseline_recent_results
-        ):
-            raise AssertionError("baseline recent order lacks a stable identity")
-        self.baseline_recent_exchange_order_ids = frozenset(
-            str(result.exchange_order_id)
-            for result in baseline_recent_results
-        )
-        self.assertEqual(
-            len(baseline_recent_results),
-            len(self.baseline_recent_exchange_order_ids),
-        )  # 이후 fresh delta가 실제 주문 수를 중복 없이 증명하려면 baseline identity도 유일해야 한다.
+        self.baseline_recent_exchange_order_ids = (
+            verify_exact_recent_order_baseline(
+                self.baseline_trades,
+                baseline_recent_results,
+            )
+        )  # Verified Trade로 설명할 수 없는 manual·외부 recent order는 mutation 전에 차단한다.
         self.assertFalse(controller.reconciliation_required)
         commission_policy = self.runtime.api_gateway.fetch_commission_discount_policy(
             "ETHUSDT"
         )
-        self.assertEqual(Decimal("0"), commission_policy.standard_market_buy_rate)
-        self.assertEqual(Decimal("0"), commission_policy.special_market_buy_rate)
-        self.assertEqual(Decimal("0"), commission_policy.tax_market_buy_rate)
-        self.assertEqual(
-            Decimal("0"),
-            commission_policy.market_buy_received_asset_commission_rate,
-        )
+        _require_zero_market_buy_commission(commission_policy)
         self.assertFalse(commission_policy.can_charge_discount_asset)
 
-        # Public rule preflight는 cache를 보지 않는 explicit GET이며 actual prepare_order가 submit 직전 다시 조회한다.
+        # Signed account filter와 public symbol rule을 순서대로 fresh 관찰해 full evaluator input을 고정한다.
+        account_filters = (
+            self.runtime.api_gateway.fetch_account_relevant_filters(
+                "ETHUSDT"
+            )
+        )
+        account_filters_observed_at = _utc_now()
+        self.assertIs(type(account_filters), AccountRelevantFilters)
+        self.assertEqual("ETHUSDT", account_filters.symbol)
+        self.assertTrue(
+            all(
+                type(account_filter) is AccountAssetFilter
+                for account_filter in account_filters.asset_filters
+            )
+        )
         symbol_rules = self.runtime.api_gateway.fetch_symbol_trading_rules(
             "ETHUSDT"
         )
         filters_observed_at = _utc_now()
+
+        # EXCHANGE_* count와 account 격리를 symbol 생략 signed snapshot 두 개의 exact empty로 증명한다.
+        if self.runtime.api_gateway.has_any_exchange_open_orders():
+            raise AssertionError(
+                "Phase 13 preflight requires zero exchange-wide open orders"
+            )
+        account_open_orders_observed_at = _utc_now()
+        if self.runtime.api_gateway.has_any_exchange_open_order_lists():
+            raise AssertionError(
+                "Phase 13 preflight requires zero exchange-wide open order lists"
+            )
+        account_open_order_lists_observed_at = _utc_now()
+        reference_price = self.runtime.api_gateway.fetch_reference_price(
+            "ETHUSDT"
+        )
+        reference_price_observed_at = _utc_now()
         self.assertEqual("ETHUSDT", symbol_rules.symbol)
         self.assertEqual("TRADING", symbol_rules.status)
         self.assertTrue(symbol_rules.is_spot_trading_allowed)
         self.assertIn("MARKET", symbol_rules.order_types)
+        self.assertIs(type(reference_price), ReferencePrice)
+        self.assertEqual("ETHUSDT", reference_price.symbol)
+        if reference_price.price <= Decimal("0"):
+            raise AssertionError(
+                "Phase 13 reference price must be positive"
+            )  # 실제 reference price 대신 고정 문장만 출력한다.
+
+        # Precision quantum을 포함한 최소 양수 BUY 후보로 quote/MAX_POSITION/count blocker를 actual child 전에 평가한다.
+        minimum_candidate_quantity = max(
+            Decimal("1").scaleb(-symbol_rules.base_asset_precision),
+            symbol_rules.lot_size.minimum_quantity,
+            symbol_rules.market_lot_size.minimum_quantity,
+            symbol_rules.lot_size.step_size,
+            symbol_rules.market_lot_size.step_size,
+        )
+        validate_account_relevant_filters(
+            minimum_candidate_quantity,
+            reference_price.price,
+            symbol_rules,
+            account_filters,
+            side=OrderSide.BUY,
+            account_open_state_verified_empty=True,
+        )
         self.preflight = _create_preflight_evidence(
             account_version=self.runtime.account.version,
             verified_at=_utc_now(),
             commission_policy=commission_policy,
             symbol_rules=symbol_rules,
             filters_observed_at=filters_observed_at,
+            account_filters=account_filters,
+            account_filters_observed_at=account_filters_observed_at,
+            account_open_orders_observed_at=(
+                account_open_orders_observed_at
+            ),
+            account_open_order_lists_observed_at=(
+                account_open_order_lists_observed_at
+            ),
+            reference_price=reference_price,
+            reference_price_observed_at=reference_price_observed_at,
         )
 
         # TYPE_0과 split은 public optimistic-version command만 사용하고 BUY 수량은 production cap이 제한한다.
@@ -5394,16 +6129,22 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         self.assertIsNotNone(risk_decision)
         self.assertTrue(risk_decision.allowed)
         self.assertEqual(13, risk_decision.budget.policy_version)
-        self.assertLessEqual(
-            risk_decision.budget.candidate_order_notional,
-            self.maximum_notional,
-        )
+        if (
+            risk_decision.budget.candidate_order_notional
+            > self.maximum_notional
+        ):
+            raise AssertionError(
+                "actual BUY candidate exceeds approved notional cap"
+            )  # 후보 notional과 승인 상한의 Decimal repr를 숨긴다.
         authoritative_position_quantity = position.quantity
-        self.assertGreater(authoritative_position_quantity, Decimal("0"))
-        self.assertEqual(
-            buy_trade.executed_quantity,
-            authoritative_position_quantity,
-        )
+        if authoritative_position_quantity <= Decimal("0"):
+            raise AssertionError(
+                "actual BUY did not create a positive Position"
+            )
+        if buy_trade.executed_quantity != authoritative_position_quantity:
+            raise AssertionError(
+                "actual BUY fill does not match authoritative Position"
+            )  # BUY fill과 Position 수량은 고정 문장 뒤에 숨긴다.
         effective_free_quantity = self._wait_for_effective_free_eth(
             authoritative_position_quantity
         )
@@ -5423,8 +6164,14 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         self._wait_for_session_termination()
         self._collect_runtime_observations()
         self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
-        self.assertEqual(Decimal("0"), position.quantity)
-        self.assertEqual((), self.runtime.trade_history_controller.get_pending_orders())
+        if position.quantity != Decimal("0"):
+            raise AssertionError(
+                "actual completion requires zero Position"
+            )  # 잔여 Position 수량을 unittest failure repr에 반사하지 않는다.
+        if self.runtime.trade_history_controller.get_pending_orders():
+            raise AssertionError(
+                "actual completion requires zero pending orders"
+            )
 
         # Normal Testnet MARKET fill에서는 이번 run이 정확히 BUY 하나와 STOP SELL 하나로 끝나야 한다.
         run_trades = self.runtime.trade_history.trades[len(self.baseline_trades) :]
@@ -5432,8 +6179,14 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         self.assertEqual((OrderSide.BUY, OrderSide.SELL), tuple(trade.side for trade in run_trades))
         sell_trade = run_trades[1]
         self.assertEqual("STOP", sell_trade.exit_reason.value)
-        self.assertEqual(authoritative_position_quantity, sell_trade.executed_quantity)
-        self.assertGreaterEqual(effective_free_quantity, sell_trade.executed_quantity)
+        if sell_trade.executed_quantity != authoritative_position_quantity:
+            raise AssertionError(
+                "STOP SELL fill does not match the authoritative Position"
+            )
+        if effective_free_quantity < sell_trade.executed_quantity:
+            raise AssertionError(
+                "STOP SELL fill exceeds the verified effective free quantity"
+            )  # SELL fill과 free balance 수량은 고정 문장 뒤에 숨긴다.
         pending_upserts = _extract_pending_order_upserts(
             self.runtime.trade_history_repository.pending_order_storage_path
         )
@@ -5442,10 +6195,14 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             str(order_metadata["client_order_id"]): order_metadata
             for order_metadata in pending_upserts
         }
-        self.assertEqual(
-            {buy_trade.client_order_id, sell_trade.client_order_id},
-            set(upserts_by_client_id),
-        )
+        expected_trade_client_ids = {
+            buy_trade.client_order_id,
+            sell_trade.client_order_id,
+        }
+        if set(upserts_by_client_id) != expected_trade_client_ids:
+            raise AssertionError(
+                "actual pending upserts do not match durable trade identity"
+            )  # 실제 client ID set은 unittest failure repr에 반사하지 않는다.
         _assert_atomic_trade_publications(self.transport_event_dtos)
 
         # First runtime을 닫은 뒤 같은 history와 read-only permission의 fresh runtime으로 최종 exposure를 증명한다.
@@ -5488,3 +6245,32 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         )
         self.assertTrue(trace_path.is_file())
         self.assertEqual(64, len(trace_digest))  # Digest만 stdout-safe assertion에 남기고 trace body는 출력하지 않는다.
+
+
+def load_tests(
+    loader: unittest.TestLoader,
+    standard_tests: unittest.TestSuite,
+    pattern: str | None,
+) -> unittest.TestSuite:
+    """
+    함수 이름: load_tests()
+    기능: Network-free harness 회귀 전체를 actual mutation TestCase보다 먼저 실행한다.
+    인자: loader -> unittest가 전달한 module loader
+        standard_tests -> default 이름 정렬 suite; 안전 순서를 위해 사용하지 않음
+        pattern -> discovery pattern 또는 direct module 실행의 None
+    반환값: helper suite 다음 exact actual suite가 오는 ordered TestSuite
+    작성 날짜: 2026/08/31
+    """
+    del standard_tests, pattern  # Default alphabetical class ordering은 actual-first가 될 수 있어 폐기한다.
+
+    # 두 class를 명시 순서로 추가해 standalone secure runner에서도 local gate를 먼저 완료한다.
+    ordered_suite = unittest.TestSuite()
+    ordered_suite.addTest(
+        loader.loadTestsFromTestCase(PhaseThirteenPublicHarnessHelperTests)
+    )
+    ordered_suite.addTest(
+        loader.loadTestsFromTestCase(
+            BinanceTestnetPhaseThirteenPublicMarketCase2Tests
+        )
+    )
+    return ordered_suite  # Actual opt-in 여부와 무관하게 helper failure가 먼저 process를 실패시킨다.

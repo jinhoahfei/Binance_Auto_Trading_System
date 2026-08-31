@@ -20,10 +20,13 @@ from binance_auto_trader.adapters.binance import (
     BinanceSpotWebSocketClient,
 )
 from binance_auto_trader.adapters.binance.mappers import (
+    AccountAssetFilter,
+    AccountRelevantFilters,
     NotionalFilter,
     OrderPreparationFilterEvidence,
     OrderSubmissionAttemptEvidence,
     QuantityFilter,
+    ReferencePrice,
     SymbolTradingRules,
 )
 from binance_auto_trader.bootstrap import create_application_runtime
@@ -40,6 +43,27 @@ from binance_auto_trader.domain.trading.states import (
 
 API_KEY_CANARY = "testnet-api-key-canary"
 API_SECRET_CANARY = "testnet-api-secret-canary"
+
+
+def _empty_account_relevant_filters() -> AccountRelevantFilters:
+    """
+    함수 이름: _empty_account_relevant_filters()
+    기능: Evidence 단위 테스트용 ETHUSDT signed-filter empty DTO를 만든다.
+    인자: 없음
+    반환값: 세 scope가 모두 비어 있는 AccountRelevantFilters
+    작성 날짜: 2026/08/31
+    """
+    # Raw myFilters mapping 대신 exact frozen DTO를 evidence fixture에 직접 제공한다.
+    return AccountRelevantFilters(
+        symbol="ETHUSDT",
+        exchange_order_count_filters=(),
+        symbol_order_count_filters=(),
+        symbol_quantity_filters=(),
+        symbol_notional_filters=(),
+        symbol_maximum_position=None,
+        passive_symbol_filter_types=frozenset(),
+        asset_filters=(),
+    )
 
 
 def _read_only_environment() -> dict[str, str]:
@@ -467,6 +491,37 @@ class TestnetConfigurationTests(unittest.TestCase):
             side=OrderSide.BUY,
             observed_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
             rules=rules,
+            account_filters=_empty_account_relevant_filters(),
+            account_filters_observed_at=datetime(
+                2026,
+                8,
+                31,
+                tzinfo=timezone.utc,
+            ),
+            account_open_orders_observed_at=datetime(
+                2026,
+                8,
+                31,
+                tzinfo=timezone.utc,
+            ),
+            account_open_order_lists_observed_at=datetime(
+                2026,
+                8,
+                31,
+                tzinfo=timezone.utc,
+            ),
+            account_open_state_verified_empty=True,
+            reference_price=ReferencePrice(
+                symbol="ETHUSDT",
+                price=Decimal("100"),
+                exchange_timestamp=1788134400000,
+            ),
+            reference_price_observed_at=datetime(
+                2026,
+                8,
+                31,
+                tzinfo=timezone.utc,
+            ),
         )
         submission_evidence = OrderSubmissionAttemptEvidence(
             intent_id="proxy-filter-evidence-intent",
@@ -477,6 +532,23 @@ class TestnetConfigurationTests(unittest.TestCase):
         delegate = Mock(name="read_only_symbol_rules_delegate")
         delegate.get_account.return_value = {}
         delegate.fetch_symbol_trading_rules.return_value = rules
+        delegate.get_account_filters.return_value = {
+            "exchangeFilters": [],
+            "symbolFilters": [],
+            "assetFilters": [
+                {
+                    "filterType": "MAX_ASSET",
+                    "asset": "USDT",
+                    "limit": "250.00000000",
+                }
+            ],
+        }
+        reference_price = ReferencePrice(
+            symbol="ETHUSDT",
+            price=Decimal("100"),
+            exchange_timestamp=1788134400000,
+        )
+        delegate.fetch_reference_price.return_value = reference_price
         delegate.get_order_preparation_filter_evidence.return_value = (
             filter_evidence
         )
@@ -493,6 +565,12 @@ class TestnetConfigurationTests(unittest.TestCase):
         result = APIGateway(
             permission_client
         ).fetch_symbol_trading_rules("ethusdt")
+        account_asset_filters = APIGateway(
+            permission_client
+        ).fetch_account_asset_filters("ethusdt")
+        observed_reference_price = APIGateway(
+            permission_client
+        ).fetch_reference_price("ethusdt")
         observed_filter_evidence = APIGateway(
             permission_client
         ).get_order_preparation_filter_evidence(
@@ -505,9 +583,26 @@ class TestnetConfigurationTests(unittest.TestCase):
         )
 
         self.assertIs(result, rules)
+        self.assertEqual(
+            account_asset_filters,
+            (
+                AccountAssetFilter(
+                    filter_type="MAX_ASSET",
+                    asset="USDT",
+                    maximum_quantity=Decimal("250.00000000"),
+                ),
+            ),
+        )
+        self.assertIs(reference_price, observed_reference_price)
         self.assertIs(filter_evidence, observed_filter_evidence)
         self.assertIs(submission_evidence, observed_submission_evidence)
         delegate.fetch_symbol_trading_rules.assert_called_once_with(
+            symbol="ETHUSDT"
+        )
+        delegate.get_account_filters.assert_called_once_with(
+            symbol="ETHUSDT"
+        )
+        delegate.fetch_reference_price.assert_called_once_with(
             symbol="ETHUSDT"
         )
         delegate.get_order_preparation_filter_evidence.assert_called_once_with(
@@ -518,6 +613,56 @@ class TestnetConfigurationTests(unittest.TestCase):
         )
         delegate.prepare_order.assert_not_called()
         delegate.submit_order.assert_not_called()
+
+    def test_permission_proxy_forwards_all_symbol_open_state_reads(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_permission_proxy_forwards_all_symbol_open_state_reads()
+        기능: Read-only Testnet proxy가 all-symbol open order/list bool 조회만 그대로 전달하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        delegate = Mock(name="read_only_open_state_delegate")
+        delegate.has_any_exchange_open_orders.return_value = False
+        delegate.has_any_exchange_open_order_lists.return_value = True
+        permission_client = testnet_module._TestnetOrderPermissionRESTClient(
+            delegate,
+            allow_orders=False,
+            maximum_order_notional=None,
+        )
+
+        # Order opt-in이 없어도 두 signed read는 허용하되 prepare·submit 권한으로 확장하지 않는다.
+        has_open_orders = permission_client.has_any_exchange_open_orders()
+        has_open_order_lists = (
+            permission_client.has_any_exchange_open_order_lists()
+        )  # Raw order/list object가 아닌 exact bool만 permission 경계를 통과한다.
+
+        self.assertFalse(has_open_orders)
+        self.assertTrue(has_open_order_lists)
+        delegate.has_any_exchange_open_orders.assert_called_once_with()
+        delegate.has_any_exchange_open_order_lists.assert_called_once_with()
+        delegate.prepare_order.assert_not_called()
+        delegate.submit_order.assert_not_called()
+
+        # Delegate가 bool 계약을 벗어나면 truthiness 변환 없이 같은 read-only 경계에서 차단한다.
+        invalid_delegate = Mock(name="invalid_open_state_delegate")
+        invalid_delegate.has_any_exchange_open_orders.return_value = ()
+        invalid_permission_client = (
+            testnet_module._TestnetOrderPermissionRESTClient(
+                invalid_delegate,
+                allow_orders=False,
+                maximum_order_notional=None,
+            )
+        )
+        with self.assertRaisesRegex(
+            TypeError,
+            "exchange open order state must be a bool",
+        ):
+            invalid_permission_client.has_any_exchange_open_orders()
+        invalid_delegate.prepare_order.assert_not_called()
+        invalid_delegate.submit_order.assert_not_called()
 
     def test_permission_proxy_blocks_unsupported_commission_before_prepare(
         self,

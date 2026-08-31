@@ -7,9 +7,14 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from typing import Protocol
 
 from binance_auto_trader.adapters.binance.mappers import (
+    AccountAssetFilter,
+    AccountRelevantFilters,
     OrderPreparationFilterEvidence,
     OrderSubmissionAttemptEvidence,
+    ReferencePrice,
     SymbolTradingRules,
+    parse_account_asset_filters,
+    parse_account_relevant_filters,
 )
 from binance_auto_trader.domain.trading.account import (
     AccountSnapshot,
@@ -308,6 +313,50 @@ class BinanceRESTClient(Protocol):
         """
         ...
 
+    def get_account_filters(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_filters()
+        기능: 공식 signed GET /api/v3/myFilters payload를 반환한다.
+        인자: symbol -> 계정 관련 filter를 조회할 Spot symbol
+        반환값: JSON으로 해석된 Binance myFilters payload
+        작성 날짜: 2026/08/31
+        """
+        ...
+
+    def has_any_exchange_open_orders(self) -> bool:
+        """
+        함수 이름: has_any_exchange_open_orders()
+        기능: symbol을 생략한 signed openOrders snapshot의 non-empty 여부를 반환한다.
+        인자: 없음
+        반환값: account 전체 open order가 하나라도 있으면 True
+        작성 날짜: 2026/08/31
+        """
+        ...
+
+    def has_any_exchange_open_order_lists(self) -> bool:
+        """
+        함수 이름: has_any_exchange_open_order_lists()
+        기능: signed openOrderList snapshot의 non-empty 여부를 반환한다.
+        인자: 없음
+        반환값: account 전체 open order list가 하나라도 있으면 True
+        작성 날짜: 2026/08/31
+        """
+        ...
+
+    def fetch_reference_price(
+        self,
+        *,
+        symbol: str,
+    ) -> ReferencePrice:
+        """
+        함수 이름: fetch_reference_price()
+        기능: 공식 GET /api/v3/referencePrice를 엄격 DTO로 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 요청 symbol에 결속된 non-null ReferencePrice
+        작성 날짜: 2026/08/31
+        """
+        ...
+
     def fetch_symbol_trading_rules(
         self,
         *,
@@ -422,6 +471,20 @@ class BinanceRESTClient(Protocol):
         """
         ...
 
+    def list_all_open_order_results(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_all_open_order_results()
+        기능: 안전 preflight에 사용할 모든 client ID의 상품 미결 주문을 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 현재 전체 미결 OrderResult tuple
+        작성 날짜: 2026/08/31
+        """
+        ...
+
     def list_recent_order_results(
         self,
         *,
@@ -435,6 +498,22 @@ class BinanceRESTClient(Protocol):
             limit -> 반환할 최근 주문 최대 개수
         반환값: 최근 OrderResult tuple
         작성 날짜: 2026/08/22
+        """
+        ...
+
+    def list_all_recent_order_results(
+        self,
+        *,
+        symbol: str,
+        limit: int = 100,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_all_recent_order_results()
+        기능: 격리 delta 검증에 사용할 모든 client ID의 최근 주문을 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+            limit -> 반환할 최근 주문 최대 개수
+        반환값: 최근 전체 OrderResult tuple
+        작성 날짜: 2026/08/31
         """
         ...
 
@@ -918,11 +997,19 @@ class APIGateway:
         provides_rules_operation = callable(
             getattr(rest_client, "fetch_symbol_trading_rules", None)
         )
+        provides_account_filters_operation = callable(
+            getattr(rest_client, "get_account_filters", None)
+        )
+        provides_reference_price_operation = callable(
+            getattr(rest_client, "fetch_reference_price", None)
+        )
         if rest_client is None or not (
             provides_kline_operation
             or provides_account_operation
             or provides_order_operation
             or provides_rules_operation
+            or provides_account_filters_operation
+            or provides_reference_price_operation
         ):
             raise TypeError(
                 "rest_client must provide a supported REST operation"
@@ -1075,6 +1162,137 @@ class APIGateway:
             raise ValueError("symbol trading rules do not match request")
 
         return rules
+
+    def fetch_account_asset_filters(
+        self,
+        symbol: str,
+    ) -> tuple[AccountAssetFilter, ...]:
+        """
+        함수 이름: fetch_account_asset_filters()
+        기능: signed myFilters raw 응답을 strict MAX_ASSET tuple로 정규화한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 해당 계정과 symbol에 적용되는 AccountAssetFilter tuple
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        get_account_filters = getattr(
+            self._rest_client,
+            "get_account_filters",
+            None,
+        )
+        if not callable(get_account_filters):
+            raise TypeError("rest_client must provide get_account_filters")
+
+        # Raw USER_DATA payload는 Gateway 밖으로 내보내지 않고 credential-free DTO로만 축약한다.
+        return parse_account_asset_filters(
+            get_account_filters(symbol=normalized_symbol),
+            normalized_symbol,
+        )  # 다른 account scope도 strict parser를 통과한 MAX_ASSET projection만 반환한다.
+
+    def fetch_account_relevant_filters(
+        self,
+        symbol: str,
+    ) -> AccountRelevantFilters:
+        """
+        함수 이름: fetch_account_relevant_filters()
+        기능: signed myFilters 세 scope를 raw JSON 없는 strict composite DTO로 정규화한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 해당 account와 symbol의 AccountRelevantFilters
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        get_account_filters = getattr(
+            self._rest_client,
+            "get_account_filters",
+            None,
+        )
+        if not callable(get_account_filters):
+            raise TypeError("rest_client must provide get_account_filters")
+
+        # 세 scope를 함께 parse해 non-empty symbol/exchange filter도 type별로 검증한다.
+        return parse_account_relevant_filters(
+            get_account_filters(symbol=normalized_symbol),
+            normalized_symbol,
+        )  # Raw mapping 대신 세 scope가 결속된 immutable DTO만 반환한다.
+
+    def has_any_exchange_open_orders(self) -> bool:
+        """
+        함수 이름: has_any_exchange_open_orders()
+        기능: all-symbol signed openOrders의 non-empty 여부를 exact bool로 반환한다.
+        인자: 없음
+        반환값: account 전체 open order가 하나라도 있으면 True
+        작성 날짜: 2026/08/31
+        """
+        # Port capability와 반환 type을 함께 검증해 누락·malformed 상태를 empty로 완화하지 않는다.
+        read_open_state = getattr(
+            self._rest_client,
+            "has_any_exchange_open_orders",
+            None,
+        )
+        if not callable(read_open_state):
+            raise TypeError(
+                "rest_client must provide has_any_exchange_open_orders"
+            )
+        has_open_orders = read_open_state()
+        if type(has_open_orders) is not bool:
+            raise TypeError("exchange open order state must be a bool")
+
+        return has_open_orders  # Order mapping과 ID는 Gateway 경계 밖으로 내보내지 않는다.
+
+    def has_any_exchange_open_order_lists(self) -> bool:
+        """
+        함수 이름: has_any_exchange_open_order_lists()
+        기능: signed openOrderList의 non-empty 여부를 exact bool로 반환한다.
+        인자: 없음
+        반환값: account 전체 open order list가 하나라도 있으면 True
+        작성 날짜: 2026/08/31
+        """
+        # 전용 order-list reader의 존재와 exact bool 결과를 각각 확인해 fail-closed로 전달한다.
+        read_open_list_state = getattr(
+            self._rest_client,
+            "has_any_exchange_open_order_lists",
+            None,
+        )
+        if not callable(read_open_list_state):
+            raise TypeError(
+                "rest_client must provide has_any_exchange_open_order_lists"
+            )
+        has_open_order_lists = read_open_list_state()
+        if type(has_open_order_lists) is not bool:
+            raise TypeError("exchange open order list state must be a bool")
+
+        return has_open_order_lists  # List ID나 child order raw payload는 반환하지 않는다.
+
+    def fetch_reference_price(
+        self,
+        symbol: str,
+    ) -> ReferencePrice:
+        """
+        함수 이름: fetch_reference_price()
+        기능: public REST port의 non-null reference price를 exact DTO와 symbol에 결속한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: canonical symbol에 해당하는 ReferencePrice
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        fetch_reference_price = getattr(
+            self._rest_client,
+            "fetch_reference_price",
+            None,
+        )
+        if not callable(fetch_reference_price):
+            raise TypeError("rest_client must provide fetch_reference_price")
+
+        # REST parser의 exact DTO만 허용하고 요청하지 않은 symbol 응답은 별도로 차단한다.
+        reference_price = fetch_reference_price(symbol=normalized_symbol)
+        if type(reference_price) is not ReferencePrice:
+            raise TypeError(
+                "fetch_reference_price must return ReferencePrice"
+            )
+        if reference_price.symbol != normalized_symbol:
+            raise ValueError("reference price does not match request")
+
+        return reference_price  # 요청 symbol과 일치한 exact DTO만 caller에 전달한다.
 
     def get_order_preparation_filter_evidence(
         self,
@@ -1362,6 +1580,34 @@ class APIGateway:
             "open order",
         )
 
+    def list_all_open_order_results(
+        self,
+        symbol: str,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_all_open_order_results()
+        기능: 실제 계정 격리 검증을 위해 상품의 모든 client ID 미결 주문을 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 정규화된 현재 전체 미결 OrderResult tuple
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        list_all_open_results = getattr(
+            self._rest_client,
+            "list_all_open_order_results",
+            None,
+        )
+        if not callable(list_all_open_results):
+            raise TypeError("rest_client must provide all-open-order query")
+
+        # 안전 preflight surface는 capability 부재를 빈 계정으로 완화하지 않고 전체 collection을 검증한다.
+        results = list_all_open_results(symbol=normalized_symbol)
+        return self._validate_order_result_collection(
+            normalized_symbol,
+            results,
+            "all open order",
+        )  # Manual client ID까지 포함한 검증 완료 tuple만 preflight에 제공한다.
+
     def list_recent_order_results(
         self,
         symbol: str,
@@ -1399,6 +1645,43 @@ class APIGateway:
             results,
             "recent order",
         )
+
+    def list_all_recent_order_results(
+        self,
+        symbol: str,
+        limit: int = 100,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_all_recent_order_results()
+        기능: 실제 계정 격리 delta를 위해 모든 client ID의 최근 주문 결과를 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+            limit -> 반환할 최근 주문 최대 개수
+        반환값: 정규화된 최근 전체 OrderResult tuple
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("limit must be an integer")
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        list_all_recent_results = getattr(
+            self._rest_client,
+            "list_all_recent_order_results",
+            None,
+        )
+        if not callable(list_all_recent_results):
+            raise TypeError("rest_client must provide all-recent-order query")
+
+        # Prefix 없는 recent collection도 symbol과 immutable OrderResult 계약 전체를 통과시킨다.
+        results = list_all_recent_results(
+            symbol=normalized_symbol,
+            limit=limit,
+        )
+        return self._validate_order_result_collection(
+            normalized_symbol,
+            results,
+            "all recent order",
+        )  # Prefix 없는 recent 결과도 같은 immutable collection 계약으로 반환한다.
 
     @staticmethod
     def _validate_order_result_collection(

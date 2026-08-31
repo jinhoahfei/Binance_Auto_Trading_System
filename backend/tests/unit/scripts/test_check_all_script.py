@@ -48,6 +48,12 @@ class CheckAllScriptTests(unittest.TestCase):
                 "BINANCE_TESTNET_API_KEY": "secret-key-canary",
                 "BINANCE_TESTNET_API_SECRET": "secret-value-canary",
                 "BINANCE_TESTNET_MAX_NOTIONAL": "999",
+                "BINANCE_TESTNET_BASELINE_HISTORY_PATH": "path-canary",
+                "BINANCE_TESTNET_BASELINE_HISTORY_FD": "31",
+                "BINANCE_TESTNET_BASELINE_HISTORY_SHA256": "digest-canary",
+                "BINANCE_TESTNET_BASELINE_PENDING_FD": "32",
+                "BINANCE_TESTNET_BASELINE_PENDING_SHA256": "pending-canary",
+                "PYTHONWARNINGS": "ignore",
             }
         )
         list_result = subprocess.run(
@@ -66,6 +72,8 @@ class CheckAllScriptTests(unittest.TestCase):
             list_result.stdout,
         )
         self.assertIn("testnet-credentials-and-cap=unset", list_result.stdout)
+        self.assertIn("testnet-baseline-evidence=unset", list_result.stdout)
+        self.assertIn("PYTHONWARNINGS=error", list_result.stdout)
         self.assertIn("backend-unittests", list_result.stdout)
         self.assertIn("ui-contract-drift-check", list_result.stdout)
         self.assertIn("phase13-deterministic-replay", list_result.stdout)
@@ -139,6 +147,7 @@ class CheckAllScriptTests(unittest.TestCase):
             self.assertIn("phase13_readiness.py gate", command_lines[18])
             for command_line in command_lines:
                 self.assertIn("|0|0|unset|unset|unset|", command_line)
+                self.assertIn("|unset|error|", command_line)
             self.assertIn(
                 "check_all: PASS: all local no-order readiness checks completed.",
                 result.stdout,
@@ -469,11 +478,19 @@ class CheckAllScriptTests(unittest.TestCase):
 key_state=${BINANCE_TESTNET_API_KEY+set}
 secret_state=${BINANCE_TESTNET_API_SECRET+set}
 public_case2_state=${BINANCE_RUN_PHASE13_PUBLIC_CASE2+set}
-printf '%s|%s|%s|%s|%s|%s|%s|%s\\n' \
+baseline_state=unset
+if [ "${BINANCE_TESTNET_BASELINE_HISTORY_PATH+set}" = "set" ] || \
+    [ "${BINANCE_TESTNET_BASELINE_HISTORY_FD+set}" = "set" ] || \
+    [ "${BINANCE_TESTNET_BASELINE_HISTORY_SHA256+set}" = "set" ] || \
+    [ "${BINANCE_TESTNET_BASELINE_PENDING_FD+set}" = "set" ] || \
+    [ "${BINANCE_TESTNET_BASELINE_PENDING_SHA256+set}" = "set" ]; then
+    baseline_state=set
+fi
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n' \
     "$(basename "$0")" "$PWD" "$BINANCE_RUN_TESTNET" \
     "$BINANCE_RUN_TESTNET_ORDERS" "${key_state:-unset}" \
     "${secret_state:-unset}" "${public_case2_state:-unset}" \
-    "$*" >> "$PHASE13_COMMAND_LOG"
+    "$baseline_state" "$PYTHONWARNINGS" "$*" >> "$PHASE13_COMMAND_LOG"
 if [ -n "${PHASE13_FAKE_FAIL_MATCH:-}" ]; then
     case "$*" in
         *"$PHASE13_FAKE_FAIL_MATCH"*) exit 9 ;;
@@ -520,10 +537,16 @@ exit 0
                 "BINANCE_TESTNET_API_KEY": "must-be-unset",
                 "BINANCE_TESTNET_API_SECRET": "must-also-be-unset",
                 "BINANCE_TESTNET_MAX_NOTIONAL": "1000",
+                "BINANCE_TESTNET_BASELINE_HISTORY_PATH": "must-be-unset",
+                "BINANCE_TESTNET_BASELINE_HISTORY_FD": "41",
+                "BINANCE_TESTNET_BASELINE_HISTORY_SHA256": "must-be-unset",
+                "BINANCE_TESTNET_BASELINE_PENDING_FD": "42",
+                "BINANCE_TESTNET_BASELINE_PENDING_SHA256": "must-be-unset",
+                "PYTHONWARNINGS": "ignore",
             }
         )
         return environment
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main()  # Direct 실행도 hostile environment 격리와 fail-fast 순서를 모두 검증한다.

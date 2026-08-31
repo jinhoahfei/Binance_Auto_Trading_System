@@ -8,7 +8,7 @@
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
 | 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. Phase 13은 2026-08-29 기준 장애 복구, configured-unbounded 위험 정책, `CANCEL_AND_LIQUIDATE`, 30분 EMA9/OLS production 계산, 전 interval 원자 경계와 public local Case 2를 구현했고 Communication `126/126`, 실제 native picker 선택·취소와 actual-browser axe `16/16 Violations 0`을 검증했다. 다만 Phase 13 actual Testnet order trace, visual SSIM `4/16` PASS·`12/16` FAIL 및 third-party supply-chain `NO_GO`가 남았다. 따라서 Phase 9와 Phase 12 master만 `[x]`이고 Phase 13과 live는 별도 승인 전까지 잠겨 있다. |
-| 2026-08-31 갱신 | Phase 13 actual 전용 target의 absolute BUY cap, 세 번째 opt-in, exact BUY→STOP SELL permit, 주문 POST 1회, process lease, real `1L.1`→`1L.3` observer, exact order trace, known-safe failure recovery와 atomic secret-free artifact를 구현했다. 주문 없는 Backend `901`(8 safe skip), scripts `169/169`, UI `373/373`, Rust `40/40`을 통과했다. 이번 session의 Keychain credential 읽기·signed request·Testnet 주문은 모두 0건이다. Current signed preflight/단일 actual Case 2는 명시적 사용자 승인 대기, visual `4/16`, supply/readiness `NO_GO`이므로 최종 `check_all.sh`는 예상대로 exit `1`이고 Phase 13과 live는 계속 `[ ]`/disabled다. 최신 재개 계약은 §16.14다. |
+| 2026-08-31 최신 갱신 | 공식 `/myFilters`의 공개 평가 가능 symbol filter 15종·exchange count 4종·`MAX_ASSET`을 strict composite DTO/evaluator로 구현하고 Testnet SBE-only `T_PLUS_SELL`은 fail closed했다. 각 prepare는 all-symbol open order/list exact empty, signed/public overlap과 가장 이른 관찰부터 고정 30초를 요구하며 transport before-send guard가 attempt evidence와 POST 경계를 결속한다. 외부 실행 시점 source의 secure read-only는 `4/4` PASS했지만 actual 1회가 durable BUY 전 reconciliation-required로 `FAILED`했다. 해당 process의 app-attributable submission attempt·POST delegate·BUY·STOP SELL·durable Trade는 0건이나 fresh verification은 `INCOMPLETE`다. 그 뒤 보강한 current tree는 외부 미결속이며 Backend `940/940`(8 safe skip), scripts `183/183`, runner `14/14`, current 집중 `102`(4 safe skip), Communication `126/126`을 통과했다. Visual `4/16`, supply/readiness `NO_GO`이므로 Phase 13과 live는 계속 `[ ]`/disabled이며 최신 재개 계약은 §16.17이다. |
 
 ---
 
@@ -3108,4 +3108,645 @@ read-only suite 뒤 단일 public Case 2 target만 직렬 실행하라. NO_SIGNA
 16/16, local-only supply/license/final notice와 current source-bound app/DMG를 마감하라. 마지막
 no-order scripts/check_all.sh exit 0 전에는 Phase 13을 완료하지 말고, 별도 live 승인 전 live를
 계속 disabled로 유지하라.
+```
+
+### 16.15 2026-08-31 승인 후 실행 결과와 다음 세션 지침 — 최신 authoritative handoff
+
+이 subsection은 같은 날짜 §16.14.3의 사용자 승인을 실제로 집행한 결과를 반영한 **현재 유일한
+재개 기준**이다. §16.12의 확정 정책·수식과 §16.14.2의 안전 경계는 보존하되, §16.14.1의 source,
+외부 실행 수와 §16.14.3~§16.14.6의 승인 대기 상태·요청문보다 우선한다. Actual P13-04는
+`NO_SIGNAL`이므로 완료되지 않았고 Phase 13 master와 live는 계속 `[ ]`/disabled다.
+
+#### 16.15.1 재개 시점의 정확한 상태
+
+| 항목 | 현재 사실 | 다음 판정 |
+|---|---|---|
+| Source | HEAD `cda0a536575646a6dbd79fc53cb206e00a644ec4` 위 dirty working tree. Account/reference filter, trace v2, secure runner, test와 architecture/readiness 문서 변경이 미커밋 | 기존 변경과 actual artifact를 reset/checkout/clean/자동 commit하지 않는다 |
+| 사용자 승인 | §16.14.3의 Keychain memory-only 조회, 고정 Testnet signed read-only와 최대 `100 USDT` actual one-shot 세 범위를 모두 승인받아 이번 실행에 사용 | Actual 1회가 종료됐으므로 이 승인을 자동 재시도 권한으로 재사용하지 않는다 |
+| Current read-only | Baseline 없는 첫 target은 `open=0`, `recent=6`을 관찰한 뒤 reconciliation에서 fail closed. Verified closed 6줄 history를 결속한 두 번째 target은 실행 당시 source에서 `4/4` PASS, 다시 `open=0`, `recent=6`. 이후 non-empty exchange/symbol relevant filter fail-close를 추가해 source가 진전됨 | Preserved account/baseline 결과는 zero-mutation 기록으로 보존하되 current-source release binding으로 승격하지 않는다. 새 actual 시각에는 signed preflight를 다시 통과해야 함 |
+| Actual Phase 13 Testnet | Exact target 1회, 180초 자연 signal 부재로 sealed schema v2 `NO_SIGNAL`; actual order/attempt/result/durable trade 0, fresh Position/pending/unknown/open 0 | P13-04 actual SUCCESS가 아니므로 가장 앞선 blocker 유지. Private seam·threshold patch·자동 재시도 금지 |
+| 당시 Local 구현 | Unit `610/610`, trace/Testnet opt-in-off `46`(network 4 skip), 관련 integration `11/11`, secure runner `12/12`, coding-convention `2/2`, `git diff --check` PASS | §16.16의 post-run 최신 수치와 구분해 historical snapshot으로만 보존 |
+| Visual | 별도 fresh actual-browser 확인도 기존과 같은 `4/16` PASS·`12/16` FAIL, addon-a11y `16/16 Violations 0` | `NO_SIGNAL` stop condition으로 UI는 수정하지 않았고 visual `NO_GO` 유지 |
+| Supply | Exact SBOM 868, third-party 866의 local declaration 494·`NOASSERTION` 372, local DB/final notice/current binding 공백 | 이번 stop 뒤 실행하지 않았고 `NO_GO` 유지. 외부 OSV 전송 금지 |
+| Live | live credential·endpoint·주문 0건, 세 경계 모두 disabled | 별도 사용자 live 승인 전 계속 disabled |
+
+#### 16.15.2 이번 작업에서 구현한 공식 Testnet filter 경계
+
+- [x] Binance Spot Testnet 공식 REST 문서의 signed `GET /api/v3/myFilters` exact 응답
+  `exchangeFilters`/`symbolFilters`/`assetFilters`와 `MAX_ASSET`의 `filterType`/`asset`/`limit`을
+  strict DTO/parser로 구현했다. 예상하지 못한 top-level/item field, filter type, 중복·symbol 외 asset은
+  fail closed한다. 공식 예시처럼 exchange/symbol collection에 account-relevant filter가 존재하면
+  현재 해당 filter type의 exact evaluator로 증명할 수 없으므로 이를 무시하지 않고 주문 전에
+  fail closed한다.
+- [x] Public `GET /api/v3/referencePrice`의 exact `symbol`/`referencePrice`/`timestamp`를 strict
+  `ReferencePrice`로 구현했다. Null, zero, non-finite, symbol mismatch와 schema drift는 주문 전에
+  거부하고 추정 VWAP이나 decision price로 대체하지 않는다.
+- [x] MARKET notional과 quote `MAX_ASSET`은 같은 fresh non-null reference price를 사용한다.
+  `MAX_ASSET`은 side와 무관하게 base에는 submitted quantity, quote에는 reference notional을 적용한다.
+  다른 asset filter는 symbol mismatch로 차단한다.
+- [x] `exchangeInfo`의 `MAX_POSITION` exact `filterType`/`maxPosition`을 파싱한다. 현재 target은 free,
+  locked와 open BUY exposure를 완전히 계산하지 않으므로 BUY에서 이 filter가 존재하면 preflight와
+  submit 모두 fail closed하고 SELL에는 잘못 적용하지 않는다.
+- [x] Signed account filter, public symbol rule과 reference price를 preflight와 매 submit 직전에 다시
+  조회하고 각각의 fetch 완료 UTC 관찰 시각을 evidence에 보존한다. Freshness는 local GET 완료
+  `observed_at`의 인과관계로 증명하며 reference payload timestamp에 임의 60초 제한을 만들지 않는다.
+- [x] Trace schema를 v2로 올려 preflight/submit-time account asset filter, reference price,
+  `MAX_POSITION`과 각 관찰 시각을 exact schema로 결속했다. Missing/unknown field, version drift,
+  BUY/SELL base·quote `MAX_ASSET`, null/stale provenance negative test를 추가했다.
+- [x] `scripts/run_testnet_from_keychain.py`는 macOS Keychain service
+  `com.binance-auto.trader.testnet`, accounts `api-key`/`api-secret`만 `/usr/bin/security` captured
+  stdout으로 읽는다. Core dump off, umask `077`, mutable buffer zeroize, generic error와 최소 child env,
+  fixed unittest module을 사용하며 credential을 argv/file/stdout/예외에 넣지 않는다. Read-only mode는
+  order opt-in과 cap을 제거하고 actual mode만 exact 세 opt-in과 cap `100`을 설정한다.
+- [x] Communication Diagram Case 2와 ADR-006에 signed myFilters/referencePrice, `MAX_ASSET`,
+  `MAX_POSITION` fail-close 및 traceability를 동기화했다. Class/function docstring과 한국어 블록·문장
+  주석을 포함한 coding-convention architecture test `2/2`를 통과했다.
+
+위 구현은 2026-08-31 확인한 공식
+[Spot Test Network REST API](https://developers.binance.com/en/docs/products/spot/testnet/rest-api)와
+[Spot filters](https://github.com/binance/binance-spot-api-docs/blob/master/filters.md)를 기준으로 한다.
+고정 Testnet REST base는 `https://testnet.binance.vision/api`이며 signed parameter는 percent-encode 뒤
+HMAC한다. Binance 계약이 달라지면 fixture·ADR·code/test를 먼저 갱신하고 external target을 중단한다.
+
+#### 16.15.3 exact 외부 실행과 보존 증거
+
+Secure runner child는 read-only 두 번과 actual 한 번, 합계 3회 실행됐다. 각 child가 고정 Keychain
+item 두 개를 한 번씩 읽었으므로 Keychain lookup은 정확히 `6`건이다. Credential-safe runner는 raw
+request/stream payload logging을 하지 않으므로 개별 REST/WebSocket wire call 수를 별도 수치로
+주장하지 않는다. Signed external target은 3회이고 mutation 수는 아래 trace로 정확히 0이다.
+
+1. Baseline 없는 read-only target은 `PHASE13_READ_ONLY_BASELINE open_order_count=0
+   recent_order_count=6`을 출력한 뒤 empty history가 기존 app-owned execution을 설명하지 못해
+   `StartupOrderReconciliationError`로 fail closed했다. `Ran 4`, error 1, 주문 0건이다.
+2. 다음 regular file을 optional baseline으로 검증했다.
+   - 경로: `backend/.testnet-artifacts/phase9-cold-restart-20260824T094110991260Z-edea774ca29f43ffbddb37fc88205b38/history.jsonl`
+   - 줄 수: `6`
+   - SHA-256: `7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34`
+3. 같은 read-only target을 baseline과 다시 실행해 `4/4` PASS했고 `open=0`, `recent=6`이 재현됐다.
+   Account, commission, signed `/myFilters`, public symbol/reference rule, balance, recent/open order,
+   signed account stream, public Kline stream과 startup reconciliation이 mutation 전에 통과했다.
+4. 동일 baseline, exact 세 opt-in과 cap `100`으로 actual module을 정확히 한 번 실행했다. Helper
+   16개가 통과한 뒤 actual target은 180초 동안 자연 Lower-BB Case C signal이 없어 의도된 non-zero
+   `NO_SIGNAL`로 종료했다. Private Action, threshold patch, direct state 주입, retry와 주문은 없다.
+5. Preserved artifact directory는
+   `backend/.testnet-artifacts/phase13-public-case2-20260831T065832120542Z-4cb81b390000444fa09861215588317e/`이다.
+   `phase13-public-case2-trace.json`의 canonical body digest는
+   `621c99c8e5cd71d5c86b64f4bc00efa4d77cadb6d779962645c1f1749bb60203`, digest field를 포함한
+   file SHA-256은 `31880863a3244f2189af9b0446d3bbfd5df39c231836dc0baeeaf8dbf668dcba`다.
+   둘은 서로 다른 입력을 hash하므로 달라야 하며 local trace validator가 body digest/schema를 다시
+   통과했다.
+6. Schema v2 trace는 `outcome=NO_SIGNAL`, baseline history 6, order attempt/result/durable trade/
+   submit-time filter evidence 0을 기록한다. Recovery는 `NOT_REQUIRED`이고 fresh final actual order,
+   duplicate order/trade, pending, unknown, matching open order와 Position은 모두 0이다.
+7. External 실행 뒤 공식 `/myFilters` 예시의 non-empty `exchangeFilters`와 `symbolFilters`도 account에
+   relevant한 제약임을 최종 감사에서 확인했다. 현재 source는 evaluator 없이 이를 무시하지 않고
+   fail closed하도록 보강했으며 local regression만 다시 실행했다. 실제 주문이 0이었던 preserved
+   trace의 안전 판정은 변하지 않지만, 앞의 external 결과는 이 최종 source의 release binding이 아니다.
+
+#### 16.15.4 현재 blocker와 중단 판정
+
+Natural public Case C signal이 없어 실제 exchange BUY/fill→exact STOP SELL, 두 durable Trade,
+History/Performance/UI publication 증거가 생성되지 않았다. `NO_SIGNAL`은 안전한 expected outcome이지만
+P13-04 PASS가 아니므로 Phase 13 master와 live release를 완료 처리하지 않는다.
+
+§16.14.5에 따라 이 one-shot 뒤 다음 작업을 실행하지 않았다.
+
+- Actual target을 같은 승인으로 재시도하지 않았다. Timeout/5xx/persistence fault 주문도 실행하지 않았다.
+- Visual 원인 순서 수정과 fresh 16-state capture를 시작하지 않았다. 기존 `4/16`·axe `16/16`을 보존한다.
+- Local-only supply/license/final notice와 current app/DMG/source binding을 시작하지 않았다.
+- Source가 actual evidence 뒤 변경된 상태에서 aggregate를 오해하지 않도록 최종
+  `scripts/check_all.sh`를 실행하지 않았다. 이전 aggregate `NO_GO`를 PASS로 바꾸지 않는다.
+- Live endpoint, live credential, live order, 24시간 soak와 외부 OSV/network 전송을 실행하지 않았다.
+
+현재 one-shot actual 승인은 정확히 한 번 사용돼 종료됐다. 다른 시각의 새 external execution은
+자동 재개 범위가 아니다. 다시 실행하려면 예상 signed target과 최대 주문 수·노출을 제시하고 아래
+세 범위를 사용자에게 새로 명시 승인받는다.
+
+1. 같은 고정 Keychain item 두 개를 한 secure child memory로만 조회
+2. 코드에 고정된 Binance Spot Testnet으로 signed read-only preflight 전송
+3. Preflight 통과 시 `ETHUSDT` 최대 `100 USDT` BUY 1회와 same-run exact Position STOP SELL 1회
+
+#### 16.15.5 다음 세션의 exact 실행 순서
+
+1. §1, 이 §16.15, Communication Diagram Case 2, Lower BB 명세, ADR-002/003/005/006과
+   `CODING_CONVENTIONS.md` 전체를 읽는다. HEAD와 `git status --short`를 기록하고 현재 dirty source,
+   baseline과 `NO_SIGNAL` artifact를 reset/checkout/clean/자동 commit하지 않는다.
+2. External 동작 없이 §16.15.3의 artifact가 regular 0600 file인지, file SHA-256과 canonical body
+   digest/schema, order/Position/pending/open zero-state가 일치하는지 확인한다. Credential이나 raw
+   payload를 trace에 추가하지 않는다.
+3. 사용자에게 §16.15.4의 새 one-shot 세 범위를 명시적으로 승인받는다. 승인 전에는 Keychain,
+   signed Testnet request와 주문을 실행하지 않는다. 현재 `NO_SIGNAL`을 성공으로 승격하거나 이전
+   승인을 재사용하지 않는다.
+4. 승인 후 공식 Testnet REST/filter/User Data Stream 계약을 다시 확인한다. Contract drift가 없고
+   local unit/trace/runner/convention 회귀가 통과한 경우에만 secure runner의 `read-only` mode를 위
+   verified baseline으로 실행한다. `open=0`, `recent=6`, fresh Position/pending/unknown 0, commission,
+   myFilters/referencePrice/MAX_POSITION와 두 stream READY 중 하나라도 불일치하면 중단한다. 특히
+   해당 filter type의 exact evaluator가 없는 동안 non-empty exchange/symbol relevant filter 응답은
+   중단 조건이다.
+5. 다른 Testnet process/account activity를 배제한 뒤 secure runner의 `phase13-public-case2` mode를
+   같은 baseline으로 정확히 한 번 실행한다. Natural signal이 없으면 주문 0의 새 `NO_SIGNAL`을
+   seal하고 다시 중단한다. `BLOCKED/UNKNOWN/FAILED`도 재시도하지 않고 artifact를 보존한다.
+6. Actual `SUCCESS`가 exact BUY→STOP SELL 두 주문/Trades와 fresh zero exposure로 닫힌 경우에만
+   §16.13.7 순서로 visual 12 mismatch를 수정해 SSIM `16/16 >= 0.980000`과 actual-browser axe
+   `16/16 Violations 0`을 만든다. Baseline/threshold/policy 완화는 금지한다.
+7. 그 뒤에만 §16.13.8의 local-only supply/license/final notice/current Phase 13 app/DMG/source
+   binding을 마감한다. Local DB·법적 근거가 없으면 `NO_GO`를 유지한다. 마지막에 모든 증거가 같은
+   source를 가리킬 때 credential/cap/order opt-in 없는 `scripts/check_all.sh` exit `0`을 확인하고서만
+   Phase 13을 완료한다. Live는 별도 승인 전 disabled다.
+
+#### 16.15.6 다음 세션에 그대로 사용할 요청문
+
+```text
+/Users/oscar/Desktop/Binance_Auto/INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §1과 전체 문서,
+특히 최신 authoritative handoff인 §16.15를 먼저 읽고 Phase 13 P13-04부터 이어서 작업하라.
+Communication Diagram Case 2, Lower_bb 명세, ADR-002/003/005/006과 CODING_CONVENTIONS.md 전체를
+읽고 블록 주석 및 문장 주석까지 정확히 지켜라. HEAD cda0a536575646a6dbd79fc53cb206e00a644ec4
+위 dirty working tree와 기존 [x], baseline 및 NO_SIGNAL artifact를 보존하고 reset/checkout/clean/
+자동 commit하지 마라.
+
+2026-08-31 current signed read-only는 verified closed 6줄 baseline에서 4/4 PASS했지만, actual public
+Case 2 one-shot은 180초 natural signal 부재로 schema v2 NO_SIGNAL, 실제 주문·attempt·result·durable
+trade 0과 final Position/pending/unknown/open 0을 남겼다. Trace는
+backend/.testnet-artifacts/phase13-public-case2-20260831T065832120542Z-4cb81b390000444fa09861215588317e/
+phase13-public-case2-trace.json이고 canonical body digest는
+621c99c8e5cd71d5c86b64f4bc00efa4d77cadb6d779962645c1f1749bb60203이다. 먼저 이 artifact의
+schema/hash/zero-state를 외부 동작 없이 재검증하라.
+
+External 실행 뒤 공식 myFilters 예시의 non-empty exchangeFilters/symbolFilters도 account-relevant
+제약임을 확인해 현재 source는 filter type별 evaluator 없이 이를 무시하지 않고 fail closed하도록
+진전됐다. 따라서
+앞의 read-only/NO_SIGNAL은 zero-mutation 기록으로 보존하되 current-source release evidence로
+승격하지 말고, 새 승인 뒤 current source로 read-only부터 다시 검증하라.
+
+이전 one-shot 승인은 이미 정확히 한 번 사용됐으므로 자동 재시도하지 마라. 새 actual 시도를 원하면
+사용자에게 ① 고정 Keychain Testnet credential의 memory-only 조회, ② 코드에 고정된 Binance Spot
+Testnet signed read-only preflight, ③ preflight 통과 시 ETHUSDT 신규 BUY 최대 100 USDT 1회와
+same-run exact Position STOP SELL 1회를 다시 명시 승인받아라. 승인 전에는 Keychain, signed request와
+주문을 실행하지 마라.
+
+새 승인 후에는 공식 Binance Testnet 문서를 재확인하고 secure runner read-only를 위 Phase 9
+baseline으로 통과한 뒤 exact actual target을 직렬로 한 번만 실행하라. NO_SIGNAL/BLOCKED/UNKNOWN/
+FAILED를 성공으로 승격하거나 private seam, threshold patch, direct state 주입, 추가 fault 주문·재시도로
+우회하지 마라. Actual SUCCESS가 완결된 뒤에만 visual SSIM 16/16과 axe 16/16, 외부 OSV 전송 없는
+local-only supply/license/final notice/current app·DMG source binding을 순서대로 마감하라. 마지막
+no-order scripts/check_all.sh exit 0 전에는 Phase 13을 완료하지 말고, 별도 live 승인 전 live를
+계속 disabled로 유지하라.
+```
+
+### 16.16 2026-08-31 실행 시점 preflight fail-close와 post-run hardening — 최신 authoritative handoff
+
+이 subsection은 §16.15.6의 요청을 실행한 최신 결과이며, **다음 세션의 유일한 재개 기준**이다.
+§16.12의 확정 정책과 §16.15의 기존 `NO_SIGNAL` artifact는 보존하되, §16.15의 외부 상태·회귀
+수치·재개 순서보다 이 절이 우선한다. 이번 signed read-only preflight는 실행 시점 source에서
+통과하지 않았고 조건부 actual target은 시작하지 않았다. 그 뒤 all-client recent identity 결속과
+실패 출력 redaction을 local-only로 더 보강했으므로 이 외부 결과는 현재 작업트리의 release binding도
+아니다. 따라서 P13-04, Phase 13 master와 live는 계속 `GAP`/`NO_GO`/disabled다.
+
+#### 16.16.1 이번 승인 범위와 정확한 중단 결과
+
+사용자는 이번 session에 한해 다음 세 범위를 모두 승인했다.
+
+1. macOS Keychain service `com.binance-auto.trader.testnet`의 고정 accounts `api-key`와
+   `api-secret`을 secure child memory로만 조회
+2. 코드에 고정된 Binance Spot Testnet endpoint로 signed read-only preflight 전송
+3. 위 preflight가 통과한 경우에만 `ETHUSDT` 신규 BUY decision notional 최대 `100 USDT` 1회와
+   same-run exact Position의 STOP SELL 1회
+
+Secure runner의 `read-only` mode를 verified baseline으로 정확히 한 번 실행했다. 고정 Keychain item
+lookup은 `2`건이고 signed external target은 `1`회다. §16.15의 보존 실행까지 합친 누적은 secure
+child `4`회, Keychain lookup `8`건, signed external target `4`회이며 누적 주문 mutation도 `0`건이다.
+Credential 값·길이·부분문자열은 argv, stdout, artifact와 예외에 기록하지 않았으며 order opt-in
+두 개는 `0`, actual cap은 child 환경에서 unset이었다.
+
+첫 test `test_account_kline_and_order_queries_use_normalized_contracts`에서 signed `/api/v3/myFilters`
+응답의 non-empty `symbolFilters`를 현재 strict parser/evaluator가 증명할 수 없어
+`BinancePayloadError: symbolFilters contains unsupported relevant filters`로 fail closed했다. 결과는
+`Ran 1 test`, error `1`, 약 `0.258s`, process exit `1`이다. Failfast 때문에 all-client
+`openOrders`/`allOrders`, startup reconciliation과 두 stream READY 검증에는 도달하지 않았다. 그러므로
+이번 target에 대해 current open/recent count나 stream READY를 주장하지 않는다.
+
+Preflight 통과 조건이 거짓이므로 actual child는 `0`회, 신규 BUY `0`건, STOP SELL `0`건, order
+attempt/result/durable Trade `0`건이다. 새 actual artifact도 생성되지 않았다. 같은 승인으로 read-only나
+actual을 재시도하지 않았고 live endpoint·live credential·live 주문·24시간 soak·외부 OSV 전송도
+실행하지 않았다.
+
+#### 16.16.2 이번 작업에서 닫은 실행 격리와 증거 경계
+
+- [x] Baseline history와 pending journal을 Keychain 조회 전에 각각 owner-only regular file,
+  same UID, link count `1`, path/inode, pre/post stat와 SHA-256으로 검증하고 `O_NOFOLLOW` descriptor로
+  pin한다. Child에는 path 대신 inherited FD와 expected digest만 전달한다.
+- [x] Baseline history는
+  `backend/.testnet-artifacts/phase9-cold-restart-20260824T094110991260Z-edea774ca29f43ffbddb37fc88205b38/history.jsonl`,
+  `6`줄, SHA-256
+  `7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34`, mode `0600`이다.
+- [x] Pending journal은 같은 directory의 `history.jsonl.pending-orders.jsonl`, `4`줄, SHA-256
+  `61a3545a829525eadbaccdd7c6ba56afc186e8b3a3db0c636f9f79bbb6c4e265`, mode `0600`이다. Semantic
+  replay는 active pending `0`, `ETHUSDT` Position `0`을 확인한다. Staging에는 canonical Trade
+  6줄만 복사해 과거 제거 완료 journal을 이번 run의 submission으로 세지 않는다.
+- [x] Secure runner는 helper suite를 actual suite보다 먼저 배치하고 unittest `-f`를 사용한다.
+  Helper/preflight 하나라도 실패하면 actual test는 로드됐더라도 실행되지 않는다.
+- [x] Account isolation은 `bat-` prefix만이 아니라 모든 client ID의 signed
+  `GET /api/v3/openOrders?symbol=ETHUSDT`와
+  `GET /api/v3/allOrders?symbol=ETHUSDT&limit=1000`을 검증하도록 확장했다. Open은 empty여야 하고
+  recent `(exchange order ID, client order ID)` exact set은 verified closed Trade identity set과
+  같아야 하며 fresh baseline이면 recent도 empty여야 한다. Missing/duplicate/client mismatch/manual
+  extra는 actual mutation 전에 고정 문장으로 차단하고 failure output에 ID·fill·가격·domain repr를
+  반사하지 않는다. Production actual 경로 canary는 regime/split/start와 direct
+  submit/sell-all/cancel의 여섯 mutation surface가 모두 `0`회임을 확인했다.
+- [x] `scripts/check_all.sh`는 `PYTHONWARNINGS=error`를 강제하고 credential, cap, 세 Testnet 실행 opt-in,
+  baseline path/FD/SHA 환경을 제거한다. Hostile parent environment가 no-order aggregate와 baseline
+  증거를 오염시키지 못한다.
+- [x] 공식 `MAX_ASSET` 의미를 정정했다. 이는 account-wide exposure가 아니라 단일 주문에 대한
+  transaction limit이며 base asset이면 order quantity, quote asset이면 reference price를 적용한
+  order notional을 제한한다. 별도의 `MAX_POSITION`만 base balance와 open BUY quantity를 포함하는
+  account-wide position 제한이다. Unsupported `symbolFilters`는 타입을 추측하거나 통째로 무시하지
+  않고, 각 공식 filter 계약과 필요한 signed read-only state를 구현할 때까지 계속 fail closed한다.
+- [x] 변경 Python의 class/function docstring, 한국어 블록 주석과 문장 주석을 convention 검사와
+  수동 감사로 확인했다. 기존 dirty working tree와 artifact를 reset/checkout/clean/자동 commit하지
+  않았다.
+
+위 계약은 2026-08-31 확인한 공식
+[Spot Test Network REST API](https://developers.binance.com/en/docs/products/spot/testnet/rest-api),
+[Spot REST API](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md),
+[Spot filters](https://github.com/binance/binance-spot-api-docs/blob/master/filters.md),
+[User Data Stream](https://developers.binance.com/en/docs/products/spot/user-data-stream)과 Testnet stream
+문서를 기준으로 한다. Binance 계약이 달라지면 fixture·DTO·ADR·test를 먼저 갱신하고 external target을
+중단한다.
+
+#### 16.16.3 현재 source의 local 검증과 보존 artifact
+
+Credential, external Binance network와 order opt-in을 제거하고 local loopback만 허용한
+`PYTHONWARNINGS=error` 환경에서 다음을 통과했다.
+
+- Backend 전체 `923/923` OK, external Testnet `8` safe skip
+- Root/scripts 전체 `183/183` OK
+- Secure runner `14/14` OK
+- 변경 범위 API/Testnet/baseline/failfast/all-client/convention 집중 `168` OK,
+  external Testnet `4` safe skip
+- `/bin/sh -n scripts/check_all.sh`와 `git diff --check` PASS
+- 변경 Python 전체의 필수 docstring, tab, 블록·문장 주석 검사 PASS
+
+기존 `NO_SIGNAL` artifact는 삭제하거나 이번 실패의 actual evidence로 바꾸지 않는다. Preserved trace는
+`backend/.testnet-artifacts/phase13-public-case2-20260831T065832120542Z-4cb81b390000444fa09861215588317e/phase13-public-case2-trace.json`이며,
+canonical body digest는
+`621c99c8e5cd71d5c86b64f4bc00efa4d77cadb6d779962645c1f1749bb60203`, file SHA-256은
+`31880863a3244f2189af9b0446d3bbfd5df39c231836dc0baeeaf8dbf668dcba`, mode `0600`이다. Offline
+validator는 schema v2, `NO_SIGNAL`, attempt/result/run trade/Position/pending/unknown/open 모두 `0`과
+canonical bytes를 재확인했다. 이는 이전 source의 안전한 zero-mutation 기록이지 현재 source의 actual
+SUCCESS가 아니다.
+
+Visual은 source-bound가 아닌 fresh diagnostic에서도 `4/16` PASS·`12/16` FAIL이며 addon-a11y의
+historical actual-browser 결과는 `16/16 Violations 0`이다. Supply는 868 components, third-party 866,
+local declaration 494, `NOASSERTION` 372와 current local DB/final notice/app·DMG binding 공백으로
+`NO_GO`다. 이번 preflight stop 뒤 UI·supply를 수정하거나 최종 `scripts/check_all.sh` aggregate를
+실행하지 않았다.
+
+#### 16.16.4 현재 blocker와 다음 세션의 exact 실행 순서
+
+1. §1, 이 §16.16, Communication Diagram Case 2, Lower BB 명세, ADR-002/003/005/006과
+   `CODING_CONVENTIONS.md` 전체를 읽는다. HEAD
+   `cda0a536575646a6dbd79fc53cb206e00a644ec4` 위 dirty working tree, 두 baseline file과 preserved
+   `NO_SIGNAL` artifact를 보존한다.
+2. External 동작 없이 공식 filter 문서와 strict fixture를 사용해 실제로 반환될 수 있는 relevant
+   `symbolFilters`를 filter type별 DTO와 evaluator로 구현한다. 타입·필드·단위·적용 side를 추측하거나
+   unknown filter를 무시하지 않는다. Count/position처럼 account state가 필요한 filter라면 공식 signed
+   read-only endpoint에서 충분한 state를 얻고, 완전성을 증명하지 못하면 계속 blocked다. 어떤 type이
+   반환됐는지 알아야 한다면 credential·raw value 없이 filter type 이름과 schema shape만 내보내는
+   secret-free diagnostic을 먼저 local test로 설계한다.
+3. 모든 변경에 strict positive/negative/schema-drift/submit-time TOCTOU test와 한국어 블록·문장
+   주석을 추가한다. Credential/order 없이 backend, scripts, runner, architecture/convention 회귀를
+   모두 통과하고 baseline/trace digest를 다시 확인한다.
+4. 새 external target 전에 사용자에게 ① 같은 두 Keychain item의 memory-only 조회, ② 고정 Binance
+   Spot Testnet signed read-only preflight, ③ preflight 통과 시 `ETHUSDT` 최대 `100 USDT` BUY 1회와
+   same-run exact Position STOP SELL 1회를 **다시 명시 승인**받는다. 이번 승인을 재사용하지 않는다.
+5. 새 승인 뒤 다른 Testnet process와 동일 account 수동 activity를 배제하고 secure runner read-only를
+   위 history/pending baseline으로 한 번 실행한다. Account/commission/filter/reference, fresh
+   Position/pending/unknown `0`, all-client open order `0`, all-client recent `(exchange ID, client ID)`
+   exact set의 verified Trade baseline 일치,
+   startup reconciliation과 signed/public stream READY를 모두 요구한다. 하나라도 불일치하면 주문 없이
+   중단하고 raw credential/filter value 없이 blocker를 기록한다.
+6. Read-only가 완전히 통과한 경우에만 같은 source와 baseline의 exact actual target을 한 번 실행한다.
+   Natural signal일 때만 BUY 1회와 same-run STOP SELL 1회를 허용한다. `NO_SIGNAL`, `BLOCKED`,
+   `UNKNOWN`, `FAILED`, timeout/5xx/persistence ambiguity는 자동 retry나 추가 주문 없이 artifact를
+   보존하고 중단한다.
+7. Actual `SUCCESS`가 두 exact order/result/Trade, History/Performance/UI publication과 fresh zero
+   exposure까지 완결된 경우 즉시 backend/source tree digest 또는 revision을 evidence에 결속한다.
+   Trace schema v2에는 source provenance가 없으므로 이 결속 없이 UI를 바꿔 final source-bound actual로
+   주장하지 않는다. 그 뒤에만 visual `16/16 >= 0.980000`과 axe `16/16`, local-only
+   supply/license/final notice/current app·DMG binding을 차례로 마감한다. 마지막 no-order
+   `scripts/check_all.sh` exit `0` 전에는 Phase 13을 완료하지 않으며 live는 별도 승인 전 disabled다.
+
+#### 16.16.5 다음 세션에 그대로 사용할 요청문
+
+```text
+/Users/oscar/Desktop/Binance_Auto/INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §1과 전체 문서,
+특히 최신 authoritative handoff인 §16.16을 먼저 읽고 Phase 13 P13-04부터 이어서 작업하라.
+Communication Diagram Case 2, Lower_bb 명세, ADR-002/003/005/006과 CODING_CONVENTIONS.md 전체를
+읽고 class/function docstring뿐 아니라 한국어 블록 주석과 문장 주석까지 정확히 지켜라. HEAD
+cda0a536575646a6dbd79fc53cb206e00a644ec4 위 dirty working tree, 기존 [x], 두 baseline file과
+preserved NO_SIGNAL artifact를 reset/checkout/clean/자동 commit하지 마라.
+
+이번 signed read-only는 실행 시점 source에서 Keychain item lookup 2건과 signed target 1회만 실행했고,
+첫 test에서 `BinancePayloadError: symbolFilters contains unsupported relevant filters`로 fail closed했다.
+Failfast로 all-client open/recent, reconciliation과 stream READY에는 도달하지 않았다. Actual child,
+BUY, STOP SELL, order attempt/result/durable Trade와 새 artifact는 모두 0이다. 실행 뒤 all-client
+recent identity 결속과 실패 출력 redaction이 local-only로 추가돼 current tree는 외부 미검증 상태다.
+따라서 preflight와 P13-04 actual은 PASS가 아니며 같은 승인을 재사용해 외부 실행을 반복하지 마라.
+
+Baseline history는
+backend/.testnet-artifacts/phase9-cold-restart-20260824T094110991260Z-edea774ca29f43ffbddb37fc88205b38/history.jsonl,
+6줄, SHA-256 7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34,
+mode 0600이다. Pending journal은 같은 directory의 history.jsonl.pending-orders.jsonl, 4줄,
+SHA-256 61a3545a829525eadbaccdd7c6ba56afc186e8b3a3db0c636f9f79bbb6c4e265, mode 0600이며 active
+pending 0, ETHUSDT Position 0이다. 기존 NO_SIGNAL trace의 canonical body digest
+621c99c8e5cd71d5c86b64f4bc00efa4d77cadb6d779962645c1f1749bb60203과 file SHA-256
+31880863a3244f2189af9b0446d3bbfd5df39c231836dc0baeeaf8dbf668dcba도 외부 동작 없이 재검증하라.
+
+먼저 공식 Binance Spot filters와 REST 계약을 사용해 relevant symbolFilters를 type별 strict
+DTO/evaluator로 구현하라. MAX_ASSET은 account-wide가 아니라 base quantity 또는 quote reference
+notional의 단일 주문 한도이고 MAX_POSITION과 구분한다. 반환 type을 모르면 raw credential/value를
+남기지 않는 schema-only diagnostic을 설계하되, signed diagnostic 자체는 새 승인 전 실행하지 마라.
+Unknown/불완전 filter를 추측하거나 무시하지 말고 계속 fail closed하라. Local strict/negative/TOCTOU
+test, runner 격리와 convention 회귀를 먼저 모두 통과하라.
+
+그 다음 사용자에게 ① 고정 Keychain Testnet credential의 memory-only 조회, ② 코드에 고정된 Binance
+Spot Testnet signed read-only preflight, ③ preflight 통과 시 ETHUSDT 신규 BUY 최대 100 USDT 1회와
+same-run exact Position STOP SELL 1회를 새로 명시 승인받아라. 승인 뒤 read-only에서 account/filter,
+Position/pending/unknown 0, all-client open 0, all-client recent identity set의 verified baseline 일치,
+reconciliation과 두 stream READY를 모두 확인하고서만 actual을 한 번 실행하라. Failure output에는
+raw order/trade repr, ID·fill·가격을 반사하지 마라. 실패·NO_SIGNAL·UNKNOWN이면 자동 재시도하지
+마라. Actual SUCCESS 뒤 source provenance를 먼저 freeze한 경우에만 visual, local-only supply와 최종
+no-order scripts/check_all.sh를 진행하라. 별도 live 승인 전 live는 계속 disabled로 유지하라.
+```
+
+### 16.17 2026-08-31 composite-filter 구현 후 one-shot 재실행 — 최신 authoritative handoff
+
+이 subsection은 §16.16.5의 요청을 새 명시 승인으로 집행한 결과이며, **다음 세션의 유일한 재개
+기준**이다. §16.12의 확정 정책, §16.15의 schema v2 `NO_SIGNAL` trace와 §16.16의 preflight 실패
+기록은 삭제하거나 성공으로 바꾸지 않고 역사 증거로 보존한다. 다만 최신 source·외부 상태·회귀
+수치·실행 순서와 공식 filter 의미는 이 절이 우선한다. HEAD는
+`cda0a536575646a6dbd79fc53cb206e00a644ec4`이고 working tree는 의도적으로 dirty다. 현재 변경과
+artifact를 reset/checkout/clean/자동 commit하지 않는다.
+
+외부 실행 시점 source는 공식 `/api/v3/myFilters` 응답 전체를 strict composite DTO로 정규화하고 signed/public
+filter 중첩을 exact 비교하며, account-wide open order와 open order list의 empty-state를 주문 준비
+때마다 signed read로 증명하도록 구현됐다. 해당 source의 secure `read-only`는 통과했지만,
+조건부 actual Case 2는 durable BUY 전에 fail closed했다. 따라서 P13-04, Phase 13 master와 live는
+계속 `GAP`/`NO_GO`/disabled다.
+
+단, 아래 `read-only` PASS와 actual FAILED는 고정 30초 prepared composite evidence 수명,
+clock regression 차단과 attempt evidence/order POST 직전 재검증을 넣기 **직전 source**의 외부
+역사 증거다. 이 세 방어와 결정론 local 회귀는 현재 작업트리에 추가됐고, trace v3의
+`public_relevant_filters` overlap 및 동일 30초 인과 검증도 완료됐다. 따라서 최신
+외부 결과를 현재 작업트리의 signed release binding으로 승격하지 않는다.
+
+#### 16.17.1 이번 승인 범위와 exact 외부 실행 결과
+
+사용자는 이번 session에 한해 다음 세 범위를 모두 승인했다.
+
+1. macOS Keychain service `com.binance-auto.trader.testnet`의 고정 accounts `api-key`와
+   `api-secret`을 secure child memory로만 조회
+2. 코드에 고정된 Binance Spot Testnet endpoint로 signed read-only preflight 전송
+3. Preflight가 모두 통과한 경우에만 `ETHUSDT` 신규 BUY decision notional 최대 `100 USDT` 1회와
+   same-run exact Position STOP SELL 1회
+
+Verified Phase 9 history/pending baseline을 descriptor와 digest로 pin한 뒤 secure runner의
+`read-only` mode를 정확히 한 번 실행했다. Keychain item lookup은 `2`건, signed external target은
+`1`회이고 order opt-in 두 개는 `0`, cap은 child 환경에서 unset이었다. 결과는
+`Ran 4 tests in 3.223s`, `OK`다. Account/commission, full relevant filter/reference price, startup
+reconciliation, signed account stream과 public Kline stream READY를 통과했다. All-client
+`ETHUSDT` open order는 `0`건이고 recent order `6`건의 `(exchange order ID, client order ID)` exact
+set은 verified closed Trade `6`건과 일치했다.
+
+그 뒤 같은 source와 baseline에서 secure runner의 `phase13-public-case2` mode를 정확히 한 번
+실행했다. 추가 Keychain lookup은 `2`건이고 exact 세 opt-in과 cap `100`만 child에 전달했다. Helper
+`18`개는 먼저 통과했지만 actual `1`개가 durable BUY 전 `reconciliation_required=true`로 닫혀
+`Ran 19 tests in 5.204s`, failure `1`로 종료됐다. 자동 재시도하지 않았다.
+
+Sealed failure evidence의 submission attempt는 `0`개이고 side도 없다. 따라서 이 application
+harness에 귀속되는 REST order permit 소비, order POST delegate, 신규 BUY·STOP SELL과 durable Trade는
+모두 `0`건이다. Runtime snapshot도 local `ETHUSDT` Position `0`, pending `0`, durable Trade `0`과
+submissions blocked를 기록했다. Recovery는 `FAILURE_RECOVERY_STATE_AMBIGUOUS` 때문에 `SKIPPED`됐고
+매도 시도도 `0`건이다. 이 증거는 **해당 process의 app-attributable submission/mutation path가
+시작되지 않았음**을 증명하지만 동일 account의 독립 외부 mutation 부재까지 증명하지 않는다.
+
+그러나 failure finalizer의 별도 fresh read-only verification은 `FRESH_VERIFICATION_FAILED`, 최종
+상태는 `INCOMPLETE`다. 그러므로 종료 후 local `ETHUSDT` Position·pending·unknown, account balance,
+all-symbol `openOrders`·`openOrderList`와 symbol-scoped `ETHUSDT allOrders` recent identity를 각각
+fresh snapshot으로 재확인했다고 주장하지 않는다. 이것이 최신 P13-04 blocker다. 이번 one-shot
+승인은 read-only 1회와 actual target 1회로 모두 소진됐으며, 새 승인 없이 signed
+diagnostic/read-only/actual을 반복하지 않는다.
+
+이번 session 뒤 보존 누적은 secure child `6`회, 고정 Keychain item lookup `12`건, signed external
+target `6`회이며 이 Phase 13 secure runner에 귀속되는 submission attempt/order POST delegate/durable
+Trade는 누적 `0`건이다. Credential 값·길이·부분문자열, raw filter/order payload와 ID·fill·가격은
+argv/stdout/artifact/exception에 기록하지 않았다. Live
+endpoint·credential·order, 24시간 soak와 외부 OSV 전송도 실행하지 않았다.
+
+#### 16.17.2 공식 composite-filter 계약과 current-source 구현
+
+- [x] Signed `GET /api/v3/myFilters`의 top-level `exchangeFilters`, `symbolFilters`, `assetFilters`를
+  모두 strict parse하고 symbol binding을 검증한다. Unknown top-level field, unknown filter type,
+  extra/missing field와 중복 type은 조용히 무시하지 않고 fail closed한다.
+- [x] 공개 Spot Filters에 평가 의미가 있는 symbol filter `15`종을 strict DTO/evaluator로 구현했다. Public
+  `exchangeInfo`와 signed `/myFilters`에 함께 나타나는 quantity/notional/count/MAX_POSITION 관련
+  filter는 exact 일치를 요구하고, signed-only asset filter도 candidate order에 적용한다.
+- [x] 최신 Testnet SBE schema `3:5`의 filter enum에만 있고 공개 Spot Filters에 평가 의미가 없는
+  `T_PLUS_SELL`은 presence 자체를 고정 typed reason으로 차단한다. Filter 이름만 안다는 이유로 임의
+  의미를 만들지 않는다.
+- [x] Exchange-scope open-order count와 symbol-scope open-order count를 구분한다. 완전한 zero-state는
+  signed all-symbol `GET /api/v3/openOrders`와 account-wide `GET /api/v3/openOrderList`로 증명한다.
+  Plain REST `MARKET` candidate는 `EXCHANGE_MAX_NUM_ORDERS`/`MAX_NUM_ORDERS`에 `+1`,
+  algo·iceberg·order-list count에는 `0`을 적용한다. `MAX_NUM_ORDER_AMENDS`는 account-wide count가
+  아니라 개별 order amend 횟수이며, 신규 MARKET은 amend operation이 아니므로 candidate delta가
+  `0`이다.
+- [x] `MAX_POSITION` BUY 평가는 공식 계약대로 base free+locked, 기존 open BUY quantity와 candidate
+  quantity가 필요하다. 현재 narrow target이 이 완전한 account state를 제공하지 못하는 경우 해당
+  filter presence를 fail closed한다.
+- [x] `MAX_ASSET`은 base asset이면 candidate quantity로 평가한다. 공식 문서는 quote asset의
+  quantity-based MARKET 주문을 어떤 conversion price로 환산하는지 정의하지 않으므로 quote
+  `MAX_ASSET` presence는 `FILTER_MAX_ASSET_QUOTE_MARKET_PRICE_UNDEFINED`로 차단한다. Reference price는
+  MARKET `MIN_NOTIONAL`/`NOTIONAL` 평가에만 사용한다.
+- [x] §16.16.2/§16.16.5와 Readiness Report §9의 “quote `MAX_ASSET`을 reference notional로
+  평가한다”는 설명은 공식 근거가 부족했던 과거 기록이다. **이 §16.17 계약이 이를 명시적으로
+  정정하며 우선한다.** 과거 문단은 당시 판단 이력으로만 남긴다.
+- [x] 각 prepare는 full signed filters, public rules, account-wide open orders empty, open order lists
+  empty, reference price 순으로 관찰한 뒤 composite evaluator를 통과해야 한다. Preflight와 submit-time
+  evidence에 두 global 관찰 시각과 verified-empty flag를 모두 결속해 TOCTOU를 차단한다.
+- [x] 현재 REST adapter는 가장 이른 composite 관찰부터 고정 `30초`만 prepared evidence를 허용한다.
+  POST clock이 마지막 관찰보다 후퇴하거나 30초를 초과하면 fingerprint를 한 번 소모하고, transport
+  before-send guard가 같은 server-time observation으로 attempt evidence를 만들기 전에 다시 차단한다.
+  정확히 30초는 허용하고 30초+1ms, fingerprint 소비 뒤 transport 진입 지연과 clock regression은
+  attempt evidence와 order POST 없이 fail closed한다.
+- [x] Trace v3은 `public_relevant_filters`를 별도 exact projection으로 보존하고 signed/public
+  quantity·notional·count·passive·MAX_POSITION overlap을 runtime과 같은 규칙으로 검증한다. 같은
+  고정 30초, exact boundary, stale·clock-regression·schema drift도 deterministic 회귀로 닫았다.
+- [x] Trace schema v3은 full account-relevant filter scope와 두 account-wide 관찰을 보존한다. Validator는
+  기존 schema v2와 v3만 exact 허용해 preserved v2 evidence를 유지하면서 새 필드의 omission·race·schema
+  drift를 차단한다.
+- [x] 변경 Python에는 class/function docstring뿐 아니라 `CODING_CONVENTIONS.md`가 요구하는 한국어
+  블록 주석과 문장 주석을 추가하고 convention 검사와 수동 감사로 확인했다.
+
+위 판단은 2026-08-31 확인한 공식
+[Query Relevant Filters](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-relevant-filters-user_data),
+[Spot Filters](https://github.com/binance/binance-spot-api-docs/blob/master/filters.md),
+[Current Open Orders](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#current-open-orders-user_data),
+[Query Open Order Lists](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-open-order-lists-user_data)와
+[Query Reference Price](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-reference-price),
+[Testnet SBE schema lifecycle](https://raw.githubusercontent.com/binance/binance-spot-api-docs/master/sbe/schemas/sbe_schema_lifecycle_testnet.json)과
+[Spot SBE 3:5 schema](https://raw.githubusercontent.com/binance/binance-spot-api-docs/master/sbe/schemas/spot_3_5.xml)를
+기준으로 한다. Binance 공식 schema가 달라지면 DTO·fixture·ADR·test를 먼저 고치고 external target은
+중단한다.
+
+#### 16.17.3 보존 baseline·artifact와 local 검증
+
+- Baseline history:
+  `backend/.testnet-artifacts/phase9-cold-restart-20260824T094110991260Z-edea774ca29f43ffbddb37fc88205b38/history.jsonl`,
+  `6`줄, SHA-256
+  `7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34`, mode `0600`, owner UID
+  `501`, link count `1`
+- Baseline pending journal: 같은 directory의 `history.jsonl.pending-orders.jsonl`, `4`줄, SHA-256
+  `61a3545a829525eadbaccdd7c6ba56afc186e8b3a3db0c636f9f79bbb6c4e265`, mode `0600`, owner UID
+  `501`, link count `1`; semantic replay active pending `0`, `ETHUSDT` Position `0`
+- Preserved schema v2 `NO_SIGNAL` trace:
+  `backend/.testnet-artifacts/phase13-public-case2-20260831T065832120542Z-4cb81b390000444fa09861215588317e/phase13-public-case2-trace.json`,
+  canonical body digest
+  `621c99c8e5cd71d5c86b64f4bc00efa4d77cadb6d779962645c1f1749bb60203`, file SHA-256
+  `31880863a3244f2189af9b0446d3bbfd5df39c231836dc0baeeaf8dbf668dcba`, mode `0600`
+- Latest sealed failure artifact:
+  `backend/.testnet-artifacts/phase13-public-case2-20260831T095958280425Z-b2c3cd9008584a539acf71703050c743/phase13-public-case2-failed.json`,
+  failure body digest
+  `3a3fd9475099dfab5f5ef75397470d9d3fb2acb8591af2bbf96679db999ba029`, file SHA-256
+  `c177ddd6f16d4a53285c42d962b97e47416de37cc39e436e0b61cd06519b6e90`, mode `0600`, owner UID
+  `501`, link count `1`, `1,102` bytes
+- Latest failure directory의 staged `history.jsonl`은 baseline과 같은 `6`줄·mode `0600`·SHA-256이고
+  새 pending sidecar는 없다. Process lease는 nonblocking exclusive reacquire로 해제 상태를 확인했다.
+
+Credential/order environment를 제거한 `PYTHONWARNINGS=error` 환경에서 current tree의 Backend 전체
+`940/940` OK, external Testnet `8` safe skip, root/scripts `183/183`, secure runner `14/14`, current
+REST/trace/actual-helper/read-only/convention 집중 `102` OK·external `4` safe skip, transport/integration
+`50/50`, trace 계약 `28/28`, Communication Diagram `126 COMPLETE / 0 GAP`을 통과했다. Local loopback
+bind가 필요한 Backend test만 OS sandbox 밖에서 `127.0.0.1`을 허용했고 Binance external network와
+credential/order opt-in은 계속 제거했다. Baseline, 두 보존 artifact의 mode/type/link/digest와
+canonical bytes도 외부 동작 없이 다시 검증했다.
+
+위 외부 PASS/FAILED는 30초 prepared-evidence 보강 직전 source의 보존 기록이다. 현재 local 회귀는
+완료했지만 source digest와 signed external target을 새로 결속하지 않았으므로 current-tree external
+PASS로 사용하지 않는다.
+
+Visual은 fresh diagnostic `4/16` PASS·`12/16` FAIL이고 historical actual-browser axe는
+`16/16 Violations 0`이다. Supply는 current local advisory DB, 완전한 third-party license/final notice와
+current app·DMG/source binding이 없어 `NO_GO`다. Actual fail-closed 뒤 이 두 축을 수정하거나 최종
+`scripts/check_all.sh` aggregate를 실행하지 않았다.
+
+#### 16.17.4 현재 blocker와 다음 세션의 exact 실행 순서
+
+1. §1과 이 §16.17 전체, Communication Diagram Case 2, Lower BB 명세, ADR-002/003/005/006과
+   `CODING_CONVENTIONS.md` 전체를 읽는다. 위 HEAD의 dirty source, baseline과 두 artifact를 보존하고
+   reset/checkout/clean/자동 commit하지 않는다. 먼저 file security, digest와 canonical schema를
+   **외부 동작 없이** 재검증한다.
+2. Keychain·Binance network·주문 없이 actual failure의 first cause를 local-only로 계측한다.
+   `reconciliation before a durable BUY`를 최소한 `ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION`,
+   `PREPARE_FILTER_OR_CAP_REJECTED`, `EVENT_WORKER_OR_RUNTIME_FAILED`처럼 안정된 enum category로
+   구분한다. 실제 이름은 project naming convention에 맞추되 raw ID·filter value·balance·price·exception
+   repr를 포함하지 않는다. Cause가 없거나 둘 이상이거나 서로 race하면 fail closed한다.
+3. Failure finalizer의 `FRESH_VERIFICATION_FAILED`도 startup/reconciliation/filter/open-order/
+   open-order-list/stream 같은 exact stable stage로 구분해 sealed evidence에 결속한다. Secret-free
+   first-cause와 fresh-stage가 failure 발생 전에 durability를 침해하지 않는지 deterministic positive/
+   negative/schema-drift/cause-race test로 증명한다. 기존 artifact schema를 묵시적으로 다시
+   해석하지 말고 versioned migration 또는 새 schema로 처리한다.
+4. 완료된 trace v3 `public_relevant_filters` overlap과 고정 30초 expiry/clock-regression/transport
+   before-send 인과 회귀를 보존한다. First-cause 변경 뒤 Backend/scripts/secure runner/trace/
+   Communication/convention 전체 회귀를 다시 통과하고 baseline, preserved v2 `NO_SIGNAL`, 최신
+   FAILED artifact digest를 확인한다. 이 단계까지 signed diagnostic을 포함한 external target은
+   `0`회다.
+5. 외부 재실행이 필요하면 예상 target과 최대 mutation을 제시하고 사용자에게 ① 같은 고정 Keychain
+   item 두 개의 memory-only 조회, ② 코드에 고정된 Spot Testnet signed read-only preflight 1회,
+   ③ 그 preflight 통과 시만 `ETHUSDT` BUY 최대 `100 USDT` 1회와 same-run exact Position STOP SELL
+   1회를 **새로 명시 승인**받는다. 이번 승인을 재사용하지 않는다.
+6. 새 승인 뒤 다른 Testnet process와 동일 account의 수동 activity를 배제한다. Secure runner
+   read-only를 verified history/pending baseline으로 한 번만 실행하고 account/commission/full
+   filter/reference, local `ETHUSDT` Position/pending/unknown `0`, account balance, all-symbol
+   `openOrders`/`openOrderList` `0`, symbol-scoped `ETHUSDT allOrders` recent의 verified Trade exact
+   identity set, startup reconciliation과 signed/public stream READY를 모두 요구한다. 하나라도
+   불일치하면 주문 없이 sealed blocker를 남기고 재시도하지 않는다.
+7. Read-only가 모두 통과한 경우에만 같은 source와 baseline의 exact actual target을 한 번 실행한다.
+   Natural signal일 때 BUY 1회와 그 same-run exact Position STOP SELL 1회만 허용한다. `NO_SIGNAL`,
+   `BLOCKED`, `UNKNOWN`, `FAILED`, timeout/5xx/persistence/fresh-verification ambiguity는 추가 주문이나
+   자동 retry 없이 artifact를 보존하고 중단한다.
+8. Actual `SUCCESS`가 exact BUY/STOP SELL/result/Trade, History/Performance/UI publication과 fresh zero
+   exposure로 완결된 경우 order-critical backend subtree의 exact digest를 즉시 freeze한다. 그 뒤에는
+   해당 subtree와 dependency lockfile을 바꾸지 않고 UI visual, supply evidence와 docs만 명시적
+   allowlist diff로 결속해 `16/16 >= 0.980000`, actual-browser axe `16/16 Violations 0`, external OSV
+   전송 없는 local-only supply/license/final notice/current app·DMG binding을 마감한다. Order-critical
+   byte가 하나라도 바뀌면 actual은 역사 증거로 강등하고 새 승인·재실행이 필요하다. 최종 tree가
+   frozen backend digest와 allowlist diff를 모두 가리키며 credential/cap/order opt-in 없는
+   `scripts/check_all.sh` exit `0`일 때만 Phase 13을 완료한다. Live는 별도 승인 전 disabled다.
+
+#### 16.17.5 다음 세션에 그대로 사용할 요청문
+
+```text
+/Users/oscar/Desktop/Binance_Auto/INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §1과 전체 문서,
+특히 최신 authoritative handoff인 §16.17을 먼저 읽고 Phase 13 P13-04부터 이어서 작업하라.
+Communication Diagram Case 2, Lower_bb 명세, ADR-002/003/005/006과 CODING_CONVENTIONS.md 전체를
+읽고 class/function docstring뿐 아니라 한국어 블록 주석과 문장 주석까지 정확히 지켜라. HEAD
+cda0a536575646a6dbd79fc53cb206e00a644ec4 위 dirty working tree, 기존 [x], Phase 9 history/pending
+baseline, preserved schema v2 NO_SIGNAL trace와 최신 FAILED artifact를 reset/checkout/clean/자동
+commit하지 마라.
+
+Current source는 공식 /api/v3/myFilters의 exchangeFilters/symbolFilters/assetFilters 전체를 strict
+composite DTO/evaluator로 처리하고 signed/public 중첩을 exact 비교한다. Account-wide openOrders와
+openOrderList empty를 각 prepare에서 signed read로 증명하고 trace schema v3에 full filter scope와
+두 관찰 시각을 결속한다. MAX_ASSET base는 candidate quantity로 평가하지만, 공식 문서에 quantity-based
+MARKET의 quote conversion price가 없으므로 quote MAX_ASSET은 fail closed한다. §16.16과 Readiness
+Report §9의 quote reference-notional 설명보다 이 정정이 우선한다. T_PLUS_SELL과 불완전
+MAX_POSITION도 추측하지 말고 계속 차단하라.
+
+외부 실행 뒤 current tree에는 prepared composite evidence의 고정 30초 expiry, clock regression 차단과
+transport before-send 재검증이 local-only로 추가됐다. Trace v3의 public_relevant_filters overlap과
+같은 30초 인과 검증도 deterministic 회귀로 완료됐다. 따라서 아래 4/4
+PASS와 actual FAILED는 직전 source의 역사 evidence이지 current tree의 external binding이 아니다.
+
+이번 새 승인으로 secure read-only는 정확히 한 번 실행해 4/4 PASS했다. All-client ETHUSDT open 0,
+recent 6은 verified closed Trade 6의 exact identity set과 일치했고 account/commission/full
+filter/reference, startup reconciliation과 두 stream READY를 모두 통과했다. 이어 같은 source와
+baseline의 actual Case 2를 정확히 한 번 실행했으나 helper 18 PASS 뒤 durable BUY 전에
+reconciliation_required가 되어 actual 1 FAIL로 닫혔다. Submission attempt/side/REST order permit/
+BUY/STOP SELL/durable Trade는 모두 0이고 runtime Position/pending도 0이다. 이는 해당 process의
+app-attributable attempt/delegate/Trade가 0임만 증명한다. Recovery는 state ambiguous로 SKIPPED됐고,
+별도 fresh verification도 FRESH_VERIFICATION_FAILED/INCOMPLETE이다. 종료 후 local ETHUSDT
+Position·pending·unknown, account balance, all-symbol openOrders/openOrderList와 symbol-scoped ETHUSDT
+recent identity를 새 snapshot으로 확인했다고 주장하지 마라. 자동 재시도하지 않았고 이번 one-shot
+승인은 소진됐다.
+
+Baseline history는
+backend/.testnet-artifacts/phase9-cold-restart-20260824T094110991260Z-edea774ca29f43ffbddb37fc88205b38/history.jsonl,
+6줄, SHA-256 7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34, mode 0600이다.
+Pending journal은 같은 directory의 history.jsonl.pending-orders.jsonl, 4줄, SHA-256
+61a3545a829525eadbaccdd7c6ba56afc186e8b3a3db0c636f9f79bbb6c4e265, mode 0600이며 active pending 0,
+ETHUSDT Position 0이다. Preserved NO_SIGNAL trace의 canonical body digest는
+621c99c8e5cd71d5c86b64f4bc00efa4d77cadb6d779962645c1f1749bb60203, file SHA-256은
+31880863a3244f2189af9b0446d3bbfd5df39c231836dc0baeeaf8dbf668dcba이다. Latest failure artifact는
+backend/.testnet-artifacts/phase13-public-case2-20260831T095958280425Z-b2c3cd9008584a539acf71703050c743/phase13-public-case2-failed.json이고,
+body digest는 3a3fd9475099dfab5f5ef75397470d9d3fb2acb8591af2bbf96679db999ba029, file SHA-256은
+c177ddd6f16d4a53285c42d962b97e47416de37cc39e436e0b61cd06519b6e90, mode 0600이다. 먼저 이 file들의
+type/owner/link/mode/digest/canonical schema를 외부 동작 없이 재검증하라.
+
+다음 작업은 Keychain·Binance network·주문 없이 local-only first-cause evidence를 만드는 것이다.
+Reconciliation 원인을 unknown/external execution, prepare/filter/cap 거부, event-worker/runtime 실패로
+stable enum 구분하고, fresh verification 실패도 exact startup stage로 구분하라. Raw ID·filter
+value·balance·price·credential·exception repr를 기록하지 말고 missing/unknown/duplicate/cause-race를
+fail closed하라. Versioned trace/failure schema와 deterministic positive/negative/TOCTOU test를
+추가하되 완료된 public_relevant_filters overlap과 고정 30초 transport 인과 계약을 보존하라. 그 뒤
+Backend/scripts/runner/Communication/convention 전체 회귀 및 세 보존 digest를 통과하라.
+
+그 뒤 external 재실행이 필요하면 사용자에게 ① 고정 Keychain Testnet credential의 memory-only 조회,
+② 코드에 고정된 Binance Spot Testnet signed read-only preflight 1회, ③ preflight 통과 시만
+ETHUSDT 신규 BUY 최대 100 USDT 1회와 same-run exact Position STOP SELL 1회를 새로 명시 승인받아라.
+새 승인 전에는 signed diagnostic도 실행하지 마라. 승인 뒤 read-only가 모두 통과한 경우에만 actual을
+한 번 실행하고 어떤 실패·NO_SIGNAL·UNKNOWN도 자동 재시도하지 마라. Actual SUCCESS와 fresh zero
+exposure 뒤 order-critical backend subtree digest를 freeze하라. 이후 해당 byte와 dependency lockfile은
+바꾸지 말고 UI/supply/docs만 명시적 allowlist diff로 결속해 visual, local-only supply와 최종 no-order
+scripts/check_all.sh를 진행하라. Order-critical byte가 바뀌면 새 승인과 actual 재실행이 필요하다.
+별도 live 승인 전 live는 계속 disabled로 유지하라.
 ```

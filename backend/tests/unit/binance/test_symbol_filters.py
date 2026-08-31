@@ -28,6 +28,7 @@ def _exchange_info_payload(
     market_minimum: str = "0.001",
     minimum_notional: str = "10",
     maximum_notional: str = "10000",
+    maximum_position: str | None = None,
 ) -> dict[str, object]:
     """
     함수 이름: _exchange_info_payload()
@@ -40,14 +41,16 @@ def _exchange_info_payload(
         market_minimum -> MARKET_LOT_SIZE minQty
         minimum_notional -> NOTIONAL minNotional
         maximum_notional -> NOTIONAL maxNotional
+        maximum_position -> 선택 MAX_POSITION maxPosition
     반환값: ETHUSDT 한 항목을 가진 exchangeInfo payload
     작성 날짜: 2026/08/22
     """
     # quotePrecision 없이도 v3 filter와 base precision만으로 동작하는 fixture를 만든다.
-    return {
+    payload: dict[str, object] = {
         "timezone": "UTC",
         "serverTime": 1787331600000,
         "rateLimits": [],
+        "exchangeFilters": [],
         "symbols": [
             {
                 "symbol": "ETHUSDT",
@@ -88,6 +91,16 @@ def _exchange_info_payload(
             }
         ],
     }
+    if maximum_position is not None:
+        symbol_payload = payload["symbols"][0]
+        symbol_payload["filters"].append(
+            {
+                "filterType": "MAX_POSITION",
+                "maxPosition": maximum_position,
+            }
+        )
+
+    return payload
 
 
 def _order(
@@ -141,7 +154,11 @@ class SymbolFilterTests(unittest.TestCase):
         order = _order()
 
         # 원 requested intent는 유지하고 제출량만 공통 0.001 grid로 내린다.
-        prepared_order = prepare_market_order(order, rules)
+        prepared_order = prepare_market_order(
+            order,
+            rules,
+            reference_price=Decimal("100"),
+        )
 
         self.assertIs(prepared_order, order)
         self.assertEqual(order.requested_quantity, Decimal("1.23456"))
@@ -228,7 +245,72 @@ class SymbolFilterTests(unittest.TestCase):
         # CANCEL_ONLY는 query/cancel용 metadata로 읽히지만 prepare 단계에서는 fail closed한다.
         self.assertEqual(rules.status, "CANCEL_ONLY")
         with self.assertRaisesRegex(SymbolFilterError, "CANCEL_ONLY"):
-            prepare_market_order(_order(), rules)
+            prepare_market_order(
+                _order(),
+                rules,
+                reference_price=Decimal("100"),
+            )
+
+    def test_buy_fails_closed_when_max_position_requires_account_exposure(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_buy_fails_closed_when_max_position_requires_account_exposure()
+        기능: MAX_POSITION이 있으면 BUY가 불완전한 account exposure 추정 없이 차단되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        rules = parse_symbol_trading_rules(
+            _exchange_info_payload(maximum_position="10"),
+            "ETHUSDT",
+        )
+
+        # Base balance와 open BUY 합을 조회하지 않은 좁은 구현은 presence 자체를 안전하게 거부한다.
+        self.assertEqual(rules.maximum_position, Decimal("10"))
+        with self.assertRaisesRegex(
+            SymbolFilterError,
+            "FILTER_MAX_POSITION_REQUIRES_ACCOUNT_EXPOSURE",
+        ):
+            prepare_market_order(
+                _order(),
+                rules,
+                reference_price=Decimal("100"),
+            )
+
+        # MAX_POSITION은 공식적으로 BUY exposure에만 적용되므로 동일 규칙의 SELL은 계속 준비한다.
+        sell_order = _order()
+        sell_order.side = OrderSide.SELL
+        prepared_sell = prepare_market_order(
+            sell_order,
+            rules,
+            reference_price=Decimal("100"),
+        )
+        self.assertIs(prepared_sell, sell_order)
+
+    def test_max_position_requires_exact_official_fields(self) -> None:
+        """
+        함수 이름: test_max_position_requires_exact_official_fields()
+        기능: MAX_POSITION의 maxPosition 누락과 알 수 없는 필드를 strict schema 오류로 차단한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        missing_payload = _exchange_info_payload(maximum_position="10")
+        missing_filter = missing_payload["symbols"][0]["filters"][-1]
+        del missing_filter["maxPosition"]
+        extended_payload = _exchange_info_payload(maximum_position="10")
+        extended_filter = extended_payload["symbols"][0]["filters"][-1]
+        extended_filter["unexpected"] = "unsafe"
+
+        # 누락 값의 기본 추정과 미래 필드의 묵시적 무시를 모두 금지한다.
+        with self.assertRaises(BinancePayloadError):
+            parse_symbol_trading_rules(missing_payload, "ETHUSDT")
+        with self.assertRaisesRegex(
+            BinancePayloadError,
+            "fields do not match",
+        ):
+            parse_symbol_trading_rules(extended_payload, "ETHUSDT")
 
     def test_missing_required_market_filter_fails_closed(self) -> None:
         """

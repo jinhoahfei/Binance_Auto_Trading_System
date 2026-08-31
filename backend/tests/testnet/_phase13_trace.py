@@ -11,9 +11,14 @@ import json
 import re
 from uuid import UUID
 
+from binance_auto_trader.adapters.binance.spot_rest_client import (
+    _MAXIMUM_ORDER_PREPARATION_AGE,
+)
 
-# Actual evidence는 한 schema와 byte framing만 사용해 확장·축약을 자동 허용하지 않는다.
-PHASE13_PUBLIC_TRACE_SCHEMA_VERSION = 1
+
+# 새 actual evidence는 v3만 생성하되 보존한 v2 artifact의 offline 검증 계약은 유지한다.
+PHASE13_PUBLIC_TRACE_SCHEMA_VERSION = 3
+_SUPPORTED_PHASE13_PUBLIC_TRACE_SCHEMA_VERSIONS = frozenset({2, 3})
 PHASE13_PUBLIC_TRACE_RECORD_TYPE = "phase13_public_case2_testnet_trace"
 PHASE13_PUBLIC_TRACE_OUTCOMES = frozenset(
     {"SUCCESS", "NO_SIGNAL", "BLOCKED", "FAILED"}
@@ -76,7 +81,7 @@ _TRACE_BODY_FIELDS = frozenset(
 )
 _TRACE_DOCUMENT_FIELDS = _TRACE_BODY_FIELDS | {"trace_sha256"}
 _TIMESTAMP_FIELDS = frozenset({"started_at", "completed_at"})
-_PREFLIGHT_FIELDS = frozenset(
+_PREFLIGHT_FIELDS_V2 = frozenset(
     {
         "endpoint_set",
         "symbol",
@@ -87,12 +92,27 @@ _PREFLIGHT_FIELDS = frozenset(
         "verified_at",
         "commission_policy",
         "fresh_filters",
+        "account_asset_filters",
+        "account_filters_observed_at",
+        "reference_price",
+        "reference_price_observed_at",
         "position_quantity",
         "pending_order_count",
         "unknown_order_count",
         "matching_open_order_count",
     }
 )
+_ACCOUNT_STATE_EVIDENCE_FIELDS = frozenset(
+    {
+        "account_relevant_filters",
+        "public_relevant_filters",
+        "account_open_orders_observed_at",
+        "account_open_orders_verified_empty",
+        "account_open_order_lists_observed_at",
+        "account_open_order_lists_verified_empty",
+    }
+)
+_PREFLIGHT_FIELDS_V3 = _PREFLIGHT_FIELDS_V2 | _ACCOUNT_STATE_EVIDENCE_FIELDS
 _COMMISSION_POLICY_FIELDS = frozenset(
     {
         "symbol",
@@ -123,10 +143,76 @@ _FRESH_FILTER_RULE_FIELDS = frozenset(
         "market_lot_size_step_size",
         "minimum_notional",
         "maximum_notional",
+        "maximum_position",
     }
 )
 _FRESH_FILTER_FIELDS = _FRESH_FILTER_RULE_FIELDS | {"observed_at"}
-_SUBMIT_TIME_FILTER_EVIDENCE_FIELDS = frozenset(
+_ACCOUNT_ASSET_FILTER_FIELDS = frozenset(
+    {"filter_type", "asset", "maximum_quantity"}
+)
+_ACCOUNT_ORDER_COUNT_FILTER_FIELDS = frozenset(
+    {"filter_type", "maximum_count"}
+)
+_ACCOUNT_QUANTITY_FILTER_FIELDS = frozenset(
+    {
+        "filter_type",
+        "minimum_quantity",
+        "maximum_quantity",
+        "step_size",
+    }
+)
+_ACCOUNT_NOTIONAL_FILTER_FIELDS = frozenset(
+    {
+        "filter_type",
+        "minimum_notional",
+        "maximum_notional",
+        "apply_minimum_to_market",
+        "apply_maximum_to_market",
+        "average_price_minutes",
+    }
+)
+_ACCOUNT_RELEVANT_FILTER_FIELDS = frozenset(
+    {
+        "symbol",
+        "exchange_order_count_filters",
+        "symbol_order_count_filters",
+        "symbol_quantity_filters",
+        "symbol_notional_filters",
+        "symbol_maximum_position",
+        "passive_symbol_filter_types",
+        "asset_filters",
+    }
+)
+_EXCHANGE_ORDER_COUNT_FILTER_TYPES = frozenset(
+    {
+        "EXCHANGE_MAX_NUM_ORDERS",
+        "EXCHANGE_MAX_NUM_ALGO_ORDERS",
+        "EXCHANGE_MAX_NUM_ICEBERG_ORDERS",
+        "EXCHANGE_MAX_NUM_ORDER_LISTS",
+    }
+)
+_SYMBOL_ORDER_COUNT_FILTER_TYPES = frozenset(
+    {
+        "MAX_NUM_ORDERS",
+        "MAX_NUM_ALGO_ORDERS",
+        "MAX_NUM_ICEBERG_ORDERS",
+        "MAX_NUM_ORDER_AMENDS",
+        "MAX_NUM_ORDER_LISTS",
+    }
+)
+_PASSIVE_SYMBOL_FILTER_TYPES = frozenset(
+    {
+        "PRICE_FILTER",
+        "PERCENT_PRICE",
+        "PERCENT_PRICE_BY_SIDE",
+        "ICEBERG_PARTS",
+        "TRAILING_DELTA",
+    }
+)
+_REFERENCE_PRICE_FIELDS = frozenset(
+    {"symbol", "price", "exchange_timestamp"}
+)
+_SUBMIT_TIME_FILTER_EVIDENCE_FIELDS_V2 = frozenset(
     {
         "sequence",
         "intent_id",
@@ -134,7 +220,14 @@ _SUBMIT_TIME_FILTER_EVIDENCE_FIELDS = frozenset(
         "side",
         "observed_at",
         "rules",
+        "account_asset_filters",
+        "account_filters_observed_at",
+        "reference_price",
+        "reference_price_observed_at",
     }
+)
+_SUBMIT_TIME_FILTER_EVIDENCE_FIELDS_V3 = (
+    _SUBMIT_TIME_FILTER_EVIDENCE_FIELDS_V2 | _ACCOUNT_STATE_EVIDENCE_FIELDS
 )
 _DECISION_FIELDS = frozenset(
     {
@@ -1003,6 +1096,12 @@ def _validate_fresh_filter_rule_values(
         minimum=Decimal("0"),
         allow_none=True,
     )
+    _require_plain_decimal(
+        filters["maximum_position"],
+        f"{location} maximum_position",
+        minimum=Decimal("0"),
+        allow_none=True,
+    )
     if (
         minimum_notional is not None
         and maximum_notional is not None
@@ -1013,6 +1112,655 @@ def _validate_fresh_filter_rule_values(
         )
 
     return None  # 공통 rule 검증은 caller의 preflight/submit-time timestamp 의미를 바꾸지 않는다.
+
+
+def _validate_account_asset_filters(
+    value: object,
+    location: str,
+) -> tuple[Mapping[str, object], ...]:
+    """
+    함수 이름: _validate_account_asset_filters()
+    기능: signed myFilters의 MAX_ASSET만 exact normalized account filter tuple로 검증한다.
+    인자: value -> account_asset_filters JSON array
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: 검증된 account asset filter mapping tuple
+    작성 날짜: 2026/08/31
+    """
+    filter_entries = _require_list(value, location)
+    validated_filters: list[Mapping[str, object]] = []
+    observed_assets: set[str] = set()
+
+    # Symbol-scoped signed 응답은 ETH/USDT MAX_ASSET만 허용하고 중복 asset은 거부한다.
+    for filter_index, filter_value in enumerate(filter_entries):
+        filter_location = f"{location}[{filter_index}]"
+        account_filter = _require_exact_mapping(
+            filter_value,
+            _ACCOUNT_ASSET_FILTER_FIELDS,
+            filter_location,
+        )
+        if account_filter["filter_type"] != "MAX_ASSET":
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{filter_location} must be a MAX_ASSET filter"
+            )
+        asset = _require_identifier(
+            account_filter["asset"],
+            f"{filter_location} asset",
+        )
+        if asset not in {"ETH", "USDT"} or asset in observed_assets:
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{location} contains an unsupported or duplicate asset"
+            )
+        observed_assets.add(asset)
+        _require_plain_decimal(
+            account_filter["maximum_quantity"],
+            f"{filter_location} maximum_quantity",
+            minimum=Decimal("0"),
+        )
+        validated_filters.append(account_filter)
+
+    return tuple(validated_filters)  # Raw signed response와 credential은 trace에 보존하지 않는다.
+
+
+def _validate_account_order_count_filters(
+    value: object,
+    *,
+    allowed_filter_types: frozenset[str],
+    location: str,
+) -> tuple[Mapping[str, object], ...]:
+    """
+    함수 이름: _validate_account_order_count_filters()
+    기능: AccountRelevantFilters의 scope별 count filter를 exact schema와 중복 없는 상한으로 검증한다.
+    인자: value -> count filter JSON array
+        allowed_filter_types -> 해당 scope에 허용된 공식 filter type 집합
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: 검증된 count filter mapping tuple
+    작성 날짜: 2026/08/31
+    """
+    filter_entries = _require_list(value, location)
+    validated_filters: list[Mapping[str, object]] = []
+    observed_filter_types: set[str] = set()
+
+    # 각 scope는 공식 type과 정수 상한을 한 번씩만 보존하고 다른 scope type을 수용하지 않는다.
+    for filter_index, filter_value in enumerate(filter_entries):
+        filter_location = f"{location}[{filter_index}]"
+        count_filter = _require_exact_mapping(
+            filter_value,
+            _ACCOUNT_ORDER_COUNT_FILTER_FIELDS,
+            filter_location,
+        )
+        filter_type = _require_identifier(
+            count_filter["filter_type"],
+            f"{filter_location} filter_type",
+        )
+        if (
+            filter_type not in allowed_filter_types
+            or filter_type in observed_filter_types
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{location} contains an unsupported or duplicate type"
+            )
+        observed_filter_types.add(str(filter_type))
+        maximum_count = _require_nonnegative_integer(
+            count_filter["maximum_count"],
+            f"{filter_location} maximum_count",
+        )
+        if (
+            filter_type in {"EXCHANGE_MAX_NUM_ORDERS", "MAX_NUM_ORDERS"}
+            and maximum_count < 1
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{filter_location} cannot admit one plain MARKET order"
+            )
+        validated_filters.append(count_filter)
+
+    return tuple(validated_filters)  # Response 순서는 canonical evidence에 그대로 유지한다.
+
+
+def _validate_account_quantity_filters(
+    value: object,
+    location: str,
+) -> tuple[Mapping[str, object], ...]:
+    """
+    함수 이름: _validate_account_quantity_filters()
+    기능: Signed symbol LOT_SIZE 계열을 exact Decimal schema와 유효 범위로 검증한다.
+    인자: value -> quantity filter JSON array
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: 검증된 quantity filter mapping tuple
+    작성 날짜: 2026/08/31
+    """
+    filter_entries = _require_list(value, location)
+    validated_filters: list[Mapping[str, object]] = []
+    observed_filter_types: set[str] = set()
+
+    # 두 공식 quantity type은 중복 없이 non-negative Decimal 하한·상한·step을 가져야 한다.
+    for filter_index, filter_value in enumerate(filter_entries):
+        filter_location = f"{location}[{filter_index}]"
+        quantity_filter = _require_exact_mapping(
+            filter_value,
+            _ACCOUNT_QUANTITY_FILTER_FIELDS,
+            filter_location,
+        )
+        filter_type = _require_identifier(
+            quantity_filter["filter_type"],
+            f"{filter_location} filter_type",
+        )
+        if (
+            filter_type not in {"LOT_SIZE", "MARKET_LOT_SIZE"}
+            or filter_type in observed_filter_types
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{location} contains an unsupported or duplicate type"
+            )
+        observed_filter_types.add(str(filter_type))
+        minimum_quantity = _require_plain_decimal(
+            quantity_filter["minimum_quantity"],
+            f"{filter_location} minimum_quantity",
+            minimum=Decimal("0"),
+        )
+        maximum_quantity = _require_plain_decimal(
+            quantity_filter["maximum_quantity"],
+            f"{filter_location} maximum_quantity",
+            minimum=Decimal("0"),
+        )
+        _require_plain_decimal(
+            quantity_filter["step_size"],
+            f"{filter_location} step_size",
+            minimum=Decimal("0"),
+        )
+        if (
+            maximum_quantity is not None
+            and minimum_quantity is not None
+            and maximum_quantity > Decimal("0")
+            and maximum_quantity < minimum_quantity
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{filter_location} quantity range is invalid"
+            )
+        validated_filters.append(quantity_filter)
+
+    return tuple(validated_filters)  # Raw symbol filter mapping은 trace schema 밖으로 확장하지 않는다.
+
+
+def _validate_account_notional_filters(
+    value: object,
+    location: str,
+) -> tuple[Mapping[str, object], ...]:
+    """
+    함수 이름: _validate_account_notional_filters()
+    기능: Signed MIN_NOTIONAL과 NOTIONAL의 exact 값·MARKET flag·기간을 검증한다.
+    인자: value -> notional filter JSON array
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: 검증된 notional filter mapping tuple
+    작성 날짜: 2026/08/31
+    """
+    filter_entries = _require_list(value, location)
+    validated_filters: list[Mapping[str, object]] = []
+    observed_filter_types: set[str] = set()
+
+    # 각 notional type은 DTO projection의 null 구조와 exact boolean MARKET 적용식을 유지해야 한다.
+    for filter_index, filter_value in enumerate(filter_entries):
+        filter_location = f"{location}[{filter_index}]"
+        notional_filter = _require_exact_mapping(
+            filter_value,
+            _ACCOUNT_NOTIONAL_FILTER_FIELDS,
+            filter_location,
+        )
+        filter_type = _require_identifier(
+            notional_filter["filter_type"],
+            f"{filter_location} filter_type",
+        )
+        if (
+            filter_type not in {"MIN_NOTIONAL", "NOTIONAL"}
+            or filter_type in observed_filter_types
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{location} contains an unsupported or duplicate type"
+            )
+        observed_filter_types.add(str(filter_type))
+        minimum_notional = _require_plain_decimal(
+            notional_filter["minimum_notional"],
+            f"{filter_location} minimum_notional",
+            minimum=Decimal("0"),
+            allow_none=True,
+        )
+        maximum_notional = _require_plain_decimal(
+            notional_filter["maximum_notional"],
+            f"{filter_location} maximum_notional",
+            minimum=Decimal("0"),
+            allow_none=True,
+        )
+        for field_name in (
+            "apply_minimum_to_market",
+            "apply_maximum_to_market",
+        ):
+            if type(notional_filter[field_name]) is not bool:
+                raise PhaseThirteenPublicTraceValidationError(
+                    f"{filter_location} MARKET flags must be booleans"
+                )
+        _require_nonnegative_integer(
+            notional_filter["average_price_minutes"],
+            f"{filter_location} average_price_minutes",
+        )
+
+        # MIN_NOTIONAL에는 상한이 없고 NOTIONAL에는 공식 하한·상한이 모두 존재해야 한다.
+        if filter_type == "MIN_NOTIONAL":
+            if (
+                minimum_notional is None
+                or maximum_notional is not None
+                or notional_filter["apply_maximum_to_market"]
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    f"{filter_location} MIN_NOTIONAL structure is invalid"
+                )
+        elif minimum_notional is None or maximum_notional is None:
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{filter_location} NOTIONAL limits must be present"
+            )
+        if (
+            minimum_notional is not None
+            and maximum_notional is not None
+            and maximum_notional < minimum_notional
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{filter_location} notional range is invalid"
+            )
+        validated_filters.append(notional_filter)
+
+    return tuple(validated_filters)  # MARKET flag와 avgPriceMins는 normalized typed 값으로만 남긴다.
+
+
+def _validate_passive_symbol_filter_types(
+    value: object,
+    location: str,
+) -> frozenset[str]:
+    """
+    함수 이름: _validate_passive_symbol_filter_types()
+    기능: Plain MARKET 비적용 symbol filter type 목록의 canonical 집합을 검증한다.
+    인자: value -> passive_symbol_filter_types JSON array
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: 중복 없는 공식 passive filter type frozenset
+    작성 날짜: 2026/08/31
+    """
+    passive_filter_values = _require_list(value, location)
+    passive_filter_types = tuple(
+        _require_identifier(
+            filter_type,
+            f"{location} filter type",
+        )
+        for filter_type in passive_filter_values
+    )
+
+    # Frozenset 직렬화는 sorted list만 허용해 같은 의미의 canonical bytes를 하나로 고정한다.
+    if (
+        tuple(sorted(str(filter_type) for filter_type in passive_filter_types))
+        != passive_filter_types
+        or len(set(passive_filter_types)) != len(passive_filter_types)
+        or any(
+            filter_type not in _PASSIVE_SYMBOL_FILTER_TYPES
+            for filter_type in passive_filter_types
+        )
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} is not canonical"
+        )
+
+    return frozenset(passive_filter_types)  # Raw price·trailing 값은 trace에 포함하지 않는다.
+
+
+def _validate_account_relevant_filters(
+    value: object,
+    *,
+    account_asset_filters: tuple[Mapping[str, object], ...],
+    public_relevant_filters: object,
+    public_rules: Mapping[str, object],
+    location: str,
+) -> Mapping[str, object]:
+    """
+    함수 이름: _validate_account_relevant_filters()
+    기능: v3 signed/public relevant filter projection과 runtime overlap 계약을 검증한다.
+    인자: value -> normalized AccountRelevantFilters JSON object
+        account_asset_filters -> v2 호환용 signed MAX_ASSET projection
+        public_relevant_filters -> 같은 exchangeInfo의 public AccountRelevantFilters projection
+        public_rules -> 같은 관찰 구간의 normalized public symbol rules
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: 검증된 AccountRelevantFilters mapping
+    작성 날짜: 2026/08/31
+    """
+    account_filters = _require_exact_mapping(
+        value,
+        _ACCOUNT_RELEVANT_FILTER_FIELDS,
+        location,
+    )
+    if account_filters["symbol"] != "ETHUSDT":
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} must be bound to ETHUSDT"
+        )
+
+    # Signed collection은 scope별 exact parser를 먼저 통과해 비교 중 malformed 우회를 막는다.
+    signed_exchange_count_filters = _validate_account_order_count_filters(
+        account_filters["exchange_order_count_filters"],
+        allowed_filter_types=_EXCHANGE_ORDER_COUNT_FILTER_TYPES,
+        location=f"{location} exchange count filters",
+    )
+    signed_symbol_count_filters = _validate_account_order_count_filters(
+        account_filters["symbol_order_count_filters"],
+        allowed_filter_types=_SYMBOL_ORDER_COUNT_FILTER_TYPES,
+        location=f"{location} symbol count filters",
+    )
+    signed_quantity_filters = _validate_account_quantity_filters(
+        account_filters["symbol_quantity_filters"],
+        f"{location} symbol quantity filters",
+    )
+    signed_notional_filters = _validate_account_notional_filters(
+        account_filters["symbol_notional_filters"],
+        f"{location} symbol notional filters",
+    )
+    signed_passive_filter_types = _validate_passive_symbol_filter_types(
+        account_filters["passive_symbol_filter_types"],
+        f"{location} passive symbol filter types",
+    )
+
+    # Public projection도 같은 exact union을 쓰되 exchangeInfo에 존재할 수 없는 asset scope는 비워 둔다.
+    public_filters = _require_exact_mapping(
+        public_relevant_filters,
+        _ACCOUNT_RELEVANT_FILTER_FIELDS,
+        f"{location} public relevant filters",
+    )
+    if public_filters["symbol"] != "ETHUSDT":
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} public relevant filters must be bound to ETHUSDT"
+        )
+    public_exchange_count_filters = _validate_account_order_count_filters(
+        public_filters["exchange_order_count_filters"],
+        allowed_filter_types=_EXCHANGE_ORDER_COUNT_FILTER_TYPES,
+        location=f"{location} public exchange count filters",
+    )
+    public_symbol_count_filters = _validate_account_order_count_filters(
+        public_filters["symbol_order_count_filters"],
+        allowed_filter_types=_SYMBOL_ORDER_COUNT_FILTER_TYPES,
+        location=f"{location} public symbol count filters",
+    )
+    public_quantity_filters = _validate_account_quantity_filters(
+        public_filters["symbol_quantity_filters"],
+        f"{location} public symbol quantity filters",
+    )
+    public_notional_filters = _validate_account_notional_filters(
+        public_filters["symbol_notional_filters"],
+        f"{location} public symbol notional filters",
+    )
+    public_passive_filter_types = _validate_passive_symbol_filter_types(
+        public_filters["passive_symbol_filter_types"],
+        f"{location} public passive symbol filter types",
+    )
+    public_asset_filters = _validate_account_asset_filters(
+        public_filters["asset_filters"],
+        f"{location} public asset filters",
+    )
+    if public_asset_filters:
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} public exchangeInfo must not contain asset filters"
+        )
+
+    # Decimal scale 차이는 runtime DTO equality와 같이 값으로 비교하고 type별 identity는 보존한다.
+    signed_quantity_values = {
+        str(filter_value["filter_type"]): (
+            Decimal(str(filter_value["minimum_quantity"])),
+            Decimal(str(filter_value["maximum_quantity"])),
+            Decimal(str(filter_value["step_size"])),
+        )
+        for filter_value in signed_quantity_filters
+    }
+    public_quantity_values = {
+        str(filter_value["filter_type"]): (
+            Decimal(str(filter_value["minimum_quantity"])),
+            Decimal(str(filter_value["maximum_quantity"])),
+            Decimal(str(filter_value["step_size"])),
+        )
+        for filter_value in public_quantity_filters
+    }
+    expected_public_quantity_values = {
+        "LOT_SIZE": (
+            Decimal(str(public_rules["lot_size_minimum_quantity"])),
+            Decimal(str(public_rules["lot_size_maximum_quantity"])),
+            Decimal(str(public_rules["lot_size_step_size"])),
+        ),
+        "MARKET_LOT_SIZE": (
+            Decimal(str(public_rules["market_lot_size_minimum_quantity"])),
+            Decimal(str(public_rules["market_lot_size_maximum_quantity"])),
+            Decimal(str(public_rules["market_lot_size_step_size"])),
+        ),
+    }
+    if public_quantity_values != expected_public_quantity_values:
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} public quantity projection does not match rules"
+        )
+    if any(
+        public_quantity_values.get(filter_type) != filter_values
+        for filter_type, filter_values in signed_quantity_values.items()
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} signed quantity filters do not match public rules"
+        )
+
+    # Notional DTO의 null·MARKET flag·기간까지 비교하고 public effective 교집을 rules 요약에 결속한다.
+    signed_notional_values = {
+        str(filter_value["filter_type"]): (
+            None
+            if filter_value["minimum_notional"] is None
+            else Decimal(str(filter_value["minimum_notional"])),
+            None
+            if filter_value["maximum_notional"] is None
+            else Decimal(str(filter_value["maximum_notional"])),
+            filter_value["apply_minimum_to_market"],
+            filter_value["apply_maximum_to_market"],
+            int(filter_value["average_price_minutes"]),
+        )
+        for filter_value in signed_notional_filters
+    }
+    public_notional_values = {
+        str(filter_value["filter_type"]): (
+            None
+            if filter_value["minimum_notional"] is None
+            else Decimal(str(filter_value["minimum_notional"])),
+            None
+            if filter_value["maximum_notional"] is None
+            else Decimal(str(filter_value["maximum_notional"])),
+            filter_value["apply_minimum_to_market"],
+            filter_value["apply_maximum_to_market"],
+            int(filter_value["average_price_minutes"]),
+        )
+        for filter_value in public_notional_filters
+    }
+    if not public_notional_values or any(
+        public_notional_values.get(filter_type) != filter_values
+        for filter_type, filter_values in signed_notional_values.items()
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} signed notional filters do not match public rules"
+        )
+    public_minimum_candidates = tuple(
+        filter_values[0]
+        for filter_values in public_notional_values.values()
+        if filter_values[2] and filter_values[0] is not None
+    )
+    public_maximum_candidates = tuple(
+        filter_values[1]
+        for filter_values in public_notional_values.values()
+        if filter_values[3] and filter_values[1] is not None
+    )
+    effective_public_minimum = (
+        max(public_minimum_candidates) if public_minimum_candidates else None
+    )
+    effective_public_maximum = (
+        min(public_maximum_candidates) if public_maximum_candidates else None
+    )
+    summarized_public_minimum = (
+        None
+        if public_rules["minimum_notional"] is None
+        else Decimal(str(public_rules["minimum_notional"]))
+    )
+    summarized_public_maximum = (
+        None
+        if public_rules["maximum_notional"] is None
+        else Decimal(str(public_rules["maximum_notional"]))
+    )
+    if (
+        effective_public_minimum != summarized_public_minimum
+        or effective_public_maximum != summarized_public_maximum
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} public notional projection does not match rules"
+        )
+
+    # Count는 runtime과 같이 양방향 exact이고 passive type은 signed 집합이 public의 부분집합이어야 한다.
+    signed_exchange_count_values = {
+        str(filter_value["filter_type"]): int(filter_value["maximum_count"])
+        for filter_value in signed_exchange_count_filters
+    }
+    public_exchange_count_values = {
+        str(filter_value["filter_type"]): int(filter_value["maximum_count"])
+        for filter_value in public_exchange_count_filters
+    }
+    signed_symbol_count_values = {
+        str(filter_value["filter_type"]): int(filter_value["maximum_count"])
+        for filter_value in signed_symbol_count_filters
+    }
+    public_symbol_count_values = {
+        str(filter_value["filter_type"]): int(filter_value["maximum_count"])
+        for filter_value in public_symbol_count_filters
+    }
+    if (
+        signed_exchange_count_values != public_exchange_count_values
+        or signed_symbol_count_values != public_symbol_count_values
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} signed count filters do not match public rules"
+        )
+    if not signed_passive_filter_types.issubset(public_passive_filter_types):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} signed passive filters do not match public rules"
+        )
+
+    # MAX_POSITION은 signed/public projection과 public scalar summary가 모두 같은 Decimal이어야 한다.
+    signed_maximum_position = _require_plain_decimal(
+        account_filters["symbol_maximum_position"],
+        f"{location} symbol_maximum_position",
+        minimum=Decimal("0"),
+        allow_none=True,
+    )
+    public_maximum_position = _require_plain_decimal(
+        public_rules["maximum_position"],
+        f"{location} public maximum_position",
+        minimum=Decimal("0"),
+        allow_none=True,
+    )
+    projected_public_maximum_position = _require_plain_decimal(
+        public_filters["symbol_maximum_position"],
+        f"{location} public symbol_maximum_position",
+        minimum=Decimal("0"),
+        allow_none=True,
+    )
+    if (
+        signed_maximum_position != projected_public_maximum_position
+        or projected_public_maximum_position != public_maximum_position
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} MAX_POSITION does not match public rules"
+        )
+
+    # Composite의 asset collection은 v2 호환 projection과 순서·값까지 정확히 같아야 한다.
+    composite_asset_filters = _validate_account_asset_filters(
+        account_filters["asset_filters"],
+        f"{location} asset filters",
+    )
+    if composite_asset_filters != account_asset_filters:
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} asset projection does not match"
+        )
+
+    return account_filters  # Credential·raw payload·account balance나 order identity는 포함하지 않는다.
+
+
+def _validate_account_open_state_evidence(
+    value: Mapping[str, object],
+    *,
+    location: str,
+) -> tuple[datetime, datetime]:
+    """
+    함수 이름: _validate_account_open_state_evidence()
+    기능: v3 all-symbol openOrders와 openOrderList의 signed empty 관찰시각을 검증한다.
+    인자: value -> preflight 또는 submit-time evidence mapping
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: open orders와 open order lists UTC 관찰시각 tuple
+    작성 날짜: 2026/08/31
+    """
+    # Empty proof는 bool True만 허용하고 raw order/list ID나 count를 새 schema에 추가하지 않는다.
+    for field_name in (
+        "account_open_orders_verified_empty",
+        "account_open_order_lists_verified_empty",
+    ):
+        if type(value[field_name]) is not bool or not value[field_name]:
+            raise PhaseThirteenPublicTraceValidationError(
+                f"{location} account-wide open state must be verified empty"
+            )
+    open_orders_observed_at = _require_utc_timestamp(
+        value["account_open_orders_observed_at"],
+        f"{location} account open orders observed_at",
+    )
+    open_order_lists_observed_at = _require_utc_timestamp(
+        value["account_open_order_lists_observed_at"],
+        f"{location} account open order lists observed_at",
+    )
+    if open_order_lists_observed_at < open_orders_observed_at:
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} account-wide open state observations are out of order"
+        )
+
+    return open_orders_observed_at, open_order_lists_observed_at  # 두 signed GET 완료 시각을 합치지 않는다.
+
+
+def _validate_reference_price(
+    value: object,
+    *,
+    observed_at: datetime,
+    location: str,
+) -> Mapping[str, object]:
+    """
+    함수 이름: _validate_reference_price()
+    기능: public referencePrice를 ETHUSDT 양의 Decimal과 최신 exchange 시각으로 검증한다.
+    인자: value -> reference_price JSON object
+        observed_at -> public 응답 관찰 UTC 시각
+        location -> secret을 포함하지 않는 고정 schema 위치
+    반환값: 검증된 reference price mapping
+    작성 날짜: 2026/08/31
+    """
+    reference_price = _require_exact_mapping(
+        value,
+        _REFERENCE_PRICE_FIELDS,
+        location,
+    )
+    if reference_price["symbol"] != "ETHUSDT":
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} must describe ETHUSDT"
+        )
+    price = _require_plain_decimal(
+        reference_price["price"],
+        f"{location} price",
+        minimum=Decimal("0"),
+    )
+    if price == Decimal("0"):
+        raise PhaseThirteenPublicTraceValidationError(
+            f"{location} price must be positive"
+        )
+    _require_nonnegative_integer(
+        reference_price["exchange_timestamp"],
+        f"{location} exchange_timestamp",
+    )
+
+    # Freshness는 local GET 완료 observed_at으로 증명하고 exchange timestamp는 payload provenance로 별도 보존한다.
+    _ = observed_at  # Caller의 exact timestamp 검증을 함수 계약에 명시적으로 남긴다.
+
+    return reference_price  # Raw endpoint payload 대신 notional 검증에 필요한 최소 정보만 반환한다.
 
 
 def _validate_fresh_filters(value: object) -> Mapping[str, object]:
@@ -1030,6 +1778,10 @@ def _validate_fresh_filters(value: object) -> Mapping[str, object]:
     )
     _require_utc_timestamp(filters["observed_at"], "filter observed_at")
     _validate_fresh_filter_rule_values(filters, "preflight fresh filters")
+    if filters["maximum_position"] is not None:
+        raise PhaseThirteenPublicTraceValidationError(
+            "Phase 13 BUY preflight must not contain MAX_POSITION"
+        )
 
     return filters  # Raw exchangeInfo와 endpoint query는 trace schema에 포함하지 않는다.
 
@@ -1037,19 +1789,26 @@ def _validate_fresh_filters(value: object) -> Mapping[str, object]:
 def _validate_order_attempt_against_fresh_filters(
     attempt: Mapping[str, object],
     filters: Mapping[str, object],
+    account_asset_filters: tuple[Mapping[str, object], ...],
+    reference_price: Mapping[str, object],
 ) -> None:
     """
     함수 이름: _validate_order_attempt_against_fresh_filters()
-    기능: filter 뒤 최종 제출 수량·notional이 기록된 fresh exchangeInfo grid와 범위를 만족하는지 검증한다.
+    기능: 최종 수량을 fresh symbol·account filter와 official MARKET reference notional로 검증한다.
     인자: attempt -> 검증된 order attempt mapping
         filters -> 검증된 fresh_filters mapping
+        account_asset_filters -> 검증된 signed MAX_ASSET filter tuple
+        reference_price -> 검증된 public reference price mapping
     반환값: 없음
     작성 날짜: 2026/08/31
     """
     submitted_quantity = Decimal(str(attempt["final_submitted_quantity"]))
-    final_notional = Decimal(str(attempt["final_notional"]))
     base_asset_precision = int(filters["base_asset_precision"])
     precision_step = Decimal("1").scaleb(-base_asset_precision)
+    reference_notional = _multiply_decimal128(
+        submitted_quantity,
+        Decimal(str(reference_price["price"])),
+    )
 
     # Production floor와 동일하게 precision quantum 및 0이 아닌 lot step을 모두 만족해야 한다.
     active_steps = [precision_step]
@@ -1091,31 +1850,61 @@ def _validate_order_attempt_against_fresh_filters(
             )
     minimum_notional = filters["minimum_notional"]
     maximum_notional = filters["maximum_notional"]
-    if minimum_notional is not None and final_notional < Decimal(
+    if minimum_notional is not None and reference_notional < Decimal(
         str(minimum_notional)
     ):
         raise PhaseThirteenPublicTraceValidationError(
             "final notional is below the fresh filter minimum"
         )
-    if maximum_notional is not None and final_notional > Decimal(
+    if maximum_notional is not None and reference_notional > Decimal(
         str(maximum_notional)
     ):
         raise PhaseThirteenPublicTraceValidationError(
             "final notional exceeds the fresh filter maximum"
         )
 
+    # MAX_POSITION은 BUY에만 적용되며 이 실증 target은 해당 filter 부재를 요구한다.
+    if attempt["side"] == "BUY" and filters["maximum_position"] is not None:
+        raise PhaseThirteenPublicTraceValidationError(
+            "Phase 13 BUY submit-time rules must not contain MAX_POSITION"
+        )
+
+    # Quantity 기반 MARKET에는 quote MAX_ASSET 공식 환산식이 없으므로 base 수량만 평가한다.
+    for account_filter in account_asset_filters:
+        if account_filter["asset"] != "ETH":
+            raise PhaseThirteenPublicTraceValidationError(
+                "quantity MARKET cannot prove a quote MAX_ASSET limit"
+            )
+        if submitted_quantity > Decimal(
+            str(account_filter["maximum_quantity"])
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "final MARKET order exceeds a signed MAX_ASSET limit"
+            )
+
     return None  # Filter snapshot과 제출 claim을 검증만 하고 caller evidence는 변경하지 않는다.
 
 
-def _validate_preflight(value: object) -> Mapping[str, object]:
+def _validate_preflight(
+    value: object,
+    *,
+    schema_version: int,
+) -> Mapping[str, object]:
     """
     함수 이름: _validate_preflight()
     기능: fixed Spot Testnet endpoint, readiness와 mutation 전 exact zero-state를 검증한다.
     인자: value -> preflight JSON object
+        schema_version -> top-level trace schema version
     반환값: 검증된 preflight mapping
     작성 날짜: 2026/08/31
     """
-    preflight = _require_exact_mapping(value, _PREFLIGHT_FIELDS, "preflight")
+    # V2는 보존 artifact의 asset-only schema, v3는 full filter와 account-wide state schema를 쓴다.
+    expected_fields = (
+        _PREFLIGHT_FIELDS_V3
+        if schema_version == 3
+        else _PREFLIGHT_FIELDS_V2
+    )
+    preflight = _require_exact_mapping(value, expected_fields, "preflight")
     if preflight["endpoint_set"] != "BINANCE_SPOT_TESTNET":
         raise PhaseThirteenPublicTraceValidationError(
             "preflight endpoint set must be Binance Spot Testnet"
@@ -1144,7 +1933,72 @@ def _validate_preflight(value: object) -> Mapping[str, object]:
         )
     _require_utc_timestamp(preflight["verified_at"], "preflight verified_at")
     _validate_commission_policy(preflight["commission_policy"])
-    _validate_fresh_filters(preflight["fresh_filters"])
+    fresh_filters = _validate_fresh_filters(preflight["fresh_filters"])
+    account_filters_observed_at = _require_utc_timestamp(
+        preflight["account_filters_observed_at"],
+        "preflight account filters observed_at",
+    )
+    account_asset_filters = _validate_account_asset_filters(
+        preflight["account_asset_filters"],
+        "preflight account asset filters",
+    )
+    account_open_orders_observed_at: datetime | None = None
+    account_open_order_lists_observed_at: datetime | None = None
+    if schema_version == 3:
+        _validate_account_relevant_filters(
+            preflight["account_relevant_filters"],
+            account_asset_filters=account_asset_filters,
+            public_relevant_filters=preflight["public_relevant_filters"],
+            public_rules=fresh_filters,
+            location="preflight account relevant filters",
+        )
+        (
+            account_open_orders_observed_at,
+            account_open_order_lists_observed_at,
+        ) = _validate_account_open_state_evidence(
+            preflight,
+            location="preflight",
+        )
+    reference_price_observed_at = _require_utc_timestamp(
+        preflight["reference_price_observed_at"],
+        "preflight reference price observed_at",
+    )
+    _validate_reference_price(
+        preflight["reference_price"],
+        observed_at=reference_price_observed_at,
+        location="preflight reference price",
+    )
+
+    # Signed account filter와 public reference price 응답은 preflight 완료 이후가 될 수 없다.
+    verified_at = _require_utc_timestamp(
+        preflight["verified_at"],
+        "preflight verified_at",
+    )
+    filters_observed_at = _require_utc_timestamp(
+        preflight["fresh_filters"]["observed_at"],
+        "preflight filter observed_at",
+    )
+    ordered_safety_observations = [
+        account_filters_observed_at,
+        filters_observed_at,
+    ]
+    if (
+        account_open_orders_observed_at is not None
+        and account_open_order_lists_observed_at is not None
+    ):
+        ordered_safety_observations.extend(
+            (
+                account_open_orders_observed_at,
+                account_open_order_lists_observed_at,
+            )
+        )
+    ordered_safety_observations.extend(
+        (reference_price_observed_at, verified_at)
+    )
+    if ordered_safety_observations != sorted(ordered_safety_observations):
+        raise PhaseThirteenPublicTraceValidationError(
+            "preflight safety observations are outside the fetch order"
+        )
 
     # Fresh runtime의 Position/pending/UNKNOWN/open order가 모두 exact zero일 때만 evidence가 시작된다.
     position_quantity = _require_plain_decimal(
@@ -1749,18 +2603,27 @@ def _validate_order_execution_traces(
 def _validate_submit_time_filter_evidence(
     value: object,
     attempts: tuple[Mapping[str, object], ...],
+    *,
+    schema_version: int,
 ) -> tuple[Mapping[str, object], ...]:
     """
     함수 이름: _validate_submit_time_filter_evidence()
     기능: production prepare-time filter 관찰을 matching attempt와 1:1 결속하고 최종 제출 산술을 검증한다.
     인자: value -> submit_time_filter_evidence JSON array
         attempts -> 먼저 검증한 order attempt tuple
+        schema_version -> top-level trace schema version
     반환값: 검증된 submit-time filter evidence tuple
     작성 날짜: 2026/08/31
     """
+    # V3 entry만 full account filter와 all-symbol open state 증거를 exact 필드로 요구한다.
+    expected_fields = (
+        _SUBMIT_TIME_FILTER_EVIDENCE_FIELDS_V3
+        if schema_version == 3
+        else _SUBMIT_TIME_FILTER_EVIDENCE_FIELDS_V2
+    )
     entries = _require_contiguous_sequence(
         _require_list(value, "submit-time filter evidence"),
-        _SUBMIT_TIME_FILTER_EVIDENCE_FIELDS,
+        expected_fields,
         "submit-time filter evidence",
     )
     attempts_by_client_id = {
@@ -1782,11 +2645,48 @@ def _validate_submit_time_filter_evidence(
             entry["observed_at"],
             "submit-time filter observed_at",
         )
-        if previous_observed_at is not None and observed_at < previous_observed_at:
+        account_filters_observed_at = _require_utc_timestamp(
+            entry["account_filters_observed_at"],
+            "submit-time account filters observed_at",
+        )
+        reference_price_observed_at = _require_utc_timestamp(
+            entry["reference_price_observed_at"],
+            "submit-time reference price observed_at",
+        )
+        ordered_safety_observations = [
+            account_filters_observed_at,
+            observed_at,
+        ]
+        if schema_version == 3:
+            (
+                account_open_orders_observed_at,
+                account_open_order_lists_observed_at,
+            ) = _validate_account_open_state_evidence(
+                entry,
+                location="submit-time filter evidence",
+            )
+            ordered_safety_observations.extend(
+                (
+                    account_open_orders_observed_at,
+                    account_open_order_lists_observed_at,
+                )
+            )
+        ordered_safety_observations.append(reference_price_observed_at)
+        latest_observed_at = max(ordered_safety_observations)
+        if ordered_safety_observations != sorted(
+            ordered_safety_observations
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "submit-time safety observations are outside the fetch order"
+            )
+        if (
+            previous_observed_at is not None
+            and min(ordered_safety_observations) < previous_observed_at
+        ):
             raise PhaseThirteenPublicTraceValidationError(
                 "submit-time filter observation times must be monotonic"
             )
-        previous_observed_at = observed_at
+        previous_observed_at = latest_observed_at
         if (
             client_order_id is None
             or client_order_id not in attempts_by_client_id
@@ -1809,19 +2709,51 @@ def _validate_submit_time_filter_evidence(
             matching_attempt["attempted_at"],
             "matching order attempted_at",
         )
-        if observed_at > attempted_at:
+        if latest_observed_at > attempted_at:
             raise PhaseThirteenPublicTraceValidationError(
-                "submit-time filter observation follows POST submission start"
+                "submit-time safety observation follows POST submission start"
+            )
+        # Composite의 첫 fetch부터 POST 시작까지 고정 freshness 경계를 넘기면
+        # 중간 account drift를 배제할 수 없다.
+        if (
+            schema_version == 3
+            and attempted_at - min(ordered_safety_observations)
+            > _MAXIMUM_ORDER_PREPARATION_AGE
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "submit-time filter evidence exceeded its maximum age"
             )
 
-        # Rules는 preflight snapshot과 별개 exact object이며 matching final quantity에만 권위를 갖는다.
+        # Rules·signed account filter·reference price는 preflight과 별개이며 matching final quantity에만 권위를 갖는다.
         rules = _require_exact_mapping(
             entry["rules"],
             _FRESH_FILTER_RULE_FIELDS,
             "submit-time filter rules",
         )
         _validate_fresh_filter_rule_values(rules, "submit-time filter rules")
-        _validate_order_attempt_against_fresh_filters(matching_attempt, rules)
+        account_asset_filters = _validate_account_asset_filters(
+            entry["account_asset_filters"],
+            "submit-time account asset filters",
+        )
+        if schema_version == 3:
+            _validate_account_relevant_filters(
+                entry["account_relevant_filters"],
+                account_asset_filters=account_asset_filters,
+                public_relevant_filters=entry["public_relevant_filters"],
+                public_rules=rules,
+                location="submit-time account relevant filters",
+            )
+        reference_price = _validate_reference_price(
+            entry["reference_price"],
+            observed_at=reference_price_observed_at,
+            location="submit-time reference price",
+        )
+        _validate_order_attempt_against_fresh_filters(
+            matching_attempt,
+            rules,
+            account_asset_filters,
+            reference_price,
+        )
 
     if observed_client_order_ids != set(attempts_by_client_id):
         raise PhaseThirteenPublicTraceValidationError(
@@ -2559,6 +3491,7 @@ def _validate_final_state(
 
 
 def _validate_cross_trace_contract(
+    schema_version: int,
     outcome: str,
     typed_reason: str | None,
     started_at: datetime,
@@ -2580,7 +3513,8 @@ def _validate_cross_trace_contract(
     """
     함수 이름: _validate_cross_trace_contract()
     기능: preflight→1L path→order/fill→Trade/transport→fresh final 전체 provenance를 결속한다.
-    인자: outcome -> top-level normalized outcome
+    인자: schema_version -> top-level trace schema version
+        outcome -> top-level normalized outcome
         typed_reason -> BLOCKED/FAILED의 safe typed reason 또는 None
         started_at -> run 시작 UTC 시각
         completed_at -> run 완료 UTC 시각
@@ -2638,6 +3572,25 @@ def _validate_cross_trace_contract(
             "recovery and final duplicate counts do not match"
         )
 
+    # V3의 두 account-wide state 관찰도 다른 signed/public safety evidence와 같은 run window에 둔다.
+    preflight_account_state_timestamps: tuple[datetime, ...] = ()
+    submit_time_account_state_timestamp_fields: tuple[str, ...] = ()
+    if schema_version == 3:
+        preflight_account_state_timestamps = (
+            _require_utc_timestamp(
+                preflight["account_open_orders_observed_at"],
+                "preflight account open orders observed_at",
+            ),
+            _require_utc_timestamp(
+                preflight["account_open_order_lists_observed_at"],
+                "preflight account open order lists observed_at",
+            ),
+        )
+        submit_time_account_state_timestamp_fields = (
+            "account_open_orders_observed_at",
+            "account_open_order_lists_observed_at",
+        )
+
     # Preflight, event, attempt, result, fill, Trade, transport와 final verification을 run window에 둔다.
     causal_timestamps = [
         _require_utc_timestamp(preflight["verified_at"], "preflight verified_at"),
@@ -2645,6 +3598,15 @@ def _validate_cross_trace_contract(
             preflight["fresh_filters"]["observed_at"],
             "filter observed_at",
         ),
+        _require_utc_timestamp(
+            preflight["account_filters_observed_at"],
+            "preflight account filters observed_at",
+        ),
+        _require_utc_timestamp(
+            preflight["reference_price_observed_at"],
+            "preflight reference price observed_at",
+        ),
+        *preflight_account_state_timestamps,
         *(
             _require_utc_timestamp(
                 event["source_event_time"],
@@ -2665,10 +3627,16 @@ def _validate_cross_trace_contract(
         ),
         *(
             _require_utc_timestamp(
-                evidence["observed_at"],
-                "submit-time filter observed_at",
+                evidence[field_name],
+                f"submit-time {field_name}",
             )
             for evidence in submit_time_filter_evidence
+            for field_name in (
+                "observed_at",
+                "account_filters_observed_at",
+                "reference_price_observed_at",
+                *submit_time_account_state_timestamp_fields,
+            )
         ),
         *(
             _require_utc_timestamp(result["observed_at"], "result observed_at")
@@ -2704,9 +3672,22 @@ def _validate_cross_trace_contract(
         preflight["fresh_filters"]["observed_at"],
         "filter observed_at",
     )
-    if filter_observed_at > preflight_verified_at:
+    account_filters_observed_at = _require_utc_timestamp(
+        preflight["account_filters_observed_at"],
+        "preflight account filters observed_at",
+    )
+    reference_price_observed_at = _require_utc_timestamp(
+        preflight["reference_price_observed_at"],
+        "preflight reference price observed_at",
+    )
+    if max(
+        filter_observed_at,
+        account_filters_observed_at,
+        reference_price_observed_at,
+        *preflight_account_state_timestamps,
+    ) > preflight_verified_at:
         raise PhaseThirteenPublicTraceValidationError(
-            "fresh filter observation follows preflight verification"
+            "fresh safety observation follows preflight verification"
         )
     if attempts and preflight_verified_at > _require_utc_timestamp(
         attempts[0]["attempted_at"],
@@ -2962,16 +3943,39 @@ def _validate_cross_trace_contract(
         ),
         None,
     )
-    if buy_filter_evidence is not None and _require_utc_timestamp(
-        fingerprint["source_event_time"],
-        "decision source_event_time",
-    ) > _require_utc_timestamp(
-        buy_filter_evidence["observed_at"],
-        "BUY submit-time filter observed_at",
-    ):
-        raise PhaseThirteenPublicTraceValidationError(
-            "BUY submit-time filter observation precedes its public source event"
+    if buy_filter_evidence is not None:
+        source_event_time = _require_utc_timestamp(
+            fingerprint["source_event_time"],
+            "decision source_event_time",
         )
+        buy_safety_observations = (
+            _require_utc_timestamp(
+                buy_filter_evidence["observed_at"],
+                "BUY submit-time filter observed_at",
+            ),
+            _require_utc_timestamp(
+                buy_filter_evidence["account_filters_observed_at"],
+                "BUY submit-time account filters observed_at",
+            ),
+            _require_utc_timestamp(
+                buy_filter_evidence["reference_price_observed_at"],
+                "BUY submit-time reference price observed_at",
+            ),
+            *(
+                _require_utc_timestamp(
+                    buy_filter_evidence[field_name],
+                    f"BUY submit-time {field_name}",
+                )
+                for field_name in submit_time_account_state_timestamp_fields
+            ),
+        )
+        if any(
+            observation_time < source_event_time
+            for observation_time in buy_safety_observations
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "BUY submit-time safety observation precedes its public source event"
+            )
 
     # 신규 BUY attempt가 immutable evaluation, Action type과 cap claim을 바꾸지 않았는지 비교한다.
     matching_attempt = any(
@@ -3121,7 +4125,11 @@ def _validate_trace_body(
     """
     _reject_secret_material(trace_body, forbidden_values)
     trace = _require_exact_mapping(trace_body, _TRACE_BODY_FIELDS, "trace body")
-    if trace["schema_version"] != PHASE13_PUBLIC_TRACE_SCHEMA_VERSION:
+    schema_version = _require_nonnegative_integer(
+        trace["schema_version"],
+        "trace schema version",
+    )
+    if schema_version not in _SUPPORTED_PHASE13_PUBLIC_TRACE_SCHEMA_VERSIONS:
         raise PhaseThirteenPublicTraceValidationError(
             "trace schema version is unsupported"
         )
@@ -3143,7 +4151,10 @@ def _validate_trace_body(
     # UUIDv4 run identity와 bounded run timestamps는 artifact끼리의 accidental 합성을 막는다.
     _require_uuid4(trace["run_id"], "trace run_id")
     started_at, completed_at = _validate_timestamps(trace["timestamps"])
-    preflight = _validate_preflight(trace["preflight"])
+    preflight = _validate_preflight(
+        trace["preflight"],
+        schema_version=schema_version,
+    )
     baseline_history_sha256 = trace["baseline_history_sha256"]
     if not isinstance(
         baseline_history_sha256,
@@ -3176,6 +4187,7 @@ def _validate_trace_body(
     submit_time_filter_evidence = _validate_submit_time_filter_evidence(
         trace["submit_time_filter_evidence"],
         attempts,
+        schema_version=schema_version,
     )
     results = _validate_order_results(trace["order_results"], attempts)
     _validate_order_execution_traces(
@@ -3196,6 +4208,7 @@ def _validate_trace_body(
         run_trades=run_trades,
     )
     _validate_cross_trace_contract(
+        schema_version,
         str(outcome),
         typed_reason,
         started_at,

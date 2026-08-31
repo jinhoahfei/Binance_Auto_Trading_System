@@ -31,6 +31,32 @@ _ORDER_STATUS_BY_BINANCE_VALUE = {
     "EXPIRED": OrderStatus.EXPIRED,
     "EXPIRED_IN_MATCH": OrderStatus.EXPIRED_IN_MATCH,
 }
+_EXCHANGE_ORDER_COUNT_FILTER_TYPES = frozenset(
+    {
+        "EXCHANGE_MAX_NUM_ORDERS",
+        "EXCHANGE_MAX_NUM_ALGO_ORDERS",
+        "EXCHANGE_MAX_NUM_ICEBERG_ORDERS",
+        "EXCHANGE_MAX_NUM_ORDER_LISTS",
+    }
+)
+_SYMBOL_ORDER_COUNT_FILTER_TYPES = frozenset(
+    {
+        "MAX_NUM_ORDERS",
+        "MAX_NUM_ALGO_ORDERS",
+        "MAX_NUM_ICEBERG_ORDERS",
+        "MAX_NUM_ORDER_AMENDS",
+        "MAX_NUM_ORDER_LISTS",
+    }
+)
+_PLAIN_MARKET_PASSIVE_SYMBOL_FILTER_TYPES = frozenset(
+    {
+        "PRICE_FILTER",
+        "PERCENT_PRICE",
+        "PERCENT_PRICE_BY_SIDE",
+        "ICEBERG_PARTS",
+        "TRAILING_DELTA",
+    }
+)
 
 
 class BinancePayloadError(ValueError):
@@ -44,7 +70,7 @@ class BinancePayloadError(ValueError):
 class SymbolFilterError(ValueError):
     """
     클래스 이름: SymbolFilterError
-    기능: 주문이 현재 symbol 상태 또는 수량·notional filter를 통과하지 못했음을 나타낸다.
+    기능: 주문이 symbol 상태·수량·notional·account asset/position filter를 통과하지 못했음을 나타낸다.
     작성 날짜: 2026/08/22
     """
 
@@ -143,10 +169,245 @@ class NotionalFilter:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountAssetFilter:
+    """
+    클래스 이름: AccountAssetFilter
+    기능: 계정에 적용된 공식 MAX_ASSET 단일 주문 자산 상한을 불변 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    filter_type: str
+    asset: str
+    maximum_quantity: Decimal
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: MAX_ASSET 종류, canonical 자산과 음이 아닌 유한 상한을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # 이 DTO는 /myFilters의 공식 MAX_ASSET 항목만 표현하도록 종류를 고정한다.
+        if self.filter_type != "MAX_ASSET":
+            raise ValueError("filter_type must be MAX_ASSET")
+        if (
+            not isinstance(self.asset, str)
+            or not self.asset
+            or self.asset != self.asset.strip().upper()
+            or not self.asset.isascii()
+            or not self.asset.isalnum()
+        ):
+            raise ValueError("asset must be canonical uppercase ASCII")
+
+        # 공식 limit 문자열을 변환한 Decimal은 0 상한도 실제 제한으로 보존한다.
+        _validate_non_negative_decimal(
+            self.maximum_quantity,
+            "maximum_quantity",
+        )  # 검증된 값은 frozen field에 원문 Decimal 그대로 남긴다.
+
+
+@dataclass(frozen=True, slots=True)
+class AccountOrderCountFilter:
+    """
+    클래스 이름: AccountOrderCountFilter
+    기능: /myFilters의 exchange 또는 symbol 주문 개수 상한 하나를 불변 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    filter_type: str
+    maximum_count: int
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 공식 주문 개수 filter 종류와 음이 아닌 정수 상한을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Exchange와 symbol scope의 공식 count filter만 한 DTO에 허용한다.
+        allowed_filter_types = (
+            _EXCHANGE_ORDER_COUNT_FILTER_TYPES
+            | _SYMBOL_ORDER_COUNT_FILTER_TYPES
+        )
+        if self.filter_type not in allowed_filter_types:
+            raise ValueError("unsupported account order count filter type")
+        if (
+            isinstance(self.maximum_count, bool)
+            or not isinstance(self.maximum_count, int)
+            or self.maximum_count < 0
+        ):
+            raise ValueError("maximum_count must be a non-negative integer")
+
+        return None  # Scope와 count를 모두 통과한 frozen DTO만 생성 완료한다.
+
+
+@dataclass(frozen=True, slots=True)
+class AccountRelevantFilters:
+    """
+    클래스 이름: AccountRelevantFilters
+    기능: signed /myFilters의 exchange·symbol·asset 규칙을 raw JSON 없이 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    symbol: str
+    exchange_order_count_filters: tuple[AccountOrderCountFilter, ...]
+    symbol_order_count_filters: tuple[AccountOrderCountFilter, ...]
+    symbol_quantity_filters: tuple[QuantityFilter, ...]
+    symbol_notional_filters: tuple[NotionalFilter, ...]
+    symbol_maximum_position: Decimal | None
+    passive_symbol_filter_types: frozenset[str]
+    asset_filters: tuple[AccountAssetFilter, ...]
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 각 filter scope의 exact DTO 타입, 중복과 값 범위를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Body에 없는 요청 symbol은 signed request context에서 canonical 값으로 반드시 결속한다.
+        if (
+            not isinstance(self.symbol, str)
+            or not self.symbol
+            or self.symbol != self.symbol.strip().upper()
+            or not self.symbol.isascii()
+            or not self.symbol.isalnum()
+        ):
+            raise ValueError("symbol must be canonical uppercase ASCII")
+
+        # Scope별 collection은 immutable exact tuple만 받아 raw mapping 혼입을 막는다.
+        for field_name in (
+            "exchange_order_count_filters",
+            "symbol_order_count_filters",
+        ):
+            filter_values = getattr(self, field_name)
+            if not isinstance(filter_values, tuple) or any(
+                type(filter_value) is not AccountOrderCountFilter
+                for filter_value in filter_values
+            ):
+                raise TypeError(
+                    f"{field_name} must be an AccountOrderCountFilter tuple"
+                )
+            if len({value.filter_type for value in filter_values}) != len(
+                filter_values
+            ):
+                raise ValueError(f"{field_name} must not contain duplicates")
+
+        # Exchange와 symbol count 종류가 서로 잘못 배치되면 생성 시점에 거부한다.
+        if any(
+            value.filter_type not in _EXCHANGE_ORDER_COUNT_FILTER_TYPES
+            for value in self.exchange_order_count_filters
+        ):
+            raise ValueError("exchange count filter has an invalid scope")
+        if any(
+            value.filter_type not in _SYMBOL_ORDER_COUNT_FILTER_TYPES
+            for value in self.symbol_order_count_filters
+        ):
+            raise ValueError("symbol count filter has an invalid scope")
+
+        # MARKET 수량·notional filter는 기존 strict DTO를 그대로 재사용한다.
+        if not isinstance(self.symbol_quantity_filters, tuple) or any(
+            type(filter_value) is not QuantityFilter
+            for filter_value in self.symbol_quantity_filters
+        ):
+            raise TypeError(
+                "symbol_quantity_filters must be a QuantityFilter tuple"
+            )
+        if not isinstance(self.symbol_notional_filters, tuple) or any(
+            type(filter_value) is not NotionalFilter
+            for filter_value in self.symbol_notional_filters
+        ):
+            raise TypeError(
+                "symbol_notional_filters must be a NotionalFilter tuple"
+            )
+        if len(
+            {value.filter_type for value in self.symbol_quantity_filters}
+        ) != len(self.symbol_quantity_filters):
+            raise ValueError("symbol_quantity_filters must not contain duplicates")
+        if len(
+            {value.filter_type for value in self.symbol_notional_filters}
+        ) != len(self.symbol_notional_filters):
+            raise ValueError("symbol_notional_filters must not contain duplicates")
+
+        # MAX_POSITION은 선택 규칙이지만 존재하면 0을 포함한 유한 Decimal이어야 한다.
+        if self.symbol_maximum_position is not None:
+            _validate_non_negative_decimal(
+                self.symbol_maximum_position,
+                "symbol_maximum_position",
+            )
+        if not isinstance(self.passive_symbol_filter_types, frozenset):
+            raise TypeError("passive_symbol_filter_types must be a frozenset")
+        if not self.passive_symbol_filter_types.issubset(
+            _PLAIN_MARKET_PASSIVE_SYMBOL_FILTER_TYPES
+        ):
+            raise ValueError("passive_symbol_filter_types contains an unknown type")
+
+        # Asset scope는 MAX_ASSET exact DTO와 자산별 단일 항목만 허용한다.
+        if not isinstance(self.asset_filters, tuple) or any(
+            type(filter_value) is not AccountAssetFilter
+            for filter_value in self.asset_filters
+        ):
+            raise TypeError("asset_filters must be an AccountAssetFilter tuple")
+        if len({value.asset for value in self.asset_filters}) != len(
+            self.asset_filters
+        ):
+            raise ValueError("asset_filters must not contain duplicate assets")
+
+        return None  # 세 scope의 type·중복·범위 검증이 끝난 경우만 생성 완료한다.
+
+
+@dataclass(frozen=True, slots=True)
+class ReferencePrice:
+    """
+    클래스 이름: ReferencePrice
+    기능: 공식 referencePrice의 symbol·양수 가격·거래소 유효 시각을 불변 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    symbol: str
+    price: Decimal
+    exchange_timestamp: int
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: canonical symbol, 양수 Decimal 가격과 음이 아닌 millisecond timestamp를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Public 응답의 symbol은 주문 규칙과 같은 canonical 대문자 ASCII 형식이어야 한다.
+        if (
+            not isinstance(self.symbol, str)
+            or not self.symbol
+            or self.symbol != self.symbol.strip().upper()
+            or not self.symbol.isascii()
+            or not self.symbol.isalnum()
+        ):
+            raise ValueError("symbol must be canonical uppercase ASCII")
+        _validate_positive_decimal(self.price, "price")
+
+        # bool은 int 하위 타입이므로 거래소 timestamp 계약에서 명시적으로 배제한다.
+        if (
+            isinstance(self.exchange_timestamp, bool)
+            or not isinstance(self.exchange_timestamp, int)
+            or self.exchange_timestamp < 0
+        ):
+            raise ValueError(
+                "exchange_timestamp must be a non-negative integer"
+            )
+
+        return None  # Symbol·price·timestamp가 모두 canonical인 DTO만 유지한다.
+
+
+@dataclass(frozen=True, slots=True)
 class SymbolTradingRules:
     """
     클래스 이름: SymbolTradingRules
-    기능: exchangeInfo에서 주문 전 검증에 필요한 Spot MARKET 규칙만 불변으로 보존한다.
+    기능: exchangeInfo에서 주문 전 검증에 필요한 Spot MARKET과 MAX_POSITION 규칙을 보존한다.
     작성 날짜: 2026/08/22
     """
 
@@ -160,6 +421,8 @@ class SymbolTradingRules:
     lot_size: QuantityFilter
     market_lot_size: QuantityFilter
     notional_filters: tuple[NotionalFilter, ...]
+    maximum_position: Decimal | None = None
+    public_relevant_filters: AccountRelevantFilters | None = None
 
     def __post_init__(self) -> None:
         """
@@ -201,12 +464,32 @@ class SymbolTradingRules:
         if not isinstance(self.notional_filters, tuple):
             raise TypeError("notional_filters must be a tuple")
 
+        # MAX_POSITION은 없을 수 있지만 있으면 0을 포함한 유한 비음수 상한이어야 한다.
+        if self.maximum_position is not None:
+            _validate_non_negative_decimal(
+                self.maximum_position,
+                "maximum_position",
+            )
+        if self.public_relevant_filters is not None:
+            if type(self.public_relevant_filters) is not AccountRelevantFilters:
+                raise TypeError(
+                    "public_relevant_filters must be an exact AccountRelevantFilters"
+                )
+            if self.public_relevant_filters.symbol != self.symbol:
+                raise ValueError(
+                    "public_relevant_filters symbol must match rules symbol"
+                )
+            if self.public_relevant_filters.asset_filters:
+                raise ValueError(
+                    "public exchangeInfo filters must not contain asset filters"
+                )
+
 
 @dataclass(frozen=True, slots=True)
 class OrderPreparationFilterEvidence:
     """
     클래스 이름: OrderPreparationFilterEvidence
-    기능: 한 Order prepare가 실제 사용한 public symbol rule과 fetch 완료 시각을 불변 보존한다.
+    기능: 한 prepare가 사용한 symbol·account filter와 reference price 및 관찰 시각을 보존한다.
     작성 날짜: 2026/08/31
     """
 
@@ -215,11 +498,18 @@ class OrderPreparationFilterEvidence:
     side: OrderSide
     observed_at: datetime
     rules: SymbolTradingRules
+    account_filters: AccountRelevantFilters
+    account_filters_observed_at: datetime
+    account_open_orders_observed_at: datetime | None
+    account_open_order_lists_observed_at: datetime | None
+    account_open_state_verified_empty: bool
+    reference_price: ReferencePrice
+    reference_price_observed_at: datetime
 
     def __post_init__(self) -> None:
         """
         함수 이름: __post_init__()
-        기능: 주문 identity, side, UTC 관찰 시각과 exact public rule 타입을 검증한다.
+        기능: 주문 identity와 submit-time public·account filter 증거 및 UTC 관찰 시각을 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/31
@@ -240,6 +530,69 @@ class OrderPreparationFilterEvidence:
             raise ValueError("observed_at must be a timezone-aware UTC datetime")
         if type(self.rules) is not SymbolTradingRules:
             raise TypeError("rules must be an exact SymbolTradingRules")
+
+        # 계정 필터는 세 scope를 모두 보존한 exact frozen DTO만 허용한다.
+        if type(self.account_filters) is not AccountRelevantFilters:
+            raise TypeError(
+                "account_filters must be an exact AccountRelevantFilters"
+            )
+        if self.account_filters.symbol != self.rules.symbol:
+            raise ValueError("account_filters symbol must match rules symbol")
+
+        # 각 fetch 완료 시각은 서로 합성하지 않고 timezone-aware UTC로 따로 보존한다.
+        for field_name in (
+            "account_filters_observed_at",
+            "reference_price_observed_at",
+        ):
+            observed_value = getattr(self, field_name)
+            if (
+                not isinstance(observed_value, datetime)
+                or observed_value.tzinfo is None
+                or observed_value.utcoffset() != timedelta(0)
+            ):
+                raise ValueError(
+                    f"{field_name} must be a timezone-aware UTC datetime"
+                )
+
+        # Account-wide isolation은 count filter 유무와 관계없이 두 signed snapshot을 모두 완전한 empty로 고정한다.
+        if type(self.account_open_state_verified_empty) is not bool:
+            raise TypeError("account_open_state_verified_empty must be a bool")
+        for field_name in (
+            "account_open_orders_observed_at",
+            "account_open_order_lists_observed_at",
+        ):
+            observed_value = getattr(self, field_name)
+            if observed_value is not None and (
+                not isinstance(observed_value, datetime)
+                or observed_value.tzinfo is None
+                or observed_value.utcoffset() != timedelta(0)
+            ):
+                raise ValueError(
+                    f"{field_name} must be None or a timezone-aware UTC datetime"
+                )
+        if (
+            not self.account_open_state_verified_empty
+            or self.account_open_orders_observed_at is None
+            or self.account_open_order_lists_observed_at is None
+        ):
+            raise ValueError(
+                "prepare requires complete empty account open-state evidence"
+            )
+        if type(self.reference_price) is not ReferencePrice:
+            raise TypeError("reference_price must be an exact ReferencePrice")
+        if self.reference_price.symbol != self.rules.symbol:
+            raise ValueError("reference_price symbol must match rules symbol")
+
+    @property
+    def account_asset_filters(self) -> tuple[AccountAssetFilter, ...]:
+        """
+        함수 이름: account_asset_filters()
+        기능: 기존 trace 소비자에 full signed DTO의 MAX_ASSET projection을 제공한다.
+        인자: 없음
+        반환값: immutable AccountAssetFilter tuple
+        작성 날짜: 2026/08/31
+        """
+        return self.account_filters.asset_filters  # Raw payload 없이 호환 projection만 반환한다.
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,6 +822,406 @@ def _parse_notional_filter(
     raise BinancePayloadError("unsupported notional filter type")
 
 
+def _parse_account_order_count_filter(
+    payload: Mapping[object, object],
+    *,
+    allowed_filter_types: frozenset[str],
+) -> AccountOrderCountFilter:
+    """
+    함수 이름: _parse_account_order_count_filter()
+    기능: /myFilters의 scope별 주문 개수 filter를 exact 필드와 typed 상한으로 변환한다.
+    인자: payload -> exchangeFilters 또는 symbolFilters의 한 JSON object
+        allowed_filter_types -> 현재 scope에 허용된 공식 filter type 집합
+    반환값: 검증된 AccountOrderCountFilter
+    작성 날짜: 2026/08/31
+    """
+    # 현재 scope의 공식 type을 먼저 고정한 뒤 type별 유일 상한 field를 선택한다.
+    filter_type = _validate_canonical_text(
+        payload.get("filterType"),
+        "filterType",
+    )
+    if filter_type not in allowed_filter_types:
+        raise BinancePayloadError("unsupported account order count filter type")
+    maximum_field_by_filter_type = {
+        "EXCHANGE_MAX_NUM_ORDERS": "maxNumOrders",
+        "EXCHANGE_MAX_NUM_ALGO_ORDERS": "maxNumAlgoOrders",
+        "EXCHANGE_MAX_NUM_ICEBERG_ORDERS": "maxNumIcebergOrders",
+        "EXCHANGE_MAX_NUM_ORDER_LISTS": "maxNumOrderLists",
+        "MAX_NUM_ORDERS": "maxNumOrders",
+        "MAX_NUM_ALGO_ORDERS": "maxNumAlgoOrders",
+        "MAX_NUM_ICEBERG_ORDERS": "maxNumIcebergOrders",
+        "MAX_NUM_ORDER_AMENDS": "maxNumOrderAmends",
+        "MAX_NUM_ORDER_LISTS": "maxNumOrderLists",
+    }
+    maximum_field = maximum_field_by_filter_type[filter_type]
+    if set(payload) != {"filterType", maximum_field}:
+        raise BinancePayloadError(
+            "account order count filter fields do not match official schema"
+        )
+
+    # bool을 정수로 수용하지 않는 공통 reader로 공식 non-negative count를 읽는다.
+    return AccountOrderCountFilter(
+        filter_type=filter_type,
+        maximum_count=_read_non_negative_integer(
+            payload.get(maximum_field),
+            maximum_field,
+        ),
+    )  # Exact schema의 count 하나만 immutable DTO로 반환한다.
+
+
+def _validate_plain_market_passive_symbol_filter(
+    payload: Mapping[object, object],
+    filter_type: str,
+) -> None:
+    """
+    함수 이름: _validate_plain_market_passive_symbol_filter()
+    기능: price·iceberg·trailing 전용 filter의 exact schema를 검증하고 plain MARKET 비적용을 확정한다.
+    인자: payload -> symbolFilters의 한 JSON object
+        filter_type -> 검증할 공식 filter type
+    반환값: 없음
+    작성 날짜: 2026/08/31
+    """
+    # Price·iceberg·trailing filter는 각 type의 decimal과 integer field 조합을 exact map으로 유지한다.
+    decimal_fields_by_filter_type = {
+        "PRICE_FILTER": ("minPrice", "maxPrice", "tickSize"),
+        "PERCENT_PRICE": ("multiplierUp", "multiplierDown"),
+        "PERCENT_PRICE_BY_SIDE": (
+            "bidMultiplierUp",
+            "bidMultiplierDown",
+            "askMultiplierUp",
+            "askMultiplierDown",
+        ),
+    }
+    integer_fields_by_filter_type = {
+        "PERCENT_PRICE": ("avgPriceMins",),
+        "PERCENT_PRICE_BY_SIDE": ("avgPriceMins",),
+        "ICEBERG_PARTS": ("limit",),
+        "TRAILING_DELTA": (
+            "minTrailingAboveDelta",
+            "maxTrailingAboveDelta",
+            "minTrailingBelowDelta",
+            "maxTrailingBelowDelta",
+        ),
+    }
+    decimal_fields = decimal_fields_by_filter_type.get(filter_type, ())
+    integer_fields = integer_fields_by_filter_type.get(filter_type, ())
+    if set(payload) != {"filterType", *decimal_fields, *integer_fields}:
+        raise BinancePayloadError(
+            "passive symbol filter fields do not match official schema"
+        )
+
+    # 모든 numeric field를 공식 JSON type대로 읽어 malformed 또는 추가 field를 차단한다.
+    parsed_decimals = {
+        field_name: _read_decimal_string(payload.get(field_name), field_name)
+        for field_name in decimal_fields
+    }
+    parsed_integers = {
+        field_name: _read_non_negative_integer(
+            payload.get(field_name),
+            field_name,
+        )
+        for field_name in integer_fields
+    }
+    if any(value < _DECIMAL_ZERO for value in parsed_decimals.values()):
+        raise BinancePayloadError(
+            "passive symbol filter decimals must be non-negative"
+        )
+    if filter_type == "PRICE_FILTER":
+        maximum_price = parsed_decimals["maxPrice"]
+        minimum_price = parsed_decimals["minPrice"]
+        if maximum_price > _DECIMAL_ZERO and maximum_price < minimum_price:
+            raise BinancePayloadError("PRICE_FILTER range is invalid")
+    if filter_type == "PERCENT_PRICE" and (
+        parsed_decimals["multiplierUp"]
+        < parsed_decimals["multiplierDown"]
+    ):
+        raise BinancePayloadError("PERCENT_PRICE range is invalid")
+    if filter_type == "PERCENT_PRICE_BY_SIDE" and (
+        parsed_decimals["bidMultiplierUp"]
+        < parsed_decimals["bidMultiplierDown"]
+        or parsed_decimals["askMultiplierUp"]
+        < parsed_decimals["askMultiplierDown"]
+    ):
+        raise BinancePayloadError("PERCENT_PRICE_BY_SIDE range is invalid")
+    if filter_type == "TRAILING_DELTA" and (
+        parsed_integers["maxTrailingAboveDelta"]
+        < parsed_integers["minTrailingAboveDelta"]
+        or parsed_integers["maxTrailingBelowDelta"]
+        < parsed_integers["minTrailingBelowDelta"]
+    ):
+        raise BinancePayloadError("TRAILING_DELTA range is invalid")
+
+    # Plain quantity MARKET은 price·stopPrice·icebergQty·trailingDelta를 보내지 않는다.
+    return None  # Exact schema와 범위를 통과한 passive type만 dispatcher에 승인한다.
+
+
+def _parse_account_asset_filter(
+    payload: Mapping[object, object],
+) -> AccountAssetFilter:
+    """
+    함수 이름: _parse_account_asset_filter()
+    기능: assetFilters의 MAX_ASSET 한 항목을 exact DTO로 변환한다.
+    인자: payload -> assetFilters의 한 JSON object
+    반환값: 검증된 AccountAssetFilter
+    작성 날짜: 2026/08/31
+    """
+    # Asset scope는 공식 MAX_ASSET의 세 field만 허용해 schema drift를 먼저 차단한다.
+    if set(payload) != {"filterType", "asset", "limit"}:
+        raise BinancePayloadError(
+            "MAX_ASSET fields do not match official schema"
+        )
+    filter_type = _validate_canonical_text(
+        payload.get("filterType"),
+        "filterType",
+    )
+    if filter_type != "MAX_ASSET":
+        raise BinancePayloadError("unsupported account asset filter type")
+    asset = _validate_canonical_text(payload.get("asset"), "asset")
+    if asset != asset.upper() or not asset.isascii() or not asset.isalnum():
+        raise BinancePayloadError("asset must be canonical uppercase ASCII")
+
+    # MAX_ASSET limit은 float를 거치지 않은 단일 주문 한도로 보존한다.
+    return AccountAssetFilter(
+        filter_type=filter_type,
+        asset=asset,
+        maximum_quantity=_read_decimal_string(
+            payload.get("limit"),
+            "limit",
+        ),
+    )  # Asset identity와 Decimal limit을 검증한 exact DTO만 반환한다.
+
+
+def parse_account_relevant_filters(
+    payload: object,
+    symbol: str,
+) -> AccountRelevantFilters:
+    """
+    함수 이름: parse_account_relevant_filters()
+    기능: 공식 /myFilters의 세 scope를 type별 strict DTO와 plain MARKET 적용 집합으로 변환한다.
+    인자: payload -> 공식 GET /api/v3/myFilters JSON object
+        symbol -> body에 없는 signed request의 canonical Spot symbol
+    반환값: raw 값이나 credential을 포함하지 않는 AccountRelevantFilters
+    작성 날짜: 2026/08/31
+    """
+    expected_symbol = _validate_canonical_text(symbol, "symbol")
+    if (
+        expected_symbol != expected_symbol.upper()
+        or not expected_symbol.isascii()
+        or not expected_symbol.isalnum()
+    ):
+        raise BinancePayloadError("symbol must be canonical uppercase ASCII")
+    if not isinstance(payload, Mapping):
+        raise BinancePayloadError("myFilters payload must be an object")
+
+    # 최신 공식 response root는 세 collection을 정확히 한 번씩 요구한다.
+    expected_top_level_fields = {
+        "exchangeFilters",
+        "symbolFilters",
+        "assetFilters",
+    }
+    if set(payload) != expected_top_level_fields:
+        raise BinancePayloadError("myFilters payload fields do not match schema")
+    for field_name in expected_top_level_fields:
+        raw_filters = payload.get(field_name)
+        if not isinstance(raw_filters, (list, tuple)):
+            raise BinancePayloadError(f"{field_name} must be an array")
+        if any(not isinstance(raw_filter, Mapping) for raw_filter in raw_filters):
+            raise BinancePayloadError(
+                f"each {field_name} item must be an object"
+            )
+
+    # Exchange scope는 공식 네 count filter 외의 type을 추측하지 않는다.
+    exchange_count_filters: list[AccountOrderCountFilter] = []
+    seen_exchange_filter_types: set[str] = set()
+    for raw_filter in payload["exchangeFilters"]:
+        filter_type = _validate_canonical_text(
+            raw_filter.get("filterType"),
+            "filterType",
+        )
+        if filter_type in seen_exchange_filter_types:
+            raise BinancePayloadError(
+                "exchangeFilters must not contain duplicate types"
+            )
+        seen_exchange_filter_types.add(filter_type)
+        exchange_count_filters.append(
+            _parse_account_order_count_filter(
+                raw_filter,
+                allowed_filter_types=_EXCHANGE_ORDER_COUNT_FILTER_TYPES,
+            )
+        )
+
+    # Symbol scope는 공식 type마다 exact schema와 plain MARKET 적용 의미를 구분한다.
+    symbol_count_filters: list[AccountOrderCountFilter] = []
+    symbol_quantity_filters: list[QuantityFilter] = []
+    symbol_notional_filters: list[NotionalFilter] = []
+    symbol_maximum_position: Decimal | None = None
+    passive_symbol_filter_types: set[str] = set()
+    seen_symbol_filter_types: set[str] = set()
+    for raw_filter in payload["symbolFilters"]:
+        filter_type = _validate_canonical_text(
+            raw_filter.get("filterType"),
+            "filterType",
+        )
+        if filter_type in seen_symbol_filter_types:
+            raise BinancePayloadError(
+                "symbolFilters must not contain duplicate types"
+            )
+        seen_symbol_filter_types.add(filter_type)
+        if filter_type in _SYMBOL_ORDER_COUNT_FILTER_TYPES:
+            symbol_count_filters.append(
+                _parse_account_order_count_filter(
+                    raw_filter,
+                    allowed_filter_types=_SYMBOL_ORDER_COUNT_FILTER_TYPES,
+                )
+            )
+        elif filter_type in {"LOT_SIZE", "MARKET_LOT_SIZE"}:
+            if set(raw_filter) != {
+                "filterType",
+                "minQty",
+                "maxQty",
+                "stepSize",
+            }:
+                raise BinancePayloadError(
+                    "quantity filter fields do not match official schema"
+                )
+            symbol_quantity_filters.append(
+                _parse_quantity_filter(raw_filter, filter_type)
+            )
+        elif filter_type in {"MIN_NOTIONAL", "NOTIONAL"}:
+            expected_fields = (
+                {
+                    "filterType",
+                    "minNotional",
+                    "applyToMarket",
+                    "avgPriceMins",
+                }
+                if filter_type == "MIN_NOTIONAL"
+                else {
+                    "filterType",
+                    "minNotional",
+                    "applyMinToMarket",
+                    "maxNotional",
+                    "applyMaxToMarket",
+                    "avgPriceMins",
+                }
+            )
+            if set(raw_filter) != expected_fields:
+                raise BinancePayloadError(
+                    "notional filter fields do not match official schema"
+                )
+            symbol_notional_filters.append(
+                _parse_notional_filter(raw_filter)
+            )
+        elif filter_type == "MAX_POSITION":
+            if set(raw_filter) != {"filterType", "maxPosition"}:
+                raise BinancePayloadError(
+                    "MAX_POSITION fields do not match official schema"
+                )
+            symbol_maximum_position = _read_decimal_string(
+                raw_filter.get("maxPosition"),
+                "maxPosition",
+            )
+            if symbol_maximum_position < _DECIMAL_ZERO:
+                raise BinancePayloadError("maxPosition must be non-negative")
+        elif filter_type in _PLAIN_MARKET_PASSIVE_SYMBOL_FILTER_TYPES:
+            _validate_plain_market_passive_symbol_filter(
+                raw_filter,
+                filter_type,
+            )
+            passive_symbol_filter_types.add(filter_type)
+        elif filter_type == "T_PLUS_SELL":
+            # 최신 공식 SBE에는 type만 있으나 공개 filter 문서에 적용식이 없어 추측을 금지한다.
+            raise BinancePayloadError(
+                "T_PLUS_SELL evaluation semantics are not documented"
+            )
+        else:
+            raise BinancePayloadError("unsupported relevant symbol filter type")
+
+    # Asset scope는 MAX_ASSET만 허용하고 같은 자산의 중복 한도를 거부한다.
+    asset_filters: list[AccountAssetFilter] = []
+    seen_assets: set[str] = set()
+    for raw_filter in payload["assetFilters"]:
+        asset_filter = _parse_account_asset_filter(raw_filter)
+        if asset_filter.asset in seen_assets:
+            raise BinancePayloadError(
+                "account asset filters must not contain duplicate assets"
+            )
+        seen_assets.add(asset_filter.asset)
+        asset_filters.append(asset_filter)
+
+    return AccountRelevantFilters(
+        symbol=expected_symbol,
+        exchange_order_count_filters=tuple(exchange_count_filters),
+        symbol_order_count_filters=tuple(symbol_count_filters),
+        symbol_quantity_filters=tuple(symbol_quantity_filters),
+        symbol_notional_filters=tuple(symbol_notional_filters),
+        symbol_maximum_position=symbol_maximum_position,
+        passive_symbol_filter_types=frozenset(passive_symbol_filter_types),
+        asset_filters=tuple(asset_filters),
+    )  # 모든 공식 scope가 비어 있어도 exact empty DTO로 안전하게 표현한다.
+
+
+def parse_account_asset_filters(
+    payload: object,
+    symbol: str,
+) -> tuple[AccountAssetFilter, ...]:
+    """
+    함수 이름: parse_account_asset_filters()
+    기능: full /myFilters strict 검증 뒤 호환용 MAX_ASSET tuple만 반환한다.
+    인자: payload -> 공식 GET /api/v3/myFilters JSON object
+        symbol -> body에 없는 signed request의 canonical Spot symbol
+    반환값: 응답 순서를 보존한 AccountAssetFilter tuple
+    작성 날짜: 2026/08/31
+    """
+    # 호환 projection도 먼저 full composite parser를 통과시켜 다른 scope의 schema drift를 숨기지 않는다.
+    relevant_filters = parse_account_relevant_filters(payload, symbol)
+
+    return relevant_filters.asset_filters  # 다른 scope도 검증한 뒤 asset projection만 공개한다.
+
+
+def parse_reference_price(
+    payload: object,
+    symbol: str,
+) -> ReferencePrice:
+    """
+    함수 이름: parse_reference_price()
+    기능: 공식 referencePrice 응답을 요청 symbol에 결속된 non-null 양수 DTO로 변환한다.
+    인자: payload -> 공식 GET /api/v3/referencePrice JSON object
+        symbol -> 요청한 canonical Spot symbol
+    반환값: 엄격히 검증한 ReferencePrice
+    작성 날짜: 2026/08/31
+    """
+    expected_symbol = _validate_canonical_text(symbol, "symbol")
+    if not isinstance(payload, Mapping):
+        raise BinancePayloadError("referencePrice payload must be an object")
+    if set(payload) != {"symbol", "referencePrice", "timestamp"}:
+        raise BinancePayloadError(
+            "referencePrice payload fields do not match schema"
+        )
+
+    # Null은 거래소의 VWAP fallback 가능 상태지만 로컬 Phase 13 경계에서는 추정하지 않는다.
+    response_symbol = _validate_canonical_text(
+        payload.get("symbol"),
+        "symbol",
+    )
+    if response_symbol != expected_symbol:
+        raise BinancePayloadError(
+            "referencePrice symbol does not match request"
+        )
+    raw_reference_price = payload.get("referencePrice")
+    if raw_reference_price is None:
+        raise BinancePayloadError("referencePrice must be non-null")
+
+    return ReferencePrice(
+        symbol=response_symbol,
+        price=_read_decimal_string(raw_reference_price, "referencePrice"),
+        exchange_timestamp=_read_non_negative_integer(
+            payload.get("timestamp"),
+            "timestamp",
+        ),
+    )  # DTO 생성이 0, NaN과 무한 가격을 추가로 차단한다.
+
+
 def parse_symbol_trading_rules(
     payload: object,
     symbol: str,
@@ -541,6 +1294,19 @@ def parse_symbol_trading_rules(
             raise BinancePayloadError("symbol filters must not contain duplicates")
         filters_by_type[filter_type] = raw_filter
 
+    # Public exchangeInfo도 myFilters와 같은 공식 union dispatcher로 unknown·extra field를 거부한다.
+    raw_exchange_filters = payload.get("exchangeFilters")
+    if not isinstance(raw_exchange_filters, (list, tuple)):
+        raise BinancePayloadError("exchangeInfo exchangeFilters must be an array")
+    public_relevant_filters = parse_account_relevant_filters(
+        {
+            "exchangeFilters": raw_exchange_filters,
+            "symbolFilters": raw_filters,
+            "assetFilters": [],
+        },
+        expected_symbol,
+    )
+
     # MARKET 제출에는 일반 lot와 market 전용 lot를 모두 검사해야 한다.
     lot_size_payload = filters_by_type.get("LOT_SIZE")
     market_lot_size_payload = filters_by_type.get("MARKET_LOT_SIZE")
@@ -548,13 +1314,12 @@ def parse_symbol_trading_rules(
         raise BinancePayloadError("LOT_SIZE and MARKET_LOT_SIZE are required")
 
     # 두 notional filter는 동시에 존재할 수 있으므로 존재하는 규칙을 모두 보존한다.
-    notional_filters = tuple(
-        _parse_notional_filter(filters_by_type[filter_type])
-        for filter_type in ("MIN_NOTIONAL", "NOTIONAL")
-        if filter_type in filters_by_type
-    )
+    notional_filters = public_relevant_filters.symbol_notional_filters
     if not notional_filters:
         raise BinancePayloadError("a notional filter is required")
+
+    # MAX_POSITION은 BUY account exposure 계산 없이는 안전하게 통과시킬 수 있도록 원문을 보존한다.
+    maximum_position = public_relevant_filters.symbol_maximum_position
 
     return SymbolTradingRules(
         symbol=expected_symbol,
@@ -570,6 +1335,8 @@ def parse_symbol_trading_rules(
             "MARKET_LOT_SIZE",
         ),
         notional_filters=notional_filters,
+        maximum_position=maximum_position,
+        public_relevant_filters=public_relevant_filters,
     )  # quotePrecision은 v4 제거 예정이므로 거래 간격 계산에 사용하지 않는다.
 
 
@@ -662,27 +1429,27 @@ def floor_market_quantity(
 
 def validate_market_notional(
     quantity: Decimal,
-    market_price: Decimal,
+    reference_price: Decimal,
     rules: SymbolTradingRules,
 ) -> None:
     """
     함수 이름: validate_market_notional()
-    기능: 현지 결정 가격으로 시장가 주문의 활성 MIN_NOTIONAL·NOTIONAL 한계를 사전 점검한다.
+    기능: 공식 non-null reference price로 MARKET 주문의 활성 notional 한계를 사전 점검한다.
     인자: quantity -> quantity filter를 적용한 제출 수량
-        market_price -> 주문 결정 시점의 양수 quote 가격
+        reference_price -> /referencePrice에서 받은 양수 quote 가격
         rules -> 현재 exchangeInfo symbol 규칙
     반환값: 없음
     작성 날짜: 2026/08/22
     """
     _validate_positive_decimal(quantity, "quantity")
-    _validate_positive_decimal(market_price, "market_price")
+    _validate_positive_decimal(reference_price, "reference_price")
     if not isinstance(rules, SymbolTradingRules):
         raise TypeError("rules must be SymbolTradingRules")
 
-    # 로컬 사전 점검은 결정 가격을 사용하며 거래소의 reference/average 가격 판정이 최종 권위다.
+    # 공식 문서와 같은 non-null reference price를 사용해 stale decision price 추정을 배제한다.
     with localcontext() as decimal_context:
         decimal_context.prec = 34
-        notional = quantity * market_price
+        notional = quantity * reference_price
 
     # 동시에 제공될 수 있는 MIN_NOTIONAL과 NOTIONAL의 시장가 적용 flag를 모두 따른다.
     for notional_filter in rules.notional_filters:
@@ -704,15 +1471,204 @@ def validate_market_notional(
             )
 
 
+def validate_account_asset_filters(
+    quantity: Decimal,
+    reference_price: Decimal,
+    rules: SymbolTradingRules,
+    account_asset_filters: tuple[AccountAssetFilter, ...],
+) -> None:
+    """
+    함수 이름: validate_account_asset_filters()
+    기능: MAX_ASSET를 base 수량에 적용하고 공식 가격식이 없는 quantity MARKET quote 한도를 차단한다.
+    인자: quantity -> quantity filter를 적용한 제출 수량
+        reference_price -> 다른 MARKET filter와 provenance를 공유하는 공식 non-null reference price
+        rules -> base·quote asset이 결속된 최신 symbol 규칙
+        account_asset_filters -> signed /myFilters의 MAX_ASSET tuple
+    반환값: 없음
+    작성 날짜: 2026/08/31
+    """
+    _validate_positive_decimal(quantity, "quantity")
+    _validate_positive_decimal(reference_price, "reference_price")
+    if not isinstance(rules, SymbolTradingRules):
+        raise TypeError("rules must be SymbolTradingRules")
+    if not isinstance(account_asset_filters, tuple) or any(
+        type(account_filter) is not AccountAssetFilter
+        for account_filter in account_asset_filters
+    ):
+        raise TypeError(
+            "account_asset_filters must be an AccountAssetFilter tuple"
+        )
+
+    for account_filter in account_asset_filters:
+        if account_filter.asset == rules.base_asset:
+            filtered_quantity = quantity
+            failure_scope = "BASE"
+        elif account_filter.asset == rules.quote_asset:
+            # 공식 MAX_ASSET 문서는 quantity MARKET의 quote 환산 가격식을 명시하지 않는다.
+            raise SymbolFilterError(
+                "FILTER_MAX_ASSET_QUOTE_MARKET_PRICE_UNDEFINED"
+            )
+        else:
+            raise SymbolFilterError("FILTER_MAX_ASSET_SYMBOL_MISMATCH")
+
+        # MAX_ASSET limit 0도 비활성 표식이 아니므로 모든 양수 주문을 정확히 거부한다.
+        if filtered_quantity > account_filter.maximum_quantity:
+            raise SymbolFilterError(
+                f"FILTER_MAX_ASSET_{failure_scope}_MAXIMUM"
+            )
+
+    return None  # 모든 account asset 상한을 통과한 MARKET 수량만 승인한다.
+
+
+def validate_account_relevant_filters(
+    quantity: Decimal,
+    reference_price: Decimal,
+    rules: SymbolTradingRules,
+    account_filters: AccountRelevantFilters,
+    *,
+    side: OrderSide,
+    account_open_state_verified_empty: bool,
+) -> None:
+    """
+    함수 이름: validate_account_relevant_filters()
+    기능: signed relevant filter를 plain quantity MARKET 주문과 complete zero-open state에 적용한다.
+    인자: quantity -> quantity filter를 적용한 제출 수량
+        reference_price -> 공식 non-null reference price
+        rules -> fresh public exchangeInfo의 symbol 규칙
+        account_filters -> fresh signed /myFilters의 strict composite DTO
+        side -> 실제 Binance MARKET side
+        account_open_state_verified_empty -> all-symbol open order와 open list가 모두 0인 증거
+    반환값: 없음
+    작성 날짜: 2026/08/31
+    """
+    _validate_positive_decimal(quantity, "quantity")
+    _validate_positive_decimal(reference_price, "reference_price")
+    if type(rules) is not SymbolTradingRules:
+        raise TypeError("rules must be an exact SymbolTradingRules")
+    if type(account_filters) is not AccountRelevantFilters:
+        raise TypeError(
+            "account_filters must be an exact AccountRelevantFilters"
+        )
+    if account_filters.symbol != rules.symbol:
+        raise SymbolFilterError("FILTER_ACCOUNT_SYMBOL_MISMATCH")
+    if not isinstance(side, OrderSide):
+        raise TypeError("side must be an OrderSide")
+    if type(account_open_state_verified_empty) is not bool:
+        raise TypeError("account_open_state_verified_empty must be a bool")
+
+    # Signed quantity/notional 규칙은 public exchangeInfo의 같은 type·값과 exact 일치해야 한다.
+    public_quantity_filters = {
+        rules.lot_size.filter_type: rules.lot_size,
+        rules.market_lot_size.filter_type: rules.market_lot_size,
+    }
+    for signed_filter in account_filters.symbol_quantity_filters:
+        if public_quantity_filters.get(signed_filter.filter_type) != signed_filter:
+            raise SymbolFilterError("FILTER_SIGNED_SYMBOL_RULE_MISMATCH")
+    public_notional_filters = {
+        filter_value.filter_type: filter_value
+        for filter_value in rules.notional_filters
+    }
+    for signed_filter in account_filters.symbol_notional_filters:
+        if public_notional_filters.get(signed_filter.filter_type) != signed_filter:
+            raise SymbolFilterError("FILTER_SIGNED_SYMBOL_RULE_MISMATCH")
+
+    # Plain MARKET에 수치를 적용하지 않는 signed type도 public symbol에 존재해야 한다.
+    public_filters = rules.public_relevant_filters
+    if (
+        public_filters is None
+        and account_filters.passive_symbol_filter_types
+    ):
+        raise SymbolFilterError("FILTER_PUBLIC_ACCOUNT_RULES_UNAVAILABLE")
+    if (
+        public_filters is not None
+        and not account_filters.passive_symbol_filter_types.issubset(
+            public_filters.passive_symbol_filter_types
+        )
+    ):
+        raise SymbolFilterError("FILTER_SIGNED_SYMBOL_RULE_MISMATCH")
+
+    # Account-dependent public count filter는 signed myFilters와 type·limit가 양방향 exact 일치해야 한다.
+    if public_filters is None:
+        if (
+            account_filters.exchange_order_count_filters
+            or account_filters.symbol_order_count_filters
+        ):
+            raise SymbolFilterError("FILTER_PUBLIC_ACCOUNT_RULES_UNAVAILABLE")
+    else:
+        public_exchange_counts = {
+            filter_value.filter_type: filter_value.maximum_count
+            for filter_value in public_filters.exchange_order_count_filters
+        }
+        signed_exchange_counts = {
+            filter_value.filter_type: filter_value.maximum_count
+            for filter_value in account_filters.exchange_order_count_filters
+        }
+        public_symbol_counts = {
+            filter_value.filter_type: filter_value.maximum_count
+            for filter_value in public_filters.symbol_order_count_filters
+        }
+        signed_symbol_counts = {
+            filter_value.filter_type: filter_value.maximum_count
+            for filter_value in account_filters.symbol_order_count_filters
+        }
+        if (
+            public_exchange_counts != signed_exchange_counts
+            or public_symbol_counts != signed_symbol_counts
+        ):
+            raise SymbolFilterError(
+                "FILTER_SIGNED_ACCOUNT_COUNT_RULE_MISMATCH"
+            )
+
+    # MAX_POSITION은 두 endpoint가 같은 값을 보존해야 하며 BUY exposure state 없이는 통과시키지 않는다.
+    if account_filters.symbol_maximum_position != rules.maximum_position:
+        raise SymbolFilterError("FILTER_SIGNED_MAX_POSITION_MISMATCH")
+    if side is OrderSide.BUY and rules.maximum_position is not None:
+        raise SymbolFilterError(
+            "FILTER_MAX_POSITION_REQUIRES_ACCOUNT_EXPOSURE"
+        )
+
+    # Account count filter가 하나라도 있으면 all-symbol order/list snapshot의 완전한 zero를 요구한다.
+    count_filters = (
+        account_filters.exchange_order_count_filters
+        + account_filters.symbol_order_count_filters
+    )
+    if count_filters and not account_open_state_verified_empty:
+        raise SymbolFilterError(
+            "FILTER_ACCOUNT_OPEN_STATE_REQUIRES_COMPLETE_EMPTY_SNAPSHOT"
+        )
+    for count_filter in count_filters:
+        if (
+            count_filter.filter_type
+            in {"EXCHANGE_MAX_NUM_ORDERS", "MAX_NUM_ORDERS"}
+            and count_filter.maximum_count < 1
+        ):
+            raise SymbolFilterError(
+                f"FILTER_{count_filter.filter_type}_MAXIMUM"
+            )
+
+    # Plain MARKET에는 algo·iceberg·list·amend와 price/trailing parameter가 없어 추가 상한을 소비하지 않는다.
+    validate_account_asset_filters(
+        quantity,
+        reference_price,
+        rules,
+        account_filters.asset_filters,
+    )
+
+    return None  # 모든 signed account 규칙과 public 중복 규칙이 일치한 경우만 준비를 계속한다.
+
+
 def prepare_market_order(
     order: Order,
     rules: SymbolTradingRules,
+    *,
+    reference_price: Decimal,
 ) -> Order:
     """
     함수 이름: prepare_market_order()
-    기능: 현재 symbol 상태를 확인하고 같은 Order의 submitted_quantity만 안전하게 내림 보정한다.
+    기능: 현재 symbol과 reference price를 확인하고 같은 Order의 제출 수량만 안전하게 보정한다.
     인자: order -> 원래 요청 수량과 제출 희망 수량을 보존한 Order
         rules -> 현재 exchangeInfo symbol 규칙
+        reference_price -> 공식 non-null reference price
     반환값: submitted_quantity를 보정한 동일 Order
     작성 날짜: 2026/08/22
     """
@@ -720,6 +1676,7 @@ def prepare_market_order(
         raise TypeError("order must be an Order")
     if not isinstance(rules, SymbolTradingRules):
         raise TypeError("rules must be SymbolTradingRules")
+    _validate_positive_decimal(reference_price, "reference_price")
 
     # CANCEL_ONLY를 포함한 비거래 상태와 MARKET·Spot 미지원 symbol은 신규 제출을 막는다.
     if order.symbol != rules.symbol:
@@ -730,12 +1687,16 @@ def prepare_market_order(
         raise SymbolFilterError("FILTER_MARKET_ORDER_UNSUPPORTED")
     if not rules.is_spot_trading_allowed:
         raise SymbolFilterError("FILTER_SPOT_TRADING_DISABLED")
+    if order.side is OrderSide.BUY and rules.maximum_position is not None:
+        raise SymbolFilterError(
+            "FILTER_MAX_POSITION_REQUIRES_ACCOUNT_EXPOSURE"
+        )
 
-    # 기존 submitted_quantity를 내린 뒤 notional을 검사해 requested intent를 변경하지 않는다.
+    # 기존 submitted_quantity를 내린 뒤 공식 reference-price notional을 검사한다.
     prepared_quantity = floor_market_quantity(order.submitted_quantity, rules)
     validate_market_notional(
         prepared_quantity,
-        order.market_price_at_decision,
+        reference_price,
         rules,
     )
     if prepared_quantity > order.requested_quantity:

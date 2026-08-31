@@ -2,12 +2,23 @@
 
 import os
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
 import unittest
 from unittest.mock import patch
 
+from binance_auto_trader.adapters.binance import (
+    AccountAssetFilter,
+    AccountRelevantFilters,
+    CommissionDiscountPolicy,
+    ReferencePrice,
+    SymbolTradingRules,
+)
+from binance_auto_trader.adapters.binance.mappers import (
+    validate_account_relevant_filters,
+)
 from binance_auto_trader.bootstrap import (
     ApplicationStatus,
     ExecutionMode,
@@ -25,11 +36,25 @@ from binance_auto_trader.bootstrap.testnet import (
     load_testnet_configuration,
 )
 from binance_auto_trader.domain.market import Kline, SUPPORTED_INTERVALS
+from binance_auto_trader.domain.trading.states import OrderSide
 
 from tests.testnet._support import (
     READ_ONLY_SKIP_REASON,
     READ_ONLY_TESTNET_REQUESTED,
+    require_empty_all_client_open_orders,
     seed_verified_closed_history,
+    verify_exact_recent_order_baseline,
+)
+
+
+_READ_ONLY_COMMISSION_FAILURE_MESSAGE = (
+    "Read-only preflight requires zero MARKET BUY commission"
+)
+_READ_ONLY_REFERENCE_PRICE_FAILURE_MESSAGE = (
+    "Read-only preflight requires a positive reference price"
+)
+_READ_ONLY_MAX_POSITION_FAILURE_MESSAGE = (
+    "Read-only preflight requires MAX_POSITION to be absent"
 )
 
 
@@ -51,6 +76,72 @@ def _build_read_only_testnet_environment() -> dict[str, str]:
         BINANCE_RUN_TESTNET_ORDERS_ENV: "0",
         BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV: "0",
     }  # Credential 값은 client 조립에만 사용하고 assertion이나 출력에는 포함하지 않는다.
+
+
+def _require_zero_read_only_commission(
+    commission_policy: CommissionDiscountPolicy,
+) -> None:
+    """
+    함수 이름: _require_zero_read_only_commission()
+    기능: 실제 account commission 값을 출력하지 않고 안전한 zero 정책인지 검증한다.
+    인자: commission_policy -> signed account 응답에서 정규화한 수수료 정책
+    반환값: MARKET BUY 비율·할인율이 zero이고 discount asset이 없으면 없음
+    작성 날짜: 2026/08/31
+    """
+    # Exact policy의 모든 실제 rate와 discount asset을 한 고정 문장 뒤에서 함께 검사한다.
+    if (
+        type(commission_policy) is not CommissionDiscountPolicy
+        or commission_policy.discount_asset is not None
+        or any(
+            commission_rate != Decimal("0")
+            for commission_rate in (
+                commission_policy.discount_rate,
+                commission_policy.standard_market_buy_rate,
+                commission_policy.special_market_buy_rate,
+                commission_policy.tax_market_buy_rate,
+                commission_policy.market_buy_received_asset_commission_rate,
+            )
+        )
+    ):
+        raise AssertionError(_READ_ONLY_COMMISSION_FAILURE_MESSAGE)
+
+    return None  # 성공 여부만 남기고 account-specific rate는 unittest 출력에 복제하지 않는다.
+
+
+def _require_positive_read_only_reference_price(reference_price: object) -> None:
+    """
+    함수 이름: _require_positive_read_only_reference_price()
+    기능: 실제 public price를 출력하지 않고 양수 유한 Decimal인지 검증한다.
+    인자: reference_price -> strict ReferencePrice DTO에서 읽은 가격
+    반환값: 양수 유한 Decimal이면 없음
+    작성 날짜: 2026/08/31
+    """
+    # Type drift·NaN·무한·0 이하 가격을 값 없는 동일 failure로 닫는다.
+    if (
+        type(reference_price) is not Decimal
+        or not reference_price.is_finite()
+        or reference_price <= Decimal("0")
+    ):
+        raise AssertionError(_READ_ONLY_REFERENCE_PRICE_FAILURE_MESSAGE)
+
+    return None  # 검증한 market price 원문은 assertion message에 넣지 않는다.
+
+
+def _require_absent_read_only_maximum_position(
+    maximum_position: object,
+) -> None:
+    """
+    함수 이름: _require_absent_read_only_maximum_position()
+    기능: 실제 MAX_POSITION 값을 출력하지 않고 filter 부재를 검증한다.
+    인자: maximum_position -> strict symbol rules의 optional account 상한
+    반환값: filter가 없으면 없음
+    작성 날짜: 2026/08/31
+    """
+    # Non-null account filter는 값과 무관하게 고정 문장으로 actual mutation 전 차단한다.
+    if maximum_position is not None:
+        raise AssertionError(_READ_ONLY_MAX_POSITION_FAILURE_MESSAGE)
+
+    return None  # Optional filter value는 실패·성공 출력 어느 쪽에도 반사하지 않는다.
 
 
 class ReadOnlyTestnetEnvironmentIsolationTests(unittest.TestCase):
@@ -98,6 +189,80 @@ class ReadOnlyTestnetEnvironmentIsolationTests(unittest.TestCase):
         self.assertFalse(configuration.allow_phase13_public_case2)
         self.assertIsNone(configuration.max_notional)
 
+    def test_sensitive_read_only_preflight_uses_fixed_failure_output(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_sensitive_read_only_preflight_uses_fixed_failure_output()
+        기능: Commission·price·MAX_POSITION 실패 출력에 실제 Decimal 값이 없는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        nonzero_commission_policy = CommissionDiscountPolicy(
+            symbol="ETHUSDT",
+            enabled_for_account=False,
+            enabled_for_symbol=False,
+            discount_asset="USDT",
+            discount_rate=Decimal("0"),
+            standard_market_buy_rate=Decimal("0.12345678"),
+            special_market_buy_rate=Decimal("0"),
+            tax_market_buy_rate=Decimal("0"),
+        )
+
+        # 세 external numeric canary를 독립 unittest failure로 실행해 stderr redaction을 고정한다.
+        guarded_cases = (
+            (
+                lambda: _require_zero_read_only_commission(
+                    nonzero_commission_policy
+                ),
+                _READ_ONLY_COMMISSION_FAILURE_MESSAGE,
+                "0.12345678",
+            ),
+            (
+                lambda: _require_positive_read_only_reference_price(
+                    Decimal("-8765.4321")
+                ),
+                _READ_ONLY_REFERENCE_PRICE_FAILURE_MESSAGE,
+                "-8765.4321",
+            ),
+            (
+                lambda: _require_absent_read_only_maximum_position(
+                    Decimal("9876.54321")
+                ),
+                _READ_ONLY_MAX_POSITION_FAILURE_MESSAGE,
+                "9876.54321",
+            ),
+        )
+        for guarded_check, fixed_message, forbidden_value in guarded_cases:
+            with self.subTest(fixed_message=fixed_message):
+
+                def run_guarded_check() -> None:
+                    """
+                    함수 이름: run_guarded_check()
+                    기능: Read-only 민감 수치 guard 하나를 독립 failure 경계에서 호출한다.
+                    인자: 없음
+                    반환값: 없음
+                    작성 날짜: 2026/08/31
+                    """
+                    guarded_check()  # Actual preflight와 같은 fixed-message helper를 호출한다.
+
+                failure_output = StringIO()
+                failure_result = unittest.TextTestRunner(
+                    stream=failure_output,
+                    verbosity=2,
+                    failfast=True,
+                ).run(unittest.FunctionTestCase(run_guarded_check))
+                captured_output = failure_output.getvalue()
+
+                # Generic blocker만 확인하고 synthetic account value는 출력 전체에서 금지한다.
+                self.assertFalse(failure_result.wasSuccessful())
+                self.assertIn(fixed_message, captured_output)
+                self.assertNotIn(
+                    forbidden_value,
+                    captured_output,
+                )  # Raw commission·price·filter canary를 stderr에 남기지 않는다.
+
 
 @unittest.skipUnless(
     READ_ONLY_TESTNET_REQUESTED,
@@ -127,7 +292,7 @@ class BinanceTestnetReadOnlyTests(unittest.TestCase):
         history_path = Path(self.temporary_directory.name) / "history.jsonl"
 
         # 이전 actual run이 있으면 pending 0·Position 0으로 검증된 closed history만 startup에 복제한다.
-        seed_verified_closed_history(history_path)
+        self.baseline_trades = seed_verified_closed_history(history_path)
         self.runtime = create_testnet_application_runtime(
             history_path=history_path,
             environment=self.testnet_environment,
@@ -168,6 +333,17 @@ class BinanceTestnetReadOnlyTests(unittest.TestCase):
                 "ETHUSDT"
             )
         )
+        account_filters = (
+            self.runtime.api_gateway.fetch_account_relevant_filters(
+                "ETHUSDT"
+            )
+        )
+        reference_price = self.runtime.api_gateway.fetch_reference_price(
+            "ETHUSDT"
+        )
+        symbol_rules = self.runtime.api_gateway.fetch_symbol_trading_rules(
+            "ETHUSDT"
+        )
         balance_assets = frozenset(
             balance.asset for balance in account_snapshot.balances
         )
@@ -175,31 +351,54 @@ class BinanceTestnetReadOnlyTests(unittest.TestCase):
         self.assertIn("ETH", balance_assets)
         self.assertIn("USDT", balance_assets)
         self.assertEqual(commission_policy.symbol, "ETHUSDT")
-        # 실제 주문 전 Roadmap gate를 증명하도록 세 유형의 MARKET BUY 비율을 각각 0으로 요구한다.
-        self.assertEqual(
-            commission_policy.standard_market_buy_rate,
-            Decimal("0"),
-        )
-        self.assertEqual(
-            commission_policy.special_market_buy_rate,
-            Decimal("0"),
-        )
-        self.assertEqual(
-            commission_policy.tax_market_buy_rate,
-            Decimal("0"),
-        )
-        self.assertIsNone(
-            commission_policy.discount_asset,
-        )  # Null policy는 parser가 세 group의 raw 12개 비율 전체 0을 확인한 뒤에만 생성한다.
-        self.assertEqual(
-            commission_policy.discount_rate,
-            Decimal("0"),
-        )
+        # 실제 주문 전 Roadmap gate는 값 repr 없이 MARKET BUY와 discount 정책 전체를 zero로 요구한다.
+        _require_zero_read_only_commission(commission_policy)
         self.assertFalse(
             commission_policy.can_charge_discount_asset
             and commission_policy.discount_asset not in {"ETH", "USDT"},
             "Unsupported third-asset commission discount must be disabled before orders",
         )  # BNB 등 제3 자산 수수료 가능성은 실제 BUY보다 먼저 credential-safe read-only로 차단한다.
+        self.assertIs(type(account_filters), AccountRelevantFilters)
+        self.assertEqual(account_filters.symbol, "ETHUSDT")
+        self.assertTrue(
+            all(
+                type(account_filter) is AccountAssetFilter
+                for account_filter in account_filters.asset_filters
+            )
+        )
+        self.assertIs(type(reference_price), ReferencePrice)
+        self.assertEqual("ETHUSDT", reference_price.symbol)
+        _require_positive_read_only_reference_price(reference_price.price)
+        self.assertIs(type(symbol_rules), SymbolTradingRules)
+        self.assertEqual("ETHUSDT", symbol_rules.symbol)
+        _require_absent_read_only_maximum_position(
+            symbol_rules.maximum_position
+        )  # Non-null filter value는 고정 문장 밖으로 나오지 않는다.
+
+        # Exchange-wide count filter는 symbol 생략 openOrders와 전용 openOrderList의 exact zero를 요구한다.
+        self.assertFalse(
+            self.runtime.api_gateway.has_any_exchange_open_orders(),
+            "Read-only preflight requires zero exchange-wide open orders",
+        )
+        self.assertFalse(
+            self.runtime.api_gateway.has_any_exchange_open_order_lists(),
+            "Read-only preflight requires zero exchange-wide open order lists",
+        )
+        minimum_candidate_quantity = max(
+            Decimal("1").scaleb(-symbol_rules.base_asset_precision),
+            symbol_rules.lot_size.minimum_quantity,
+            symbol_rules.market_lot_size.minimum_quantity,
+            symbol_rules.lot_size.step_size,
+            symbol_rules.market_lot_size.step_size,
+        )
+        validate_account_relevant_filters(
+            minimum_candidate_quantity,
+            reference_price.price,
+            symbol_rules,
+            account_filters,
+            side=OrderSide.BUY,
+            account_open_state_verified_empty=True,
+        )
 
         klines_by_interval = self.runtime.api_gateway.load_all_klines(
             "ETHUSDT",
@@ -217,22 +416,30 @@ class BinanceTestnetReadOnlyTests(unittest.TestCase):
             )
         )
 
-        # 복구용 조회도 raw mapping 없이 tuple 결과만 application 경계에 공개해야 한다.
-        open_results = self.runtime.api_gateway.list_open_order_results(
+        # 격리용 조회는 manual client ID까지 포함하되 raw mapping 없이 tuple 결과만 공개한다.
+        open_results = self.runtime.api_gateway.list_all_open_order_results(
             "ETHUSDT"
         )
-        recent_results = self.runtime.api_gateway.list_recent_order_results(
+        recent_results = self.runtime.api_gateway.list_all_recent_order_results(
             "ETHUSDT",
-            limit=10,
+            limit=1000,
         )
-        self.assertIsInstance(open_results, tuple)
-        self.assertIsInstance(recent_results, tuple)
+        require_empty_all_client_open_orders(open_results)
+        verify_exact_recent_order_baseline(
+            self.baseline_trades,
+            recent_results,
+        )
         self.assertTrue(
             all(
                 result.symbol == "ETHUSDT"
                 for result in (*open_results, *recent_results)
             )
         )
+        print(
+            "PHASE13_READ_ONLY_BASELINE "
+            f"all_open_order_count={len(open_results)} "
+            f"all_recent_order_count={len(recent_results)}"
+        )  # Credential, balance, order ID·length은 출력하지 않고 baseline 판정 개수만 남긴다.
 
     def test_application_ready_opens_signed_account_stream_and_closes(
         self,

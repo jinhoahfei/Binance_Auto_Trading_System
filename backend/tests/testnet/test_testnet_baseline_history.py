@@ -1,6 +1,8 @@
 """Actual Testnet run 사이의 닫힌 durable history baseline 인계를 검증한다."""
 
+from datetime import datetime, timezone
 from decimal import Decimal
+import hashlib
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,12 +10,19 @@ import unittest
 from unittest.mock import patch
 
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
+from binance_auto_trader.domain.trading import OrderResult, OrderStatus
 from binance_auto_trader.domain.trading.states import OrderSide
 
 from tests.testnet._support import (
+    TESTNET_BASELINE_HISTORY_FD_ENV,
     TESTNET_BASELINE_HISTORY_PATH_ENV,
+    TESTNET_BASELINE_HISTORY_SHA256_ENV,
+    TESTNET_BASELINE_PENDING_FD_ENV,
+    TESTNET_BASELINE_PENDING_SHA256_ENV,
     build_testnet_order,
+    require_empty_all_client_open_orders,
     seed_verified_closed_history,
+    verify_exact_recent_order_baseline,
 )
 from tests.unit.history.factories import make_trade
 
@@ -24,6 +33,90 @@ class TestnetBaselineHistoryTests(unittest.TestCase):
     기능: Position 0 history만 새 actual Testnet artifact로 복제되는지 검증한다.
     작성 날짜: 2026/08/24
     """
+
+    def test_all_client_preflight_accepts_only_exact_verified_identity(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_all_client_preflight_accepts_only_exact_verified_identity()
+        기능: fresh empty와 verified Trade identity의 exact all-client 결과만 통과하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        baseline_trade = make_trade(
+            order_id="7401"
+        )  # 공개 fixture identity 하나로 pair-set 계약을 고정한다.
+        matching_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id=baseline_trade.client_order_id,
+            status=OrderStatus.FILLED,
+            processed_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+            exchange_order_id=baseline_trade.order_id,
+        )
+        mismatched_client_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id="manual-client-canary",
+            status=OrderStatus.FILLED,
+            processed_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+            exchange_order_id=baseline_trade.order_id,
+        )
+        extra_manual_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id="manual-extra-canary",
+            status=OrderStatus.CANCELED,
+            processed_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+            exchange_order_id="7402",
+        )
+        unstable_identity_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id=baseline_trade.client_order_id,
+            status=OrderStatus.NEW,
+            processed_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+        )
+
+        # 최초 run은 양쪽 empty만, 이어진 run은 exchange/client identity pair의 exact set만 허용한다.
+        self.assertIsNone(require_empty_all_client_open_orders(()))
+        self.assertEqual(
+            frozenset(),
+            verify_exact_recent_order_baseline((), ()),
+        )
+        self.assertEqual(
+            frozenset({baseline_trade.order_id}),
+            verify_exact_recent_order_baseline(
+                (baseline_trade,),
+                (matching_result,),
+            ),
+        )
+
+        # Missing, duplicate, same-exchange/different-client와 extra manual pair는 같은 고정 문장으로 닫는다.
+        invalid_recent_cases = (
+            ("missing", ()),
+            ("duplicate", (matching_result, matching_result)),
+            ("client-mismatch", (mismatched_client_result,)),
+            ("extra-manual", (matching_result, extra_manual_result)),
+            ("unstable-identity", (unstable_identity_result,)),
+        )
+        for case_name, recent_results in invalid_recent_cases:
+            with self.subTest(case_name=case_name):
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    "^Testnet recent orders do not match verified closed history$",
+                ):
+                    verify_exact_recent_order_baseline(
+                        (baseline_trade,),
+                        recent_results,
+                    )
+
+        # Duplicate baseline 자체도 exchange 결과로 덮어 정상 provenance처럼 만들 수 없다.
+        with self.assertRaisesRegex(
+            AssertionError,
+            "^Testnet recent orders do not match verified closed history$",
+        ):
+            verify_exact_recent_order_baseline(
+                (baseline_trade, baseline_trade),
+                (matching_result,),
+            )  # Baseline duplicate도 같은 고정 문장으로 차단한다.
 
     def test_missing_baseline_keeps_new_artifact_empty(self) -> None:
         """
@@ -112,6 +205,123 @@ class TestnetBaselineHistoryTests(unittest.TestCase):
                 (),
                 copied_repository.get_pending_order_recovery_records(),
             )
+
+    def test_inherited_descriptor_is_digest_bound_and_durably_copied(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_inherited_descriptor_is_digest_bound_and_durably_copied()
+        기능: Secure runner의 pinned inode만 exact digest로 복제되고 drift는 흔적 없이 거부되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        with TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            source_path = temporary_root / "source.jsonl"
+            destination_path = temporary_root / "destination.jsonl"
+            mismatched_destination_path = temporary_root / "mismatch.jsonl"
+            source_repository = TradeHistoryRepository(source_path)
+            buy_trade = make_trade(
+                order_id="7151",
+                requested_quantity=Decimal("1"),
+                executed_quantity=Decimal("1"),
+                executed_amount=Decimal("100"),
+                average_fill_price=Decimal("100"),
+                fee_amount=Decimal("0"),
+                fee_asset="USDT",
+                fee_quote_amount=Decimal("0"),
+            )
+            sell_trade = make_trade(
+                order_id="7152",
+                side=OrderSide.SELL,
+                requested_quantity=Decimal("1"),
+                executed_quantity=Decimal("1"),
+                executed_amount=Decimal("110"),
+                average_fill_price=Decimal("110"),
+                fee_amount=Decimal("0"),
+                fee_asset="USDT",
+                fee_quote_amount=Decimal("0"),
+                allocated_cost_basis=Decimal("100"),
+                realized_pnl=Decimal("10"),
+                realized_return_rate=Decimal("10.00000000"),
+            )
+            for trade in (buy_trade, sell_trade):
+                source_repository.save_this_trade_by_order_id(
+                    trade.order_id,
+                    trade,
+                )
+            removed_pending_order = build_testnet_order(
+                side=OrderSide.BUY,
+                quantity=Decimal("0.01"),
+                decision_price=Decimal("100"),
+            )
+            source_repository.save_pending_order(removed_pending_order)
+            source_repository.delete_pending_order(
+                removed_pending_order.client_order_id
+            )
+            source_path.chmod(0o600)
+            pending_source_path = source_repository.pending_order_storage_path
+            pending_source_path.chmod(0o600)
+            source_bytes = source_path.read_bytes()
+            pending_source_bytes = pending_source_path.read_bytes()
+            source_descriptor = os.open(source_path, os.O_RDONLY)
+            pending_source_descriptor = os.open(
+                pending_source_path,
+                os.O_RDONLY,
+            )
+            try:
+                # Path key 없이 history·pending descriptor/digest pair만 전달해 secure child 계약을 재현한다.
+                descriptor_environment = {
+                    TESTNET_BASELINE_HISTORY_FD_ENV: str(source_descriptor),
+                    TESTNET_BASELINE_HISTORY_SHA256_ENV: hashlib.sha256(
+                        source_bytes
+                    ).hexdigest(),
+                    TESTNET_BASELINE_PENDING_FD_ENV: str(
+                        pending_source_descriptor
+                    ),
+                    TESTNET_BASELINE_PENDING_SHA256_ENV: hashlib.sha256(
+                        pending_source_bytes
+                    ).hexdigest(),
+                }
+                with patch.dict(
+                    os.environ,
+                    descriptor_environment,
+                    clear=True,
+                ):
+                    baseline_trades = seed_verified_closed_history(
+                        destination_path
+                    )
+                self.assertEqual((buy_trade, sell_trade), baseline_trades)
+                self.assertEqual(source_bytes, destination_path.read_bytes())
+                self.assertEqual(0o600, destination_path.stat().st_mode & 0o777)
+                self.assertFalse(
+                    destination_path.with_name(
+                        f"{destination_path.name}.pending-orders.jsonl"
+                    ).exists()
+                )
+
+                mismatched_environment = {
+                    TESTNET_BASELINE_HISTORY_FD_ENV: str(source_descriptor),
+                    TESTNET_BASELINE_HISTORY_SHA256_ENV: "0" * 64,
+                }
+                with patch.dict(
+                    os.environ,
+                    mismatched_environment,
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "changed before copy",
+                    ):
+                        seed_verified_closed_history(
+                            mismatched_destination_path
+                        )
+                self.assertFalse(mismatched_destination_path.exists())
+            finally:
+                # 두 test-local inherited descriptor를 모든 semantic assertion 뒤 함께 닫는다.
+                os.close(source_descriptor)
+                os.close(pending_source_descriptor)
 
     def test_open_baseline_is_rejected_before_destination_write(self) -> None:
         """
@@ -218,4 +428,4 @@ class TestnetBaselineHistoryTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main()  # Direct 실행도 baseline path·descriptor의 같은 fail-closed suite를 사용한다.

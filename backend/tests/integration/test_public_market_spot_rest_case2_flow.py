@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
@@ -235,6 +235,7 @@ def _exchange_info_payload() -> dict[str, object]:
         "timezone": "UTC",
         "serverTime": INITIAL_TIME_MILLISECONDS,
         "rateLimits": [],
+        "exchangeFilters": [],
         "symbols": [
             {
                 "symbol": SYMBOL,
@@ -303,6 +304,7 @@ class LocalCase2HTTPTransport:
         headers: Mapping[str, str],
         body: bytes | None,
         timeout_seconds: int,
+        before_send: Callable[[], None] | None = None,
     ) -> HTTPTransportResponse:
         """
         함수 이름: request()
@@ -312,9 +314,13 @@ class LocalCase2HTTPTransport:
             headers -> request header mapping
             body -> form body 또는 None
             timeout_seconds -> 검증된 request timeout
+            before_send -> local route 처리 직전에 실행할 선택 fail-closed guard
         반환값: 외부 I/O 없이 만든 HTTPTransportResponse
         작성 날짜: 2026/08/29
         """
+        # 실제 transport와 같은 경계에서 주문 freshness guard를 먼저 통과시킨다.
+        if before_send is not None:
+            before_send()
         split_url = urlsplit(url)
         path = split_url.path
         query = parse_qs(split_url.query)
@@ -336,8 +342,30 @@ class LocalCase2HTTPTransport:
             return _json_response({"serverTime": INITIAL_TIME_MILLISECONDS})
         if method == "GET" and path.endswith("/v3/account"):
             return _json_response(_account_payload())
+
+        # Submit-time account·symbol·account-wide empty·reference read는 모두 production route를 재현한다.
+        if method == "GET" and path.endswith("/v3/myFilters"):
+            return _json_response(
+                {
+                    "exchangeFilters": [],
+                    "symbolFilters": [],
+                    "assetFilters": [],
+                }
+            )
         if method == "GET" and path.endswith("/v3/exchangeInfo"):
             return _json_response(_exchange_info_payload())
+        if method == "GET" and path.endswith("/v3/openOrders"):
+            return _json_response([])
+        if method == "GET" and path.endswith("/v3/openOrderList"):
+            return _json_response([])
+        if method == "GET" and path.endswith("/v3/referencePrice"):
+            return _json_response(
+                {
+                    "symbol": SYMBOL,
+                    "referencePrice": "88.6",
+                    "timestamp": INITIAL_TIME_MILLISECONDS,
+                }
+            )
         if method == "POST" and path.endswith("/v3/order"):
             return self._handle_submit(body)
         if method == "GET" and path.endswith("/v3/order"):

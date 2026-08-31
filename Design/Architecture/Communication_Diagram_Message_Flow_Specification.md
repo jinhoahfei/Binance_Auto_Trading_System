@@ -699,12 +699,19 @@ Operation
 - `loadAllKlines(symbol : String, limit : int) : Map<Interval, List<Kline>>`
 - `fetchAccountSnapshot(asset : String = "ETH") : AccountSnapshot`
 - `fetchCommissionDiscountPolicy(symbol : String) : CommissionDiscountPolicy`
+- `fetchAccountAssetFilters(symbol : String) : List<AccountAssetFilter>`
+- `fetchAccountRelevantFilters(symbol : String) : AccountRelevantFilters`
+- `hasAnyExchangeOpenOrders() : Boolean`
+- `hasAnyExchangeOpenOrderLists() : Boolean`
+- `fetchReferencePrice(symbol : String) : ReferencePrice`
 - `sellAllPosition(symbol : String, quantity : Decimal) : OrderResult`
 - `submitOrder(order : Order) : OrderResult`
 - `queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult`
 - `cancelOrder(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult`
 - `listOpenOrderResults(symbol : String) : List<OrderResult>`
 - `listRecentOrderResults(symbol : String, limit : int = 100) : List<OrderResult>`
+- `listAllOpenOrderResults(symbol : String) : List<OrderResult>`
+- `listAllRecentOrderResults(symbol : String, limit : int = 1000) : List<OrderResult>`
 
 조회와 취소는 `orderId` 또는 `clientOrderId` 중 하나 이상을 요구한다. retry 횟수나
 전략 판단은 이 Gateway가 아니라 `TradingController`가 ADR-002에 따라 수행한다.
@@ -718,6 +725,51 @@ tax/special 수수료가 검증된 string discount asset으로 전환될 수 있
 Testnet은 두 flag가 참이고 discount와 12개 commission 비율이 모두 0인 응답에서 explicit
 `null`을 반환했다. 이 exact all-zero schema drift만 수수료 자산 부재로 허용하며, field 누락,
 하나라도 양수인 null 또는 string이 아닌 다른 타입은 fail closed한다.
+
+2026-08-31 재대조한 현재 공식 계약의 signed `GET /api/v3/myFilters`는 한 account와
+symbol에 관련된 exchange/symbol/asset filter를 함께 반환한다. Gateway는 요청 symbol을
+body와 별도의 provenance로 결속하고, 공식 union의 type·field·JSON type을 scope별 immutable
+`AccountRelevantFilters`로 엄격히 정규화한다. Unknown/duplicate/extra field와 공개 평가식이
+없는 `T_PLUS_SELL`은 무시하지 않고 fail closed한다. `fetchAccountAssetFilters`는 전체
+payload를 같은 parser로 먼저 검증한 뒤 `MAX_ASSET` projection만 주는 호환 경계다.
+공식 `MAX_ASSET` 정의는 base asset에는 quantity, quote asset에는 notional을 적용한다고만
+명시하고 quantity 기반 MARKET 주문의 quote notional 환산 가격식은 제공하지 않는다. 따라서
+이번 Phase 13의 quantity 기반 MARKET BUY/SELL에서는 base `MAX_ASSET`만 최종 제출 quantity로
+평가하고, quote `MAX_ASSET`이 반환되면 `referencePrice * quantity`를 합성하지 않은 채
+journal/POST 전에 고정 fail closed한다. 관련 없는 asset, 중복, unknown asset filter와 잘못된
+Decimal도 주문 전에 fail closed한다. 별도 symbol filter인 MARKET `MIN_NOTIONAL`/`NOTIONAL`은
+non-null reference price가 있으면 그 값을 사용한다. 따라서 fresh public
+`GET /api/v3/referencePrice`를 엄격한 `ReferencePrice`로 정규화하고
+preflight와 각 submit-time evidence에 각각 관찰 시각을 결속한다. Null 또는 `-2043`, symbol·timestamp
+drift에서는 임의 VWAP·마지막 가격을 추정하지 않는다. `MAX_POSITION`은 current account exposure와
+모든 open BUY까지 필요한 filter이므로 이 좁은 Phase 13 BUY target에서는 존재 자체를 차단하고,
+정확한 account-position evaluator가 없는 상태에서 quantity만 비교해 통과시키지 않는다.
+
+`EXCHANGE_MAX_NUM_*`와 symbol count filter는 symbol-scoped order 조회로 account 전체를 추정하지
+않는다. Preflight와 각 submit-time prepare는 signed `GET /api/v3/openOrders`를 symbol 없이,
+signed `GET /api/v3/openOrderList`를 전용 endpoint로 조회해 두 exact empty snapshot과 각각의
+관찰 시각을 고정한다. Non-empty/malformed/시각 순서 drift는 journal과 `POST /api/v3/order`
+전에 차단하고 order/list ID를 Gateway·trace·오류 출력으로 노출하지 않는다.
+
+Prepared composite evidence는 account filter, public rule, 두 account-wide empty-state와 reference
+price 중 가장 이른 관찰부터 고정 `30초`까지만 유효하다. 정확히 30초는 허용하지만 30초+1ms와
+마지막 관찰보다 후퇴한 clock은 fingerprint를 한 번 소모한 뒤에도 order POST 전에 차단한다. 실제
+transport는 socket I/O 직전 `before_send` guard에서 같은 server-aligned 시각으로 freshness를 다시
+검증하고, 통과한 경우에만 최초 submission-attempt evidence를 만든다. 따라서 fingerprint 소비 뒤
+transport 진입이 지연돼도 attempt evidence와 order POST 없이 fail closed한다.
+
+Phase 13 trace v3는 signed composite와 별도로 같은 `exchangeInfo`에서 만든
+`public_relevant_filters` exact projection을 보존한다. Validator는 quantity·notional·count·passive·
+`MAX_POSITION`의 signed/public overlap, public scalar rule 결속과 위 30초 인과관계를 runtime과 같은
+규칙으로 재검증한다. Stale·clock regression·schema drift는 차단하고 preserved trace v2는 그
+version의 계약으로만 계속 검증한다.
+
+Phase 13 actual preflight의 격리 조회는 application prefix에 한정하지 않고 manual client ID까지
+포함한 symbol-scoped `openOrders`와 `allOrders(limit=1000)`를 사용한다. Open 결과는 비어 있어야
+하고 recent 결과의 `(exchange order ID, client order ID)` exact set은 inode·digest·pending·Position
+검증을 통과한 closed baseline Trade set과 같아야 한다. Fresh baseline이면 recent도 비어 있어야
+한다. Missing, duplicate, manual/외부 identity 또는 stable exchange ID 부재는 actual mutation 전에
+고정 문장으로 fail closed하며, 실패 출력에 `OrderResult`/`Trade` repr, ID와 fill을 반사하지 않는다.
 
 ### 8.9 WebSocketGateway
 
@@ -1317,7 +1369,12 @@ Testnet Case 2는 local in-scope gate 통과 후만 `ETHUSDT`에 별도 opt-in�
 각 신규 BUY decision notional을 `100 USDT` 이하로 제한한다. 이 상한은 신규
 노출 사전 추정치이므로 거래소 filter 검증을 대체하지 않는다. STOP/recovery SELL은
 Position·free ETH·최신 filter 안의 정확한 보유 수량으로 제한하고 BUY cap을 적용하지
-않는다. `live`는 ADR-003의 release 승인, 매 실행 확인, configured policy의
+않는다. 각 BUY/SELL prepare는 fresh `exchangeInfo`, signed `myFilters`와 public
+`referencePrice`를 다시 읽는다. Base `MAX_ASSET`은 최종 제출 quantity로 평가하고 MARKET
+`MIN_NOTIONAL`/`NOTIONAL`만 reference price notional로 재검증한다. 공식 환산 가격식이 없는
+quantity 기반 MARKET의 quote `MAX_ASSET`이 있으면 고정 fail closed한다. `MAX_POSITION`이 있거나
+reference price를 authoritative하게 읽지 못하면 신규 BUY를 열지 않는다. `live`는 ADR-003의
+release 승인, 매 실행 확인, configured policy의
 version·nullable 세 상한·`REALIZED_ONLY`·`CANCEL_AND_LIQUIDATE`와 reconciliation을
 모두 통과해야 한다. Phase 13 구현 여부와 관계없이 별도 사용자 live 승인
 record와 서명된 release checklist가 생기기 전에는 configuration, backend와 UI 세
@@ -1378,6 +1435,7 @@ snapshot barrier를 다시 수행한다.
 | P13-03 / process ownership | `TradingController` | `markProcessOwnershipAmbiguous(reason) : void` | parent/sidecar/PyInstaller/listener identity가 불명확하면 신규 BUY와 relaunch를 잠그고 자동 kill·재주문 금지 |
 | P13-03 / stale owner release | `Tauri native startup -> runtime ownership artifact` | `inspectStaleRuntimeOwner() : Attestation?`, `releaseStaleRuntimeOwner(attestation) : void` | Python spawn 전 exclusive lock 획득·PID-absent ACTIVE/ORPHANED만 exact identity로 표시하고, 확인 뒤 같은 inode와 PID 부재를 재검증해 RELEASED fsync. 취소·경합·변경은 mutation 없이 fail closed하며 kill/cancel/청산 금지 |
 | P13-04 / `1L.1`~`1L.3` | `MarketDataController -> TradingController` | `observeMarketEvaluation(evaluation, marketVersion, sourceEventId) : TradingEvent?` | 확정 OLS 정규화식과 concrete implementation-detail builder로 지속 Kline의 immutable evaluation/version을 serial TradingEvent에 결합한다. Claim 시 queue preparer가 Context update·event 재분류를 수행하고 private Action 호출은 금지한다. Bootstrap wiring·monotonic reset/rebase, builder 직접 회귀 20개, all-interval 원자 경계, public local Case 2 여섯 흐름과 production Spot REST memory-HTTP E2E를 통과했다. Actual Phase 13 Testnet order/fill trace는 별도 GAP이다. |
+| P13-04 / actual preflight·submit | `TradingController -> APIGateway` | `fetchAccountRelevantFilters(symbol) : AccountRelevantFilters`, `hasAnyExchangeOpenOrders() : Boolean`, `hasAnyExchangeOpenOrderLists() : Boolean`, `fetchReferencePrice(symbol) : ReferencePrice` | Signed `myFilters`의 세 scope와 public symbol rule을 strict DTO로 대조하고 preflight·각 prepare에서 account-wide open order/list exact empty를 새로 증명한다. Quantity 기반 MARKET은 base `MAX_ASSET`만 제출 quantity로 평가한다. Quote `MAX_ASSET`은 공식 환산 가격식이 없으므로 고정 차단하고, reference price는 MARKET `MIN_NOTIONAL`/`NOTIONAL`에만 적용한다. Count limit 0, malformed/unknown/T_PLUS_SELL, public/signed drift, `MAX_POSITION` BUY와 reference-price 부재도 journal/POST 전에 차단한다. 가장 이른 composite 관찰부터 고정 30초와 clock monotonicity를 적용하고 transport `before_send`에서 freshness와 attempt evidence를 결속한다. Trace v3는 별도 `public_relevant_filters` projection의 overlap과 같은 30초 인과를 검증한다. Credential·raw response·order/list ID는 trace에 넣지 않는다. |
 | P13-04 / market full-resync | `MarketDataController -> RegimeController` | `reconcileMarketStream() : MarketSnapshot`, `reconcileRegime(snapshot) : RegimeResult?` | 동일 4H candle은 지표·추천·STM을 재검증하고 무전이로 새 version에 결합한다. 새 candle만 재평가하며 결과/source/completion version 불일치나 실패는 gate를 열지 않음 |
 | D-07 / `1.4` | `MarketDataController -> RegimeController` | `calculate4HIndicators(snapshot) : IndicatorSnapshot` | ADR-004의 확정봉·Decimal·golden formula 사용 |
 | D-10~D-13 / Case 2 `13`, Case 3·4 | `TradingController/UIStateController -> TradeHistoryController` | 기존 `recordOrderExecution`, `getTradeDetails`, `exportCSV` | JSONL/Performance/KST/CSV 정책을 조정, 새 업무 클래스 불필요 |
@@ -1387,6 +1445,10 @@ snapshot barrier를 다시 수행한다.
 
 - 주문 취소와 open/recent order 조회는 `APIGateway`의 Binance REST 캡슐화 책임에 응집되므로
   이 클래스에 추가했다.
+- Account relevant filter 세 scope, account-wide open order/list empty 조회와 MARKET
+  `MIN_NOTIONAL`/`NOTIONAL`용 reference price 조회도 같은 Binance REST 캡슐화 책임에
+  응집되므로 새 business lifeline 없이 `APIGateway`의 immutable adapter DTO로 추가했다.
+  Quote `MAX_ASSET` 환산은 이 DTO 책임으로 추정하지 않는다.
 - Regime evaluation Action dispatcher는 `RegimeController`, Trading event loop와 retry
   scheduler 정책은 `TradingController`의 private 구현이다. Production bootstrap의 단일
   interruptible worker는 Controller의 bounded cycle을 호출하고 상태 publication을 연결할

@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING, localcontext
+from functools import partial
 import hashlib
 import hmac
 import json
@@ -27,16 +28,21 @@ from binance_auto_trader.domain.trading.order import (
 from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 from .mappers import (
+    AccountRelevantFilters,
     BinancePayloadError,
     OrderPreparationFilterEvidence,
     OrderSubmissionAttemptEvidence,
+    ReferencePrice,
     SymbolFilterError,
     SymbolTradingRules,
     format_decimal_parameter,
     map_fill_payloads,
     map_order_result,
+    parse_account_relevant_filters,
+    parse_reference_price,
     parse_symbol_trading_rules,
     prepare_market_order,
+    validate_account_relevant_filters,
 )
 
 
@@ -45,6 +51,7 @@ SPOT_TESTNET_ALTERNATE_API_BASE_URL = "https://api1.testnet.binance.vision/api"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 12
 DEFAULT_RECV_WINDOW_MILLISECONDS = 5_000
 APPLICATION_CLIENT_ORDER_ID_PREFIX = "bat-"
+_MAXIMUM_ORDER_PREPARATION_AGE = timedelta(seconds=30)
 _OFFICIAL_TESTNET_BASE_URLS = frozenset(
     {
         SPOT_TESTNET_API_BASE_URL,
@@ -123,6 +130,7 @@ class HTTPTransport(Protocol):
         headers: Mapping[str, str],
         body: bytes | None,
         timeout_seconds: int,
+        before_send: Callable[[], None] | None = None,
     ) -> HTTPTransportResponse:
         """
         함수 이름: request()
@@ -132,6 +140,7 @@ class HTTPTransport(Protocol):
             headers -> 전송할 header mapping
             body -> form body 또는 None
             timeout_seconds -> 연결과 응답에 적용할 양수 제한
+            before_send -> 실제 I/O 직전에 실행할 선택 fail-closed guard
         반환값: body를 모두 읽은 HTTPTransportResponse
         작성 날짜: 2026/08/22
         """
@@ -202,6 +211,7 @@ class UrllibHTTPTransport:
         headers: Mapping[str, str],
         body: bytes | None,
         timeout_seconds: int,
+        before_send: Callable[[], None] | None = None,
     ) -> HTTPTransportResponse:
         """
         함수 이름: request()
@@ -211,6 +221,7 @@ class UrllibHTTPTransport:
             headers -> 전송할 header mapping
             body -> form body 또는 None
             timeout_seconds -> 연결과 응답에 적용할 양수 제한
+            before_send -> opener 진입 직전에 실행할 선택 fail-closed guard
         반환값: 성공 또는 HTTP 오류의 구조화된 응답
         작성 날짜: 2026/08/22
         """
@@ -221,6 +232,10 @@ class UrllibHTTPTransport:
             headers=dict(headers),
             method=method,
         )
+        if before_send is not None:
+            if not callable(before_send):
+                raise TypeError("before_send must be callable or None")
+            before_send()  # Guard가 실패하면 opener와 socket에는 어떤 요청도 전달하지 않는다.
         try:
             with self._opener.open(
                 request_value,
@@ -755,6 +770,90 @@ class BinanceSpotRESTClient:
 
         return response.payload  # APIGateway가 raw rate를 할인 가능성 정책으로 축약한다.
 
+    def get_account_filters(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_filters()
+        기능: 공식 signed GET /api/v3/myFilters의 한 symbol 전체 JSON을 반환한다.
+        인자: symbol -> 계정 관련 filter를 조회할 Spot symbol
+        반환값: 해석된 Binance myFilters JSON object
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = self._normalize_symbol(symbol)
+
+        # MAX_ASSET는 이 USER_DATA endpoint에만 있으므로 기존 HMAC 경계로 매번 조회한다.
+        response = self._request_json(
+            method="GET",
+            endpoint="/v3/myFilters",
+            parameters={"symbol": normalized_symbol},
+            signed=True,
+        )
+        if not isinstance(response.payload, Mapping):
+            raise BinancePayloadError("myFilters response must be an object")
+
+        return response.payload  # APIGateway 또는 submit-time parser가 raw schema를 엄격히 축약한다.
+
+    def has_any_exchange_open_orders(self) -> bool:
+        """
+        함수 이름: has_any_exchange_open_orders()
+        기능: signed all-symbol openOrders snapshot이 비어 있는지 raw identity 비노출로 확인한다.
+        인자: 없음
+        반환값: 한 건 이상이면 True, exact empty array면 False
+        작성 날짜: 2026/08/31
+        """
+        # Symbol을 생략해야 EXCHANGE_* count filter의 account 전체 scope를 증명할 수 있다.
+        response = self._request_json(
+            method="GET",
+            endpoint="/v3/openOrders",
+            parameters={},
+            signed=True,
+        )
+        if not isinstance(response.payload, (list, tuple)):
+            raise BinancePayloadError(
+                "all-symbol openOrders response must be an array"
+            )
+
+        return bool(response.payload)  # 실패 출력에 order ID나 raw mapping을 반사하지 않는다.
+
+    def has_any_exchange_open_order_lists(self) -> bool:
+        """
+        함수 이름: has_any_exchange_open_order_lists()
+        기능: signed all-symbol openOrderList snapshot이 비어 있는지 raw identity 비노출로 확인한다.
+        인자: 없음
+        반환값: 한 건 이상이면 True, exact empty array면 False
+        작성 날짜: 2026/08/31
+        """
+        # Order-list count는 component order 추정 대신 공식 전용 USER_DATA endpoint로 확인한다.
+        response = self._request_json(
+            method="GET",
+            endpoint="/v3/openOrderList",
+            parameters={},
+            signed=True,
+        )
+        if not isinstance(response.payload, (list, tuple)):
+            raise BinancePayloadError(
+                "all-symbol openOrderList response must be an array"
+            )
+
+        return bool(response.payload)  # List ID와 child order는 메모리 bool 밖으로 내보내지 않는다.
+
+    def fetch_reference_price(
+        self,
+        *,
+        symbol: str,
+    ) -> ReferencePrice:
+        """
+        함수 이름: fetch_reference_price()
+        기능: 공식 public referencePrice를 매번 새로 조회해 non-null 엄격 DTO로 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 요청 symbol에 결속된 ReferencePrice
+        작성 날짜: 2026/08/31
+        """
+        reference_price, _reference_price_observed_at = (
+            self._fetch_reference_price_with_observed_at(symbol=symbol)
+        )
+
+        return reference_price  # Null과 -2043에는 local VWAP fallback을 만들지 않는다.
+
     def fetch_symbol_trading_rules(
         self,
         *,
@@ -850,6 +949,55 @@ class BinanceSpotRESTClient:
         self._symbol_rules_by_symbol[normalized_symbol] = rules
         return rules, observed_at
 
+    def _fetch_account_relevant_filters_with_observed_at(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[AccountRelevantFilters, datetime]:
+        """
+        함수 이름: _fetch_account_relevant_filters_with_observed_at()
+        기능: fresh signed myFilters 세 scope를 엄격 해석하고 응답 처리 완료 UTC 시각을 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: AccountRelevantFilters와 fetch 완료 UTC datetime tuple
+        작성 날짜: 2026/08/31
+        """
+        payload = self.get_account_filters(symbol=symbol)
+
+        # Signed GET이 server offset을 만든 후 strict parser와 같은 시간축의 완료 시각을 기록한다.
+        account_filters = parse_account_relevant_filters(payload, symbol)
+        observed_at = self._provenance_time(require_server_alignment=True)
+
+        return account_filters, observed_at  # Signed strict DTO와 동일 server-time 축만 전달한다.
+
+    def _fetch_reference_price_with_observed_at(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[ReferencePrice, datetime]:
+        """
+        함수 이름: _fetch_reference_price_with_observed_at()
+        기능: fresh public referencePrice를 엄격 해석하고 응답 처리 완료 UTC 시각을 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: non-null ReferencePrice와 fetch 완료 UTC datetime tuple
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = self._normalize_symbol(symbol)
+
+        # Public endpoint에는 API key나 signed parameter를 보내지 않고 symbol 하나만 전달한다.
+        response = self._request_json(
+            method="GET",
+            endpoint="/v3/referencePrice",
+            parameters={"symbol": normalized_symbol},
+            signed=False,
+        )
+        reference_price = parse_reference_price(
+            response.payload,
+            normalized_symbol,
+        )
+        observed_at = self._provenance_time(require_server_alignment=False)
+
+        return reference_price, observed_at  # Public 가격과 완료 시각을 한 fresh snapshot으로 전달한다.
+
     def get_server_timestamp_milliseconds(self) -> int:
         """
         함수 이름: get_server_timestamp_milliseconds()
@@ -872,7 +1020,7 @@ class BinanceSpotRESTClient:
     def prepare_order(self, order: Order) -> Order:
         """
         함수 이름: prepare_order()
-        기능: 최신 MARKET rule을 적용하고 durable 제출에 쓸 객체·ID·수량 fingerprint를 고정한다.
+        기능: 최신 symbol·account filter와 reference price를 적용해 제출 fingerprint를 고정한다.
         인자: order -> 제출할 ETHUSDT Order aggregate
         반환값: requested_quantity를 보존하고 submitted_quantity만 내린 동일 Order
         작성 날짜: 2026/08/22
@@ -892,7 +1040,17 @@ class BinanceSpotRESTClient:
                 raise OrderPreparationRequiredError(
                     "prepared order identity or quantity changed"
                 )
+            self._require_fresh_preparation_evidence(
+                order.client_order_id
+            )
             return order  # journal 이전의 중복 prepare도 최초 준비 결과를 그대로 사용한다.
+
+        # 계정 전용 filter를 먼저 signed 조회해 이후 모든 관찰 시각을 Binance 시간축에 맞춘다.
+        account_filters, account_filters_observed_at = (
+            self._fetch_account_relevant_filters_with_observed_at(
+                symbol=order.symbol
+            )
+        )
 
         # Preflight 조회와 별개로 매 제출 직전 다시 조회한 rule만 수량 준비의 권위가 된다.
         rules, rules_observed_at = (
@@ -901,7 +1059,47 @@ class BinanceSpotRESTClient:
             )
         )
 
-        prepared_order = prepare_market_order(order, rules)
+        # Account-wide count·isolation 완전성을 위해 submit-time 두 signed snapshot을 항상 exact empty로 고정한다.
+        has_open_orders = self.has_any_exchange_open_orders()
+        account_open_orders_observed_at = self._provenance_time(
+            require_server_alignment=True
+        )
+        if has_open_orders:
+            raise SymbolFilterError(
+                "FILTER_ACCOUNT_OPEN_ORDER_STATE_NOT_EMPTY"
+            )
+        has_open_order_lists = self.has_any_exchange_open_order_lists()
+        account_open_order_lists_observed_at = self._provenance_time(
+            require_server_alignment=True
+        )
+        if has_open_order_lists:
+            raise SymbolFilterError(
+                "FILTER_ACCOUNT_OPEN_ORDER_LIST_STATE_NOT_EMPTY"
+            )
+        account_open_state_verified_empty = True
+
+        # MARKET notional은 fresh non-null reference price로 평가하고 quote MAX_ASSET은 별도 차단한다.
+        reference_price, reference_price_observed_at = (
+            self._fetch_reference_price_with_observed_at(
+                symbol=order.symbol
+            )
+        )
+
+        prepared_order = prepare_market_order(
+            order,
+            rules,
+            reference_price=reference_price.price,
+        )
+        validate_account_relevant_filters(
+            prepared_order.submitted_quantity,
+            reference_price.price,
+            rules,
+            account_filters,
+            side=prepared_order.side,
+            account_open_state_verified_empty=(
+                account_open_state_verified_empty
+            ),
+        )
 
         # Bootstrap cap은 일반 주문에 유지하되 STOP/recovery SELL cleanup만 가격 상승으로 막지 않는다.
         if (
@@ -935,6 +1133,15 @@ class BinanceSpotRESTClient:
             side=prepared_order.side,
             observed_at=rules_observed_at,
             rules=rules,
+            account_filters=account_filters,
+            account_filters_observed_at=account_filters_observed_at,
+            account_open_orders_observed_at=account_open_orders_observed_at,
+            account_open_order_lists_observed_at=(
+                account_open_order_lists_observed_at
+            ),
+            account_open_state_verified_empty=account_open_state_verified_empty,
+            reference_price=reference_price,
+            reference_price_observed_at=reference_price_observed_at,
         )  # Journal과 POST 전 성공한 exact prepare만 read-only provenance로 공개한다.
 
         return prepared_order  # 원 aggregate identity와 requested_quantity를 그대로 유지한다.
@@ -963,18 +1170,7 @@ class BinanceSpotRESTClient:
             "newOrderRespType": "FULL",
         }
         try:
-            # 첫 signed POST 전에 server offset을 확정해 attempt와 Binance fill이 같은 시간축을 사용한다.
-            attempted_at = self._provenance_time(
-                require_server_alignment=True
-            )
-            self._submission_attempt_evidence_by_client_id[
-                order.client_order_id
-            ] = OrderSubmissionAttemptEvidence(
-                intent_id=order.intent_id,
-                client_order_id=order.client_order_id,
-                side=order.side,
-                attempted_at=attempted_at,
-            )
+            # Attempt evidence와 최종 freshness는 transport의 실제 I/O 직전 guard가 원자적으로 만든다.
             response = self._request_json(
                 method="POST",
                 endpoint="/v3/order",
@@ -1089,19 +1285,23 @@ class BinanceSpotRESTClient:
         self,
         *,
         symbol: str = "ETHUSDT",
-        client_order_id_prefix: str = APPLICATION_CLIENT_ORDER_ID_PREFIX,
+        client_order_id_prefix: str | None = APPLICATION_CLIENT_ORDER_ID_PREFIX,
     ) -> tuple[OrderResult, ...]:
         """
         함수 이름: list_open_order_results()
         기능: 한 symbol의 open orders를 조회해 application client ID 주문만 fill과 함께 반환한다.
         인자: symbol -> 조회할 Spot symbol
-            client_order_id_prefix -> 로컬 application 주문 ID prefix
+            client_order_id_prefix -> 로컬 application 주문 ID prefix 또는 전체 조회의 None
         반환값: 최신 open OrderResult tuple
         작성 날짜: 2026/08/22
         """
         normalized_symbol = self._normalize_symbol(symbol)
-        normalized_prefix = self._normalize_client_order_id_prefix(
-            client_order_id_prefix
+        normalized_prefix = (
+            None
+            if client_order_id_prefix is None
+            else self._normalize_client_order_id_prefix(
+                client_order_id_prefix
+            )
         )
 
         # Symbol을 항상 보내 weight 80인 전체-symbol 조회 대신 공식 weight 6 경로를 사용한다.
@@ -1118,11 +1318,29 @@ class BinanceSpotRESTClient:
             client_order_id_prefix=normalized_prefix,
         )  # 호출자는 이 결과로 restart open-order reconciliation을 수행한다.
 
+    def list_all_open_order_results(
+        self,
+        *,
+        symbol: str = "ETHUSDT",
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_all_open_order_results()
+        기능: 한 symbol의 모든 client ID open order를 안전 preflight용 정규화 결과로 반환한다.
+        인자: symbol -> 조회할 Spot symbol
+        반환값: Application prefix를 포함한 전체 open OrderResult tuple
+        작성 날짜: 2026/08/31
+        """
+        # Recovery 기본 surface와 달리 actual 격리 검사는 manual·외부 client ID도 숨기지 않는다.
+        return self.list_open_order_results(
+            symbol=symbol,
+            client_order_id_prefix=None,
+        )  # Prefix가 다른 동시 주문도 격리 검사에서 제외하지 않는다.
+
     def list_recent_order_results(
         self,
         *,
         symbol: str = "ETHUSDT",
-        client_order_id_prefix: str = APPLICATION_CLIENT_ORDER_ID_PREFIX,
+        client_order_id_prefix: str | None = APPLICATION_CLIENT_ORDER_ID_PREFIX,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         limit: int = 500,
@@ -1131,7 +1349,7 @@ class BinanceSpotRESTClient:
         함수 이름: list_recent_order_results()
         기능: allOrders 최근 구간에서 application 주문을 골라 누적 myTrades fill과 반환한다.
         인자: symbol -> 조회할 Spot symbol
-            client_order_id_prefix -> 로컬 application 주문 ID prefix
+            client_order_id_prefix -> 로컬 application 주문 ID prefix 또는 전체 조회의 None
             start_time -> 선택 조회 시작 UTC 시각
             end_time -> 선택 조회 종료 UTC 시각
             limit -> 1~1000 주문 개수
@@ -1139,8 +1357,12 @@ class BinanceSpotRESTClient:
         작성 날짜: 2026/08/22
         """
         normalized_symbol = self._normalize_symbol(symbol)
-        normalized_prefix = self._normalize_client_order_id_prefix(
-            client_order_id_prefix
+        normalized_prefix = (
+            None
+            if client_order_id_prefix is None
+            else self._normalize_client_order_id_prefix(
+                client_order_id_prefix
+            )
         )
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
@@ -1178,6 +1400,33 @@ class BinanceSpotRESTClient:
             expected_symbol=normalized_symbol,
             client_order_id_prefix=normalized_prefix,
         )  # client prefix filtering은 allOrders가 지원하지 않아 로컬에서 수행한다.
+
+    def list_all_recent_order_results(
+        self,
+        *,
+        symbol: str = "ETHUSDT",
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 500,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_all_recent_order_results()
+        기능: 한 symbol의 모든 client ID recent order를 격리 delta 검사용으로 반환한다.
+        인자: symbol -> 조회할 Spot symbol
+            start_time -> 선택 조회 시작 UTC 시각
+            end_time -> 선택 조회 종료 UTC 시각
+            limit -> 1~1000 주문 개수
+        반환값: Application prefix를 포함한 전체 recent OrderResult tuple
+        작성 날짜: 2026/08/31
+        """
+        # Actual baseline/final delta는 manual client ID도 포함해야 동시 외부 주문을 숨기지 않는다.
+        return self.list_recent_order_results(
+            symbol=symbol,
+            client_order_id_prefix=None,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+        )  # Manual client ID까지 포함한 symbol-scoped recent snapshot만 반환한다.
 
     def _order_preparation_fingerprint(
         self,
@@ -1240,6 +1489,133 @@ class BinanceSpotRESTClient:
             raise OrderPreparationRequiredError(
                 "prepared order identity or quantity changed"
             )
+
+        # Fingerprint가 같아도 account/filter snapshot이 오래됐으면 POST 전에 표식을 폐기한다.
+        self._require_fresh_preparation_evidence(order.client_order_id)
+
+        return None  # Fresh evidence와 exact fingerprint를 모두 통과한 한 번의 제출만 허용한다.
+
+    def _require_fresh_preparation_evidence(
+        self,
+        client_order_id: str,
+        *,
+        checked_at: datetime | None = None,
+    ) -> OrderPreparationFilterEvidence:
+        """
+        함수 이름: _require_fresh_preparation_evidence()
+        기능: 준비된 composite filter와 account empty-state가 고정 30초 안인지 검증한다.
+        인자: client_order_id -> 준비 증거를 찾을 application Order identity
+            checked_at -> 선택 transport 직전 server-aligned UTC 시각
+        반환값: 유효 기간과 server-time 인과관계를 통과한 immutable filter evidence
+        작성 날짜: 2026/08/31
+        """
+        # Fingerprint와 별도로 immutable composite evidence가 남아 있어야 freshness를 계산할 수 있다.
+        evidence = self._preparation_filter_evidence_by_client_id.get(
+            client_order_id
+        )
+        if evidence is None:
+            raise OrderPreparationRequiredError(
+                "prepared order filter evidence is missing"
+            )
+
+        # DTO 불변식이 깨진 내부 상태도 None을 시간값으로 추정하지 않고 제출 전에 차단한다.
+        account_open_orders_observed_at = (
+            evidence.account_open_orders_observed_at
+        )
+        account_open_order_lists_observed_at = (
+            evidence.account_open_order_lists_observed_at
+        )
+        if (
+            account_open_orders_observed_at is None
+            or account_open_order_lists_observed_at is None
+        ):
+            raise OrderPreparationRequiredError(
+                "prepared order open-state evidence is incomplete"
+            )
+
+        # 가장 이른 filter 관찰부터 POST 직전까지를 제한해 중간의 stale account state를 숨기지 않는다.
+        observation_times = (
+            evidence.account_filters_observed_at,
+            evidence.observed_at,
+            account_open_orders_observed_at,
+            account_open_order_lists_observed_at,
+            evidence.reference_price_observed_at,
+        )
+        earliest_observed_at = min(observation_times)
+        latest_observed_at = max(observation_times)
+        selected_checked_at = checked_at
+        if selected_checked_at is None:
+            selected_checked_at = self._provenance_time(
+                require_server_alignment=True
+            )
+        elif (
+            not isinstance(selected_checked_at, datetime)
+            or selected_checked_at.tzinfo is None
+            or selected_checked_at.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("checked_at must be a timezone-aware UTC datetime")
+        if selected_checked_at < latest_observed_at:
+            raise OrderPreparationRequiredError(
+                "prepared order evidence clock regressed"
+            )
+        if (
+            selected_checked_at - earliest_observed_at
+            > _MAXIMUM_ORDER_PREPARATION_AGE
+        ):
+            raise OrderPreparationRequiredError(
+                "prepared order filter evidence expired"
+            )
+
+        return evidence  # Raw filter나 credential 없이 immutable freshness proof만 내부에 돌려준다.
+
+    def _begin_order_transport_attempt(
+        self,
+        parameters: Mapping[str, object],
+    ) -> None:
+        """
+        함수 이름: _begin_order_transport_attempt()
+        기능: 실제 order I/O 직전 freshness를 검증하고 최초 attempt evidence를 같은 시각에 기록한다.
+        인자: parameters -> submit_order가 고정한 credential 없는 MARKET parameter
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        client_order_id = parameters.get("newClientOrderId")
+        if (
+            not isinstance(client_order_id, str)
+            or _CLIENT_ORDER_ID_PATTERN.fullmatch(client_order_id) is None
+        ):
+            raise OrderPreparationRequiredError(
+                "order transport identity is invalid"
+            )
+
+        # Transport 진입 시각 하나로 30초 판정과 trace attempt provenance를 함께 고정한다.
+        attempted_at = self._provenance_time(require_server_alignment=True)
+        evidence = self._require_fresh_preparation_evidence(
+            client_order_id,
+            checked_at=attempted_at,
+        )
+        existing_attempt = self._submission_attempt_evidence_by_client_id.get(
+            client_order_id
+        )
+        if existing_attempt is None:
+            self._submission_attempt_evidence_by_client_id[
+                client_order_id
+            ] = OrderSubmissionAttemptEvidence(
+                intent_id=evidence.intent_id,
+                client_order_id=client_order_id,
+                side=evidence.side,
+                attempted_at=attempted_at,
+            )
+        elif (
+            existing_attempt.intent_id != evidence.intent_id
+            or existing_attempt.client_order_id != client_order_id
+            or existing_attempt.side is not evidence.side
+        ):
+            raise OrderPreparationRequiredError(
+                "order transport attempt provenance changed"
+            )
+
+        return None  # Timestamp retry도 최초 logical attempt identity를 덮어쓰지 않고 다시 freshness만 확인한다.
 
     def _request_json(
         self,
@@ -1359,12 +1735,20 @@ class BinanceSpotRESTClient:
             request_body = encoded_parameters.encode("ascii")
             headers["Content-Type"] = "application/x-www-form-urlencoded"
 
+        # Order POST만 transport I/O 직전 callback으로 freshness와 attempt evidence를 결속한다.
+        before_send: Callable[[], None] | None = None
+        if method == "POST" and endpoint == "/v3/order":
+            before_send = partial(
+                self._begin_order_transport_attempt,
+                parameters,
+            )
         transport_response = self._transport.request(
             method=method,
             url=request_url,
             headers=headers,
             body=request_body,
             timeout_seconds=self._request_timeout_seconds,
+            before_send=before_send,
         )
         if not isinstance(transport_response, HTTPTransportResponse):
             raise TypeError("transport must return HTTPTransportResponse")
@@ -1527,14 +1911,14 @@ class BinanceSpotRESTClient:
         payload: object,
         *,
         expected_symbol: str,
-        client_order_id_prefix: str,
+        client_order_id_prefix: str | None,
     ) -> tuple[OrderResult, ...]:
         """
         함수 이름: _map_order_collection()
         기능: openOrders/allOrders 배열에서 application 주문을 골라 fill과 OrderResult로 변환한다.
         인자: payload -> 공식 order JSON array
             expected_symbol -> 요청한 symbol
-            client_order_id_prefix -> 선택할 client ID prefix
+            client_order_id_prefix -> 선택할 client ID prefix 또는 모든 ID를 뜻하는 None
         반환값: 응답 순서를 유지한 OrderResult tuple
         작성 날짜: 2026/08/22
         """
@@ -1549,7 +1933,10 @@ class BinanceSpotRESTClient:
             client_order_id = order_payload.get("clientOrderId")
             if not isinstance(client_order_id, str):
                 raise BinancePayloadError("clientOrderId must be a string")
-            if not client_order_id.startswith(client_order_id_prefix):
+            if (
+                client_order_id_prefix is not None
+                and not client_order_id.startswith(client_order_id_prefix)
+            ):
                 continue
             if order_payload.get("symbol") != expected_symbol:
                 raise BinancePayloadError("order collection symbol does not match request")

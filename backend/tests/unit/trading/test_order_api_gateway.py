@@ -8,10 +8,13 @@ import unittest
 
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
 from binance_auto_trader.adapters.binance.mappers import (
+    AccountAssetFilter,
+    AccountRelevantFilters,
     NotionalFilter,
     OrderPreparationFilterEvidence,
     OrderSubmissionAttemptEvidence,
     QuantityFilter,
+    ReferencePrice,
     SymbolTradingRules,
 )
 from binance_auto_trader.domain.common import RegimeType
@@ -28,6 +31,27 @@ from binance_auto_trader.domain.trading.states import (
 
 
 PROCESSED_AT = datetime(2026, 8, 22, 2, 0, tzinfo=timezone.utc)
+
+
+def _empty_account_relevant_filters() -> AccountRelevantFilters:
+    """
+    함수 이름: _empty_account_relevant_filters()
+    기능: Gateway provenance 단위 테스트용 empty signed-filter DTO를 만든다.
+    인자: 없음
+    반환값: ETHUSDT에 결속된 AccountRelevantFilters
+    작성 날짜: 2026/08/31
+    """
+    # Credential이나 raw response가 없는 immutable fixture만 Gateway에 전달한다.
+    return AccountRelevantFilters(
+        symbol="ETHUSDT",
+        exchange_order_count_filters=(),
+        symbol_order_count_filters=(),
+        symbol_quantity_filters=(),
+        symbol_notional_filters=(),
+        symbol_maximum_position=None,
+        passive_symbol_filter_types=frozenset(),
+        asset_filters=(),
+    )
 
 
 def _symbol_trading_rules(
@@ -96,6 +120,18 @@ class FakeSymbolRulesRESTClient:
         self.client_order_ids: list[str] = []
         self.submission_evidence_result: object = None
         self.submission_client_order_ids: list[str] = []
+        self.account_filters_result: object = {
+            "exchangeFilters": [],
+            "symbolFilters": [],
+            "assetFilters": [],
+        }
+        self.account_filter_symbols: list[str] = []
+        self.reference_price_result: object = ReferencePrice(
+            symbol="ETHUSDT",
+            price=Decimal("100"),
+            exchange_timestamp=1787374800000,
+        )
+        self.reference_price_symbols: list[str] = []
 
     def fetch_symbol_trading_rules(self, *, symbol: str) -> object:
         """
@@ -137,6 +173,28 @@ class FakeSymbolRulesRESTClient:
         """
         self.submission_client_order_ids.append(client_order_id)  # POST 시작 evidence도 별도 read로 센다.
         return self.submission_evidence_result
+
+    def get_account_filters(self, *, symbol: str) -> object:
+        """
+        함수 이름: get_account_filters()
+        기능: 전달된 symbol을 기록하고 설정한 raw myFilters 후보를 반환한다.
+        인자: symbol -> Gateway가 canonical 형식으로 전달한 symbol
+        반환값: 설정된 myFilters object
+        작성 날짜: 2026/08/31
+        """
+        self.account_filter_symbols.append(symbol)  # Signed read의 canonical correlation을 기록한다.
+        return self.account_filters_result
+
+    def fetch_reference_price(self, *, symbol: str) -> object:
+        """
+        함수 이름: fetch_reference_price()
+        기능: 전달된 symbol을 기록하고 설정한 reference price 후보를 반환한다.
+        인자: symbol -> Gateway가 canonical 형식으로 전달한 symbol
+        반환값: 설정된 reference price object
+        작성 날짜: 2026/08/31
+        """
+        self.reference_price_symbols.append(symbol)  # Public read의 symbol 결속을 기록한다.
+        return self.reference_price_result
 
 
 def _order(
@@ -229,6 +287,10 @@ class FakeOrderRESTClient:
         self.submitted_orders: list[Order] = []
         self.queried_orders: list[Order] = []
         self.canceled_orders: list[Order] = []
+        self.all_open_results: object = ()
+        self.all_recent_results: object = ()
+        self.all_open_symbols: list[str] = []
+        self.all_recent_calls: list[tuple[str, int]] = []
 
     def submit_order(self, *, order: Order) -> object:
         """
@@ -262,6 +324,34 @@ class FakeOrderRESTClient:
         """
         self.canceled_orders.append(order)  # 취소가 별도 submit을 만들지 않는지 확인한다.
         return self.cancel_result
+
+    def list_all_open_order_results(self, *, symbol: str) -> object:
+        """
+        함수 이름: list_all_open_order_results()
+        기능: 격리용 전체 open-order symbol을 기록하고 설정 collection을 반환한다.
+        인자: symbol -> Gateway가 전달한 canonical symbol
+        반환값: 설정된 전체 open-order 후보
+        작성 날짜: 2026/08/31
+        """
+        self.all_open_symbols.append(symbol)  # Prefix 없는 안전 조회가 별도 port를 탔는지 남긴다.
+        return self.all_open_results
+
+    def list_all_recent_order_results(
+        self,
+        *,
+        symbol: str,
+        limit: int,
+    ) -> object:
+        """
+        함수 이름: list_all_recent_order_results()
+        기능: 격리용 전체 recent-order symbol·limit를 기록하고 설정 collection을 반환한다.
+        인자: symbol -> Gateway가 전달한 canonical symbol
+            limit -> Gateway가 검증한 bounded limit
+        반환값: 설정된 전체 recent-order 후보
+        작성 날짜: 2026/08/31
+        """
+        self.all_recent_calls.append((symbol, limit))
+        return self.all_recent_results  # Raw candidate 검증은 Gateway 책임으로 남긴다.
 
 
 def _fake_client(
@@ -358,6 +448,73 @@ class APIGatewaySymbolRulesTests(unittest.TestCase):
 
                 self.assertEqual(client.symbols, ["ETHUSDT"])
 
+    def test_fetch_account_asset_filters_normalizes_signed_payload(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_fetch_account_asset_filters_normalizes_signed_payload()
+        기능: Gateway가 raw myFilters를 strict MAX_ASSET tuple로 축약하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        client = FakeSymbolRulesRESTClient(_symbol_trading_rules())
+        client.account_filters_result = {
+            "exchangeFilters": [],
+            "symbolFilters": [],
+            "assetFilters": [
+                {
+                    "filterType": "MAX_ASSET",
+                    "asset": "USDT",
+                    "limit": "250.00000000",
+                }
+            ],
+        }
+        gateway = APIGateway(client)
+
+        # Lowercase 입력은 canonical symbol로 전달하고 raw collection은 DTO 하나로 제한한다.
+        result = gateway.fetch_account_asset_filters(" ethusdt ")
+
+        self.assertEqual(
+            result,
+            (
+                AccountAssetFilter(
+                    filter_type="MAX_ASSET",
+                    asset="USDT",
+                    maximum_quantity=Decimal("250.00000000"),
+                ),
+            ),
+        )
+        self.assertEqual(client.account_filter_symbols, ["ETHUSDT"])
+
+    def test_fetch_reference_price_requires_exact_correlated_dto(self) -> None:
+        """
+        함수 이름: test_fetch_reference_price_requires_exact_correlated_dto()
+        기능: Gateway가 ReferencePrice exact 타입과 요청 symbol 일치를 강제하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        client = FakeSymbolRulesRESTClient(_symbol_trading_rules())
+        gateway = APIGateway(client)
+
+        # 정상 DTO identity는 유지하고 raw mapping과 다른 symbol은 각각 차단한다.
+        expected_reference_price = client.reference_price_result
+        self.assertIs(
+            gateway.fetch_reference_price("ethusdt"),
+            expected_reference_price,
+        )
+        client.reference_price_result = {"referencePrice": "100"}
+        with self.assertRaises(TypeError):
+            gateway.fetch_reference_price("ETHUSDT")
+        client.reference_price_result = ReferencePrice(
+            symbol="BTCUSDT",
+            price=Decimal("100"),
+            exchange_timestamp=1787374800000,
+        )
+        with self.assertRaises(ValueError):
+            gateway.fetch_reference_price("ETHUSDT")
+
     def test_get_order_submission_provenance_is_exact_and_correlated(
         self,
     ) -> None:
@@ -375,6 +532,17 @@ class APIGatewaySymbolRulesTests(unittest.TestCase):
             side=OrderSide.BUY,
             observed_at=PROCESSED_AT,
             rules=rules,
+            account_filters=_empty_account_relevant_filters(),
+            account_filters_observed_at=PROCESSED_AT,
+            account_open_orders_observed_at=PROCESSED_AT,
+            account_open_order_lists_observed_at=PROCESSED_AT,
+            account_open_state_verified_empty=True,
+            reference_price=ReferencePrice(
+                symbol="ETHUSDT",
+                price=Decimal("100"),
+                exchange_timestamp=1787374800000,
+            ),
+            reference_price_observed_at=PROCESSED_AT,
         )
         submission_evidence = OrderSubmissionAttemptEvidence(
             intent_id="filter-evidence-intent",
@@ -416,6 +584,17 @@ class APIGatewaySymbolRulesTests(unittest.TestCase):
                     side=OrderSide.BUY,
                     observed_at=PROCESSED_AT,
                     rules=rules,
+                    account_filters=_empty_account_relevant_filters(),
+                    account_filters_observed_at=PROCESSED_AT,
+                    account_open_orders_observed_at=PROCESSED_AT,
+                    account_open_order_lists_observed_at=PROCESSED_AT,
+                    account_open_state_verified_empty=True,
+                    reference_price=ReferencePrice(
+                        symbol="ETHUSDT",
+                        price=Decimal("100"),
+                        exchange_timestamp=1787374800000,
+                    ),
+                    reference_price_observed_at=PROCESSED_AT,
                 ),
                 ValueError,
             ),
@@ -576,6 +755,39 @@ class APIGatewayOrderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gateway.sell_all_position(buy_order)
         self.assertEqual(client.submitted_orders, [sell_order])
+
+    def test_full_account_order_queries_preserve_non_application_client_ids(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_full_account_order_queries_preserve_non_application_client_ids()
+        기능: 격리용 open/recent 조회가 manual client ID 결과도 collection guard 뒤 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        order = _order()
+        manual_result = _order_result(
+            order,
+            status=OrderStatus.NEW,
+            client_order_id="manual-client-id",
+        )
+        client = _fake_client(order)
+        client.all_open_results = (manual_result,)
+        client.all_recent_results = (manual_result,)
+        gateway = APIGateway(client)
+
+        # Prefix 없는 두 port 모두 canonical symbol과 caller limit만 받아 같은 manual result를 보존한다.
+        self.assertEqual(
+            (manual_result,),
+            gateway.list_all_open_order_results(" ethusdt "),
+        )
+        self.assertEqual(
+            (manual_result,),
+            gateway.list_all_recent_order_results("ETHUSDT", limit=77),
+        )
+        self.assertEqual(["ETHUSDT"], client.all_open_symbols)
+        self.assertEqual([("ETHUSDT", 77)], client.all_recent_calls)
 
 
 if __name__ == "__main__":

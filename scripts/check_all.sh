@@ -31,8 +31,12 @@ BINANCE_RUN_TESTNET_ORDERS=0
 export BINANCE_RUN_TESTNET BINANCE_RUN_TESTNET_ORDERS
 unset BINANCE_TESTNET_API_KEY BINANCE_TESTNET_API_SECRET BINANCE_TESTNET_MAX_NOTIONAL
 unset BINANCE_RUN_PHASE13_PUBLIC_CASE2
+unset BINANCE_TESTNET_BASELINE_HISTORY_PATH BINANCE_TESTNET_BASELINE_HISTORY_FD
+unset BINANCE_TESTNET_BASELINE_HISTORY_SHA256 BINANCE_TESTNET_BASELINE_PENDING_FD
+unset BINANCE_TESTNET_BASELINE_PENDING_SHA256
 PYTHONDONTWRITEBYTECODE=1
-export PYTHONDONTWRITEBYTECODE
+PYTHONWARNINGS=error
+export PYTHONDONTWRITEBYTECODE PYTHONWARNINGS
 
 # 함수 이름: fail()
 # 기능: readiness 단계 이름이나 secret 원문을 반사하지 않는 고정 오류로 즉시 중단한다.
@@ -334,6 +338,8 @@ list_steps() {
     echo "check_all: SAFETY: BINANCE_RUN_TESTNET_ORDERS=0"
     echo "check_all: SAFETY: BINANCE_RUN_PHASE13_PUBLIC_CASE2=unset"
     echo "check_all: SAFETY: testnet-credentials-and-cap=unset"
+    echo "check_all: SAFETY: testnet-baseline-evidence=unset"
+    echo "check_all: SAFETY: PYTHONWARNINGS=error"
     echo "backend-unittests"
     echo "phase12-script-unittests"
     echo "ui-contract-drift-check"

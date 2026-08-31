@@ -355,7 +355,64 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "market_lot_size_step_size": "0.0001",
             "minimum_notional": "5",
             "maximum_notional": None,
+            "maximum_position": None,
         }
+        account_asset_filters = [
+            {
+                "filter_type": "MAX_ASSET",
+                "asset": "ETH",
+                "maximum_quantity": "100",
+            }
+        ]
+        account_relevant_filters = {
+            "symbol": "ETHUSDT",
+            "exchange_order_count_filters": [
+                {
+                    "filter_type": "EXCHANGE_MAX_NUM_ORDERS",
+                    "maximum_count": 1000,
+                }
+            ],
+            "symbol_order_count_filters": [
+                {
+                    "filter_type": "MAX_NUM_ORDERS",
+                    "maximum_count": 100,
+                }
+            ],
+            "symbol_quantity_filters": [
+                {
+                    "filter_type": "LOT_SIZE",
+                    "minimum_quantity": "0.0001",
+                    "maximum_quantity": "1000",
+                    "step_size": "0.0001",
+                },
+                {
+                    "filter_type": "MARKET_LOT_SIZE",
+                    "minimum_quantity": "0",
+                    "maximum_quantity": "1000",
+                    "step_size": "0.0001",
+                },
+            ],
+            "symbol_notional_filters": [
+                {
+                    "filter_type": "MIN_NOTIONAL",
+                    "minimum_notional": "5",
+                    "maximum_notional": None,
+                    "apply_minimum_to_market": True,
+                    "apply_maximum_to_market": False,
+                    "average_price_minutes": 5,
+                }
+            ],
+            "symbol_maximum_position": None,
+            "passive_symbol_filter_types": [
+                "ICEBERG_PARTS",
+                "PERCENT_PRICE",
+                "PRICE_FILTER",
+                "TRAILING_DELTA",
+            ],
+            "asset_filters": deepcopy(account_asset_filters),
+        }
+        public_relevant_filters = deepcopy(account_relevant_filters)
+        public_relevant_filters["asset_filters"] = []
         submit_time_filter_evidence = [
             {
                 "sequence": 1,
@@ -364,6 +421,32 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                 "side": "BUY",
                 "observed_at": "2026-08-31T00:00:00.900Z",
                 "rules": deepcopy(fresh_filter_rules),
+                "account_asset_filters": deepcopy(account_asset_filters),
+                "account_relevant_filters": deepcopy(
+                    account_relevant_filters
+                ),
+                "public_relevant_filters": deepcopy(
+                    public_relevant_filters
+                ),
+                "account_filters_observed_at": (
+                    "2026-08-31T00:00:00.850Z"
+                ),
+                "account_open_orders_observed_at": (
+                    "2026-08-31T00:00:00.910Z"
+                ),
+                "account_open_orders_verified_empty": True,
+                "account_open_order_lists_observed_at": (
+                    "2026-08-31T00:00:00.920Z"
+                ),
+                "account_open_order_lists_verified_empty": True,
+                "reference_price": {
+                    "symbol": "ETHUSDT",
+                    "price": "2500",
+                    "exchange_timestamp": 1788134400900,
+                },
+                "reference_price_observed_at": (
+                    "2026-08-31T00:00:00.950Z"
+                ),
             },
             {
                 "sequence": 2,
@@ -372,6 +455,32 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                 "side": "SELL",
                 "observed_at": "2026-08-31T00:00:19.900Z",
                 "rules": deepcopy(fresh_filter_rules),
+                "account_asset_filters": deepcopy(account_asset_filters),
+                "account_relevant_filters": deepcopy(
+                    account_relevant_filters
+                ),
+                "public_relevant_filters": deepcopy(
+                    public_relevant_filters
+                ),
+                "account_filters_observed_at": (
+                    "2026-08-31T00:00:19.850Z"
+                ),
+                "account_open_orders_observed_at": (
+                    "2026-08-31T00:00:19.910Z"
+                ),
+                "account_open_orders_verified_empty": True,
+                "account_open_order_lists_observed_at": (
+                    "2026-08-31T00:00:19.920Z"
+                ),
+                "account_open_order_lists_verified_empty": True,
+                "reference_price": {
+                    "symbol": "ETHUSDT",
+                    "price": "2505",
+                    "exchange_timestamp": 1788134419900,
+                },
+                "reference_price_observed_at": (
+                    "2026-08-31T00:00:19.950Z"
+                ),
             },
         ]
 
@@ -410,6 +519,32 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                     "observed_at": "2026-08-31T00:00:00.040Z",
                     **fresh_filter_rules,
                 },
+                "account_asset_filters": deepcopy(account_asset_filters),
+                "account_relevant_filters": deepcopy(
+                    account_relevant_filters
+                ),
+                "public_relevant_filters": deepcopy(
+                    public_relevant_filters
+                ),
+                "account_filters_observed_at": (
+                    "2026-08-31T00:00:00.030Z"
+                ),
+                "account_open_orders_observed_at": (
+                    "2026-08-31T00:00:00.041Z"
+                ),
+                "account_open_orders_verified_empty": True,
+                "account_open_order_lists_observed_at": (
+                    "2026-08-31T00:00:00.042Z"
+                ),
+                "account_open_order_lists_verified_empty": True,
+                "reference_price": {
+                    "symbol": "ETHUSDT",
+                    "price": "2500",
+                    "exchange_timestamp": 1788134400040,
+                },
+                "reference_price_observed_at": (
+                    "2026-08-31T00:00:00.045Z"
+                ),
                 "position_quantity": "0",
                 "pending_order_count": 0,
                 "unknown_order_count": 0,
@@ -599,6 +734,36 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
 
         return trace_body  # NO_SIGNAL도 public input과 UI batch를 버리지 않는다.
 
+    def _legacy_v2_trace_body(self) -> dict[str, object]:
+        """
+        함수 이름: _legacy_v2_trace_body()
+        기능: v3 fixture에서 새 account filter/state 필드만 제거한
+            보존용 v2 body를 만든다.
+        인자: 없음
+        반환값: 기존 exact v2 nested schema를 가진 mutable trace dictionary
+        작성 날짜: 2026/08/31
+        """
+        trace_body = self._success_trace_body()
+        trace_body["schema_version"] = 2
+        v3_only_fields = (
+            "account_relevant_filters",
+            "public_relevant_filters",
+            "account_open_orders_observed_at",
+            "account_open_orders_verified_empty",
+            "account_open_order_lists_observed_at",
+            "account_open_order_lists_verified_empty",
+        )
+
+        # Preflight와 각 prepare evidence에서 동일한 v3 확장만 제거해
+        # v2 exact schema를 재현한다.
+        for field_name in v3_only_fields:
+            del trace_body["preflight"][field_name]
+        for evidence in trace_body["submit_time_filter_evidence"]:
+            for field_name in v3_only_fields:
+                del evidence[field_name]
+
+        return trace_body  # V2 causal order를 유지해 backward validator만 검증한다.
+
     def _assert_body_is_rejected(self, trace_body: dict[str, object]) -> None:
         """
         함수 이름: _assert_body_is_rejected()
@@ -621,6 +786,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         trace_body = self._success_trace_body()
 
         # Seal은 입력 body를 수정하지 않고 body canonical bytes에만 digest를 결합해야 한다.
+        self.assertEqual(3, PHASE13_PUBLIC_TRACE_SCHEMA_VERSION)
         sealed_trace = seal_phase13_public_trace(trace_body)
         first_bytes = canonical_phase13_public_trace_bytes(sealed_trace)
         second_bytes = canonical_phase13_public_trace_bytes(deepcopy(sealed_trace))
@@ -642,6 +808,29 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         self.assertEqual(first_bytes, second_bytes)
         self.assertTrue(first_bytes.endswith(b"\n"))
         self.assertEqual(json.loads(first_bytes), sealed_trace)
+
+    def test_preserved_schema_v2_trace_remains_verifiable(self) -> None:
+        """
+        함수 이름: test_preserved_schema_v2_trace_remains_verifiable()
+        기능: v3 도입 뒤에도 exact v2 body·digest를 offline validator가
+            계속 수용하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        legacy_trace_body = self._legacy_v2_trace_body()
+
+        # Legacy seal과 validation은 v3 필드를 합성하지 않고
+        # 원 v2 canonical bytes를 그대로 유지한다.
+        sealed_trace = seal_phase13_public_trace(legacy_trace_body)
+        recorded_digest = validate_phase13_public_trace(sealed_trace)
+
+        self.assertEqual(2, sealed_trace["schema_version"])
+        self.assertNotIn(
+            "account_relevant_filters",
+            sealed_trace["preflight"],
+        )
+        self.assertEqual(recorded_digest, sealed_trace["trace_sha256"])
 
     def test_all_normalized_outcomes_are_supported_without_synthesizing_orders(
         self,
@@ -691,12 +880,41 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         missing_nested = self._success_trace_body()
         del missing_nested["public_market_events"][0]["context_version"]
         invalid_trace_bodies.append(("missing_nested", missing_nested))
+        missing_account_filters = self._success_trace_body()
+        del missing_account_filters["preflight"]["account_asset_filters"]
+        invalid_trace_bodies.append(
+            ("missing_account_filters", missing_account_filters)
+        )
+        missing_reference_price = self._success_trace_body()
+        del missing_reference_price["submit_time_filter_evidence"][0][
+            "reference_price"
+        ]
+        invalid_trace_bodies.append(
+            ("missing_reference_price", missing_reference_price)
+        )
         unknown_nested = self._success_trace_body()
         unknown_nested["final_state"]["unexpected_field"] = 0
         invalid_trace_bodies.append(("unknown_nested", unknown_nested))
+        unknown_account_filter = self._success_trace_body()
+        unknown_account_filter["preflight"]["account_asset_filters"][0][
+            "current_balance"
+        ] = "0"
+        invalid_trace_bodies.append(
+            ("unknown_account_filter", unknown_account_filter)
+        )
+        unknown_reference_price = self._success_trace_body()
+        unknown_reference_price["preflight"]["reference_price"][
+            "average_price_minutes"
+        ] = 5
+        invalid_trace_bodies.append(
+            ("unknown_reference_price", unknown_reference_price)
+        )
         schema_drift = self._success_trace_body()
         schema_drift["schema_version"] = PHASE13_PUBLIC_TRACE_SCHEMA_VERSION + 1
         invalid_trace_bodies.append(("schema_drift", schema_drift))
+        legacy_schema = self._success_trace_body()
+        legacy_schema["schema_version"] = 1
+        invalid_trace_bodies.append(("legacy_schema", legacy_schema))
         record_drift = self._success_trace_body()
         record_drift["record_type"] = "phase13_public_case2_future_trace"
         invalid_trace_bodies.append(("record_drift", record_drift))
@@ -739,6 +957,167 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         for case_name, trace_body in invalid_trace_bodies:
             with self.subTest(case_name=case_name):
                 self._assert_body_is_rejected(trace_body)
+
+    def test_v3_account_filter_and_open_state_schema_fail_closed(self) -> None:
+        """
+        함수 이름: test_v3_account_filter_and_open_state_schema_fail_closed()
+        기능: Full account filter projection과 두 account-wide empty 관찰의
+            drift를 모두 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        invalid_trace_bodies: list[tuple[str, dict[str, object]]] = []
+
+        # V3 필수 object·nested field 누락과 unknown raw 확장을
+        # exact schema 단계에서 차단한다.
+        missing_composite = self._success_trace_body()
+        del missing_composite["preflight"]["account_relevant_filters"]
+        invalid_trace_bodies.append(("missing_composite", missing_composite))
+        missing_public_composite = self._success_trace_body()
+        del missing_public_composite["preflight"]["public_relevant_filters"]
+        invalid_trace_bodies.append(
+            ("missing_public_composite", missing_public_composite)
+        )
+        missing_nested = self._success_trace_body()
+        del missing_nested["preflight"]["account_relevant_filters"][
+            "passive_symbol_filter_types"
+        ]
+        invalid_trace_bodies.append(("missing_nested", missing_nested))
+        unknown_nested = self._success_trace_body()
+        unknown_nested["preflight"]["account_relevant_filters"][
+            "raw_filter_payload"
+        ] = {}
+        invalid_trace_bodies.append(("unknown_nested", unknown_nested))
+
+        # Symbol binding, scope, count type·경계와 passive canonical order를
+        # 각각 독립 변조한다.
+        wrong_symbol = self._success_trace_body()
+        wrong_symbol["preflight"]["account_relevant_filters"][
+            "symbol"
+        ] = "BTCUSDT"
+        invalid_trace_bodies.append(("wrong_symbol", wrong_symbol))
+        wrong_count_scope = self._success_trace_body()
+        wrong_count_scope["preflight"]["account_relevant_filters"][
+            "exchange_order_count_filters"
+        ][0]["filter_type"] = "MAX_NUM_ORDERS"
+        invalid_trace_bodies.append(("wrong_count_scope", wrong_count_scope))
+        boolean_count = self._success_trace_body()
+        boolean_count["preflight"]["account_relevant_filters"][
+            "symbol_order_count_filters"
+        ][0]["maximum_count"] = True
+        invalid_trace_bodies.append(("boolean_count", boolean_count))
+        zero_normal_order_limit = self._success_trace_body()
+        zero_normal_order_limit["preflight"]["account_relevant_filters"][
+            "symbol_order_count_filters"
+        ][0]["maximum_count"] = 0
+        invalid_trace_bodies.append(
+            ("zero_normal_order_limit", zero_normal_order_limit)
+        )
+        duplicate_count = self._success_trace_body()
+        duplicate_count["preflight"]["account_relevant_filters"][
+            "symbol_order_count_filters"
+        ].append(
+            deepcopy(
+                duplicate_count["preflight"]["account_relevant_filters"][
+                    "symbol_order_count_filters"
+                ][0]
+            )
+        )
+        invalid_trace_bodies.append(("duplicate_count", duplicate_count))
+        unsorted_passive = self._success_trace_body()
+        unsorted_passive["preflight"]["account_relevant_filters"][
+            "passive_symbol_filter_types"
+        ].reverse()
+        invalid_trace_bodies.append(("unsorted_passive", unsorted_passive))
+        unknown_passive = self._success_trace_body()
+        unknown_passive["preflight"]["account_relevant_filters"][
+            "passive_symbol_filter_types"
+        ].append("T_PLUS_SELL")
+        invalid_trace_bodies.append(("unknown_passive", unknown_passive))
+
+        # DTO scalar schema와 v2 asset projection이 달라져도
+        # normalized evidence로 봉인하지 않는다.
+        negative_quantity = self._success_trace_body()
+        negative_quantity["preflight"]["account_relevant_filters"][
+            "symbol_quantity_filters"
+        ][0]["step_size"] = "-0.0001"
+        invalid_trace_bodies.append(("negative_quantity", negative_quantity))
+        wrong_notional_flag = self._success_trace_body()
+        wrong_notional_flag["preflight"]["account_relevant_filters"][
+            "symbol_notional_filters"
+        ][0]["apply_minimum_to_market"] = 1
+        invalid_trace_bodies.append(
+            ("wrong_notional_flag", wrong_notional_flag)
+        )
+        mismatched_asset_projection = self._success_trace_body()
+        mismatched_asset_projection["preflight"]["account_relevant_filters"][
+            "asset_filters"
+        ][0]["maximum_quantity"] = "99"
+        invalid_trace_bodies.append(
+            ("mismatched_asset_projection", mismatched_asset_projection)
+        )
+        public_asset_scope = self._success_trace_body()
+        public_asset_scope["preflight"]["public_relevant_filters"][
+            "asset_filters"
+        ].append(
+            deepcopy(public_asset_scope["preflight"]["account_asset_filters"][0])
+        )
+        invalid_trace_bodies.append(("public_asset_scope", public_asset_scope))
+
+        # Account-wide state는 두 exact True와
+        # openOrders→openOrderList UTC 순서를 모두 요구한다.
+        nonempty_orders = self._success_trace_body()
+        nonempty_orders["preflight"][
+            "account_open_orders_verified_empty"
+        ] = False
+        invalid_trace_bodies.append(("nonempty_orders", nonempty_orders))
+        non_boolean_lists = self._success_trace_body()
+        non_boolean_lists["preflight"][
+            "account_open_order_lists_verified_empty"
+        ] = 1
+        invalid_trace_bodies.append(("non_boolean_lists", non_boolean_lists))
+        reversed_open_state = self._success_trace_body()
+        reversed_open_state["preflight"][
+            "account_open_orders_observed_at"
+        ] = "2026-08-31T00:00:00.043Z"
+        invalid_trace_bodies.append(
+            ("reversed_open_state", reversed_open_state)
+        )
+        late_preflight_state = self._success_trace_body()
+        late_preflight_state["preflight"][
+            "account_open_orders_observed_at"
+        ] = "2026-08-31T00:00:00.051Z"
+        late_preflight_state["preflight"][
+            "account_open_order_lists_observed_at"
+        ] = "2026-08-31T00:00:00.052Z"
+        late_preflight_state["preflight"][
+            "reference_price_observed_at"
+        ] = "2026-08-31T00:00:00.053Z"
+        invalid_trace_bodies.append(
+            ("late_preflight_state", late_preflight_state)
+        )
+        late_submit_state = self._success_trace_body()
+        late_submit_state["submit_time_filter_evidence"][0][
+            "account_open_orders_observed_at"
+        ] = "2026-08-31T00:00:01.010Z"
+        late_submit_state["submit_time_filter_evidence"][0][
+            "account_open_order_lists_observed_at"
+        ] = "2026-08-31T00:00:01.020Z"
+        late_submit_state["submit_time_filter_evidence"][0][
+            "reference_price_observed_at"
+        ] = "2026-08-31T00:00:01.030Z"
+        invalid_trace_bodies.append(("late_submit_state", late_submit_state))
+
+        for case_name, trace_body in invalid_trace_bodies:
+            with self.subTest(case_name=case_name):
+                self._assert_body_is_rejected(trace_body)
+
+        # V2 body에 v3 nested field를 섞으면
+        # version downgrade로 새 증거를 우회할 수 없다.
+        legacy_with_v3_fields = self._success_trace_body()
+        legacy_with_v3_fields["schema_version"] = 2
+        self._assert_body_is_rejected(legacy_with_v3_fields)
 
     def test_hash_tamper_and_noncanonical_digest_are_rejected(self) -> None:
         """
@@ -964,6 +1343,47 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "base_asset_precision"
         ] = 19
         invalid_trace_bodies.append(("unsupported_precision", unsupported_precision))
+
+        # Phase 13 BUY의 MAX_POSITION, signed MAX_ASSET·reference price schema와 preflight 시각 drift를 거부한다.
+        maximum_position = self._success_trace_body()
+        maximum_position["preflight"]["fresh_filters"][
+            "maximum_position"
+        ] = "10"
+        invalid_trace_bodies.append(("maximum_position", maximum_position))
+        duplicate_account_asset = self._success_trace_body()
+        duplicate_filter = deepcopy(
+            duplicate_account_asset["preflight"]["account_asset_filters"][0]
+        )
+        duplicate_account_asset["preflight"]["account_asset_filters"].append(
+            deepcopy(duplicate_filter)
+        )
+        duplicate_account_asset["preflight"]["account_relevant_filters"][
+            "asset_filters"
+        ].append(duplicate_filter)
+        invalid_trace_bodies.append(
+            ("duplicate_account_asset", duplicate_account_asset)
+        )
+        wrong_reference_symbol = self._success_trace_body()
+        wrong_reference_symbol["preflight"]["reference_price"][
+            "symbol"
+        ] = "BTCUSDT"
+        invalid_trace_bodies.append(
+            ("wrong_reference_symbol", wrong_reference_symbol)
+        )
+        late_account_filters = self._success_trace_body()
+        late_account_filters["preflight"][
+            "account_filters_observed_at"
+        ] = "2026-08-31T00:00:00.060Z"
+        invalid_trace_bodies.append(
+            ("late_account_filters", late_account_filters)
+        )
+        late_reference_price = self._success_trace_body()
+        late_reference_price["preflight"][
+            "reference_price_observed_at"
+        ] = "2026-08-31T00:00:00.060Z"
+        invalid_trace_bodies.append(
+            ("late_reference_price", late_reference_price)
+        )
         for case_name, trace_body in invalid_trace_bodies:
             with self.subTest(case_name=case_name):
                 self._assert_body_is_rejected(trace_body)
@@ -976,6 +1396,14 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         disabled_steps["preflight"]["fresh_filters"][
             "market_lot_size_step_size"
         ] = "0"
+        for filter_scope in (
+            "account_relevant_filters",
+            "public_relevant_filters",
+        ):
+            for quantity_filter in disabled_steps["preflight"][filter_scope][
+                "symbol_quantity_filters"
+            ]:
+                quantity_filter["step_size"] = "0"
         seal_phase13_public_trace(disabled_steps)
 
         # Earlier preflight snapshot은 submit-time rules와 다를 수 있고 최종 수량 권위를 대신하지 않는다.
@@ -983,6 +1411,13 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         changed_after_preflight["preflight"]["fresh_filters"][
             "lot_size_step_size"
         ] = "0.003"
+        for filter_scope in (
+            "account_relevant_filters",
+            "public_relevant_filters",
+        ):
+            changed_after_preflight["preflight"][filter_scope][
+                "symbol_quantity_filters"
+            ][0]["step_size"] = "0.003"
         seal_phase13_public_trace(changed_after_preflight)
 
     def test_submit_time_filters_are_authoritative_and_causally_bound(
@@ -1039,6 +1474,50 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "2026-08-31T00:00:00.800Z"
         )
         invalid_trace_bodies.append(("stale_sell_filter", stale_sell_filter))
+        clock_regression = self._success_trace_body()
+        clock_regression["order_attempts"][0]["attempted_at"] = (
+            "2026-08-31T00:00:00.940Z"
+        )
+        with self.assertRaisesRegex(
+            PhaseThirteenPublicTraceValidationError,
+            "safety observation follows POST submission start",
+        ):
+            seal_phase13_public_trace(clock_regression)
+
+        # Source 이후 시작된 composite라도 첫 fetch부터 POST까지
+        # production 고정 freshness 경계를 넘기면 stale evidence다.
+        stale_composite = self._success_trace_body()
+        stale_composite["timestamps"]["started_at"] = (
+            "2026-08-30T23:59:00.000Z"
+        )
+        stale_composite["immutable_decision_fingerprint"]["source_event_time"] = (
+            "2026-08-30T23:59:00.000Z"
+        )
+        for market_event in stale_composite["public_market_events"]:
+            market_event["source_event_time"] = "2026-08-30T23:59:00.000Z"
+        stale_composite["submit_time_filter_evidence"][0][
+            "account_filters_observed_at"
+        ] = "2026-08-30T23:59:30.000Z"
+        with self.assertRaisesRegex(
+            PhaseThirteenPublicTraceValidationError,
+            "filter evidence exceeded its maximum age",
+        ):
+            seal_phase13_public_trace(stale_composite)
+
+        # Production 경계와 동일한 exact age는 stale이 아니므로 seal을 허용한다.
+        boundary_composite = self._success_trace_body()
+        boundary_composite["timestamps"]["started_at"] = (
+            "2026-08-30T23:59:00.000Z"
+        )
+        boundary_composite["immutable_decision_fingerprint"][
+            "source_event_time"
+        ] = "2026-08-30T23:59:00.000Z"
+        for market_event in boundary_composite["public_market_events"]:
+            market_event["source_event_time"] = "2026-08-30T23:59:00.000Z"
+        boundary_composite["submit_time_filter_evidence"][0][
+            "account_filters_observed_at"
+        ] = "2026-08-30T23:59:31.000Z"
+        seal_phase13_public_trace(boundary_composite)
 
         # 느지막 polling 관찰을 attempted_at으로 쓰면 fill·terminal result보다 뒤이므로 거부한다.
         polling_observation_as_attempt = self._success_trace_body()
@@ -1060,6 +1539,111 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "minimum_notional"
         ] = "11"
         invalid_trace_bodies.append(("below_submit_notional", below_submit_notional))
+
+        # Runtime overlap과 동일하게 signed common 값, passive subset과 bilateral count drift를 거부한다.
+        signed_quantity_drift = self._success_trace_body()
+        signed_quantity_drift["submit_time_filter_evidence"][0][
+            "account_relevant_filters"
+        ]["symbol_quantity_filters"][0]["step_size"] = "0.0002"
+        invalid_trace_bodies.append(("signed_quantity_drift", signed_quantity_drift))
+        signed_notional_drift = self._success_trace_body()
+        signed_notional_drift["submit_time_filter_evidence"][0][
+            "account_relevant_filters"
+        ]["symbol_notional_filters"][0]["minimum_notional"] = "6"
+        invalid_trace_bodies.append(("signed_notional_drift", signed_notional_drift))
+        signed_count_drift = self._success_trace_body()
+        signed_count_drift["submit_time_filter_evidence"][0][
+            "account_relevant_filters"
+        ]["exchange_order_count_filters"][0]["maximum_count"] = 999
+        invalid_trace_bodies.append(("signed_count_drift", signed_count_drift))
+        signed_passive_drift = self._success_trace_body()
+        signed_passive_types = signed_passive_drift[
+            "submit_time_filter_evidence"
+        ][0]["account_relevant_filters"]["passive_symbol_filter_types"]
+        signed_passive_types.append("PERCENT_PRICE_BY_SIDE")
+        signed_passive_types.sort()
+        invalid_trace_bodies.append(("signed_passive_drift", signed_passive_drift))
+
+        # Signed/public을 함께 변조해도 public scalar rule binding을 우회할 수 없어야 한다.
+        bilateral_quantity_drift = self._success_trace_body()
+        for filter_scope in (
+            "account_relevant_filters",
+            "public_relevant_filters",
+        ):
+            bilateral_quantity_drift["submit_time_filter_evidence"][0][
+                filter_scope
+            ]["symbol_quantity_filters"][0]["step_size"] = "0.0002"
+        invalid_trace_bodies.append(
+            ("bilateral_quantity_drift", bilateral_quantity_drift)
+        )
+
+        # Official MARKET notional은 decision price가 아닌 submit-time referencePrice로 검증해야 한다.
+        reference_below_minimum = self._success_trace_body()
+        reference_below_minimum["submit_time_filter_evidence"][0][
+            "reference_price"
+        ]["price"] = "1000"
+        invalid_trace_bodies.append(
+            ("reference_below_minimum", reference_below_minimum)
+        )
+        submit_maximum_position = self._success_trace_body()
+        submit_maximum_position["submit_time_filter_evidence"][0]["rules"][
+            "maximum_position"
+        ] = "100"
+        invalid_trace_bodies.append(
+            ("submit_maximum_position", submit_maximum_position)
+        )
+
+        # Base MAX_ASSET은 final quantity와 비교하고 BUY·SELL 양쪽의 초과를 차단한다.
+        for case_name, evidence_index, maximum_quantity in (
+            ("buy_base_max_asset", 0, "0.003"),
+            ("sell_base_max_asset", 1, "0.003"),
+        ):
+            exceeded_max_asset = self._success_trace_body()
+            exceeded_max_asset["submit_time_filter_evidence"][evidence_index][
+                "account_asset_filters"
+            ][0]["maximum_quantity"] = maximum_quantity
+            exceeded_max_asset["submit_time_filter_evidence"][evidence_index][
+                "account_relevant_filters"
+            ]["asset_filters"][0]["maximum_quantity"] = maximum_quantity
+            invalid_trace_bodies.append((case_name, exceeded_max_asset))
+
+        # Quantity MARKET의 quote MAX_ASSET은 공식 환산 가격식이 없어 limit 값과 무관하게 fail-close한다.
+        for case_name, evidence_index in (
+            ("buy_quote_max_asset", 0),
+            ("sell_quote_max_asset", 1),
+        ):
+            quote_max_asset = self._success_trace_body()
+            quote_filter = {
+                "filter_type": "MAX_ASSET",
+                "asset": "USDT",
+                "maximum_quantity": "100000",
+            }
+            quote_max_asset["submit_time_filter_evidence"][evidence_index][
+                "account_asset_filters"
+            ].append(deepcopy(quote_filter))
+            quote_max_asset["submit_time_filter_evidence"][evidence_index][
+                "account_relevant_filters"
+            ]["asset_filters"].append(quote_filter)
+            invalid_trace_bodies.append((case_name, quote_max_asset))
+
+        # Submit-time symbol·timestamp drift는 matching attempt의 fresh safety provenance가 아니다.
+        reference_symbol_drift = self._success_trace_body()
+        reference_symbol_drift["submit_time_filter_evidence"][0][
+            "reference_price"
+        ]["symbol"] = "BTCUSDT"
+        invalid_trace_bodies.append(
+            ("reference_symbol_drift", reference_symbol_drift)
+        )
+        late_account_filter = self._success_trace_body()
+        late_account_filter["submit_time_filter_evidence"][0][
+            "account_filters_observed_at"
+        ] = "2026-08-31T00:00:01.100Z"
+        invalid_trace_bodies.append(("late_account_filter", late_account_filter))
+        late_reference_price = self._success_trace_body()
+        late_reference_price["submit_time_filter_evidence"][0][
+            "reference_price_observed_at"
+        ] = "2026-08-31T00:00:01.100Z"
+        invalid_trace_bodies.append(("late_reference_price", late_reference_price))
 
         # Public source가 POST submission-start보다 늦으면 causal order를 충족하지 못한다.
         source_after_attempt = self._success_trace_body()

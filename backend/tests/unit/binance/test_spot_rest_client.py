@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from email.message import Message
@@ -22,6 +22,7 @@ from urllib.response import addinfourl
 
 from binance_auto_trader.adapters.binance import spot_rest_client as spot_rest_client_module
 from binance_auto_trader.adapters.binance.spot_rest_client import (
+    BinanceAPIError,
     BinancePayloadError,
     BinanceSpotRESTClient,
     HTTPTransportResponse,
@@ -29,8 +30,11 @@ from binance_auto_trader.adapters.binance.spot_rest_client import (
     UrllibHTTPTransport,
 )
 from binance_auto_trader.adapters.binance.mappers import (
+    AccountAssetFilter,
+    AccountOrderCountFilter,
     OrderPreparationFilterEvidence,
     OrderSubmissionAttemptEvidence,
+    ReferencePrice,
     SymbolFilterError,
     SymbolTradingRules,
 )
@@ -154,17 +158,24 @@ class QueueHTTPTransport:
     작성 날짜: 2026/08/22
     """
 
-    def __init__(self, responses: list[object]) -> None:
+    def __init__(
+        self,
+        responses: list[object],
+        *,
+        request_entry_hook: Callable[[str, str], None] | None = None,
+    ) -> None:
         """
         함수 이름: __init__()
         기능: 반환할 response queue와 빈 request 기록을 초기화한다.
         인자: responses -> HTTPTransportResponse 또는 발생시킬 Exception 목록
+            request_entry_hook -> production guard 직전 호출할 선택 test hook
         반환값: 없음
         작성 날짜: 2026/08/22
         """
         # 테스트마다 독립 queue를 복사해 호출자가 제공한 목록을 변경하지 않는다.
         self.responses = list(responses)
         self.requests: list[dict[str, object]] = []
+        self.request_entry_hook = request_entry_hook  # Scheduler 지연 fixture만 선택 주입한다.
 
     def request(
         self,
@@ -174,6 +185,7 @@ class QueueHTTPTransport:
         headers: Mapping[str, str],
         body: bytes | None,
         timeout_seconds: int,
+        before_send: Callable[[], None] | None = None,
     ) -> HTTPTransportResponse:
         """
         함수 이름: request()
@@ -183,9 +195,16 @@ class QueueHTTPTransport:
             headers -> request header mapping
             body -> form body 또는 None
             timeout_seconds -> 정수 timeout
+            before_send -> 실제 fake I/O 직전에 실행할 production guard
         반환값: queue의 HTTPTransportResponse
         작성 날짜: 2026/08/22
         """
+        # Transport 진입 지연을 먼저 재현한 뒤 production guard를 actual I/O 경계에서 실행한다.
+        if self.request_entry_hook is not None:
+            self.request_entry_hook(method, url)
+        if before_send is not None:
+            before_send()
+
         # Mutable header를 복사해 client가 후속 요청에서 바꿔도 과거 기록을 보존한다.
         self.requests.append(
             {
@@ -205,6 +224,66 @@ class QueueHTTPTransport:
             raise AssertionError("fake response must be HTTPTransportResponse")
 
         return selected_response  # production transport와 같은 불변 response만 반환한다.
+
+
+class MutableUTCClock:
+    """
+    클래스 이름: MutableUTCClock
+    기능: 준비 증거 expiry와 clock regression을 실제 대기 없이 재현한다.
+    작성 날짜: 2026/08/31
+    """
+
+    def __init__(self, current_time: datetime) -> None:
+        """
+        함수 이름: __init__()
+        기능: timezone-aware UTC 시작 시각을 mutable test state로 보존한다.
+        인자: current_time -> 최초 반환할 UTC datetime
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Production clock이 요구하는 timezone-aware UTC만 mutable fixture로 허용한다.
+        if current_time.tzinfo is None or current_time.utcoffset() != timedelta(0):
+            raise ValueError("current_time must be a timezone-aware UTC datetime")
+
+        self.current_time = current_time  # Test가 지정한 UTC 시각만 production clock 경계에 제공한다.
+
+    def __call__(self) -> datetime:
+        """
+        함수 이름: __call__()
+        기능: 현재 설정된 UTC 시각을 production client clock 형식으로 반환한다.
+        인자: 없음
+        반환값: timezone-aware UTC datetime
+        작성 날짜: 2026/08/31
+        """
+        return self.current_time  # Wall-clock sleep 없이 요청 간 시간 경과를 결정론적으로 만든다.
+
+    def advance(self, elapsed_time: timedelta) -> None:
+        """
+        함수 이름: advance()
+        기능: 현재 시각을 지정한 양의 기간만큼 전진시킨다.
+        인자: elapsed_time -> 전진할 양의 timedelta
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # 0 또는 음수 이동은 advance와 regression test의 의도를 섞으므로 거부한다.
+        if elapsed_time <= timedelta(0):
+            raise ValueError("elapsed_time must be positive")
+
+        self.current_time += elapsed_time  # Expiry 경계 밖의 submit 시각을 정확히 재현한다.
+
+    def regress(self, elapsed_time: timedelta) -> None:
+        """
+        함수 이름: regress()
+        기능: 현재 시각을 지정한 양의 기간만큼 후퇴시킨다.
+        인자: elapsed_time -> 후퇴할 양의 timedelta
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # 0 또는 음수 이동은 causal clock regression fixture로 허용하지 않는다.
+        if elapsed_time <= timedelta(0):
+            raise ValueError("elapsed_time must be positive")
+
+        self.current_time -= elapsed_time  # Causal observation 이전으로 간 wall clock을 재현한다.
 
 
 def _json_response(
@@ -247,6 +326,7 @@ def _exchange_info_payload(
         "timezone": "UTC",
         "serverTime": FIXED_TIME_MILLISECONDS,
         "rateLimits": [],
+        "exchangeFilters": [],
         "symbols": [
             {
                 "symbol": "ETHUSDT",
@@ -281,6 +361,103 @@ def _exchange_info_payload(
             }
         ],
     }
+
+
+def _account_filters_payload(
+    *asset_filters: dict[str, object],
+    exchange_filters: tuple[dict[str, object], ...] = (),
+    symbol_filters: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
+    """
+    함수 이름: _account_filters_payload()
+    기능: Submit-time signed myFilters에 사용할 공식 세 collection fixture를 만든다.
+    인자: asset_filters -> assetFilters에 넣을 MAX_ASSET object들
+        exchange_filters -> exchangeFilters에 넣을 account count object들
+        symbol_filters -> symbolFilters에 넣을 symbol relevant object들
+    반환값: strict parser가 소비할 myFilters payload
+    작성 날짜: 2026/08/31
+    """
+    # 세 scope의 입력을 서로 섞지 않고 공식 root collection에 그대로 배치한다.
+    return {
+        "exchangeFilters": list(exchange_filters),
+        "symbolFilters": list(symbol_filters),
+        "assetFilters": list(asset_filters),
+    }  # 호출자가 생략한 scope만 정확히 empty array로 남긴다.
+
+
+def _reference_price_payload(
+    *,
+    price: str | None = "100",
+    symbol: str = "ETHUSDT",
+) -> dict[str, object]:
+    """
+    함수 이름: _reference_price_payload()
+    기능: Submit-time public referencePrice의 설정 또는 null fixture를 만든다.
+    인자: price -> 공식 decimal 문자열 또는 null
+        symbol -> 응답에 포함할 canonical symbol
+    반환값: 공식 referencePrice payload
+    작성 날짜: 2026/08/31
+    """
+    # Exchange timestamp는 고정 clock과 같게 두어 evidence 비교를 결정론적으로 만든다.
+    return {
+        "symbol": symbol,
+        "referencePrice": price,
+        "timestamp": FIXED_TIME_MILLISECONDS,
+    }
+
+
+def _preparation_responses(
+    *,
+    exchange_info_payload: object | None = None,
+    account_filters_payload: object | None = None,
+    reference_price_payload: object | None = None,
+    server_time_milliseconds: int = FIXED_TIME_MILLISECONDS,
+    include_server_time: bool = True,
+) -> list[HTTPTransportResponse]:
+    """
+    함수 이름: _preparation_responses()
+    기능: prepare_order의 filter·all-symbol empty state·referencePrice 응답 순서를 만든다.
+    인자: exchange_info_payload -> 선택 exchangeInfo payload
+        account_filters_payload -> 선택 myFilters payload
+        reference_price_payload -> 선택 referencePrice payload
+        server_time_milliseconds -> 최초 signed read의 serverTime
+        include_server_time -> client가 아직 offset을 갖지 않아 /time이 필요한지 여부
+    반환값: QueueHTTPTransport에 전달할 prepare response 목록
+    작성 날짜: 2026/08/31
+    """
+    selected_exchange_info = (
+        _exchange_info_payload()
+        if exchange_info_payload is None
+        else exchange_info_payload
+    )
+    selected_account_filters = (
+        _account_filters_payload()
+        if account_filters_payload is None
+        else account_filters_payload
+    )
+    selected_reference_price = (
+        _reference_price_payload()
+        if reference_price_payload is None
+        else reference_price_payload
+    )
+
+    # Production 순서와 같이 optional /time 뒤 filter, 두 empty account state와 가격을 배치한다.
+    responses: list[HTTPTransportResponse] = []
+    if include_server_time:
+        responses.append(
+            _json_response({"serverTime": server_time_milliseconds})
+        )
+    responses.extend(
+        (
+            _json_response(selected_account_filters),
+            _json_response(selected_exchange_info),
+            _json_response([]),
+            _json_response([]),
+            _json_response(selected_reference_price),
+        )
+    )  # 기본 prepare fixture도 account-wide isolation의 완전한 zero를 증명한다.
+
+    return responses
 
 
 def _order(*, quantity: str = "1.23456", client_order_id: str = "bat-client-0") -> Order:
@@ -511,8 +688,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         """
         transport = QueueHTTPTransport(
             [
-                _json_response(_exchange_info_payload()),
-                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                *_preparation_responses(),
                 _json_response(
                     _filled_order_payload(),
                     status_code=302,
@@ -528,7 +704,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
 
         self.assertIs(result.status, OrderStatus.UNKNOWN)
         self.assertIsNone(result.exchange_order_id)
-        self.assertEqual(len(transport.requests), 3)
+        self.assertEqual(len(transport.requests), 7)
 
     def test_submit_percent_encodes_then_signs_and_never_exposes_secret(self) -> None:
         """
@@ -540,8 +716,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         """
         transport = QueueHTTPTransport(
             [
-                _json_response(_exchange_info_payload()),
-                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                *_preparation_responses(),
                 _json_response(_filled_order_payload()),
             ]
         )
@@ -574,7 +749,11 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         self.assertEqual(order.requested_quantity, Decimal("1.23456"))
         self.assertEqual(order.submitted_quantity, Decimal("1.234"))
         self.assertEqual(len(result.fills), 1)
-        post_request = transport.requests[2]
+        post_request = next(
+            request_value
+            for request_value in transport.requests
+            if request_value["method"] == "POST"
+        )
         self.assertEqual(post_request["method"], "POST")
         self.assertNotIn("?", post_request["url"])
         request_body = post_request["body"].decode("ascii")
@@ -763,7 +942,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/22
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload())]
+            _preparation_responses()
         )
         client = _client(transport)
         order = _order()
@@ -775,7 +954,206 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         self.assertIs(first_prepared_order, order)
         self.assertIs(second_prepared_order, order)
         self.assertEqual(order.submitted_quantity, Decimal("1.234"))
-        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(len(transport.requests), 6)
+
+    def test_duplicate_prepare_rejects_expired_cached_evidence(self) -> None:
+        """
+        함수 이름: test_duplicate_prepare_rejects_expired_cached_evidence()
+        기능: 같은 주문의 cached prepare도 고정 30초를 넘으면 재사용하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # 실제 I/O 없이 prepare 완료 시각과 이후 cached 호출 시각을 분리한다.
+        transport = QueueHTTPTransport(_preparation_responses())
+        mutable_clock = MutableUTCClock(FIXED_TIME)
+        client = BinanceSpotRESTClient(
+            API_KEY,
+            SECRET_KEY,
+            transport=transport,
+            clock=mutable_clock,
+            result_clock=_fixed_clock,
+        )
+        order = client.prepare_order(_order())
+        mutable_clock.advance(timedelta(seconds=31))
+
+        # Cached fingerprint가 같아도 stale account/filter state는 network 없이 차단한다.
+        with self.assertRaisesRegex(
+            OrderPreparationRequiredError,
+            "filter evidence expired",
+        ):
+            client.prepare_order(order)
+
+        self.assertEqual(len(transport.requests), 6)  # 추가 read나 POST가 전혀 발생하지 않는다.
+
+    def test_submit_rejects_expired_preparation_before_post(self) -> None:
+        """
+        함수 이름: test_submit_rejects_expired_preparation_before_post()
+        기능: 준비의 첫 composite 관찰 후 30초를 넘긴 제출을 POST 전에 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Mutable clock으로 composite 관찰과 제출 사이의 30초+1ms 경과를 재현한다.
+        transport = QueueHTTPTransport(_preparation_responses())
+        mutable_clock = MutableUTCClock(FIXED_TIME)
+        client = BinanceSpotRESTClient(
+            API_KEY,
+            SECRET_KEY,
+            transport=transport,
+            clock=mutable_clock,
+            result_clock=_fixed_clock,
+        )
+        order = client.prepare_order(_order())
+        mutable_clock.advance(
+            timedelta(seconds=30, milliseconds=1)
+        )
+
+        # Expired 표식은 한 번 소모하고 submission evidence나 order POST를 만들지 않는다.
+        with self.assertRaisesRegex(
+            OrderPreparationRequiredError,
+            "filter evidence expired",
+        ):
+            client.submit_order(order=order)
+
+        self.assertEqual(len(transport.requests), 6)
+        self.assertIsNone(
+            client.get_order_submission_attempt_evidence(
+                client_order_id=order.client_order_id
+            )
+        )  # Attempt evidence도 POST 직전에만 생성한다.
+        with self.assertRaisesRegex(
+            OrderPreparationRequiredError,
+            "order must be prepared",
+        ):
+            client.submit_order(order=order)
+
+        self.assertEqual(len(transport.requests), 6)  # Expired fingerprint는 다시 제출할 수 없다.
+
+    def test_submit_rechecks_expiry_after_consuming_fingerprint(self) -> None:
+        """
+        함수 이름: test_submit_rechecks_expiry_after_consuming_fingerprint()
+        기능: 표식 소비 직후 process가 지연돼도 실제 POST 직전 freshness를 다시 검사하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        mutable_clock = MutableUTCClock(FIXED_TIME)
+
+        def delay_at_transport_entry(method: str, url: str) -> None:
+            """
+            함수 이름: delay_at_transport_entry()
+            기능: Order transport 진입 뒤 production before-send guard 직전에 31초를 전진시킨다.
+            인자: method -> fake transport가 받은 HTTP method
+                url -> fake transport가 받은 absolute request URL
+            반환값: 없음
+            작성 날짜: 2026/08/31
+            """
+            if method == "POST" and urlsplit(url).path == "/api/v3/order":
+                mutable_clock.advance(timedelta(seconds=31))
+
+            return None  # GET 준비 요청은 움직이지 않고 실제 order I/O 경계만 지연시킨다.
+
+        # Fingerprint 소비 뒤 transport가 실제 요청을 기록하기 직전의 scheduler 지연을 재현한다.
+        transport = QueueHTTPTransport(
+            _preparation_responses(),
+            request_entry_hook=delay_at_transport_entry,
+        )
+        client = BinanceSpotRESTClient(
+            API_KEY,
+            SECRET_KEY,
+            transport=transport,
+            clock=mutable_clock,
+            result_clock=_fixed_clock,
+        )
+        order = client.prepare_order(_order())
+
+        # Transport before-send guard는 지연 뒤 stale evidence를 보고 fake I/O도 시작하지 않는다.
+        with self.assertRaisesRegex(
+            OrderPreparationRequiredError,
+            "filter evidence expired",
+        ):
+            client.submit_order(order=order)
+
+        self.assertEqual(len(transport.requests), 6)
+        self.assertIsNone(
+            client.get_order_submission_attempt_evidence(
+                client_order_id=order.client_order_id
+            )
+        )  # 지연된 attempt는 evidence에도 기록하지 않는다.
+
+    def test_submit_allows_exact_preparation_age_boundary(self) -> None:
+        """
+        함수 이름: test_submit_allows_exact_preparation_age_boundary()
+        기능: Composite 첫 관찰 후 정확히 30초인 transport attempt는 허용하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # 성공 POST 응답을 포함하고 clock을 고정 경계와 정확히 같게 전진시킨다.
+        transport = QueueHTTPTransport(
+            [*_preparation_responses(), _json_response(_filled_order_payload())]
+        )
+        mutable_clock = MutableUTCClock(FIXED_TIME)
+        client = BinanceSpotRESTClient(
+            API_KEY,
+            SECRET_KEY,
+            transport=transport,
+            clock=mutable_clock,
+            result_clock=_fixed_clock,
+        )
+        order = client.prepare_order(_order())
+        mutable_clock.advance(timedelta(seconds=30))
+
+        # `>` 경계만 만료이므로 정확한 30초 attempt는 한 번의 POST와 evidence를 만든다.
+        result = client.submit_order(order=order)
+        submission_evidence = client.get_order_submission_attempt_evidence(
+            client_order_id=order.client_order_id
+        )
+
+        self.assertIs(result.status, OrderStatus.FILLED)
+        self.assertIsNotNone(submission_evidence)
+        if submission_evidence is None:
+            self.fail("exact boundary submission must retain attempt evidence")
+        self.assertEqual(
+            FIXED_TIME + timedelta(seconds=30),
+            submission_evidence.attempted_at,
+        )  # Attempt timestamp는 before-send guard의 exact boundary 시각이다.
+
+    def test_submit_rejects_preparation_clock_regression(self) -> None:
+        """
+        함수 이름: test_submit_rejects_preparation_clock_regression()
+        기능: 제출 clock이 composite 관찰보다 뒤로 가면 age를 음수로 통과시키지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Composite 관찰 뒤 server-time clock만 1ms 후퇴시키는 fixture를 만든다.
+        transport = QueueHTTPTransport(_preparation_responses())
+        mutable_clock = MutableUTCClock(FIXED_TIME)
+        client = BinanceSpotRESTClient(
+            API_KEY,
+            SECRET_KEY,
+            transport=transport,
+            clock=mutable_clock,
+            result_clock=_fixed_clock,
+        )
+        order = client.prepare_order(_order())
+        mutable_clock.regress(timedelta(milliseconds=1))
+
+        # Server-time causal axis가 후퇴하면 stale 여부를 추측하지 않고 제출 표식을 폐기한다.
+        with self.assertRaisesRegex(
+            OrderPreparationRequiredError,
+            "evidence clock regressed",
+        ):
+            client.submit_order(order=order)
+
+        self.assertEqual(len(transport.requests), 6)
+        self.assertIsNone(
+            client.get_order_submission_attempt_evidence(
+                client_order_id=order.client_order_id
+            )
+        )  # Clock 오류도 POST나 attempt evidence를 허용하지 않는다.
 
     def test_public_symbol_rules_fetch_is_fresh_unsigned_and_strict(self) -> None:
         """
@@ -823,6 +1201,328 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
             self.assertNotIn("X-MBX-APIKEY", request_value["headers"])
             self.assertIsNone(request_value["body"])
 
+    def test_prepare_uses_reference_price_for_notional_validation(self) -> None:
+        """
+        함수 이름: test_prepare_uses_reference_price_for_notional_validation()
+        기능: Decision price가 통과해도 fresh reference price notional이 낮으면 prepare를 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        transport = QueueHTTPTransport(
+            _preparation_responses(
+                exchange_info_payload=_exchange_info_payload(
+                    minimum_notional="10"
+                ),
+                reference_price_payload=_reference_price_payload(price="5"),
+            )
+        )
+        client = _client(transport)
+        order = _order(quantity="1.234")
+
+        # Decision notional 123.4와 달리 공식 reference notional 6.17은 최소 10을 통과하지 못한다.
+        with self.assertRaisesRegex(SymbolFilterError, "NOTIONAL_MINIMUM"):
+            client.prepare_order(order)
+
+        self.assertIsNone(
+            client.get_order_preparation_filter_evidence(
+                client_order_id=order.client_order_id
+            )
+        )
+        self.assertEqual(len(transport.requests), 6)
+
+    def test_prepare_quote_max_asset_requires_official_price_formula(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_prepare_quote_max_asset_requires_official_price_formula()
+        기능: Quantity MARKET의 공식 환산식이 없는 quote MAX_ASSET를 추정 없이 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        transport = QueueHTTPTransport(
+            _preparation_responses(
+                account_filters_payload=_account_filters_payload(
+                    {
+                        "filterType": "MAX_ASSET",
+                        "asset": "USDT",
+                        "limit": "120",
+                    }
+                ),
+                reference_price_payload=_reference_price_payload(price="100"),
+            )
+        )
+        client = _client(transport)
+        order = _order(quantity="1.23456")
+
+        # Reference price가 있어도 MAX_ASSET 문서에 quantity MARKET quote 환산식이 없으므로 추정하지 않는다.
+        with self.assertRaisesRegex(
+            SymbolFilterError,
+            "FILTER_MAX_ASSET_QUOTE_MARKET_PRICE_UNDEFINED",
+        ):
+            client.prepare_order(order)
+
+        self.assertIsNone(
+            client.get_order_preparation_filter_evidence(
+                client_order_id=order.client_order_id
+            )
+        )
+        self.assertEqual(len(transport.requests), 6)  # 실패 뒤 POST request는 생성되지 않는다.
+
+    def test_prepare_count_filters_record_complete_empty_state_evidence(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_prepare_count_filters_record_complete_empty_state_evidence()
+        기능: Composite count filter가 두 all-symbol empty snapshot과 전체 provenance를 요구하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        exchange_count_filter = {
+            "filterType": "EXCHANGE_MAX_NUM_ORDERS",
+            "maxNumOrders": 1000,
+        }
+        symbol_count_filter = {
+            "filterType": "MAX_NUM_ORDER_LISTS",
+            "maxNumOrderLists": 20,
+        }
+        account_filters_payload = _account_filters_payload(
+            exchange_filters=(exchange_count_filter,),
+            symbol_filters=(symbol_count_filter,),
+        )
+        exchange_info_payload = _exchange_info_payload()
+        exchange_info_payload["exchangeFilters"] = [
+            dict(exchange_count_filter)
+        ]
+        exchange_info_payload["symbols"][0]["filters"].append(
+            dict(symbol_count_filter)
+        )
+        transport = QueueHTTPTransport(
+            [
+                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                _json_response(account_filters_payload),
+                _json_response(exchange_info_payload),
+                _json_response([]),
+                _json_response([]),
+                _json_response(_reference_price_payload()),
+            ]
+        )
+        client = _client(transport)
+
+        # Count filter가 있으면 openOrders와 openOrderList가 모두 empty인 뒤에만 prepare가 완성된다.
+        prepared_order = client.prepare_order(
+            _order()
+        )  # POST 없이 immutable preparation evidence까지만 생성한다.
+        evidence = client.get_order_preparation_filter_evidence(
+            client_order_id=prepared_order.client_order_id
+        )
+        if evidence is None:
+            self.fail("successful count-filter prepare must expose evidence")
+
+        self.assertEqual(prepared_order.intent_id, evidence.intent_id)
+        self.assertEqual(
+            prepared_order.client_order_id,
+            evidence.client_order_id,
+        )
+        self.assertIs(OrderSide.BUY, evidence.side)
+        self.assertEqual("ETHUSDT", evidence.rules.symbol)
+        self.assertEqual(
+            evidence.account_filters.exchange_order_count_filters,
+            (
+                AccountOrderCountFilter(
+                    filter_type="EXCHANGE_MAX_NUM_ORDERS",
+                    maximum_count=1000,
+                ),
+            ),
+        )
+        self.assertEqual(
+            evidence.account_filters.symbol_order_count_filters,
+            (
+                AccountOrderCountFilter(
+                    filter_type="MAX_NUM_ORDER_LISTS",
+                    maximum_count=20,
+                ),
+            ),
+        )
+        self.assertTrue(evidence.account_open_state_verified_empty)
+        self.assertEqual(
+            FIXED_TIME,
+            evidence.account_filters_observed_at,
+        )
+        self.assertEqual(
+            FIXED_TIME,
+            evidence.account_open_orders_observed_at,
+        )
+        self.assertEqual(
+            FIXED_TIME,
+            evidence.account_open_order_lists_observed_at,
+        )
+        self.assertEqual(FIXED_TIME, evidence.observed_at)
+        self.assertEqual(
+            FIXED_TIME,
+            evidence.reference_price_observed_at,
+        )
+        self.assertEqual(
+            ReferencePrice(
+                symbol="ETHUSDT",
+                price=Decimal("100"),
+                exchange_timestamp=FIXED_TIME_MILLISECONDS,
+            ),
+            evidence.reference_price,
+        )
+        self.assertEqual((), evidence.account_asset_filters)
+        self.assertEqual(
+            tuple(urlsplit(value["url"]).path for value in transport.requests),
+            (
+                "/api/v3/time",
+                "/api/v3/myFilters",
+                "/api/v3/exchangeInfo",
+                "/api/v3/openOrders",
+                "/api/v3/openOrderList",
+                "/api/v3/referencePrice",
+            ),
+        )
+        self.assertFalse(
+            any(
+                request_value["method"] == "POST"
+                for request_value in transport.requests
+            )
+        )
+
+    def test_prepare_count_filters_reject_nonempty_state_before_post(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_prepare_count_filters_reject_nonempty_state_before_post()
+        기능: All-symbol order 또는 order-list 한 건이라도 있으면 evidence와 POST 전에 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        exchange_count_filter = {
+            "filterType": "EXCHANGE_MAX_NUM_ORDERS",
+            "maxNumOrders": 1000,
+        }
+        symbol_count_filter = {
+            "filterType": "MAX_NUM_ORDER_LISTS",
+            "maxNumOrderLists": 20,
+        }
+        nonempty_cases = (
+            (
+                "open-order",
+                [{"orderId": 81}],
+                [],
+                "FILTER_ACCOUNT_OPEN_ORDER_STATE_NOT_EMPTY",
+            ),
+            (
+                "open-order-list",
+                [],
+                [{"orderListId": 91}],
+                "FILTER_ACCOUNT_OPEN_ORDER_LIST_STATE_NOT_EMPTY",
+            ),
+        )
+
+        # 각 account state를 새 client로 분리해 첫 실패가 다음 signed-read 순서에 영향을 주지 않게 한다.
+        for (
+            case_name,
+            open_orders_payload,
+            open_order_lists_payload,
+            expected_error,
+        ) in nonempty_cases:
+            with self.subTest(case_name=case_name):
+                account_filters_payload = _account_filters_payload(
+                    exchange_filters=(exchange_count_filter,),
+                    symbol_filters=(symbol_count_filter,),
+                )
+                exchange_info_payload = _exchange_info_payload()
+                exchange_info_payload["exchangeFilters"] = [
+                    dict(exchange_count_filter)
+                ]
+                exchange_info_payload["symbols"][0]["filters"].append(
+                    dict(symbol_count_filter)
+                )
+                responses = [
+                    _json_response(
+                        {"serverTime": FIXED_TIME_MILLISECONDS}
+                    ),
+                    _json_response(account_filters_payload),
+                    _json_response(exchange_info_payload),
+                    _json_response(open_orders_payload),
+                ]
+                if not open_orders_payload:
+                    responses.append(
+                        _json_response(open_order_lists_payload)
+                    )
+                transport = QueueHTTPTransport(responses)
+                client = _client(transport)
+                order = _order()
+
+                with self.assertRaisesRegex(
+                    SymbolFilterError,
+                    f"^{expected_error}$",
+                ):
+                    client.prepare_order(order)
+
+                request_paths = tuple(
+                    urlsplit(value["url"]).path
+                    for value in transport.requests
+                )  # Non-empty가 발견된 exact signed snapshot 뒤 즉시 중단한다.
+                expected_paths = (
+                    "/api/v3/time",
+                    "/api/v3/myFilters",
+                    "/api/v3/exchangeInfo",
+                    "/api/v3/openOrders",
+                )
+                if not open_orders_payload:
+                    expected_paths += ("/api/v3/openOrderList",)
+                self.assertEqual(expected_paths, request_paths)
+                self.assertIsNone(
+                    client.get_order_preparation_filter_evidence(
+                        client_order_id=order.client_order_id
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        request_value["method"] == "POST"
+                        for request_value in transport.requests
+                    )
+                )
+
+    def test_prepare_buy_fails_closed_when_max_position_is_present(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_prepare_buy_fails_closed_when_max_position_is_present()
+        기능: Submit-time exchangeInfo의 MAX_POSITION이 account exposure 추정 없이 BUY를 막는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        exchange_info_payload = _exchange_info_payload()
+        exchange_info_payload["symbols"][0]["filters"].append(
+            {
+                "filterType": "MAX_POSITION",
+                "maxPosition": "10.00000000",
+            }
+        )
+        transport = QueueHTTPTransport(
+            _preparation_responses(
+                exchange_info_payload=exchange_info_payload
+            )
+        )
+        client = _client(transport)
+
+        # Base balance와 open BUY 총량을 확보하지 않은 narrow path는 MAX_POSITION presence를 차단한다.
+        with self.assertRaisesRegex(
+            SymbolFilterError,
+            "FILTER_MAX_POSITION_REQUIRES_ACCOUNT_EXPOSURE",
+        ):
+            client.prepare_order(_order())
+
+        self.assertEqual(len(transport.requests), 6)
+
     def test_public_symbol_rules_fetch_rejects_mismatched_payload(self) -> None:
         """
         함수 이름: test_public_symbol_rules_fetch_rejects_mismatched_payload()
@@ -861,7 +1561,16 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         transport = QueueHTTPTransport(
             [
                 _json_response(preflight_payload),
-                _json_response(submit_time_payload),
+                *_preparation_responses(
+                    exchange_info_payload=submit_time_payload,
+                    account_filters_payload=_account_filters_payload(
+                        {
+                            "filterType": "MAX_ASSET",
+                            "asset": "ETH",
+                            "limit": "2.00000000",
+                        }
+                    ),
+                ),
             ]
         )
         client = _client(transport)
@@ -894,12 +1603,44 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
             Decimal("0.01"),
             filter_evidence.rules.market_lot_size.step_size,
         )
-        self.assertEqual(len(transport.requests), 2)
-        self.assertTrue(
-            all(
-                "/api/v3/exchangeInfo" in request_value["url"]
-                for request_value in transport.requests
-            )
+        self.assertEqual(
+            filter_evidence.account_asset_filters,
+            (
+                AccountAssetFilter(
+                    filter_type="MAX_ASSET",
+                    asset="ETH",
+                    maximum_quantity=Decimal("2.00000000"),
+                ),
+            ),
+        )
+        self.assertEqual(
+            FIXED_TIME,
+            filter_evidence.account_filters_observed_at,
+        )
+        self.assertEqual(
+            filter_evidence.reference_price,
+            ReferencePrice(
+                symbol="ETHUSDT",
+                price=Decimal("100"),
+                exchange_timestamp=FIXED_TIME_MILLISECONDS,
+            ),
+        )
+        self.assertEqual(
+            FIXED_TIME,
+            filter_evidence.reference_price_observed_at,
+        )
+        self.assertEqual(len(transport.requests), 7)
+        self.assertEqual(
+            tuple(urlsplit(value["url"]).path for value in transport.requests),
+            (
+                "/api/v3/exchangeInfo",
+                "/api/v3/time",
+                "/api/v3/myFilters",
+                "/api/v3/exchangeInfo",
+                "/api/v3/openOrders",
+                "/api/v3/openOrderList",
+                "/api/v3/referencePrice",
+            ),
         )
 
     def test_prepare_and_submission_provenance_share_server_time_axis(self) -> None:
@@ -916,7 +1657,10 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
             [
                 _json_response({"serverTime": server_time_milliseconds}),
                 _json_response({}),
-                _json_response(_exchange_info_payload()),
+                *_preparation_responses(
+                    server_time_milliseconds=server_time_milliseconds,
+                    include_server_time=False,
+                ),
                 _json_response(_filled_order_payload()),
             ]
         )
@@ -969,7 +1713,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/22
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload())]
+            _preparation_responses()
         )
         client = _client(transport)
         order = client.prepare_order(_order())
@@ -979,8 +1723,8 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         with self.assertRaises(OrderPreparationRequiredError):
             client.submit_order(order=order)
 
-        self.assertEqual(len(transport.requests), 1)
-        self.assertIn("/v3/exchangeInfo", transport.requests[0]["url"])
+        self.assertEqual(len(transport.requests), 6)
+        self.assertIn("/v3/referencePrice", transport.requests[-1]["url"])
 
     def test_submit_rejects_side_changed_after_prepare(self) -> None:
         """
@@ -991,7 +1735,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/22
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload())]
+            _preparation_responses()
         )
         client = _client(transport)
         order = client.prepare_order(_order())
@@ -1001,8 +1745,8 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         with self.assertRaises(OrderPreparationRequiredError):
             client.submit_order(order=order)
 
-        self.assertEqual(len(transport.requests), 1)
-        self.assertIn("/v3/exchangeInfo", transport.requests[0]["url"])
+        self.assertEqual(len(transport.requests), 6)
+        self.assertIn("/v3/referencePrice", transport.requests[-1]["url"])
 
     def test_submit_rejects_policy_version_changed_after_prepare(self) -> None:
         """
@@ -1013,7 +1757,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/25
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload())]
+            _preparation_responses()
         )
         client = _client(transport)
         order = client.prepare_order(_order())
@@ -1023,8 +1767,8 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         with self.assertRaises(OrderPreparationRequiredError):
             client.submit_order(order=order)
 
-        self.assertEqual(len(transport.requests), 1)
-        self.assertIn("/v3/exchangeInfo", transport.requests[0]["url"])
+        self.assertEqual(len(transport.requests), 6)
+        self.assertIn("/v3/referencePrice", transport.requests[-1]["url"])
 
     def test_account_commission_uses_signed_symbol_endpoint(self) -> None:
         """
@@ -1070,6 +1814,178 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         )
         self.assertNotIn(SECRET_KEY, commission_request["url"])
         self.assertIsNone(commission_request["body"])
+
+    def test_account_filters_uses_signed_symbol_endpoint(self) -> None:
+        """
+        함수 이름: test_account_filters_uses_signed_symbol_endpoint()
+        기능: myFilters가 공식 signed path와 canonical symbol을 사용해 raw schema를 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        account_filters_payload = _account_filters_payload(
+            {
+                "filterType": "MAX_ASSET",
+                "asset": "USDT",
+                "limit": "250.00000000",
+            }
+        )
+        transport = QueueHTTPTransport(
+            [
+                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                _json_response(account_filters_payload),
+            ]
+        )
+        client = _client(transport)
+
+        # USER_DATA 요청은 /time 뒤 API key와 HMAC parameter를 포함하되 secret 원문은 제외한다.
+        result = client.get_account_filters(symbol="ethusdt")
+
+        self.assertEqual(result, account_filters_payload)
+        account_filters_request = transport.requests[1]
+        parsed_url = urlsplit(account_filters_request["url"])
+        request_parameters = parse_qs(parsed_url.query)
+        self.assertEqual(parsed_url.path, "/api/v3/myFilters")
+        self.assertEqual(request_parameters["symbol"], ["ETHUSDT"])
+        self.assertIn("timestamp", request_parameters)
+        self.assertIn("recvWindow", request_parameters)
+        self.assertIn("signature", request_parameters)
+        self.assertEqual(
+            account_filters_request["headers"]["X-MBX-APIKEY"],
+            API_KEY,
+        )
+        self.assertNotIn(SECRET_KEY, account_filters_request["url"])
+        self.assertIsNone(account_filters_request["body"])
+
+    def test_all_symbol_open_state_reads_are_signed_and_identity_free(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_all_symbol_open_state_reads_are_signed_and_identity_free()
+        기능: openOrders와 openOrderList 전체 계정 조회가 symbol 없이 bool만 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        transport = QueueHTTPTransport(
+            [
+                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                _json_response([]),
+                _json_response([{"orderListId": 71}]),
+            ]
+        )
+        client = _client(transport)
+
+        # 두 USER_DATA read는 raw order/list identity 대신 account 전체 non-empty bool만 남긴다.
+        has_open_orders = client.has_any_exchange_open_orders()
+        has_open_order_lists = (
+            client.has_any_exchange_open_order_lists()
+        )  # 같은 synchronized offset을 재사용하되 별도 signed snapshot을 만든다.
+
+        self.assertFalse(has_open_orders)
+        self.assertTrue(has_open_order_lists)
+        self.assertEqual(
+            tuple(urlsplit(value["url"]).path for value in transport.requests),
+            (
+                "/api/v3/time",
+                "/api/v3/openOrders",
+                "/api/v3/openOrderList",
+            ),
+        )
+        for request_value in transport.requests[1:]:
+            with self.subTest(path=urlsplit(request_value["url"]).path):
+                request_parameters = parse_qs(
+                    urlsplit(request_value["url"]).query
+                )
+                self.assertNotIn("symbol", request_parameters)
+                self.assertIn("timestamp", request_parameters)
+                self.assertIn("recvWindow", request_parameters)
+                self.assertIn("signature", request_parameters)
+                self.assertEqual(
+                    API_KEY,
+                    request_value["headers"]["X-MBX-APIKEY"],
+                )
+                self.assertIsNone(request_value["body"])
+        self.assertFalse(
+            any(
+                request_value["method"] == "POST"
+                for request_value in transport.requests
+            )
+        )
+
+    def test_reference_price_fetch_is_fresh_unsigned_and_strict(self) -> None:
+        """
+        함수 이름: test_reference_price_fetch_is_fresh_unsigned_and_strict()
+        기능: 연속 referencePrice 조회가 cache 없이 public exact DTO를 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        transport = QueueHTTPTransport(
+            [
+                _json_response(_reference_price_payload(price="100")),
+                _json_response(_reference_price_payload(price="101")),
+            ]
+        )
+        client = _client(transport)
+
+        # 두 public GET은 각각 새 Decimal을 반환하고 credential header를 전혀 보내지 않는다.
+        first_reference_price = client.fetch_reference_price(
+            symbol="ethusdt"
+        )
+        second_reference_price = client.fetch_reference_price(
+            symbol="ETHUSDT"
+        )
+
+        self.assertEqual(first_reference_price.price, Decimal("100"))
+        self.assertEqual(second_reference_price.price, Decimal("101"))
+        self.assertEqual(first_reference_price.symbol, "ETHUSDT")
+        for request_value in transport.requests:
+            parsed_url = urlsplit(request_value["url"])
+            self.assertEqual(parsed_url.path, "/api/v3/referencePrice")
+            self.assertEqual(
+                parse_qs(parsed_url.query),
+                {"symbol": ["ETHUSDT"]},
+            )
+            self.assertNotIn("X-MBX-APIKEY", request_value["headers"])
+            self.assertIsNone(request_value["body"])
+
+    def test_reference_price_null_and_minus_2043_fail_closed(self) -> None:
+        """
+        함수 이름: test_reference_price_null_and_minus_2043_fail_closed()
+        기능: Null과 공식 NO_REFERENCE_PRICE 오류가 VWAP 추정 없이 실패하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        null_transport = QueueHTTPTransport(
+            [_json_response(_reference_price_payload(price=None))]
+        )
+        missing_transport = QueueHTTPTransport(
+            [
+                _json_response(
+                    {
+                        "code": -2043,
+                        "msg": "This symbol doesn't have a reference price.",
+                    },
+                    status_code=400,
+                )
+            ]
+        )
+
+        # 두 공식 부재 표현 모두 값 생성이나 average-price request 없이 한 GET에서 종료한다.
+        with self.assertRaisesRegex(BinancePayloadError, "non-null"):
+            _client(null_transport).fetch_reference_price(
+                symbol="ETHUSDT"
+            )
+        with self.assertRaises(BinanceAPIError) as captured_error:
+            _client(missing_transport).fetch_reference_price(
+                symbol="ETHUSDT"
+            )
+
+        self.assertEqual(captured_error.exception.api_code, -2043)
+        self.assertEqual(len(null_transport.requests), 1)
+        self.assertEqual(len(missing_transport.requests), 1)
 
     def test_invalid_timestamp_resynchronizes_once_then_retries(self) -> None:
         """
@@ -1122,8 +2038,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         """
         transport = QueueHTTPTransport(
             [
-                _json_response(_exchange_info_payload()),
-                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                *_preparation_responses(),
                 _json_response(
                     {"code": -1021, "msg": "outside recvWindow"},
                     status_code=400,
@@ -1158,7 +2073,15 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         self.assertEqual(len(order_requests), 1)
         self.assertEqual(
             request_paths,
-            ("/api/v3/exchangeInfo", "/api/v3/time", "/api/v3/order"),
+            (
+                "/api/v3/time",
+                "/api/v3/myFilters",
+                "/api/v3/exchangeInfo",
+                "/api/v3/openOrders",
+                "/api/v3/openOrderList",
+                "/api/v3/referencePrice",
+                "/api/v3/order",
+            ),
         )
 
     def test_legacy_order_timestamp_rejection_retains_single_retry(
@@ -1173,8 +2096,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         """
         transport = QueueHTTPTransport(
             [
-                _json_response(_exchange_info_payload()),
-                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                *_preparation_responses(),
                 _json_response(
                     {"code": -1021, "msg": "outside recvWindow"},
                     status_code=400,
@@ -1203,8 +2125,12 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
                 for request_value in transport.requests
             ),
             (
-                "/api/v3/exchangeInfo",
                 "/api/v3/time",
+                "/api/v3/myFilters",
+                "/api/v3/exchangeInfo",
+                "/api/v3/openOrders",
+                "/api/v3/openOrderList",
+                "/api/v3/referencePrice",
                 "/api/v3/order",
                 "/api/v3/time",
                 "/api/v3/order",
@@ -1236,8 +2162,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
             with self.subTest(failure_type=type(failure_response).__name__):
                 transport = QueueHTTPTransport(
                     [
-                        _json_response(_exchange_info_payload()),
-                        _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                        *_preparation_responses(),
                         failure_response,
                     ]
                 )
@@ -1259,8 +2184,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         """
         transport = QueueHTTPTransport(
             [
-                _json_response(_exchange_info_payload()),
-                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                *_preparation_responses(),
                 _json_response(
                     {"code": -1003, "msg": "rate limited"},
                     status_code=429,
@@ -1289,8 +2213,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         reflected_message = "Filter failure for bat-client-0 and secret text"
         transport = QueueHTTPTransport(
             [
-                _json_response(_exchange_info_payload()),
-                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                *_preparation_responses(),
                 _json_response(
                     {"code": -1013, "msg": reflected_message},
                     status_code=400,
@@ -1353,8 +2276,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         """
         transport = QueueHTTPTransport(
             [
-                _json_response(_exchange_info_payload()),
-                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                *_preparation_responses(),
                 _json_response(
                     {"code": -2010, "msg": "Duplicate order sent."},
                     status_code=400,
@@ -1400,7 +2322,11 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/31
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload(maximum_notional="100000"))]
+            _preparation_responses(
+                exchange_info_payload=_exchange_info_payload(
+                    maximum_notional="100000"
+                )
+            )
         )
         client = _client(
             transport,
@@ -1413,7 +2339,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
 
         self.assertIs(prepared_order, exact_ceiling_order)
         self.assertEqual(prepared_order.submitted_quantity, Decimal("1.000"))
-        self.assertEqual(len(transport.requests), 1)  # Preparation은 public filter 조회 한 번으로 끝난다.
+        self.assertEqual(len(transport.requests), 6)  # 다섯 fresh read와 최초 time sync를 포함한다.
 
     def test_configured_maximum_notional_blocks_order_before_signing(self) -> None:
         """
@@ -1424,22 +2350,26 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/22
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload(maximum_notional="100000"))]
+            _preparation_responses(
+                exchange_info_payload=_exchange_info_payload(
+                    maximum_notional="100000"
+                )
+            )
         )
         client = _client(
             transport,
             maximum_order_notional=Decimal("100"),
         )
 
-        # 1.234 ETH×100 USDT는 local cap 100을 넘으므로 journal·/time·POST 전에 거부한다.
+        # 1.234 ETH×100 USDT는 fresh read 이후 journal·POST 전에 local cap으로 거부한다.
         with self.assertRaisesRegex(
             SymbolFilterError,
             "FILTER_CONFIGURED_MAXIMUM_NOTIONAL",
         ):
             client.prepare_order(_order())
 
-        self.assertEqual(len(transport.requests), 1)
-        self.assertIn("/v3/exchangeInfo", transport.requests[0]["url"])
+        self.assertEqual(len(transport.requests), 6)
+        self.assertIn("/v3/referencePrice", transport.requests[-1]["url"])
 
     def test_configured_entry_cap_allows_stop_sell_above_quote_cap(
         self,
@@ -1452,7 +2382,11 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/24
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload(maximum_notional="100000"))]
+            _preparation_responses(
+                exchange_info_payload=_exchange_info_payload(
+                    maximum_notional="100000"
+                )
+            )
         )
         client = _client(
             transport,
@@ -1485,7 +2419,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
             * prepared_sell.market_price_at_decision,
             Decimal("100"),
         )
-        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(len(transport.requests), 6)
 
     def test_configured_entry_cap_still_blocks_non_stop_sell(
         self,
@@ -1498,7 +2432,11 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         작성 날짜: 2026/08/24
         """
         transport = QueueHTTPTransport(
-            [_json_response(_exchange_info_payload(maximum_notional="100000"))]
+            _preparation_responses(
+                exchange_info_payload=_exchange_info_payload(
+                    maximum_notional="100000"
+                )
+            )
         )
         client = _client(
             transport,
@@ -1525,7 +2463,7 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         ):
             client.prepare_order(take_profit_sell)
 
-        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(len(transport.requests), 6)
 
     def test_query_hydrates_partial_fill_from_my_trades(self) -> None:
         """
@@ -1710,6 +2648,39 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         self.assertEqual(results[0].client_order_id, "bat-open-0")
         open_query = parse_qs(urlsplit(transport.requests[1]["url"]).query)
         self.assertEqual(open_query["symbol"], ["ETHUSDT"])
+
+        # Safety preflight 전용 surface는 같은 signed endpoint에서 manual client ID도 숨기지 않는다.
+        full_transport = QueueHTTPTransport(
+            [
+                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                _json_response(open_orders),
+            ]
+        )
+        all_results = _client(full_transport).list_all_open_order_results()
+        self.assertEqual(
+            ("bat-open-0", "manual-order"),
+            tuple(result.client_order_id for result in all_results),
+        )
+
+        # allOrders 전용 surface도 prefix 없이 manual ID를 유지하고 bounded limit를 그대로 서명한다.
+        recent_transport = QueueHTTPTransport(
+            [
+                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                _json_response(open_orders),
+            ]
+        )
+        all_recent_results = _client(
+            recent_transport
+        ).list_all_recent_order_results(limit=17)
+        self.assertEqual(
+            ("bat-open-0", "manual-order"),
+            tuple(result.client_order_id for result in all_recent_results),
+        )
+        recent_query = parse_qs(
+            urlsplit(recent_transport.requests[1]["url"]).query
+        )
+        self.assertEqual(recent_query["symbol"], ["ETHUSDT"])
+        self.assertEqual(recent_query["limit"], ["17"])
 
 
 if __name__ == "__main__":

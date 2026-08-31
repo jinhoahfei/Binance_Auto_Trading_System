@@ -114,7 +114,37 @@ evidence GAP이다. Local suite 밖의 추가 actual timeout/5xx/persistence 주
   API로 상태를 조회한다.
 - [Spot symbol filters](https://developers.binance.com/en/docs/products/spot/filters)은
   `LOT_SIZE`, `MARKET_LOT_SIZE`, `MIN_NOTIONAL`/`NOTIONAL`의 quantity·notional 경계를 정의한다.
-  따라서 recovery SELL도 submit 직전 최신 `exchangeInfo` filter로 exact holdings를 정규화한다.
+  현재 계약은 이 MARKET `MIN_NOTIONAL`/`NOTIONAL` notional에 non-null reference price를 우선
+  사용한다. 공식 `MAX_ASSET` 정의는 base asset에는 quantity, quote asset에는 notional을 적용한다고만
+  명시하며 quantity 기반 MARKET 주문의 quote notional 환산 가격식은 제공하지 않는다. 따라서
+  Phase 13은 base `MAX_ASSET`만 제출 quantity로 평가하고 quote `MAX_ASSET`이 반환되면
+  `referencePrice * quantity`를 합성하지 않은 채 고정 fail closed한다. Recovery SELL도 submit 직전
+  최신 `exchangeInfo` filter로 exact holdings를 정규화하며 같은 차단 계약을 적용한다.
+- [Spot REST `myFilters`](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-relevant-filters-user_data)는
+  특정 account와 symbol에 관련된 exchange/symbol/asset filter 세 scope를 반환한다.
+  Phase 13 preflight와 각 prepare는 이 signed read를 별도로 수행하고 요청 symbol context에
+  immutable composite DTO를 결속한다. 공식 type별 exact field·JSON type과 scope를 검증하며,
+  malformed/unknown/duplicate/extra field와 평가식이 공개되지 않은 `T_PLUS_SELL`을
+  추정하거나 무시하지 않는다. Quantity 기반 MARKET에서는 base `MAX_ASSET`만
+  quantity로 평가하며 quote filter는 journal/POST 전에 차단한다.
+- [Current open orders](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#current-open-orders-user_data)와
+  [current open order lists](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-open-order-lists-user_data)는
+  account count filter의 완전한 현재 상태를 증명하는 signed read다. `openOrders`는 symbol을 생략해
+  exchange-wide로 조회하고 `openOrderList`는 전용 endpoint를 사용한다. Preflight와
+  submit-time에 두 exact empty snapshot과 각각의 server-aligned 관찰 시각을 보존하며,
+  non-empty/malformed에서 order/list identity를 오류나 trace로 내보내지 않고 차단한다.
+- [Spot REST reference price](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-reference-price)는
+  symbol, reference price와 exchange timestamp를 반환한다. 이번 좁은 actual target은 null 또는
+  `-2043`에서 VWAP·last price fallback을 합성하지 않고 신규 BUY를 닫는다. 이 값은 MARKET
+  `MIN_NOTIONAL`/`NOTIONAL` 검증용이며 quote `MAX_ASSET` 환산 근거로 사용하지 않는다.
+- Prepared composite evidence는 account filter, public rule, 두 account-wide empty-state와 reference
+  price 중 가장 이른 관찰부터 고정 `30초`까지만 유효하다. 정확히 30초는 허용하지만 30초+1ms와
+  clock regression은 차단한다. Fingerprint는 submit에서 한 번 소모하고, 실제 transport의 socket I/O
+  직전 `before_send` guard가 같은 server-aligned 시각으로 freshness를 다시 검증한 뒤에만 최초
+  submission-attempt evidence를 만든다. Trace v3는 signed composite와 별도의
+  `public_relevant_filters` projection을 보존하고 quantity·notional·count·passive·`MAX_POSITION`
+  overlap, public scalar binding과 같은 30초 인과를 runtime 규칙으로 재검증한다. Preserved v2는
+  schema version을 바꾸지 않고 그 계약으로만 계속 검증한다.
 - [Spot Testnet REST](https://developers.binance.com/en/docs/products/spot/testnet/rest-api)는
   실제 Phase 13 증거를 고정 Spot Testnet endpoint에서 수집할 때 같은 query/cancel 계약을
   검증할 기준이다.
@@ -306,6 +336,14 @@ Actual target은 artifact root에 owner-only regular lockfile을 두고 parent d
 Testnet 자동화, legacy target, 직접 REST client와 동일 account의 외부 주문은 절차적으로 모두
 중지한 상태에서만 actual run을 시작한다.
 
+Read-only와 actual preflight는 app prefix만 조회하지 않고 모든 client ID의 symbol-scoped open order와
+최근 order 최대 1000개를 signed 조회한다. Open order는 0이어야 하며 recent
+`(exchange order ID, client order ID)` set은 owner/inode/digest와 semantic replay를 통과한 closed
+baseline Trade identity set과 정확히 같아야 한다. Fresh baseline은 양쪽 empty만 허용한다. Missing,
+duplicate, manual/외부 order와 unstable identity는 mutation 전에 차단하고 failure 문장에는 raw
+`OrderResult`, `Trade`, ID와 fill을 포함하지 않는다. Snapshot 뒤 동일 account의 별도 activity까지
+kernel lock이 막지는 못하므로 외부 process·수동 주문 중지 조건은 그대로 유지한다.
+
 REST transport는 모든 3xx를 non-success로 거부하고 redirect를 따라가지 않는다. 따라서 signed
 query, API key header와 request body가 다른 origin으로 재전송되지 않는다. Actual success/failure
 artifact는 같은 directory의 owner-only `O_EXCL|O_NOFOLLOW` 임시 inode에 canonical bytes를 쓰고
@@ -381,19 +419,43 @@ local cache 부재는 fail closed한다. 실제 local-only vulnerability/license
   `raw_ols_slope / candidate_price * 100`, `%/30분봉`으로 정규화하고 네 사용 위치마다
   실제 계산 입력 가격을 분모로 사용한다.
 - Phase 13 actual Testnet은 local gate 통과 후 `ETHUSDT`, 각 신규 BUY 최대
-  `100 USDT`, 정확한 보유 수량의 recovery SELL만 허용한다.
+  `100 USDT`, 정확한 보유 수량의 recovery SELL만 허용한다. Preflight와 submit 직전에 current
+  `exchangeInfo`, signed account `myFilters`, all-symbol open order/open order-list state와 public
+  reference price를 각각 새로 읽는다. Signed/public filter의 공통 type·limit drift, count limit 0,
+  account-wide non-empty 상태와 관찰 시각 순서 drift는 journal/POST 전에 fail closed한다.
+  Base `MAX_ASSET`만 제출 quantity로 검증하고 quantity 기반 MARKET의 quote `MAX_ASSET`은 공식
+  환산 가격식이 없으므로 고정 fail closed한다. Reference price는 MARKET
+  `MIN_NOTIONAL`/`NOTIONAL`에만 사용한다. 완전한 account exposure evaluator가 필요한
+  `MAX_POSITION`이 BUY에 존재하거나 reference price가 authoritative하지 않으면 fail closed한다.
+  이 composite evidence는 가장 이른 관찰부터 고정 30초와 clock monotonicity를 만족해야 하며,
+  transport `before_send`가 order POST 직전에 freshness와 최초 attempt evidence를 같은 시각으로
+  결속한다. Trace v3의 별도 `public_relevant_filters` projection도 signed/public overlap과 같은
+  30초 인과관계를 증명해야 한다.
 - 프로젝트 자체는 비공개·개인용이며 Python/npm/Cargo의 license·publish metadata와
   repository notice로 강제한다. 제3자 dependency 의무는 별도로 준수한다.
 - 외부 OSV 서비스 전송은 영구 불허이며 OS network deny·offline cached DB만 허용한다.
   최신 advisory 확인 불가 또는 cache 부재는 fail closed한다.
 - 24시간 soak는 영구 제외하고 PASS로 기록하지 않는다.
 
+2026-08-31 one-shot 외부 증거는 위 30초 transport guard와 trace overlap 보강 **직전 source**에
+귀속된다. 그 source의 fixed-Keychain memory-only signed read-only는 `4/4` PASS했지만, 조건부
+actual은 durable BUY 전에 reconciliation-required로 `FAILED`했다. 해당 Phase 13 harness의
+app-attributable submission attempt·order POST delegate·BUY·STOP SELL·durable Trade는 0건이고
+runtime Position/pending도 0이지만, 별도 fresh verification은 `INCOMPLETE`다. 따라서 동일 account의
+독립 외부 mutation 부재나 종료 후 fresh zero exposure를 주장하지 않는다.
+
+이후 보강한 current tree는 Backend `940/940`, scripts `183/183`, secure runner `14/14`, current
+집중 `102` OK·external `4` safe skip, Communication `126/126`을 통과했지만 signed external target과
+새로 결속하지 않았다. 다음 작업은 Keychain·Binance network·주문 없이 reconciliation 원인과 fresh
+verification 실패 stage를 stable secret-free enum으로 먼저 분리하고 deterministic test로 닫는 것이다.
+그 뒤 external 재실행이 필요하면 세 범위를 새로 명시 승인받으며 어떤 실패도 자동 재시도하지 않는다.
+
 Configured-unbounded domain·wire·UI gate와 `CANCEL_AND_LIQUIDATE`의 receipt-first cleanup,
 restart resume, exact activation replay, active-epoch provenance와 authoritative completion boolean은
 focused local test evidence를 갖춘다. Private/personal 프로젝트 선언과 registry 배포 차단도
 local byte-bound evidence를 갖추고 project `UNKNOWN` group을 제거했다. 30분 production builder,
 all-interval 원자 경계, public local Case 2와 Communication `126/126`은 완료했다. 실제 Phase 13
-Testnet public Case 2, visual SSIM·third-party supply evidence는 미완료이므로 P13-04,
+Testnet public Case 2의 `SUCCESS`, visual SSIM·third-party supply evidence는 미완료이므로 P13-04,
 P13-06~P13-08 전체 판정은
 유지한다. P13-01 local implementation은 완료 상태를 유지하고 Phase 13 master만 나머지 전체 gate를
 기다린다. 별도 live release commit·signed checklist·사용자 승인은
