@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "capture_contract": {
+    "viewport": {
+      "width": 1440,
+      "height": 1024,
+      "device_scale_factor": 1
+    },
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 1024
+    },
+    "current_image_format": "jpeg_jfif",
+    "current_file_extension": ".jpg",
+    "automatic_baseline_update": false
+  },
+  "comparison_contract": {
+    "tool": "ffmpeg",
+    "required_version_prefix": "ffmpeg version 8.0 ",
+    "metric": "ssim_all",
+    "minimum_score": "0.980000",
+    "anti_alias_normalization": {
+      "filter": "gblur",
+      "sigma": "0.5",
+      "steps": 1,
+      "pixel_format": "yuv444p",
+      "apply_symmetrically": true
+    }
+  }
+}

@@ -51,6 +51,7 @@ from tests.integration.test_account_stream_flow import (
     _account_rest_payload,
     _ready_market_snapshot,
 )
+from tests.integration.phase13_risk_fixture import create_test_risk_policy
 
 
 STARTED_AT = datetime(2026, 8, 22, 3, 0, tzinfo=timezone.utc)
@@ -360,6 +361,7 @@ def _create_started_controller(
     clock: MutableUtcClock,
     *,
     maximum_order_notional: Decimal | None = None,
+    maximum_order_submissions_per_intent: int = 5,
     order_retry_jitter: Callable[[], Decimal] | None = None,
 ) -> tuple[
     TradingController,
@@ -373,6 +375,7 @@ def _create_started_controller(
     인자: client -> order response script와 account payload를 제공할 fake REST client
         clock -> Controller와 fake 결과가 공유할 deterministic clock
         maximum_order_notional -> BUY Order 생성 전 적용할 선택 quote 진입 상한
+        maximum_order_submissions_per_intent -> 새 client ID 전 intent별 제출 상한
         order_retry_jitter -> ADR-002 delay에 적용할 결정론적 factor provider 또는 None
     반환값: Controller, Position, history Controller와 in-memory repository tuple
     작성 날짜: 2026/08/22
@@ -397,7 +400,11 @@ def _create_started_controller(
         command_gate=True,
         position=position,
         trade_history_controller=history_controller,
+        risk_policy_state=create_test_risk_policy(),
         maximum_order_notional=maximum_order_notional,
+        maximum_order_submissions_per_intent=(
+            maximum_order_submissions_per_intent
+        ),
         order_retry_jitter=order_retry_jitter,
         clock=clock,
     )
@@ -979,6 +986,38 @@ class OrderReconciliationFlowTests(unittest.TestCase):
         self.assertIsNone(
             controller.context.runtime.pending_intent_id
         )  # ADR-002는 잔량 Position이 있는 최종 실패에만 운영 lock을 유지한다.
+
+    def test_single_submission_budget_blocks_retry_before_client_id_trace(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_single_submission_budget_blocks_retry_before_client_id_trace()
+        기능: Phase 13 상한 1이 소비된 intent의 새 client ID·Gateway submit을 모두 사전에 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        clock = MutableUtcClock()
+        client = ScriptedOrderRESTClient(clock, submit_steps=())
+        controller, position, _, repository = _create_started_controller(
+            client,
+            clock,
+            maximum_order_submissions_per_intent=1,
+        )
+        controller._submission_attempts_by_intent[BUY_INTENT_ID] = 1
+        trace_before = controller.order_execution_trace
+
+        # RETRY 예약 patch와 submit이 들어와도 소진 검사는 client ID trace나 외부 호출보다 먼저 끝난다.
+        result = _submit_case_b_buy(controller)
+
+        self.assertEqual(result, ())
+        self.assertEqual(controller.maximum_order_submissions_per_intent, 1)
+        self.assertEqual(controller.order_execution_trace, trace_before)
+        self.assertEqual(client.submitted_orders, [])
+        self.assertEqual(position.quantity, Decimal("0"))
+        self.assertEqual(repository.saved_trades, [])
+        self.assertIs(controller.status, TradingSessionStatus.RUNNING)
+        self.assertIs(controller.context.runtime.trading_phase, TradingPhase.IDLE)
 
     def test_pending_stop_queries_cancels_and_queries_same_order_again(
         self,

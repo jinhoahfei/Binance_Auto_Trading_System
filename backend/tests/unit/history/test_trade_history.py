@@ -37,6 +37,20 @@ class TradeHistoryTests(unittest.TestCase):
 
         self.assertEqual(history.trades, (trade,))
 
+    def test_constructor_rejects_non_iterable_and_non_trade_values(self) -> None:
+        """
+        함수 이름: test_constructor_rejects_non_iterable_and_non_trade_values()
+        기능: Communication 3.2 생성자가 잘못된 복원 입력을 빈 이력으로 숨기지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        # Iterable 계약과 원소 타입 계약을 각각 위반해 생성 전 fail-closed 경계를 확인한다.
+        with self.assertRaisesRegex(TypeError, "iterable of Trade"):
+            TradeHistory(None)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(TypeError, "trade must be a Trade"):
+            TradeHistory((object(),))  # type: ignore[arg-type]
+
     def test_same_order_with_different_content_raises_conflict(self) -> None:
         """
         함수 이름: test_same_order_with_different_content_raises_conflict()

@@ -29,7 +29,13 @@ import {
     type TradingUnavailableReason,
 } from '../../features/trading-control';
 import type {
+    BackendDailyLossScope,
+    BackendDecimalString,
+    BackendManualKillBehavior,
     BackendTradingStatus,
+    BackendRiskBudgetSnapshot,
+    BackendRiskBlockReason,
+    BackendRiskPolicyAvailability,
     ChartDrawing,
     ChartInterval,
     CsvPeriod,
@@ -118,6 +124,23 @@ export interface UiApplicationFacadeOptions {
     readonly regime_metrics?: ReadonlyArray<RegimeMetric>;
     readonly logic_coverage?: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled?: boolean;
+    readonly risk_policy_availability?: BackendRiskPolicyAvailability;
+    readonly configured_risk_policy_version?: number | null;
+    readonly max_order_notional?: BackendDecimalString | null;
+    readonly max_position_notional?: BackendDecimalString | null;
+    readonly max_daily_loss?: BackendDecimalString | null;
+    readonly daily_loss_scope?: BackendDailyLossScope | null;
+    readonly manual_kill_behavior?: BackendManualKillBehavior | null;
+    readonly session_risk_policy_version?: number | null;
+    readonly risk_control_version?: number;
+    readonly manual_kill_active?: boolean;
+    readonly manual_kill_cleanup_complete?: boolean;
+    readonly manual_kill_activation_behavior?: BackendManualKillBehavior | null;
+    readonly manual_kill_activation_policy_version?: number | null;
+    readonly last_risk_decision_allowed?: boolean | null;
+    readonly last_risk_budget?: BackendRiskBudgetSnapshot | null;
+    readonly risk_block_reason?: BackendRiskBlockReason | null;
+    readonly process_ownership_ambiguous?: boolean;
     readonly recent_trades?: ReadonlyArray<TradeRecord>;
     // Demo/Storybook/test fixture만 상세 행을 seed하며 live mapper는 이 값을 전달하지 않는다.
     readonly history_records?: ReadonlyArray<TradeRecord>;
@@ -143,6 +166,23 @@ export interface UiServerOwnedSnapshot {
     readonly regime_metrics: ReadonlyArray<RegimeMetric>;
     readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled: boolean;
+    readonly risk_policy_availability: BackendRiskPolicyAvailability;
+    readonly configured_risk_policy_version: number | null;
+    readonly max_order_notional: BackendDecimalString | null;
+    readonly max_position_notional: BackendDecimalString | null;
+    readonly max_daily_loss: BackendDecimalString | null;
+    readonly daily_loss_scope: BackendDailyLossScope | null;
+    readonly manual_kill_behavior: BackendManualKillBehavior | null;
+    readonly session_risk_policy_version: number | null;
+    readonly risk_control_version: number;
+    readonly manual_kill_active: boolean;
+    readonly manual_kill_cleanup_complete: boolean;
+    readonly manual_kill_activation_behavior: BackendManualKillBehavior | null;
+    readonly manual_kill_activation_policy_version: number | null;
+    readonly last_risk_decision_allowed: boolean | null;
+    readonly last_risk_budget: BackendRiskBudgetSnapshot | null;
+    readonly risk_block_reason: BackendRiskBlockReason | null;
+    readonly process_ownership_ambiguous: boolean;
     readonly recent_trades: ReadonlyArray<TradeRecord>;
     readonly scale_in_percentage: number;
     readonly scale_out_percentage: number;
@@ -190,6 +230,23 @@ export type UiApplicationIntent =
         readonly version: number;
         readonly session_id: string | null;
         readonly command_enabled: boolean;
+        readonly risk_policy_availability: BackendRiskPolicyAvailability;
+        readonly configured_risk_policy_version: number | null;
+        readonly max_order_notional: BackendDecimalString | null;
+        readonly max_position_notional: BackendDecimalString | null;
+        readonly max_daily_loss: BackendDecimalString | null;
+        readonly daily_loss_scope: BackendDailyLossScope | null;
+        readonly manual_kill_behavior: BackendManualKillBehavior | null;
+        readonly session_risk_policy_version: number | null;
+        readonly risk_control_version: number;
+        readonly manual_kill_active: boolean;
+        readonly manual_kill_cleanup_complete: boolean;
+        readonly manual_kill_activation_behavior: BackendManualKillBehavior | null;
+        readonly manual_kill_activation_policy_version: number | null;
+        readonly last_risk_decision_allowed: boolean | null;
+        readonly last_risk_budget: BackendRiskBudgetSnapshot | null;
+        readonly risk_block_reason: BackendRiskBlockReason | null;
+        readonly process_ownership_ambiguous: boolean;
         readonly scale_in: string;
         readonly scale_out: string;
         readonly scale_in_percentage: number;
@@ -321,6 +378,24 @@ export interface AppViewModel {
     };
     readonly trading: {
         readonly command_enabled: boolean;
+        readonly risk_policy_availability: BackendRiskPolicyAvailability | undefined;
+        readonly configured_risk_policy_version: number | null | undefined;
+        readonly max_order_notional: BackendDecimalString | null | undefined;
+        readonly max_position_notional: BackendDecimalString | null | undefined;
+        readonly max_daily_loss: BackendDecimalString | null | undefined;
+        readonly daily_loss_scope: BackendDailyLossScope | null | undefined;
+        readonly manual_kill_behavior: BackendManualKillBehavior | null | undefined;
+        readonly session_risk_policy_version: number | null | undefined;
+        readonly risk_control_version: number | undefined;
+        readonly manual_kill_active: boolean | undefined;
+        readonly manual_kill_cleanup_complete: boolean | undefined;
+        readonly manual_kill_activation_behavior:
+            BackendManualKillBehavior | null | undefined;
+        readonly manual_kill_activation_policy_version: number | null | undefined;
+        readonly last_risk_decision_allowed: boolean | null | undefined;
+        readonly last_risk_budget: BackendRiskBudgetSnapshot | null | undefined;
+        readonly risk_block_reason: BackendRiskBlockReason | null | undefined;
+        readonly process_ownership_ambiguous: boolean | undefined;
         readonly is_trading: boolean;
         readonly is_pending: boolean;
         readonly is_recovery_liquidation: boolean;
@@ -437,6 +512,28 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
         },
         trading: {
             command_enabled: snapshot.trading.context.command_enabled,
+            risk_policy_availability: snapshot.trading.context.risk_policy_availability,
+            configured_risk_policy_version:
+                snapshot.trading.context.configured_risk_policy_version,
+            max_order_notional: snapshot.trading.context.max_order_notional,
+            max_position_notional: snapshot.trading.context.max_position_notional,
+            max_daily_loss: snapshot.trading.context.max_daily_loss,
+            daily_loss_scope: snapshot.trading.context.daily_loss_scope,
+            manual_kill_behavior: snapshot.trading.context.manual_kill_behavior,
+            session_risk_policy_version: snapshot.trading.context.session_risk_policy_version,
+            risk_control_version: snapshot.trading.context.risk_control_version,
+            manual_kill_active: snapshot.trading.context.manual_kill_active,
+            manual_kill_cleanup_complete:
+                snapshot.trading.context.manual_kill_cleanup_complete,
+            manual_kill_activation_behavior:
+                snapshot.trading.context.manual_kill_activation_behavior,
+            manual_kill_activation_policy_version:
+                snapshot.trading.context.manual_kill_activation_policy_version,
+            last_risk_decision_allowed: snapshot.trading.context.last_risk_decision_allowed,
+            last_risk_budget: snapshot.trading.context.last_risk_budget,
+            risk_block_reason: snapshot.trading.context.risk_block_reason,
+            process_ownership_ambiguous:
+                snapshot.trading.context.process_ownership_ambiguous,
             is_trading: snapshot.trading.context.is_trading,
             is_pending: snapshot.trading.matches('starting')
                 || snapshot.trading.matches('stopping')
@@ -649,6 +746,66 @@ export class UiApplicationFacade {
                 ...(options.command_enabled === undefined
                     ? {}
                     : { command_enabled: options.command_enabled }),
+                ...(options.risk_policy_availability === undefined
+                    ? {}
+                    : { risk_policy_availability: options.risk_policy_availability }),
+                ...(options.configured_risk_policy_version === undefined
+                    ? {}
+                    : { configured_risk_policy_version: options.configured_risk_policy_version }),
+                ...(options.max_order_notional === undefined
+                    ? {}
+                    : { max_order_notional: options.max_order_notional }),
+                ...(options.max_position_notional === undefined
+                    ? {}
+                    : { max_position_notional: options.max_position_notional }),
+                ...(options.max_daily_loss === undefined
+                    ? {}
+                    : { max_daily_loss: options.max_daily_loss }),
+                ...(options.daily_loss_scope === undefined
+                    ? {}
+                    : { daily_loss_scope: options.daily_loss_scope }),
+                ...(options.manual_kill_behavior === undefined
+                    ? {}
+                    : { manual_kill_behavior: options.manual_kill_behavior }),
+                ...(options.session_risk_policy_version === undefined
+                    ? {}
+                    : { session_risk_policy_version: options.session_risk_policy_version }),
+                ...(options.risk_control_version === undefined
+                    ? {}
+                    : { risk_control_version: options.risk_control_version }),
+                ...(options.manual_kill_active === undefined
+                    ? {}
+                    : { manual_kill_active: options.manual_kill_active }),
+                ...(options.manual_kill_cleanup_complete === undefined
+                    ? {}
+                    : {
+                        manual_kill_cleanup_complete:
+                            options.manual_kill_cleanup_complete,
+                    }),
+                ...(options.manual_kill_activation_behavior === undefined
+                    ? {}
+                    : {
+                        manual_kill_activation_behavior:
+                            options.manual_kill_activation_behavior,
+                    }),
+                ...(options.manual_kill_activation_policy_version === undefined
+                    ? {}
+                    : {
+                        manual_kill_activation_policy_version:
+                            options.manual_kill_activation_policy_version,
+                    }),
+                ...(options.last_risk_decision_allowed === undefined
+                    ? {}
+                    : { last_risk_decision_allowed: options.last_risk_decision_allowed }),
+                ...(options.last_risk_budget === undefined
+                    ? {}
+                    : { last_risk_budget: options.last_risk_budget }),
+                ...(options.risk_block_reason === undefined
+                    ? {}
+                    : { risk_block_reason: options.risk_block_reason }),
+                ...(options.process_ownership_ambiguous === undefined
+                    ? {}
+                    : { process_ownership_ambiguous: options.process_ownership_ambiguous }),
                 ...(options.is_trading === undefined
                     ? {}
                     : { is_trading: options.is_trading }),
@@ -843,6 +1000,26 @@ export class UiApplicationFacade {
                     selected_regime: this.actors.regime.getSnapshot().context.applied_regime,
                     logic_coverage: intent.logic_coverage,
                     command_enabled: intent.command_enabled,
+                    risk_policy_availability: intent.risk_policy_availability,
+                    configured_risk_policy_version: intent.configured_risk_policy_version,
+                    max_order_notional: intent.max_order_notional,
+                    max_position_notional: intent.max_position_notional,
+                    max_daily_loss: intent.max_daily_loss,
+                    daily_loss_scope: intent.daily_loss_scope,
+                    manual_kill_behavior: intent.manual_kill_behavior,
+                    session_risk_policy_version: intent.session_risk_policy_version,
+                    risk_control_version: intent.risk_control_version,
+                    manual_kill_active: intent.manual_kill_active,
+                    manual_kill_cleanup_complete:
+                        intent.manual_kill_cleanup_complete,
+                    manual_kill_activation_behavior:
+                        intent.manual_kill_activation_behavior,
+                    manual_kill_activation_policy_version:
+                        intent.manual_kill_activation_policy_version,
+                    last_risk_decision_allowed: intent.last_risk_decision_allowed,
+                    last_risk_budget: intent.last_risk_budget,
+                    risk_block_reason: intent.risk_block_reason,
+                    process_ownership_ambiguous: intent.process_ownership_ambiguous,
                     is_trading,
                     has_open_position: intent.has_open_position,
                     lifecycle_status: intent.status,
@@ -1331,6 +1508,29 @@ export class UiApplicationFacade {
                 selected_regime: synchronized_snapshot.applied_regime,
                 logic_coverage: synchronized_snapshot.logic_coverage,
                 command_enabled: synchronized_snapshot.command_enabled,
+                risk_policy_availability: synchronized_snapshot.risk_policy_availability,
+                configured_risk_policy_version:
+                    synchronized_snapshot.configured_risk_policy_version,
+                max_order_notional: synchronized_snapshot.max_order_notional,
+                max_position_notional: synchronized_snapshot.max_position_notional,
+                max_daily_loss: synchronized_snapshot.max_daily_loss,
+                daily_loss_scope: synchronized_snapshot.daily_loss_scope,
+                manual_kill_behavior: synchronized_snapshot.manual_kill_behavior,
+                session_risk_policy_version: synchronized_snapshot.session_risk_policy_version,
+                risk_control_version: synchronized_snapshot.risk_control_version,
+                manual_kill_active: synchronized_snapshot.manual_kill_active,
+                manual_kill_cleanup_complete:
+                    synchronized_snapshot.manual_kill_cleanup_complete,
+                manual_kill_activation_behavior:
+                    synchronized_snapshot.manual_kill_activation_behavior,
+                manual_kill_activation_policy_version:
+                    synchronized_snapshot.manual_kill_activation_policy_version,
+                last_risk_decision_allowed:
+                    synchronized_snapshot.last_risk_decision_allowed,
+                last_risk_budget: synchronized_snapshot.last_risk_budget,
+                risk_block_reason: synchronized_snapshot.risk_block_reason,
+                process_ownership_ambiguous:
+                    synchronized_snapshot.process_ownership_ambiguous,
                 is_trading: synchronized_snapshot.is_trading,
                 has_open_position: synchronized_snapshot.has_open_position,
                 lifecycle_status: synchronized_snapshot.trading_state_label,

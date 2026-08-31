@@ -13,8 +13,9 @@ import sys
 import tempfile
 from time import monotonic, sleep
 import unittest
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from binance_auto_trader.transport import SCHEMA_VERSION
 from tests.integration.transport.test_process_runner import _read_until_eof
 
 
@@ -149,6 +150,7 @@ class ProductionSidecarProcessTests(unittest.TestCase):
                 # Fresh exec는 선행 socket 객체의 finalizer가 fixed FD 3~6을 닫는 fork hazard를 없앤다.
                 try:
                     backend_root = Path(__file__).resolve().parents[3]
+                    os.chdir(temporary_directory)
                     child_environment = {
                         "PYTHONPATH": os.pathsep.join(
                             (str(backend_root / "src"), str(backend_root))
@@ -180,7 +182,7 @@ class ProductionSidecarProcessTests(unittest.TestCase):
             os.close(stop_read_fd)
             os.close(config_read_fd)
             configuration = {
-                "schema_version": 2,
+                "schema_version": SCHEMA_VERSION,
                 "allowed_origin": TEST_ORIGIN,
                 "history_path": str(history_path),
                 "api_key": "testnet-api-key",
@@ -203,10 +205,38 @@ class ProductionSidecarProcessTests(unittest.TestCase):
                 descriptor = json.loads(ready_payload.decode("utf-8"))
                 self.assertEqual(
                     frozenset(descriptor),
-                    frozenset({"port", "session_id", "schema_version"}),
+                    frozenset(
+                        {
+                            "port",
+                            "session_id",
+                            "runtime_pid",
+                            "process_start_id",
+                            "schema_version",
+                        }
+                    ),
+                )
+                self.assertEqual(descriptor["runtime_pid"], child_process_id)
+                self.assertEqual(
+                    str(UUID(descriptor["process_start_id"])),
+                    descriptor["process_start_id"],
                 )
                 self.assertNotIn(token, ready_payload.decode("utf-8"))
                 self.assertNotIn("testnet-api-secret", ready_payload.decode("utf-8"))
+                ownership_path = (
+                    Path(temporary_directory) / ".backend-runtime.lock"
+                )
+                ownership_artifact = json.loads(
+                    ownership_path.read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    ownership_artifact,
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "runtime_pid": descriptor["runtime_pid"],
+                        "process_start_id": descriptor["process_start_id"],
+                        "owner_state": "ACTIVE",
+                    },
+                )  # Lock artifact는 session token과 API credential을 포함하지 않는다.
 
                 # Parent stop byte는 안전 종료 receipt 없이 process를 강제 종료할 권한이 없다.
                 try:
@@ -233,7 +263,10 @@ class ProductionSidecarProcessTests(unittest.TestCase):
                     timeout=3.0,
                 )
                 request_body = json.dumps(
-                    {"schema_version": 2, "expected_version": 0}
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "expected_version": 0,
+                    }
                 )
                 connection.request(
                     "POST",
@@ -271,6 +304,48 @@ class ProductionSidecarProcessTests(unittest.TestCase):
                         unexpected_exit_id,
                         0,
                     )  # Parent crash EOF는 CLOSED process도 스스로 끝내지 못한다.
+
+                    # Ownership ambiguity와 durable flush 뒤에도 기존 listener는 조회 경로를 유지한다.
+                    health_connection = HTTPConnection(
+                        "127.0.0.1",
+                        descriptor["port"],
+                        timeout=3.0,
+                    )
+                    health_connection.request(
+                        "GET",
+                        "/v1/health",
+                        headers={
+                            "Host": f"127.0.0.1:{descriptor['port']}",
+                            "Origin": TEST_ORIGIN,
+                            "Authorization": f"Bearer {token}",
+                            "X-Request-Id": str(uuid4()),
+                        },
+                    )
+                    health_response = health_connection.getresponse()
+                    health_response.read()
+                    health_connection.close()
+                    self.assertEqual(health_response.status, 200)
+                    orphaned_artifact = json.loads(
+                        ownership_path.read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(
+                        orphaned_artifact["owner_state"],
+                        "ORPHANED",
+                    )  # Parent EOF와 같은 iteration에 durable orphan marker를 게시한다.
+
+                    # Parent-loss 상태의 actual runtime이 advisory lock을 계속 쥐어 새 owner 시작을 막는다.
+                    ownership_descriptor = os.open(
+                        ownership_path,
+                        os.O_RDWR,
+                    )
+                    try:
+                        with self.assertRaises(OSError):
+                            fcntl.flock(
+                                ownership_descriptor,
+                                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                            )
+                    finally:
+                        os.close(ownership_descriptor)
                     self.assertTrue(history_path.is_file())
                     return
 
@@ -284,6 +359,13 @@ class ProductionSidecarProcessTests(unittest.TestCase):
                 )
                 child_reaped = True
                 self.assertTrue(history_path.is_file())
+                released_artifact = json.loads(
+                    ownership_path.read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    released_artifact["owner_state"],
+                    "RELEASED",
+                )  # Safe shutdown process만 다음 launch에 필요한 정상 release marker를 fsync한다.
             finally:
                 try:
                     os.close(stop_write_fd)

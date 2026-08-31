@@ -1,6 +1,11 @@
 """Backend use case를 조정하는 application controller를 공개한다."""
 
-from .market_data_controller import MarketDataController
+from .market_data_controller import (
+    MarketDataController,
+    MarketDataStreamStateError,
+    MarketEvaluationBuilder,
+    TradingMarketObserver,
+)
 from .regime_controller import (
     RegimeController,
     RegimeEvaluationError,
@@ -11,9 +16,11 @@ from .regime_controller import (
 from .trade_history_controller import TradeDetailsResult, TradeHistoryController
 from .trading_controller import (
     AccountStreamRecoveryBlockedError,
+    ManualKillResult,
     OrderExecutionFailureCode,
     OrderExecutionTraceEntry,
     OrderExecutionTraceResult,
+    PublicMarketBoundaryTraceEntry,
     SplitRatioResult,
     StartupOrderReconciliationError,
     TradingController,
@@ -29,9 +36,13 @@ from .trading_controller import (
 __all__ = [
     "AccountStreamRecoveryBlockedError",
     "MarketDataController",
+    "MarketDataStreamStateError",
+    "MarketEvaluationBuilder",
+    "ManualKillResult",
     "OrderExecutionFailureCode",
     "OrderExecutionTraceEntry",
     "OrderExecutionTraceResult",
+    "PublicMarketBoundaryTraceEntry",
     "RegimeController",
     "RegimeEvaluationError",
     "RegimeEvaluationFailureCode",
@@ -41,6 +52,7 @@ __all__ = [
     "TradeDetailsResult",
     "TradeHistoryController",
     "TradingController",
+    "TradingMarketObserver",
     "TradingLogicSelectionResult",
     "TradingSelectionPort",
     "TradingSessionError",

@@ -82,6 +82,7 @@ class Kline:
     close: Decimal
     volume: Decimal
     closed: bool
+    event_time: datetime | None = None
 
     def __post_init__(self) -> None:
         """
@@ -101,6 +102,14 @@ class Kline:
             "open_time",
         )
         object.__setattr__(self, "open_time", normalized_open_time)
+
+        # REST 봉에는 event 시각이 없지만 WebSocket 봉은 단조 순서와 provenance를 보존한다.
+        if self.event_time is not None:
+            normalized_event_time = _normalize_utc_datetime(
+                self.event_time,
+                "event_time",
+            )
+            object.__setattr__(self, "event_time", normalized_event_time)
 
         price_fields = (
             ("open", self.open),

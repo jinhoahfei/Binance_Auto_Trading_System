@@ -1,5 +1,6 @@
 """공식 Binance Spot Kline과 account WebSocket stream을 정규화한다."""
 
+from collections import OrderedDict
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ from binance_auto_trader.domain.trading.order import (
 
 
 _UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_MAXIMUM_KLINE_EVENT_FINGERPRINTS = 4_096
 _INTERVAL_MILLISECONDS_BY_INTERVAL = {
     Interval.ONE_MINUTE: 60_000,
     Interval.THIRTY_MINUTES: 1_800_000,
@@ -110,7 +112,7 @@ class BinanceWebSocketClient(Protocol):
 class KlineBufferStateError(RuntimeError):
     """
     클래스 이름: KlineBufferStateError
-    기능: stale 또는 끊긴 Kline buffer를 배출하려는 상태 오류를 나타낸다.
+    기능: stale·끊김·손상 상태의 Kline buffer를 배출하거나 승격하려는 오류를 나타낸다.
     작성 날짜: 2026/08/20
     """
 
@@ -133,6 +135,7 @@ class _ManagedSubscription:
     __slots__ = (
         "_close_lock",
         "_closed",
+        "_on_closing",
         "_on_closed",
         "_transport_subscription",
     )
@@ -141,16 +144,24 @@ class _ManagedSubscription:
         self,
         transport_subscription: Subscription,
         on_closed: Callable[[], None],
+        *,
+        on_closing: Callable[[], None] | None = None,
     ) -> None:
         """
         함수 이름: __init__()
         기능: 주입 client handle과 Gateway 종료 callback을 보존한다.
         인자: transport_subscription -> 주입 client가 반환한 구독 handle
             on_closed -> Gateway 수신 상태를 종료할 callback
+            on_closing -> transport close 전에 소유자 종료를 표시할 optional callback
         반환값: 없음
         작성 날짜: 2026/08/20
         """
+        if on_closing is not None and not callable(on_closing):
+            raise TypeError("on_closing must be callable or None")
+
+        # 소유자 close 표식은 transport가 동기 disconnect callback을 호출하기 전에 사용한다.
         self._transport_subscription = transport_subscription
+        self._on_closing = on_closing
         self._on_closed = on_closed
         self._close_lock = RLock()
         self._closed = False
@@ -168,6 +179,9 @@ class _ManagedSubscription:
                 return
             self._closed = True
 
+        # 일부 test double과 transport는 close 안에서 disconnect를 동기 호출하므로 먼저 의도를 기록한다.
+        if self._on_closing is not None:
+            self._on_closing()
         try:
             self._transport_subscription.close()
         finally:
@@ -494,6 +508,7 @@ def _parse_websocket_kline(payload: object) -> Kline:
         close=_read_decimal_string(kline_payload.get("c"), "k.c"),
         volume=_read_decimal_string(kline_payload.get("v"), "k.v"),
         closed=closed,
+        event_time=_milliseconds_to_utc(event_payload.get("E"), "E"),
     )
 
 
@@ -886,12 +901,20 @@ class WebSocketGateway:
             reconciliation_required_callback
         )
         self._lock = RLock()
+        self._kline_delivery_lock = RLock()
         self._generation = 0
         self._active_subscription: Subscription | None = None
         self._active_symbol: str | None = None
         self._active_intervals: tuple[Interval, ...] = ()
         self._connected = False
         self._buffer_error: Exception | None = None
+        # Kline mode와 wire event fingerprint를 현재 generation 안에서 함께 교체한다.
+        self._kline_live_observer: Callable[[Kline], object] | None = None
+        self._kline_event_fingerprints: OrderedDict[
+            tuple[str, Interval, datetime, datetime],
+            Kline,
+        ] = OrderedDict()
+        self._kline_cursor_by_interval: dict[Interval, Kline] = {}
         self._kline_buffer: dict[
             Interval,
             dict[datetime, Kline],
@@ -920,6 +943,37 @@ class WebSocketGateway:
             str,
             dict[tuple[str, str], Fill],
         ] = {}
+
+    @property
+    def kline_replay_buffer_size(self) -> int:
+        """
+        함수 이름: kline_replay_buffer_size()
+        기능: 현재 Kline generation이 보존한 bounded duplicate fingerprint 수를 반환한다.
+        인자: 없음
+        반환값: 0에서 고정 상한 사이의 fingerprint 수
+        작성 날짜: 2026/08/25
+        """
+        # Soak observer가 내부 container를 직접 참조하지 않고 누수 상한만 검증하게 한다.
+        with self._lock:
+            return len(self._kline_event_fingerprints)
+
+    @property
+    def kline_live_ready(self) -> bool:
+        """
+        함수 이름: kline_live_ready()
+        기능: 현재 Kline 세대가 연결되고 손상 없이 live observer까지 승격됐는지 반환한다.
+        인자: 없음
+        반환값: 새 시장 effect가 현재 세대를 신뢰할 수 있으면 True
+        작성 날짜: 2026/08/25
+        """
+        # 연결 flag만으로 초기 buffer 세대를 거래 가능 상태로 오인하지 않게 네 조건을 결합한다.
+        with self._lock:
+            return (
+                self._connected
+                and self._active_subscription is not None
+                and self._buffer_error is None
+                and self._kline_live_observer is not None
+            )
 
     @property
     def account_connected(self) -> bool:
@@ -1058,12 +1112,16 @@ class WebSocketGateway:
         self,
         symbol: str,
         intervals: Collection[Interval],
+        *,
+        reconciliation_required_callback: Callable[[str], object]
+        | None = None,
     ) -> Subscription:
         """
         함수 이름: start_all_kline_buffering()
         기능: 새 구독 세대를 활성화하고 수신 Kline을 빈 초기화 buffer에 쌓는다.
         인자: symbol -> 구독할 Binance Spot symbol
             intervals -> 구독할 canonical interval set 또는 내부 tuple
+            reconciliation_required_callback -> 현재 세대 장애를 full-resync owner에 알릴 callback
         반환값: 새 WebSocket 구독 handle
         작성 날짜: 2026/08/20
         """
@@ -1075,6 +1133,13 @@ class WebSocketGateway:
         if not callable(subscribe_all_kline_streams):
             raise TypeError(
                 "web_socket_client must provide subscribe_all_kline_streams"
+            )
+        if (
+            reconciliation_required_callback is not None
+            and not callable(reconciliation_required_callback)
+        ):
+            raise TypeError(
+                "reconciliation_required_callback must be callable or None"
             )
 
         normalized_symbol = _normalize_symbol(symbol)
@@ -1100,19 +1165,24 @@ class WebSocketGateway:
             if interval in intervals
         )
 
-        with self._lock:
-            self._generation += 1
-            generation = self._generation
-            previous_subscription = self._active_subscription
-            self._active_subscription = None
-            self._active_symbol = normalized_symbol
-            self._active_intervals = normalized_intervals
-            self._connected = True
-            self._buffer_error = None
-            self._kline_buffer = {
-                interval: {}
-                for interval in normalized_intervals
-            }
+        # 진행 중인 이전 observer가 snapshot을 바꾼 뒤에만 새 generation identity를 공개한다.
+        with self._kline_delivery_lock:
+            with self._lock:
+                self._generation += 1
+                generation = self._generation
+                previous_subscription = self._active_subscription
+                self._active_subscription = None
+                self._active_symbol = normalized_symbol
+                self._active_intervals = normalized_intervals
+                self._connected = True
+                self._buffer_error = None
+                self._kline_live_observer = None
+                self._kline_event_fingerprints = OrderedDict()
+                self._kline_cursor_by_interval = {}
+                self._kline_buffer = {
+                    interval: {}
+                    for interval in normalized_intervals
+                }
 
         if previous_subscription is not None:
             try:
@@ -1129,7 +1199,26 @@ class WebSocketGateway:
             반환값: 없음
             작성 날짜: 2026/08/20
             """
-            self._buffer_kline_message(payload, generation)
+            self._buffer_kline_message(
+                payload,
+                generation,
+                reconciliation_required_callback,
+            )
+
+        owner_close_started = False
+
+        def on_closing() -> None:
+            """
+            함수 이름: on_closing()
+            기능: transport close보다 먼저 현재 handle의 소유자 종료 의도를 표시한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/08/25
+            """
+            # Flag를 먼저 보이게 한 뒤 같은 generation의 connected 상태를 멱등 종료한다.
+            nonlocal owner_close_started
+            owner_close_started = True
+            self._mark_disconnected(generation)
 
         def on_disconnect() -> None:
             """
@@ -1138,6 +1227,24 @@ class WebSocketGateway:
             인자: 없음
             반환값: 없음
             작성 날짜: 2026/08/20
+            """
+            disconnected = self._mark_disconnected(generation)
+            if (
+                disconnected
+                and not owner_close_started
+                and reconciliation_required_callback is not None
+            ):
+                reconciliation_required_callback(
+                    "kline_stream_disconnected"
+                )  # 현재 세대의 최초 비정상 종료만 상위 full-resync owner에 전달한다.
+
+        def on_closed() -> None:
+            """
+            함수 이름: on_closed()
+            기능: 소유자가 닫은 Kline handle을 장애 알림 없이 종료 상태로 확정한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/08/25
             """
             self._mark_disconnected(generation)
 
@@ -1162,7 +1269,8 @@ class WebSocketGateway:
             raise TypeError("WebSocket client returned no subscription")
         subscription = _ManagedSubscription(
             transport_subscription,
-            on_disconnect,
+            on_closed,
+            on_closing=on_closing,
         )
 
         with self._lock:
@@ -1306,89 +1414,290 @@ class WebSocketGateway:
         반환값: active interval별 시간순 Kline tuple mapping
         작성 날짜: 2026/08/20
         """
-        with self._lock:
-            if subscription is not self._active_subscription:
-                raise KlineBufferStateError(
-                    "subscription is not the active Kline buffer"
-                )
-            if not self._connected:
-                raise KlineBufferStateError(
-                    "Kline stream disconnected before buffer drain"
-                )
-            if self._buffer_error is not None:
-                raise KlineBufferStateError(
-                    "invalid Kline payload was received before buffer drain"
-                ) from self._buffer_error
-
-            drained_buffer = {
-                interval: tuple(
-                    sorted(
-                        self._kline_buffer[interval].values(),
-                        key=lambda kline: kline.open_time,
+        # Buffer 수신과 generation 종료를 같은 delivery 순서에 넣어 drain 뒤 mutation을 막는다.
+        with self._kline_delivery_lock:
+            with self._lock:
+                if subscription is not self._active_subscription:
+                    raise KlineBufferStateError(
+                        "subscription is not the active Kline buffer"
                     )
-                )
-                for interval in self._active_intervals
-            }
-            self._generation += 1
-            self._active_subscription = None
-            self._connected = False
-            self._kline_buffer = {
-                interval: {}
-                for interval in self._active_intervals
-            }
+                if not self._connected:
+                    raise KlineBufferStateError(
+                        "Kline stream disconnected before buffer drain"
+                    )
+                if self._buffer_error is not None:
+                    raise KlineBufferStateError(
+                        "invalid Kline payload was received before buffer drain"
+                    ) from self._buffer_error
+                if self._kline_live_observer is not None:
+                    raise KlineBufferStateError(
+                        "live Kline observer is already active"
+                    )
+
+                drained_buffer = {
+                    interval: tuple(
+                        sorted(
+                            self._kline_buffer[interval].values(),
+                            key=lambda kline: kline.open_time,
+                        )
+                    )
+                    for interval in self._active_intervals
+                }
+                self._generation += 1
+                self._active_subscription = None
+                self._connected = False
+                self._kline_event_fingerprints = OrderedDict()
+                self._kline_cursor_by_interval = {}
+                self._kline_buffer = {
+                    interval: {}
+                    for interval in self._active_intervals
+                }
 
         return drained_buffer
+
+    def promote_kline_buffer_to_live(
+        self,
+        observer: Callable[[Kline], object],
+        subscription: Subscription | None = None,
+    ) -> Subscription:
+        """
+        함수 이름: promote_kline_buffer_to_live()
+        기능: 현재 세대 buffer를 순서대로 전달한 뒤 같은 구독을 live observer로 무손실 승격한다.
+        인자: observer -> 정규화 Kline을 연속 처리할 callback
+            subscription -> 선택적으로 검증할 현재 구독 handle
+        반환값: 재구독하지 않은 동일한 현재 구독 handle
+        작성 날짜: 2026/08/25
+        """
+        # callback 형식 오류는 현재 구독 상태를 읽기 전에 닫는다.
+        if not callable(observer):
+            raise TypeError("observer must be callable")
+
+        # Delivery lock을 먼저 잡아 buffer replay가 이후 live callback보다 반드시 앞서게 한다.
+        with self._kline_delivery_lock:
+            with self._lock:
+                # 선택 handle, 연결, latched parse 오류와 중복 promotion을 한 lock에서 확인한다.
+                active_subscription = self._active_subscription
+                if active_subscription is None:
+                    raise KlineBufferStateError(
+                        "no active Kline buffer is available"
+                    )
+                if (
+                    subscription is not None
+                    and subscription is not active_subscription
+                ):
+                    raise KlineBufferStateError(
+                        "subscription is not the active Kline buffer"
+                    )
+                if not self._connected:
+                    raise KlineBufferStateError(
+                        "Kline stream disconnected before live promotion"
+                    )
+                if self._buffer_error is not None:
+                    raise KlineBufferStateError(
+                        "invalid Kline payload was received before live promotion"
+                    ) from self._buffer_error
+                if self._kline_live_observer is not None:
+                    raise KlineBufferStateError(
+                        "live Kline observer is already active"
+                    )
+
+                # interval 간에도 Binance E를 우선해 결정적 buffer 전달 순서를 만든다.
+                buffered_klines = tuple(
+                    sorted(
+                        (
+                            kline
+                            for interval_buffer in self._kline_buffer.values()
+                            for kline in interval_buffer.values()
+                        ),
+                        key=self._kline_delivery_key,
+                    )
+                )
+                self._kline_buffer = {
+                    interval: {}
+                    for interval in self._active_intervals
+                }
+                self._kline_live_observer = observer
+
+            try:
+                # Gateway lock은 callback 전에 놓아 application lock과의 역순 교착을 방지한다.
+                for buffered_kline in buffered_klines:
+                    observer(buffered_kline)
+            except Exception as error:
+                with self._lock:
+                    if (
+                        active_subscription is self._active_subscription
+                        and self._buffer_error is None
+                    ):
+                        self._buffer_error = error
+                raise KlineBufferStateError(
+                    "Kline observer failed during live promotion"
+                ) from error
+
+            return active_subscription
+
+    @staticmethod
+    def _kline_delivery_key(
+        kline: Kline,
+    ) -> tuple[datetime, datetime, str]:
+        """
+        함수 이름: _kline_delivery_key()
+        기능: buffer 승격 시 event 시각, 봉 시각, interval 순의 결정적 전달 key를 만든다.
+        인자: kline -> 정렬할 WebSocket Kline
+        반환값: UTC event 시각과 봉 시각 및 interval 문자열 tuple
+        작성 날짜: 2026/08/25
+        """
+        # REST Kline처럼 E가 없는 값은 live replay 순서 key로 사용할 수 없다.
+        if kline.event_time is None:
+            raise KlineBufferStateError(
+                "WebSocket Kline must contain an event time"
+            )
+
+        return (
+            kline.event_time,
+            kline.open_time,
+            kline.interval.value,
+        )  # 동일 E에서도 open time과 interval로 결정적 순서를 완성한다.
 
     def _buffer_kline_message(
         self,
         payload: object,
         generation: int,
+        reconciliation_required_callback: Callable[[str], object]
+        | None = None,
     ) -> None:
         """
         함수 이름: _buffer_kline_message()
         기능: 현재 연결 세대의 정규화 Kline만 dedup buffer에 마지막 값으로 저장한다.
         인자: payload -> WebSocket에서 받은 raw 또는 combined payload
             generation -> callback이 속한 구독 세대
+            reconciliation_required_callback -> 현재 세대 오류를 full-resync owner에 알릴 callback
         반환값: 없음
         작성 날짜: 2026/08/20
         """
-        with self._lock:
+        callback_error: Exception | None = None
+        # Delivery와 state lock 순서를 고정해 live callback 순서와 generation 교체를 직렬화한다.
+        with self._kline_delivery_lock:
             try:
-                if generation != self._generation or not self._connected:
-                    return
+                with self._lock:
+                    if generation != self._generation:
+                        return
+                    if self._buffer_error is not None:
+                        raise self._buffer_error  # 첫 손상 원인을 유지해 이후 payload도 같은 세대에서 fail closed한다.
+                    if not self._connected:
+                        return
 
-                kline = _parse_websocket_kline(payload)
-                if kline.symbol != self._active_symbol:
-                    raise ValueError(
-                        "WebSocket Kline symbol is not subscribed"
-                    )
-                if kline.interval not in self._active_intervals:
-                    raise ValueError(
-                        "WebSocket Kline interval is not subscribed"
-                    )
+                    kline = _parse_websocket_kline(payload)
+                    if kline.symbol != self._active_symbol:
+                        raise ValueError(
+                            "WebSocket Kline symbol is not subscribed"
+                        )
+                    if kline.interval not in self._active_intervals:
+                        raise ValueError(
+                            "WebSocket Kline interval is not subscribed"
+                        )
+                    if kline.event_time is None:
+                        raise ValueError(
+                            "WebSocket Kline event time is required"
+                        )
 
-                self._kline_buffer[kline.interval][kline.open_time] = kline
+                    # symbol·interval·openTime·eventTime 전체 key로 wire 재전달을 멱등 처리한다.
+                    event_key = (
+                        kline.symbol,
+                        kline.interval,
+                        kline.open_time,
+                        kline.event_time,
+                    )
+                    existing_kline = self._kline_event_fingerprints.get(
+                        event_key
+                    )
+                    if existing_kline is not None:
+                        if existing_kline != kline:
+                            raise ValueError(
+                                "duplicate Kline event key changed payload"
+                            )
+                        return  # 완전히 같은 wire event 재전달은 observer와 snapshot에 다시 반영하지 않는다.
+
+                    # Bounded fingerprint에서 제거된 오래된 event도 interval cursor 뒤로 역행하지 못한다.
+                    previous_kline = self._kline_cursor_by_interval.get(
+                        kline.interval
+                    )
+                    if previous_kline is not None:
+                        if previous_kline.event_time is None:
+                            raise RuntimeError(
+                                "Kline stream cursor lost its event time"
+                            )
+                        if kline == previous_kline:
+                            return  # 다른 interval traffic으로 fingerprint가 제거된 최신 duplicate도 멱등이다.
+                        if (
+                            kline.event_time <= previous_kline.event_time
+                            or kline.open_time < previous_kline.open_time
+                        ):
+                            raise ValueError(
+                                "Kline stream event moved backwards"
+                            )
+
+                    # 정상 stream에서는 fingerprint 수를 고정해 24시간 이상 연결의 메모리가 단조 증가하지 않게 한다.
+                    self._kline_event_fingerprints[event_key] = kline
+                    self._kline_event_fingerprints.move_to_end(event_key)
+                    while (
+                        len(self._kline_event_fingerprints)
+                        > _MAXIMUM_KLINE_EVENT_FINGERPRINTS
+                    ):
+                        self._kline_event_fingerprints.popitem(last=False)
+                    self._kline_cursor_by_interval[kline.interval] = kline
+                    live_observer = self._kline_live_observer
+                    if live_observer is None:
+                        self._kline_buffer[kline.interval][
+                            kline.open_time
+                        ] = kline
+                        return
+
+                # Application callback은 Gateway state lock 밖에서 실행하되 delivery lock으로 순서를 유지한다.
+                live_observer(kline)
             except Exception as error:
-                if (
-                    generation == self._generation
-                    and self._connected
-                    and self._buffer_error is None
-                ):
-                    self._buffer_error = error
-                raise
+                with self._lock:
+                    if (
+                        generation == self._generation
+                        and self._buffer_error is None
+                    ):
+                        self._buffer_error = error
+                callback_error = error
 
-    def _mark_disconnected(self, generation: int) -> None:
+        if callback_error is None:
+            return
+
+        # Payload·observer 오류는 transport close를 기다리지 않고 즉시 같은 full-resync 경로를 연다.
+        disconnected = self._mark_disconnected(generation)
+        if disconnected and reconciliation_required_callback is not None:
+            try:
+                reconciliation_required_callback(
+                    "kline_stream_invalid"
+                )
+            except Exception as reconciliation_error:
+                callback_error.add_note(
+                    "Kline reconciliation callback failed: "
+                    f"{type(reconciliation_error).__name__}"
+                )
+        raise callback_error
+
+    def _mark_disconnected(self, generation: int) -> bool:
         """
         함수 이름: _mark_disconnected()
         기능: callback 세대가 현재 구독일 때만 buffer 연결을 끊긴 상태로 바꾼다.
         인자: generation -> 종료 callback이 속한 구독 세대
-        반환값: 없음
+        반환값: 현재 연결 세대를 최초로 종료했으면 True
         작성 날짜: 2026/08/20
         """
-        with self._lock:
-            if generation == self._generation:
+        # 진행 중 observer가 끝난 뒤 세대를 닫아 callback 반환 후 snapshot mutation이 남지 않게 한다.
+        with self._kline_delivery_lock:
+            with self._lock:
+                if generation != self._generation or not self._connected:
+                    return False
+
                 self._connected = False
                 self._active_subscription = None
+                self._kline_live_observer = None
+                return True
 
     def _handle_account_info_message(
         self,

@@ -16,7 +16,6 @@ from .states import ExitReason, OrderSide, StrategyType
 _SUPPORTED_SYMBOL = "ETHUSDT"
 _DECIMAL_ZERO = Decimal("0")
 _DECIMAL_PRECISION = 34
-_MAX_RETRY_AFTER = timedelta(seconds=30)
 _ORDER_ID_PATTERN = re.compile(r"^[1-9][0-9]*$")
 _SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+$")
 
@@ -54,12 +53,30 @@ class OrderResultFailureKind(str, Enum):
 class PendingOrderRecoveryLifecycle(str, Enum):
     """
     클래스 이름: PendingOrderRecoveryLifecycle
-    기능: durable sidecar가 증명한 제출 전·명시적 제출 거부 lifecycle을 구분한다.
-    작성 날짜: 2026/08/23
+    기능: durable sidecar가 증명한 주문 제출·체결·history commit lifecycle을 구분한다.
+    작성 날짜: 2026/08/25
     """
 
     PREPARED = "PREPARED"
+    SUBMITTED = "SUBMITTED"
+    UNKNOWN = "UNKNOWN"
+    PARTIAL = "PARTIAL"
+    TERMINAL = "TERMINAL"
+    HISTORY_COMMITTED = "HISTORY_COMMITTED"
     SUBMISSION_REJECTED_CONFIRMED = "SUBMISSION_REJECTED_CONFIRMED"
+
+
+class PendingOrderSubmissionProvenance(str, Enum):
+    """
+    클래스 이름: PendingOrderSubmissionProvenance
+    기능: PREPARED journal이 REST POST 시작 전 상태를 증명하는지 구분한다.
+    작성 날짜: 2026/08/29
+    """
+
+    LEGACY_PREPARED_AMBIGUOUS = "LEGACY_PREPARED_AMBIGUOUS"
+    SUBMITTED_FSYNC_PRECEDES_REST_POST = (
+        "SUBMITTED_FSYNC_PRECEDES_REST_POST"
+    )
 
 
 # 상태 집합은 Controller가 신규 제출과 reconciliation branch를 문자열 추측 없이 판정하게 한다.
@@ -447,8 +464,8 @@ class OrderResult:
         if self.retry_after is not None:
             if not isinstance(self.retry_after, timedelta):
                 raise TypeError("retry_after must be a timedelta or None")
-            if self.retry_after < timedelta(0) or self.retry_after > _MAX_RETRY_AFTER:
-                raise ValueError("retry_after must be between 0 and 30 seconds")
+            if self.retry_after < timedelta(0):
+                raise ValueError("retry_after must be non-negative")
         normalized_time = _normalize_utc_datetime(self.processed_at, "processed_at")
         object.__setattr__(self, "processed_at", normalized_time)  # 외부 offset을 저장하지 않는다.
 
@@ -680,7 +697,9 @@ class Order:
     requested_quantity: Decimal
     submitted_quantity: Decimal
     market_price_at_decision: Decimal
+    risk_policy_version: int | None = None
     exit_reason: ExitReason | None = None
+    exit_pct_b_at_intent: Decimal | None = None
     exchange_order_id: str | None = field(init=False, default=None)
     status: OrderStatus | None = field(init=False, default=None)
     filled_quantity: Decimal = field(init=False, default=_DECIMAL_ZERO)
@@ -736,6 +755,21 @@ class Order:
         if self.side is OrderSide.BUY and self.exit_reason is not None:
             raise ValueError("BUY order must not have exit_reason")
 
+        # Case C SELL 판단 %B는 float 변환 없이 유한 Decimal로만 intent에 고정한다.
+        if self.exit_pct_b_at_intent is not None:
+            _validate_finite_decimal(
+                self.exit_pct_b_at_intent,
+                "exit_pct_b_at_intent",
+            )
+            if self.side is not OrderSide.SELL or self.exit_reason is None:
+                raise ValueError(
+                    "exit_pct_b_at_intent requires a SELL exit reason"
+                )
+            if self.strategy is not StrategyType.CASE_C:
+                raise ValueError(
+                    "exit_pct_b_at_intent is supported only for Case C"
+                )
+
         # filter 전 intent와 실제 제출 수량을 모두 양수 Decimal로 보존한다.
         for field_name, field_value in (
             ("requested_quantity", self.requested_quantity),
@@ -747,6 +781,17 @@ class Order:
                 raise ValueError(f"{field_name} must be greater than zero")
         if self.submitted_quantity > self.requested_quantity:
             raise ValueError("submitted_quantity must not exceed requested_quantity")
+
+        # BUY risk provenance는 bool을 int로 받지 않고 configured policy의 양수 version만 보존한다.
+        if self.risk_policy_version is not None:
+            if type(self.risk_policy_version) is not int:
+                raise TypeError(
+                    "risk_policy_version must be an integer or None"
+                )
+            if self.risk_policy_version < 1:
+                raise ValueError(
+                    "risk_policy_version must be a positive integer or None"
+                )
 
     @property
     def is_terminal(self) -> bool:
@@ -1017,24 +1062,35 @@ class Order:
 class PendingOrderRecoveryRecord:
     """
     클래스 이름: PendingOrderRecoveryRecord
-    기능: 재시작 same-ID 조회에 필요한 Order metadata와 durable lifecycle을 함께 보존한다.
-    작성 날짜: 2026/08/23
+    기능: 재시작 same-ID 조회에 필요한 Order, lifecycle과 제출 경계 근거를 보존한다.
+    작성 날짜: 2026/08/29
     """
 
     order: Order
     lifecycle: PendingOrderRecoveryLifecycle
+    submission_provenance: PendingOrderSubmissionProvenance = (
+        PendingOrderSubmissionProvenance.LEGACY_PREPARED_AMBIGUOUS
+    )
 
     def __post_init__(self) -> None:
         """
         함수 이름: __post_init__()
-        기능: recovery record가 canonical Order와 지원 lifecycle만 포함하는지 검증한다.
+        기능: recovery record가 canonical Order, lifecycle과 제출 경계 근거만 포함하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/23
+        작성 날짜: 2026/08/29
         """
         if not isinstance(self.order, Order):
             raise TypeError("order must be an Order")
         if not isinstance(self.lifecycle, PendingOrderRecoveryLifecycle):
             raise TypeError(
                 "lifecycle must be a PendingOrderRecoveryLifecycle"
+            )
+        if not isinstance(
+            self.submission_provenance,
+            PendingOrderSubmissionProvenance,
+        ):
+            raise TypeError(
+                "submission_provenance must be a "
+                "PendingOrderSubmissionProvenance"
             )

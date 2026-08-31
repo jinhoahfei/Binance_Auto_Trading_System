@@ -6,7 +6,7 @@
 | 결정일 | 2026-08-20 |
 | 적용 결정 | D-14 |
 | API major version | `v1` |
-| schema version | `2` |
+| schema version | `3` |
 
 ## 1. 경계와 책임
 
@@ -30,8 +30,13 @@ React/Tauri renderer와 Python backend는 별도 process다. Communication Diagr
 - token은 command-line argument, URL, source, `.env`, 일반 environment variable와
   log로 전달하지 않는다. Tauri가 만든 anonymous inherited pipe/file descriptor로
   backend에 한 번 전달한다.
-- backend ready 신호에는 `port`, `session_id`, `schema_version`만 포함하고 token을
-  출력하지 않는다.
+- backend ready 신호에는 `port`, `session_id`, positive `runtime_pid`, canonical
+  `process_start_id`, `schema_version`만 포함하고 token을 출력하지 않는다.
+- native lifecycle은 직접 spawn한 launcher child PID/handle과 READY의 actual Python
+  `runtime_pid`/`process_start_id`를 서로 다른 identity로 보존한다. Python app-data
+  `.backend-runtime.lock`의 durable artifact는 `schema_version`, `runtime_pid`,
+  `process_start_id`, `owner_state` 네 field만 포함하며 port·parent PID·token을 기록하지
+  않는다.
 - Tauri는 renderer의 live adapter에 connection descriptor를 한 번 전달한다. token은
   adapter closure의 메모리에만 두고 local/session storage, IndexedDB, Redux/XState
   snapshot, URL, error message와 console에 넣지 않는다. shutdown 시 참조를 지운다.
@@ -58,7 +63,7 @@ POST/PATCH command는 추가로 `Idempotency-Key`를 요구한다. token 비교�
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "request_id": "uuid",
   "ok": true,
   "data": {}
@@ -69,7 +74,7 @@ POST/PATCH command는 추가로 `Idempotency-Key`를 요구한다. token 비교�
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "request_id": "uuid",
   "ok": false,
   "error": {
@@ -96,6 +101,7 @@ trace를 넣지 않는다. 같은 `Idempotency-Key`와 같은 body의 재요청�
 | `POST` | `/v1/trading/start` | `expected_version` | command status, session/version | `TradingController.startTrading` |
 | `POST` | `/v1/trading/stop` | `expected_version` | `STOPPING`/`TERMINATED`/reconciliation 상태 | `TradingController.stopTrading` |
 | `POST` | `/v1/trading/recovered-position/liquidate` | `expected_version` | 복구 Position 청산의 `STOPPING`/`TERMINATED`/reconciliation 상태 | `TradingController.liquidateRecoveredPosition` |
+| `PATCH` | `/v1/trading/manual-kill` | exact boolean `active`, `expected_version` | kill 상태, policy provenance와 새 risk control version | `TradingController.setManualKill` |
 | `PATCH` | `/v1/trading/split-ratios` | Decimal string `scale_in`, `scale_out`, version | 적용 값과 새 version | `TradingContext`를 조정하는 `TradingController` |
 | `POST` | `/v1/csv-exports` | ADR-004의 option DTO | path, row count 또는 typed failure | `TradeHistoryController.exportCSV` |
 | `POST` | `/v1/shutdown` | `expected_version` | accepted/blocked와 안전 상태 | bootstrap lifecycle 함수가 기존 stop/flush Operation 조정 |
@@ -108,6 +114,12 @@ schema version 2의 `/v1/snapshot.trading.logic_coverage`는 canonical 순서의
 `type0`~`type4`를 정확히 한 번씩 포함한다. 각 행은 `support_status`와
 `start_guard`를 가지며 UI는 누락·중복·알 수 없는 조합을 fail closed한다. 이는 시작
 안전성에 필요한 필수 필드이므로 해당 필드가 없던 schema version 1과 구분한다.
+
+schema version 3은 Phase 13의 `risk_policy_availability`, configured/session policy version,
+`risk_control_version`, `manual_kill_active`, 최근 typed risk 차단 사유와
+`process_ownership_ambiguous`를 trading snapshot의 필수 필드로 추가한다. UI는 backend보다
+앞서 성공이나 안전 상태를 추정하지 않고 이 authoritative publication만 표시한다. 이 필드가
+없는 schema version 2와 process identity가 없는 READY descriptor는 fail closed한다.
 
 HTTP status 기본 매핑은 다음과 같다.
 
@@ -134,7 +146,7 @@ CSV는 별도 job/status endpoint가 없는 `exportCSV(): CSVExportResult` 계�
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "session_id": "uuid",
   "event_id": "uuid",
   "sequence": 42,
@@ -171,7 +183,7 @@ URL query나 subprotocol에 넣지 않는다.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "type": "AUTHENTICATE",
   "token": "session-token",
   "after_sequence": 41
@@ -211,6 +223,10 @@ backend는 최근 10,000개 또는 15분 중 먼저 도달하는 범위의 event
 - backend가 ready 전이면 command를 `503 BACKEND_NOT_READY`로 거부한다.
 - sidecar crash 또는 session ID 변경 시 adapter는 신규 command를 막고 UI를 offline으로
   전환한다.
+- runtime ownership artifact는 startup에 `ACTIVE`, parent control FD EOF에 `ORPHANED`,
+  정상 종료에만 `RELEASED`를 fsync한다. OS advisory lock이 비어 있어도
+  `ACTIVE`/`ORPHANED`를 새 owner가 덮어쓰지 않으며, operator reconciliation 없이
+  sidecar를 자동 relaunch하지 않는다.
 - shutdown은 ADR-003의 open order/Position 안전 조건을 먼저 검사한다. 안전하지 않으면
   `409 SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE`를 반환한다.
 - 정상 shutdown은 신규 command 차단 → trading stop 완료 → history flush/fsync → stream

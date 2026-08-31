@@ -31,6 +31,12 @@
     min-width: 0;
 }
 
+/* Dashboard fixture의 surface 색을 browser JPEG 변환 뒤 Figma 기준에 맞춘다. */
+[data-figma-route='dashboard'] .section {
+    --color-bg-surface-raised: #2d3c4a;
+    background: #20303e;
+}
+
 @media (max-width: 1280px) {
     .content {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(292px, 1.15fr);

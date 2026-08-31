@@ -6,6 +6,11 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from typing import Protocol
 
+from binance_auto_trader.adapters.binance.mappers import (
+    OrderPreparationFilterEvidence,
+    OrderSubmissionAttemptEvidence,
+    SymbolTradingRules,
+)
 from binance_auto_trader.domain.trading.account import (
     AccountSnapshot,
     AssetBalance,
@@ -155,6 +160,109 @@ class CommissionDiscountPolicy:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class Phase13OrderSubmissionAttempt:
+    """
+    클래스 이름: Phase13OrderSubmissionAttempt
+    기능: Phase 13 logical submit permit이 소비된 주문의 secret-free 최소 identity를 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    symbol: str
+    side: OrderSide
+    order_type: str
+    intent_id: str
+    submission_attempt: int
+    attempted_at: datetime
+    client_order_id: str
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 공개 주문 snapshot의 canonical identity, attempt와 UTC 시각을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Snapshot에는 raw parameter 대신 canonical Spot identity와 고정 MARKET type만 허용한다.
+        if (
+            not isinstance(self.symbol, str)
+            or not self.symbol
+            or self.symbol != self.symbol.strip().upper()
+            or not self.symbol.isascii()
+            or not self.symbol.isalnum()
+        ):
+            raise ValueError("symbol must be canonical uppercase ASCII")
+        if not isinstance(self.side, OrderSide):
+            raise TypeError("side must be an OrderSide")
+        if self.order_type != "MARKET":
+            raise ValueError("order_type must be MARKET")
+        for field_name in ("intent_id", "client_order_id"):
+            field_value = getattr(self, field_name)
+            if (
+                not isinstance(field_value, str)
+                or not field_value
+                or field_value != field_value.strip()
+            ):
+                raise ValueError(f"{field_name} must be non-empty canonical text")
+        if isinstance(self.submission_attempt, bool) or not isinstance(
+            self.submission_attempt,
+            int,
+        ):
+            raise TypeError("submission_attempt must be an integer")
+        if self.submission_attempt < 0:
+            raise ValueError("submission_attempt must be a non-negative integer")
+        if (
+            not isinstance(self.attempted_at, datetime)
+            or self.attempted_at.tzinfo is None
+            or self.attempted_at.utcoffset() is None
+            or self.attempted_at.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("attempted_at must be timezone-aware UTC")
+
+
+@dataclass(frozen=True, slots=True)
+class Phase13OrderSubmissionGuardSnapshot:
+    """
+    클래스 이름: Phase13OrderSubmissionGuardSnapshot
+    기능: Phase 13 mutation 시작·차단 상태와 최대 두 logical submit identity를 불변 공개한다.
+    작성 날짜: 2026/08/31
+    """
+
+    mutation_started: bool
+    submissions_blocked: bool
+    attempts: tuple[Phase13OrderSubmissionAttempt, ...]
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: guard boolean과 attempt tuple의 exact 상관관계를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Truthy 대체값이나 mutable collection이 failure finalizer의 판단을 흐리지 못하게 한다.
+        if type(self.mutation_started) is not bool:
+            raise TypeError("mutation_started must be a bool")
+        if type(self.submissions_blocked) is not bool:
+            raise TypeError("submissions_blocked must be a bool")
+        if not isinstance(self.attempts, tuple) or any(
+            type(attempt) is not Phase13OrderSubmissionAttempt
+            for attempt in self.attempts
+        ):
+            raise TypeError(
+                "attempts must be a Phase13OrderSubmissionAttempt tuple"
+            )
+        if len(self.attempts) > 2:
+            raise ValueError("Phase 13 permits at most two logical submissions")
+        if self.mutation_started is not bool(self.attempts):
+            raise ValueError("mutation_started must match observed attempts")
+        if len({attempt.client_order_id for attempt in self.attempts}) != len(
+            self.attempts
+        ):
+            raise ValueError("Phase 13 client order IDs must be unique")
+
+
 class BinanceRESTClient(Protocol):
     """
     클래스 이름: BinanceRESTClient
@@ -197,6 +305,70 @@ class BinanceRESTClient(Protocol):
         인자: symbol -> 수수료 할인 설정을 조회할 Spot symbol
         반환값: JSON으로 해석된 Binance commission payload
         작성 날짜: 2026/08/24
+        """
+        ...
+
+    def fetch_symbol_trading_rules(
+        self,
+        *,
+        symbol: str,
+    ) -> SymbolTradingRules:
+        """
+        함수 이름: fetch_symbol_trading_rules()
+        기능: 공식 exchangeInfo를 새로 조회한 엄격 Spot symbol rule을 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: raw payload가 아닌 SymbolTradingRules
+        작성 날짜: 2026/08/31
+        """
+        ...
+
+    def get_order_preparation_filter_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> OrderPreparationFilterEvidence | None:
+        """
+        함수 이름: get_order_preparation_filter_evidence()
+        기능: 성공한 prepare의 public filter provenance를 credential 없는 immutable DTO로 반환한다.
+        인자: client_order_id -> 준비된 application Order identity
+        반환값: exact OrderPreparationFilterEvidence 또는 prepare가 없으면 None
+        작성 날짜: 2026/08/31
+        """
+        ...
+
+    def get_order_submission_attempt_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> OrderSubmissionAttemptEvidence | None:
+        """
+        함수 이름: get_order_submission_attempt_evidence()
+        기능: 실제 REST POST 시작 시각을 credential 없는 immutable DTO로 반환한다.
+        인자: client_order_id -> 제출을 시작한 application Order identity
+        반환값: exact OrderSubmissionAttemptEvidence 또는 POST 시작 전이면 None
+        작성 날짜: 2026/08/31
+        """
+        ...
+
+    def block_phase13_order_submissions(self) -> None:
+        """
+        함수 이름: block_phase13_order_submissions()
+        기능: Phase 13 failure 이후 모든 후속 logical submit permit을 원자 차단한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        ...
+
+    def get_phase13_order_submission_guard_snapshot(
+        self,
+    ) -> Phase13OrderSubmissionGuardSnapshot:
+        """
+        함수 이름: get_phase13_order_submission_guard_snapshot()
+        기능: Phase 13 mutation 시작·차단과 secret-free attempt snapshot을 반환한다.
+        인자: 없음
+        반환값: immutable Phase13OrderSubmissionGuardSnapshot
+        작성 날짜: 2026/08/31
         """
         ...
 
@@ -541,7 +713,7 @@ def _parse_account_snapshot(
 ) -> AccountSnapshot:
     """
     함수 이름: _parse_account_snapshot()
-    기능: 공식 Spot account 응답을 가격 정보 없는 전체 AccountSnapshot으로 변환한다.
+    기능: 거래 가능한 공식 Spot account 응답을 가격 정보 없는 전체 AccountSnapshot으로 변환한다.
     인자: payload -> JSON으로 해석한 GET /api/v3/account 응답
         valuation_asset -> 응답에 반드시 포함되어야 할 ETH asset
     반환값: 정규화된 전체 AccountSnapshot
@@ -551,6 +723,13 @@ def _parse_account_snapshot(
         raise TypeError("Binance account payload must be an object")
     if payload.get("accountType") != "SPOT":
         raise ValueError("Binance accountType must be SPOT")
+
+    # 주문 가능 여부는 truthy 변환 없이 공식 boolean을 요구하고 비활성 계정은 startup에서 닫는다.
+    can_trade = payload.get("canTrade")
+    if type(can_trade) is not bool:
+        raise TypeError("Binance account canTrade must be a bool")
+    if not can_trade:
+        raise ValueError("Binance Spot account must permit trading")
 
     raw_balances = payload.get("balances")
     if not isinstance(raw_balances, (list, tuple)):
@@ -726,7 +905,7 @@ class APIGateway:
         반환값: 없음
         작성 날짜: 2026/08/20
         """
-        # 주입 client가 Kline, account 또는 fake order 중 지원하는 operation을 하나 이상 갖는지 확인한다.
+        # 주입 client가 Kline, account, public rule 또는 fake order operation을 하나 이상 갖는지 확인한다.
         provides_kline_operation = callable(
             getattr(rest_client, "get_klines", None)
         )
@@ -736,10 +915,14 @@ class APIGateway:
         provides_order_operation = callable(
             getattr(rest_client, "submit_order", None)
         )
+        provides_rules_operation = callable(
+            getattr(rest_client, "fetch_symbol_trading_rules", None)
+        )
         if rest_client is None or not (
             provides_kline_operation
             or provides_account_operation
             or provides_order_operation
+            or provides_rules_operation
         ):
             raise TypeError(
                 "rest_client must provide a supported REST operation"
@@ -860,6 +1043,169 @@ class APIGateway:
             normalized_symbol,
         )
 
+    def fetch_symbol_trading_rules(
+        self,
+        symbol: str,
+    ) -> SymbolTradingRules:
+        """
+        함수 이름: fetch_symbol_trading_rules()
+        기능: public REST port의 최신 exchangeInfo rule을 domain 타입과 symbol에 결속해 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: canonical symbol에 해당하는 SymbolTradingRules
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        fetch_symbol_trading_rules = getattr(
+            self._rest_client,
+            "fetch_symbol_trading_rules",
+            None,
+        )
+        if not callable(fetch_symbol_trading_rules):
+            raise TypeError(
+                "rest_client must provide fetch_symbol_trading_rules"
+            )
+
+        # Gateway는 raw exchangeInfo나 cache를 보지 않고 REST port가 새로 해석한 공개 DTO만 검증한다.
+        rules = fetch_symbol_trading_rules(symbol=normalized_symbol)
+        if type(rules) is not SymbolTradingRules:
+            raise TypeError(
+                "fetch_symbol_trading_rules must return SymbolTradingRules"
+            )
+        if rules.symbol != normalized_symbol:
+            raise ValueError("symbol trading rules do not match request")
+
+        return rules
+
+    def get_order_preparation_filter_evidence(
+        self,
+        client_order_id: str,
+    ) -> OrderPreparationFilterEvidence | None:
+        """
+        함수 이름: get_order_preparation_filter_evidence()
+        기능: REST port가 보존한 submit-time public filter evidence를 identity와 타입에 결속한다.
+        인자: client_order_id -> 준비된 application Order identity
+        반환값: immutable filter evidence 또는 해당 prepare가 없으면 None
+        작성 날짜: 2026/08/31
+        """
+        if (
+            not isinstance(client_order_id, str)
+            or not client_order_id
+            or client_order_id != client_order_id.strip()
+        ):
+            raise ValueError("client_order_id must be non-empty canonical text")
+        get_filter_evidence = getattr(
+            self._rest_client,
+            "get_order_preparation_filter_evidence",
+            None,
+        )
+        if not callable(get_filter_evidence):
+            raise TypeError(
+                "rest_client must provide get_order_preparation_filter_evidence"
+            )
+
+        # Gateway는 raw response나 mutable cache 대신 한 client ID에 이미 고정된 frozen DTO만 공개한다.
+        evidence = get_filter_evidence(client_order_id=client_order_id)
+        if evidence is None:
+            return None
+        if type(evidence) is not OrderPreparationFilterEvidence:
+            raise TypeError(
+                "filter evidence must be an OrderPreparationFilterEvidence"
+            )
+        if evidence.client_order_id != client_order_id:
+            raise ValueError("filter evidence does not match requested order")
+
+        return evidence
+
+    def get_order_submission_attempt_evidence(
+        self,
+        client_order_id: str,
+    ) -> OrderSubmissionAttemptEvidence | None:
+        """
+        함수 이름: get_order_submission_attempt_evidence()
+        기능: REST port의 submission-start evidence를 요청 client ID와 exact 타입에 결속한다.
+        인자: client_order_id -> 제출을 시작한 application Order identity
+        반환값: immutable submission evidence 또는 POST 시작 전이면 None
+        작성 날짜: 2026/08/31
+        """
+        if (
+            not isinstance(client_order_id, str)
+            or not client_order_id
+            or client_order_id != client_order_id.strip()
+        ):
+            raise ValueError("client_order_id must be non-empty canonical text")
+        get_submission_evidence = getattr(
+            self._rest_client,
+            "get_order_submission_attempt_evidence",
+            None,
+        )
+        if not callable(get_submission_evidence):
+            raise TypeError(
+                "rest_client must provide get_order_submission_attempt_evidence"
+            )
+
+        # POST raw request가 아니라 server-aligned time과 correlation만 가진 frozen DTO를 검증한다.
+        evidence = get_submission_evidence(client_order_id=client_order_id)
+        if evidence is None:
+            return None
+        if type(evidence) is not OrderSubmissionAttemptEvidence:
+            raise TypeError(
+                "submission evidence must be an OrderSubmissionAttemptEvidence"
+            )
+        if evidence.client_order_id != client_order_id:
+            raise ValueError("submission evidence does not match requested order")
+
+        return evidence
+
+    def block_phase13_order_submissions(self) -> None:
+        """
+        함수 이름: block_phase13_order_submissions()
+        기능: actual harness failure 뒤 REST port의 Phase 13 submit permit을 원자 폐쇄한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        block_submissions = getattr(
+            self._rest_client,
+            "block_phase13_order_submissions",
+            None,
+        )
+        if not callable(block_submissions):
+            raise TypeError(
+                "rest_client must provide block_phase13_order_submissions"
+            )
+
+        # Gateway는 raw client state를 읽지 않고 단방향 fail-closed operation만 위임한다.
+        block_submissions()
+
+    def get_phase13_order_submission_guard_snapshot(
+        self,
+    ) -> Phase13OrderSubmissionGuardSnapshot:
+        """
+        함수 이름: get_phase13_order_submission_guard_snapshot()
+        기능: REST port의 Phase 13 mutation·차단 상태를 secret-free frozen DTO로 반환한다.
+        인자: 없음
+        반환값: exact Phase13OrderSubmissionGuardSnapshot
+        작성 날짜: 2026/08/31
+        """
+        get_guard_snapshot = getattr(
+            self._rest_client,
+            "get_phase13_order_submission_guard_snapshot",
+            None,
+        )
+        if not callable(get_guard_snapshot):
+            raise TypeError(
+                "rest_client must provide get_phase13_order_submission_guard_snapshot"
+            )
+
+        # Exact DTO 검증으로 delegate가 raw request mapping을 공개하는 fallback을 허용하지 않는다.
+        snapshot = get_guard_snapshot()
+        if type(snapshot) is not Phase13OrderSubmissionGuardSnapshot:
+            raise TypeError(
+                "guard snapshot must be a Phase13OrderSubmissionGuardSnapshot"
+            )
+
+        return snapshot
+
     def submit_order(self, order: Order) -> OrderResult:
         """
         함수 이름: submit_order()
@@ -906,6 +1252,7 @@ class APIGateway:
             "requested_quantity",
             "market_price_at_decision",
             "exit_reason",
+            "exit_pct_b_at_intent",
         )
         original_identity = tuple(
             getattr(order, field_name) for field_name in immutable_identity

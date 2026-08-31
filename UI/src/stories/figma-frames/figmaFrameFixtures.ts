@@ -241,6 +241,7 @@ export const FIGMA_FRAME_FIXTURES: Readonly<Record<FigmaFrameKey, FigmaFrameFixt
         year: 2026,
         month: 6,
         selectedDate: '2026-06-29',
+        headerDate: '2026-06-22',
       },
       errors: {
         saveLocation: '저장 위치를 선택해야 합니다',

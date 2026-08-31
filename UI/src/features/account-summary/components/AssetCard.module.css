@@ -64,5 +64,5 @@
 }
 
 .card dd.profit {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }

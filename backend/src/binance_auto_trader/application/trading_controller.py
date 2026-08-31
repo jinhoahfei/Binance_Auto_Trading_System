@@ -12,6 +12,7 @@ import hashlib
 from threading import RLock
 from time import sleep
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from binance_auto_trader.adapters.binance.api_gateway import (
     APP_CLIENT_ORDER_ID_PREFIX,
@@ -52,6 +53,7 @@ from binance_auto_trader.domain.trading.action_requests import (
 )
 from binance_auto_trader.domain.trading.context import (
     ContextVersionConflictError,
+    MarketEvaluationSnapshot,
     PendingOrderSnapshot,
     PositionSnapshot,
     TradingContext,
@@ -63,6 +65,7 @@ from binance_auto_trader.domain.trading.event_queue import (
 )
 from binance_auto_trader.domain.trading.events import (
     BuyAttemptPayload,
+    BuyRiskBlockedPayload,
     EventPriority,
     ForceSellOutcomePayload,
     SellAttemptPayload,
@@ -83,6 +86,7 @@ from binance_auto_trader.domain.trading.order import (
     OrderResultFailureKind,
     OrderStatus,
     PendingOrderRecoveryLifecycle,
+    PendingOrderSubmissionProvenance,
     TERMINAL_ORDER_STATUSES,
 )
 from binance_auto_trader.domain.trading.position import (
@@ -91,6 +95,18 @@ from binance_auto_trader.domain.trading.position import (
     PositionStateSnapshot,
 )
 from binance_auto_trader.domain.trading.results import TradingSTMResult
+from binance_auto_trader.domain.trading.risk import (
+    DailyLossScope,
+    ManualKillBehavior,
+    ManualKillControlState,
+    RiskBlockReason,
+    RiskBudgetSnapshot,
+    RiskDecision,
+    RiskPolicy,
+    RiskPolicyAvailability,
+    RiskPolicyUnavailable,
+    evaluate_buy_risk,
+)
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
     OrderAttemptKind,
@@ -104,9 +120,12 @@ from binance_auto_trader.domain.trading.stm import TradingSTM
 
 # 멱등 기록 한도와 외부 source별 허용 event를 module 수준의 불변 정책으로 고정한다.
 _MAX_COMMAND_RECORDS = 1_024
+_MAX_MANUAL_KILL_COMMAND_RECORDS = 1_024
+_MAX_PUBLIC_MARKET_BOUNDARY_TRACE_ENTRIES = 4_096
 _BASE_ASSET = "ETH"
 _QUOTE_ASSET = "USDT"
 _TRADING_SYMBOL = "ETHUSDT"
+_KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
 _MAX_SUBMISSIONS_PER_INTENT = 5
 _ORDER_RECONCILIATION_DELAYS = (
     timedelta(seconds=1),
@@ -223,6 +242,7 @@ _ORDER_TRACE_PARTICIPANTS = {
     "3": ("TradingController", "TradingContext"),
     "4": ("TradingController", "MarketSnapshot"),
     "5": ("TradingController", "Order"),
+    "5.1": ("TradingController", "RiskPolicy"),
     "6": ("TradingController", "APIGateway"),
     "6.1": ("APIGateway", "BinanceRESTClient"),
     "7": ("TradingController", "Order"),
@@ -296,6 +316,7 @@ class TradingSessionFailureCode(str, Enum):
     NO_SELECTED_REGIME = "NO_SELECTED_REGIME"
     POSITION_RECONCILIATION_REQUIRED = "POSITION_RECONCILIATION_REQUIRED"
     STALE_CONTEXT_VERSION = "STALE_CONTEXT_VERSION"
+    STALE_RISK_CONTROL_VERSION = "STALE_RISK_CONTROL_VERSION"
     TRADING_ACTIVE = "TRADING_ACTIVE"
     TRADING_ALREADY_ACTIVE = "TRADING_ALREADY_ACTIVE"
     TRADING_NOT_STARTED = "TRADING_NOT_STARTED"
@@ -395,6 +416,12 @@ class OrderExecutionFailureCode(str, Enum):
     SYMBOL_FILTER_REJECTED = "SYMBOL_FILTER_REJECTED"
     STREAM_RECONCILIATION_REQUIRED = "STREAM_RECONCILIATION_REQUIRED"
     EVENT_RUNTIME_FAILED = "EVENT_RUNTIME_FAILED"
+    RISK_POLICY_UNAVAILABLE = "RISK_POLICY_UNAVAILABLE"
+    RISK_POLICY_VERSION_MISMATCH = "RISK_POLICY_VERSION_MISMATCH"
+    MANUAL_KILL_SWITCH_ACTIVE = "MANUAL_KILL_SWITCH_ACTIVE"
+    RISK_ORDER_NOTIONAL_EXCEEDED = "RISK_ORDER_NOTIONAL_EXCEEDED"
+    RISK_DAILY_LOSS_EXCEEDED = "RISK_DAILY_LOSS_EXCEEDED"
+    RISK_POSITION_NOTIONAL_EXCEEDED = "RISK_POSITION_NOTIONAL_EXCEEDED"
 
 
 class OrderExecutionTraceResult(str, Enum):
@@ -487,6 +514,75 @@ class OrderExecutionTraceEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicMarketBoundaryTraceEntry:
+    """
+    클래스 이름: PublicMarketBoundaryTraceEntry
+    기능: production Kline 관찰, 시장 평가와 STM Action emission의 불변 provenance를 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    message_id: str
+    event_type: str
+    source_event_id: str
+    evaluation_id: str
+    market_version: int
+    context_version: int
+    regime: RegimeType
+    action_type: str | None = None
+    side: OrderSide | None = None
+    strategy: StrategyType | None = None
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 1L 단계, source/version과 Action optional field 조합을 exact production contract로 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        expected_event_type = {
+            "1L.1": "KLINE_OBSERVED",
+            "1L.2": "MARKET_EVALUATED",
+            "1L.3": "ACTION_EMITTED",
+        }.get(self.message_id)
+        if expected_event_type is None or self.event_type != expected_event_type:
+            raise ValueError("public market boundary message and event type do not match")
+        for field_name in ("source_event_id", "evaluation_id"):
+            field_value = getattr(self, field_name)
+            if (
+                not isinstance(field_value, str)
+                or not field_value
+                or field_value != field_value.strip()
+            ):
+                raise ValueError(f"{field_name} must be non-empty canonical text")
+        if self.evaluation_id != f"market:{self.market_version}:{self.source_event_id}":
+            raise ValueError("evaluation_id must bind the exact source and market version")
+        for field_name in ("market_version", "context_version"):
+            field_value = getattr(self, field_name)
+            if type(field_value) is not int or field_value < 0:
+                raise ValueError(f"{field_name} must be a non-negative exact integer")
+        if self.market_version < 1:
+            raise ValueError("market_version must be positive")
+        if not isinstance(self.regime, RegimeType):
+            raise TypeError("regime must be a RegimeType")
+
+        # Kline/evaluation에는 Action field가 없고 emission만 typed SubmitOrder identity를 가진다.
+        if self.message_id in {"1L.1", "1L.2"}:
+            if any(
+                value is not None
+                for value in (self.action_type, self.side, self.strategy)
+            ):
+                raise ValueError("pre-action public evidence cannot contain action fields")
+            return
+        if (
+            self.action_type != "SUBMIT_ORDER"
+            or not isinstance(self.side, OrderSide)
+            or not isinstance(self.strategy, StrategyType)
+        ):
+            raise ValueError("ACTION_EMITTED requires a typed SubmitOrder identity")
+
+
+@dataclass(frozen=True, slots=True)
 class TradingLogicSelectionResult:
     """
     클래스 이름: TradingLogicSelectionResult
@@ -510,6 +606,20 @@ class SplitRatioResult:
     scale_in: Decimal
     scale_out: Decimal
     version: int
+
+
+@dataclass(frozen=True, slots=True)
+class ManualKillResult:
+    """
+    클래스 이름: ManualKillResult
+    기능: versioned manual kill command의 활성 상태, 정책 provenance와 control version을 보존한다.
+    작성 날짜: 2026/08/25
+    """
+
+    active: bool
+    behavior: ManualKillBehavior | None
+    policy_version: int | None
+    risk_control_version: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -544,6 +654,21 @@ class TradingSessionSnapshot:
     command_enabled: bool
     selected: RegimeType | None
     support_status: TradingLogicSupportStatus | None
+    risk_policy_availability: RiskPolicyAvailability
+    configured_risk_policy_version: int | None
+    session_risk_policy_version: int | None
+    risk_control_version: int
+    manual_kill_active: bool
+    manual_kill_cleanup_complete: bool
+    manual_kill_activation_behavior: ManualKillBehavior | None
+    manual_kill_activation_policy_version: int | None
+    last_risk_decision: RiskDecision | None
+    process_ownership_ambiguous: bool
+    max_order_notional: Decimal | None = None
+    max_position_notional: Decimal | None = None
+    max_daily_loss: Decimal | None = None
+    daily_loss_scope: DailyLossScope | None = None
+    manual_kill_behavior: ManualKillBehavior | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -588,6 +713,9 @@ class _OrderExecutionState:
     persistence_pending: bool = False
     # Trade history 저장과 별개인 pending sidecar REMOVE durability를 독립적으로 보존한다.
     pending_recovery_pending: bool = False
+    recovery_lifecycle: PendingOrderRecoveryLifecycle = (
+        PendingOrderRecoveryLifecycle.PREPARED
+    )
     stop_followup_started: bool = False
     awaiting_terminal_zero_confirmation: bool = False
     submission_rejection_confirmable: bool = False
@@ -781,7 +909,10 @@ class TradingController:
         position: Position | None = None,
         trade_history_controller: TradeHistoryController | None = None,
         pending_order_recovery_enabled: bool = False,
+        market_stream_recovery_enabled: bool = False,
         maximum_order_notional: Decimal | None = None,
+        maximum_order_submissions_per_intent: int = _MAX_SUBMISSIONS_PER_INTENT,
+        risk_policy_state: RiskPolicy | RiskPolicyUnavailable | None = None,
         order_retry_jitter: Callable[[], Decimal] | None = None,
         order_retry_waiter: Callable[[timedelta], object] | None = None,
         event_runtime_notifier: Callable[[], object] | None = None,
@@ -801,7 +932,10 @@ class TradingController:
             position -> 실제 fill과 average cost를 소유할 Phase 8 Position 또는 None
             trade_history_controller -> terminal execution을 durable 기록할 Controller 또는 None
             pending_order_recovery_enabled -> testnet 제출 전 sidecar journal 활성 여부
+            market_stream_recovery_enabled -> Kline live 세대와 full-resync gate 강제 여부
             maximum_order_notional -> BUY와 일반 SELL 생성 전 적용하고 force SELL은 제외할 quote 상한
+            maximum_order_submissions_per_intent -> journal·client ID 생성 전 적용할 intent별 제출 상한
+            risk_policy_state -> 모든 신규 BUY에 적용할 versioned 정책 또는 명시적 미설정 상태
             order_retry_jitter -> 각 일반 주문 대기에 적용할 0.8~1.2 Decimal provider 또는 None
             order_retry_waiter -> startup same-order 조회 지연을 수행할 callable 또는 None
             event_runtime_notifier -> queue 또는 due 작업이 생겼음을 알릴 non-blocking callback
@@ -835,6 +969,8 @@ class TradingController:
             )
         if type(pending_order_recovery_enabled) is not bool:
             raise TypeError("pending_order_recovery_enabled must be a bool")
+        if type(market_stream_recovery_enabled) is not bool:
+            raise TypeError("market_stream_recovery_enabled must be a bool")
         if maximum_order_notional is not None and (
             not isinstance(maximum_order_notional, Decimal)
             or not maximum_order_notional.is_finite()
@@ -842,6 +978,32 @@ class TradingController:
         ):
             raise ValueError(
                 "maximum_order_notional must be a positive finite Decimal or None"
+            )
+        if isinstance(
+            maximum_order_submissions_per_intent,
+            bool,
+        ) or not isinstance(maximum_order_submissions_per_intent, int):
+            raise TypeError(
+                "maximum_order_submissions_per_intent must be an integer"
+            )
+        if not 1 <= maximum_order_submissions_per_intent <= (
+            _MAX_SUBMISSIONS_PER_INTENT
+        ):
+            raise ValueError(
+                "maximum_order_submissions_per_intent must be an integer from 1 to 5"
+            )
+        selected_risk_policy_state = (
+            RiskPolicyUnavailable()
+            if risk_policy_state is None
+            else risk_policy_state
+        )
+        if not isinstance(
+            selected_risk_policy_state,
+            (RiskPolicy, RiskPolicyUnavailable),
+        ):
+            raise TypeError(
+                "risk_policy_state must be a RiskPolicy, "
+                "RiskPolicyUnavailable, or None"
             )
         if order_retry_jitter is not None and not callable(order_retry_jitter):
             raise TypeError("order_retry_jitter must be callable or None")
@@ -872,7 +1034,50 @@ class TradingController:
         self._pending_order_recovery_enabled = (
             pending_order_recovery_enabled
         )
+        self._market_stream_recovery_enabled = (
+            market_stream_recovery_enabled
+        )
         self._maximum_order_notional = maximum_order_notional
+        self._maximum_order_submissions_per_intent = (
+            maximum_order_submissions_per_intent
+        )  # Phase 13 actual target은 한 intent에 새 client ID를 정확히 하나만 허용한다.
+        self._risk_policy_state = selected_risk_policy_state
+        self._session_risk_policy_version: int | None = None
+        self._manual_kill_control_recovery_enabled = (
+            trade_history_controller is not None
+            and trade_history_controller.supports_manual_kill_control_recovery
+        )
+        restored_manual_kill_replay: tuple[
+            ManualKillControlState,
+            ...,
+        ] = ()
+        restored_manual_kill_state = ManualKillControlState()
+        if self._manual_kill_control_recovery_enabled:
+            restored_manual_kill_replay = (
+                trade_history_controller.get_manual_kill_control_replay()
+            )
+            if restored_manual_kill_replay:
+                restored_manual_kill_state = restored_manual_kill_replay[-1]
+            # 구성 단계의 strict replay가 실패하면 volatile inactive 상태로 시작하지 않는다.
+        self._manual_kill_active = restored_manual_kill_state.active
+        self._risk_control_version = restored_manual_kill_state.version
+        self._manual_kill_behavior_at_activation = (
+            restored_manual_kill_state.behavior
+            if restored_manual_kill_state.active
+            else None
+        )
+        self._manual_kill_policy_version_at_activation = (
+            restored_manual_kill_state.policy_version
+            if restored_manual_kill_state.active
+            else None
+        )
+        self._manual_kill_cleanup_verified = not (
+            restored_manual_kill_state.active
+            and restored_manual_kill_state.behavior
+            is ManualKillBehavior.CANCEL_AND_LIQUIDATE
+        )
+        self._manual_kill_control_persistence_ambiguous = False
+        self._last_risk_decision: RiskDecision | None = None
         self._order_retry_jitter = (
             order_retry_jitter or _unit_order_retry_jitter_factor
         )  # Phase 8 fake는 factor 1.0, 실거래는 동일 경계에 난수 provider를 주입한다.
@@ -926,6 +1131,32 @@ class TradingController:
         self._cleanup_in_progress = False
         self._command_records: dict[tuple[str, str], _CommandRecord] = {}
         self._command_order: deque[tuple[str, str]] = deque()
+        self._manual_kill_command_records: dict[str, _CommandRecord] = {}
+        self._manual_kill_command_order: deque[str] = deque()
+        for restored_receipt in restored_manual_kill_replay:
+            restored_command_id = restored_receipt.command_id
+            restored_expected_version = restored_receipt.expected_version
+            if (
+                restored_command_id is None
+                or restored_expected_version is None
+            ):
+                raise RuntimeError(
+                    "manual-kill replay receipt lacks command provenance"
+                )
+            restored_manual_kill_result = ManualKillResult(
+                active=restored_receipt.active,
+                behavior=restored_receipt.behavior,
+                policy_version=restored_receipt.policy_version,
+                risk_control_version=restored_receipt.version,
+            )
+            self._store_manual_kill_command_record(
+                restored_command_id,
+                (
+                    restored_receipt.active,
+                    restored_expected_version,
+                ),
+                restored_manual_kill_result,
+            )  # 최근 command receipt 전부를 복원해 restart 뒤 ID payload 변경도 거부한다.
 
         # 주문별 조회·저장 상태와 retry 예산은 session Controller 한 곳에서만 변경한다.
         self._order_states_by_client_id: dict[str, _OrderExecutionState] = {}
@@ -937,10 +1168,18 @@ class TradingController:
         self._force_sell_intent_id: str | None = None
         self._force_sell_retry_due_at: datetime | None = None
         self._order_trace: list[OrderExecutionTraceEntry] = []
+        self._public_market_boundary_trace: list[
+            PublicMarketBoundaryTraceEntry
+        ] = []
         self._active_trace_event_id: str | None = None
         self._account_free_overlays: dict[str, _AccountFreeOverlay] = {}
         self._stream_reconciliation_required = False
+        self._market_stream_monitoring_started = False
+        self._market_stream_reconciliation_required = False
+        self._market_stream_interrupted_running_session = False
+        self._latest_market_evaluation_version = 0
         self._event_runtime_failed = False  # 이 process에서는 worker failure 뒤 command gate를 다시 열지 않는다.
+        self._process_ownership_ambiguous = False  # Parent/runtime identity 손실은 fresh process 전까지 해제하지 않는다.
         self._startup_reconciliation_complete = False
         self._startup_reconciliation_blocked = False
         self._recovered_position_liquidation_session = False  # 일반 stop과 복구 청산의 멱등 namespace를 구분한다.
@@ -955,6 +1194,18 @@ class TradingController:
         작성 날짜: 2026/08/21
         """
         return self._account
+
+    @property
+    def maximum_order_submissions_per_intent(self) -> int:
+        """
+        함수 이름: maximum_order_submissions_per_intent()
+        기능: journal과 새 client ID 생성 전에 적용하는 intent별 제출 상한을 반환한다.
+        인자: 없음
+        반환값: 1~5 범위의 immutable runtime 제출 상한
+        작성 날짜: 2026/08/31
+        """
+        # Read-only 공개 값은 현재 제출 횟수나 주문 identity를 노출하지 않는다.
+        return self._maximum_order_submissions_per_intent
 
     @property
     def account_subscription(self) -> Subscription | None:
@@ -1063,12 +1314,16 @@ class TradingController:
         반환값: 거래 command가 허용되면 True
         작성 날짜: 2026/08/21
         """
-        # Testnet startup 복구와 연결 재조정이 끝난 경우에만 공개 command gate를 연다.
+        # Testnet startup·연결 복구와 중단 session의 operator 재조정이 끝난 경우에만 공개 gate를 연다.
         return (
             self._mode_command_enabled
             and self._web_socket_gateway.account_ready
+            and not self._requires_manual_kill_cleanup_locked()
             and not self._stream_reconciliation_required
+            and self._market_stream_ready
+            and not self._market_stream_interrupted_running_session
             and not self._event_runtime_failed
+            and not self._process_ownership_ambiguous
             and (
                 not self._pending_order_recovery_enabled
                 or self._startup_reconciliation_complete
@@ -1087,16 +1342,706 @@ class TradingController:
         반환값: 미해결 재조정 상태가 하나라도 있으면 True
         작성 날짜: 2026/08/24
         """
-        # 공개 lifecycle과 startup, stream 및 event worker gate를 같은 session lock에서 판정한다.
+        # 공개 lifecycle과 중단 provenance, startup, stream 및 worker gate를 같은 session lock에서 판정한다.
         with self._session_lock:
             return (
                 self._stream_reconciliation_required
+                or self._market_stream_reconciliation_required
+                or self._market_stream_interrupted_running_session
                 or self._event_runtime_failed
+                or self._process_ownership_ambiguous
                 or self._startup_reconciliation_blocked
                 or not self._startup_reconciliation_complete
+                or (
+                    self._requires_manual_kill_cleanup_locked()
+                    and not self._manual_kill_cleanup_verified
+                )
                 or self._status
                 is TradingSessionStatus.RECONCILIATION_REQUIRED
-            )  # 종료 owner가 private flag를 직접 읽지 않게 authoritative 판정을 제공한다.
+            )  # Fresh open order만 남아도 cleanup bool을 통해 shutdown owner가 안전하게 차단한다.
+
+    @property
+    def market_stream_reconciliation_required(self) -> bool:
+        """
+        함수 이름: market_stream_reconciliation_required()
+        기능: 새 Kline 세대와 REST same-version 평가가 필요한지 반환한다.
+        인자: 없음
+        반환값: 시장 full-resync blocker가 활성화됐으면 True
+        작성 날짜: 2026/08/25
+        """
+        with self._session_lock:
+            return self._market_stream_reconciliation_required
+
+    @property
+    def _market_stream_ready(self) -> bool:
+        """
+        함수 이름: _market_stream_ready()
+        기능: opt-in runtime에서 Controller blocker와 Gateway live readiness를 함께 판정한다.
+        인자: 없음
+        반환값: 시장 stream이 신규 effect에 안전하면 True
+        작성 날짜: 2026/08/25
+        """
+        # Legacy 단위 조립은 기존 계약을 유지하고 production bootstrap만 live 세대를 강제한다.
+        return (
+            not self._market_stream_recovery_enabled
+            or not self._market_stream_monitoring_started
+            or (
+                not self._market_stream_reconciliation_required
+                and self._web_socket_gateway.kline_live_ready
+            )
+        )
+
+    @property
+    def risk_policy_state(self) -> RiskPolicy | RiskPolicyUnavailable:
+        """
+        함수 이름: risk_policy_state()
+        기능: 현재 process에 주입된 configured 또는 explicit unavailable 위험 정책을 반환한다.
+        인자: 없음
+        반환값: 현재 RiskPolicy 또는 RiskPolicyUnavailable
+        작성 날짜: 2026/08/24
+        """
+        with self._session_lock:
+            return self._risk_policy_state  # 불변 정책 값만 외부에 공개한다.
+
+    @property
+    def last_risk_decision(self) -> RiskDecision | None:
+        """
+        함수 이름: last_risk_decision()
+        기능: 가장 최근 신규 BUY의 허용·차단 결정과 authoritative budget을 반환한다.
+        인자: 없음
+        반환값: 최근 RiskDecision 또는 아직 BUY 평가가 없으면 None
+        작성 날짜: 2026/08/24
+        """
+        with self._session_lock:
+            return self._last_risk_decision  # frozen decision이므로 caller가 내부 budget을 바꿀 수 없다.
+
+    @property
+    def manual_kill_active(self) -> bool:
+        """
+        함수 이름: manual_kill_active()
+        기능: 신규 BUY 위험 gate가 사용할 현재 manual kill 상태를 반환한다.
+        인자: 없음
+        반환값: manual kill이 활성화됐으면 True
+        작성 날짜: 2026/08/24
+        """
+        with self._session_lock:
+            return self._manual_kill_active  # 신규 BUY gate와 wire snapshot이 같은 잠금 상태를 읽는다.
+
+    @property
+    def manual_kill_cleanup_complete(self) -> bool:
+        """
+        함수 이름: manual_kill_cleanup_complete()
+        기능: CANCEL_AND_LIQUIDATE의 주문·journal·Position 권위 검증이 끝났는지 반환한다.
+        인자: 없음
+        반환값: cleanup이 불필요하거나 권위 있게 완료됐으면 True
+        작성 날짜: 2026/08/29
+        """
+        with self._session_lock:
+            return self._manual_kill_cleanup_verified  # activation receipt와 cleanup 완료 publication을 분리한다.
+
+    @property
+    def process_ownership_ambiguous(self) -> bool:
+        """
+        함수 이름: process_ownership_ambiguous()
+        기능: parent·runtime ownership 상실로 모든 자동 effect가 잠겼는지 반환한다.
+        인자: 없음
+        반환값: fresh process reconciliation이 필요하면 True
+        작성 날짜: 2026/08/24
+        """
+        with self._session_lock:
+            return self._process_ownership_ambiguous  # 외부 owner는 private flag를 추측하지 않는다.
+
+    def replace_risk_policy(
+        self,
+        policy_state: RiskPolicy | RiskPolicyUnavailable,
+    ) -> None:
+        """
+        함수 이름: replace_risk_policy()
+        기능: immutable 위험 정책 state를 교체하되 active session의 고정 version은 보존한다.
+        인자: policy_state -> 새 configured RiskPolicy 또는 explicit unavailable 상태
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Mutable mapping이나 duck-typed policy를 active session에 주입하지 못하게 한다.
+        if not isinstance(policy_state, (RiskPolicy, RiskPolicyUnavailable)):
+            raise TypeError(
+                "policy_state must be a RiskPolicy or RiskPolicyUnavailable"
+            )
+
+        with self._session_lock:
+            self._risk_policy_state = policy_state  # active session은 다음 BUY에서 version mismatch로 fail closed한다.
+
+    def set_manual_kill(
+        self,
+        active: bool,
+        *,
+        command_id: str,
+        expected_version: int,
+    ) -> ManualKillResult:
+        """
+        함수 이름: set_manual_kill()
+        기능: operator manual kill을 별도 optimistic version과 command ID로 멱등 설정한다.
+        인자: active -> kill switch 활성 여부인 exact bool
+            command_id -> transport가 발급한 멱등 command 식별자
+            expected_version -> 호출자가 관측한 risk control version
+        반환값: 적용 상태와 정책 provenance를 가진 ManualKillResult
+        작성 날짜: 2026/08/25
+        """
+        # Operator 입력을 exact bool/version으로 검증한 뒤 멱등 fingerprint를 구성한다.
+        if type(active) is not bool:
+            raise TypeError("active must be a bool")
+        self._validate_expected_version_value(expected_version)
+        fingerprint = (active, expected_version)
+
+        with self._session_lock:
+            # Fsync 결과가 불명인 process에서는 어느 control command도 상태를 다시 추측하지 않는다.
+            if self._manual_kill_control_persistence_ambiguous:
+                raise RuntimeError(
+                    "manual-kill control persistence requires a fresh restart"
+                )
+
+            # 동일 command 재전송은 risk version이나 kill 상태를 다시 바꾸지 않고 최초 결과를 재생한다.
+            cached = self._read_manual_kill_command_record(
+                command_id,
+                fingerprint,
+            )
+            if cached is not None:
+                cached_result = self._require_manual_kill_result(cached)
+                if self._requires_manual_kill_cleanup_locked():
+                    self._begin_manual_kill_cleanup_locked(
+                        self._manual_kill_cleanup_command_id_locked()
+                    )
+                return cached_result  # 응답 유실 재시도도 같은 activation epoch의 cleanup을 재개한다.
+            if expected_version != self._risk_control_version:
+                raise TradingSessionError(
+                    TradingSessionFailureCode.STALE_RISK_CONTROL_VERSION,
+                    "Expected risk control version does not match authoritative version",
+                    current_version=self._risk_control_version,
+                    expected_version=expected_version,
+                )
+
+            # 해제 직전마다 fresh REST·journal·Position을 다시 읽어 이전 완료 bool의 TOCTOU를 차단한다.
+            if (
+                not active
+                and self._requires_manual_kill_cleanup_locked()
+            ):
+                self._verify_manual_kill_cleanup_locked()
+                if not self._manual_kill_cleanup_verified:
+                    raise TradingSessionError(
+                        TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                        "Manual-kill cleanup must complete before release",
+                        current_version=self._risk_control_version,
+                        expected_version=expected_version,
+                    )
+
+            policy_state = self._risk_policy_state
+            state_changes = self._manual_kill_active is not active
+
+            # Active no-op은 hot policy가 아니라 최초 activation의 durable cleanup 의무를 보존한다.
+            if active and not state_changes:
+                receipt_behavior = self._manual_kill_behavior_at_activation
+                receipt_policy_version = (
+                    self._manual_kill_policy_version_at_activation
+                )
+            else:
+                receipt_behavior = (
+                    policy_state.manual_kill_behavior
+                    if isinstance(policy_state, RiskPolicy)
+                    else None
+                )
+                receipt_policy_version = (
+                    policy_state.version
+                    if isinstance(policy_state, RiskPolicy)
+                    else None
+                )
+
+            # Toggle과 no-op 모두 성공 receipt를 fsync해 restart에서도 command ID 의미를 보존한다.
+            next_control_state = ManualKillControlState(
+                active=active,
+                version=(
+                    self._risk_control_version + 1
+                    if state_changes
+                    else self._risk_control_version
+                ),
+                command_id=command_id,
+                expected_version=expected_version,
+                behavior=receipt_behavior,
+                policy_version=receipt_policy_version,
+            )
+            history_controller = self._trade_history_controller
+            if self._manual_kill_control_recovery_enabled:
+                if history_controller is None:
+                    raise RuntimeError(
+                        "manual-kill recovery capability lost its history owner"
+                    )
+                try:
+                    history_controller.save_manual_kill_control_state(
+                        next_control_state
+                    )
+                except Exception:
+                    # 활성화 저장 실패는 즉시 메모리 kill을 켜고 모든 신규 effect를 reconciliation으로 잠근다.
+                    if active:
+                        self._manual_kill_active = True
+                    self._manual_kill_control_persistence_ambiguous = True
+                    self._process_ownership_ambiguous = True
+                    self._stream_reconciliation_required = True
+                    raise
+            previous_cleanup_verified = self._manual_kill_cleanup_verified
+            self._manual_kill_active = active
+            self._risk_control_version = next_control_state.version
+            if active:
+                self._manual_kill_behavior_at_activation = (
+                    next_control_state.behavior
+                )
+                self._manual_kill_policy_version_at_activation = (
+                    next_control_state.policy_version
+                )
+                self._manual_kill_cleanup_verified = (
+                    previous_cleanup_verified
+                    if not state_changes
+                    else next_control_state.behavior
+                    is not ManualKillBehavior.CANCEL_AND_LIQUIDATE
+                )
+            else:
+                self._manual_kill_behavior_at_activation = None
+                self._manual_kill_policy_version_at_activation = None
+                self._manual_kill_cleanup_verified = True
+            result = ManualKillResult(
+                active=self._manual_kill_active,
+                behavior=next_control_state.behavior,
+                policy_version=next_control_state.policy_version,
+                risk_control_version=self._risk_control_version,
+            )
+            self._store_manual_kill_command_record(
+                command_id,
+                fingerprint,
+                result,
+            )  # 성공한 operator command receipt를 toggle 여부와 무관하게 bounded cache에 남긴다.
+
+            # Durable activation 뒤에만 canonical STOP 또는 recovery SELL을 시작해 신규 entry를 선차단한다.
+            if self._requires_manual_kill_cleanup_locked():
+                self._begin_manual_kill_cleanup_locked(
+                    self._manual_kill_cleanup_command_id_locked()
+                )
+            return result
+
+    def resume_manual_kill_cleanup(self) -> bool:
+        """
+        함수 이름: resume_manual_kill_cleanup()
+        기능: 재시작 reconciliation 뒤 durable CANCEL_AND_LIQUIDATE 정리를 같은 identity로 재개한다.
+        인자: 없음
+        반환값: app-owned open order, pending journal과 Position이 모두 0이면 True
+        작성 날짜: 2026/08/29
+        """
+        with self._session_lock:
+            if not self._requires_manual_kill_cleanup_locked():
+                self._manual_kill_cleanup_verified = True
+                return True  # inactive 또는 BLOCK_NEW_ORDERS에는 외부 cleanup effect가 없다.
+
+            # Risk control version은 restart마다 같은 내부 cleanup command identity를 재구성한다.
+            cleanup_command_id = self._manual_kill_cleanup_command_id_locked()
+            self._begin_manual_kill_cleanup_locked(cleanup_command_id)
+            return self._manual_kill_cleanup_verified
+
+    def _manual_kill_cleanup_command_id_locked(self) -> str:
+        """
+        함수 이름: _manual_kill_cleanup_command_id_locked()
+        기능: 활성 epoch의 control version에서 restart-safe cleanup command ID를 결정한다.
+        인자: 없음
+        반환값: 같은 activation 동안 변하지 않는 내부 cleanup command ID
+        작성 날짜: 2026/08/29
+        """
+        if not self._requires_manual_kill_cleanup_locked():
+            raise RuntimeError("manual-kill cleanup is not active")
+
+        return (
+            f"manual-kill-recovery-{self._risk_control_version}"
+        )  # 사용자 no-op command ID와 분리해 response loss·restart에서도 외부 주문 identity를 재사용한다.
+
+    def _requires_manual_kill_cleanup_locked(self) -> bool:
+        """
+        함수 이름: _requires_manual_kill_cleanup_locked()
+        기능: durable activation 당시 행동이 CANCEL_AND_LIQUIDATE인지 lock 내부에서 판정한다.
+        인자: 없음
+        반환값: 활성 kill이 안전 정리를 요구하면 True
+        작성 날짜: 2026/08/29
+        """
+        return (
+            self._manual_kill_active
+            and self._manual_kill_behavior_at_activation
+            is ManualKillBehavior.CANCEL_AND_LIQUIDATE
+        )  # 현재 policy hot-swap이 이미 fsync된 activation 행동을 바꾸지 못한다.
+
+    def _begin_manual_kill_cleanup_locked(
+        self,
+        command_id: str,
+        *,
+        account_reconciliation_complete: bool = False,
+    ) -> None:
+        """
+        함수 이름: _begin_manual_kill_cleanup_locked()
+        기능: 실행 session은 STOP으로, 복구 Position은 recovery SELL로 넘기고 완료 사실을 재검증한다.
+        인자: command_id -> activation 또는 restart에서 결정적으로 만든 cleanup identity
+            account_reconciliation_complete -> 이번 호출이 fresh REST·signed-stream 재연결 뒤인지 여부
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        if not isinstance(command_id, str):
+            raise TypeError("command_id must be a string")
+        if not command_id or command_id != command_id.strip():
+            raise ValueError("command_id must be a non-empty trimmed string")
+        if type(account_reconciliation_complete) is not bool:
+            raise TypeError("account_reconciliation_complete must be a bool")
+        if not self._requires_manual_kill_cleanup_locked():
+            return
+
+        # 시작 전 startup reconciliation은 pending 취소와 Position 복원까지 마친 뒤 재개하도록 대기한다.
+        if not self._startup_reconciliation_complete and self._status is (
+            TradingSessionStatus.NOT_STARTED
+        ):
+            return
+
+        try:
+            # 실행 session에는 기존 STOP STM을 전달해 pending query→cancel→query와 force SELL을 재사용한다.
+            if self._active_stm is not None and self._session_id is not None:
+                if self._status is TradingSessionStatus.RUNNING:
+                    self.stop_trading(
+                        command_id=f"manual-kill-stop-{command_id}",
+                        expected_version=self._context.version,
+                    )
+                elif self._status is (
+                    TradingSessionStatus.RECONCILIATION_REQUIRED
+                ):
+                    self._resume_manual_kill_order_cleanup_locked(
+                        command_id,
+                        account_reconciliation_complete=(
+                            account_reconciliation_complete
+                        ),
+                    )
+            else:
+                position = self._require_position()
+                if position.quantity > Decimal("0"):
+                    self.liquidate_recovered_position(
+                        command_id=(
+                            f"manual-kill-liquidation-{command_id}"
+                        ),
+                        expected_version=self._context.version,
+                    )
+        except Exception:
+            # Receipt와 거래소 사실은 되돌리지 않고 operator-visible reconciliation 상태를 유지한다.
+            self._manual_kill_cleanup_verified = False
+            if self._context.initialized:
+                self._context.apply_runtime_patch(
+                    patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
+                )
+                self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+            else:
+                self._startup_reconciliation_blocked = True
+            return
+
+        # 동기 cancel/terminal/force SELL이 끝난 경우에도 fresh open-order와 durable journal을 다시 본다.
+        self._verify_manual_kill_cleanup_locked()
+
+    def _resume_manual_kill_order_cleanup_locked(
+        self,
+        command_id: str,
+        *,
+        account_reconciliation_complete: bool,
+    ) -> None:
+        """
+        함수 이름: _resume_manual_kill_order_cleanup_locked()
+        기능: RECONCILIATION_REQUIRED 세션의 기존 주문만 query→개별 cancel→query 순서로 재개한다.
+        인자: command_id -> 활성 kill epoch에서 고정된 cleanup identity
+            account_reconciliation_complete -> fresh account REST와 signed stream gap을 닫았는지 여부
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        if not isinstance(command_id, str):
+            raise TypeError("command_id must be a string")
+        if not command_id or command_id != command_id.strip():
+            raise ValueError("command_id must be a non-empty trimmed string")
+        if type(account_reconciliation_complete) is not bool:
+            raise TypeError("account_reconciliation_complete must be a bool")
+
+        # Signed account 사실이나 process owner가 불명확하면 같은 ID 취소조차 다음 복구까지 보류한다.
+        if not self._manual_kill_cancel_reentry_gate_open_locked(
+            account_reconciliation_complete=account_reconciliation_complete,
+        ):
+            self._mark_manual_kill_cleanup_reconciliation_locked()
+            return
+        if account_reconciliation_complete:
+            self._stream_reconciliation_required = False  # 방금 닫은 REST→stream ACK gap만 명시적으로 해제한다.
+
+        # 이미 canonical STOPPING에 들어간 세션만 terminal 뒤 잔량 SELL을 같은 microstep에서 허용한다.
+        active_stm = self._active_stm
+        stop_effect_gate_open = (
+            active_stm is not None
+            and active_stm.current_state.root_state is RootState.STOPPING
+            and self._manual_kill_stop_effect_gate_open_locked()
+        )
+        if stop_effect_gate_open:
+            if self._context.runtime.trading_phase is not TradingPhase.STOPPING:
+                self._context.apply_runtime_patch(
+                    patch(trading_phase=TradingPhase.STOPPING)
+                )
+            self._status = TradingSessionStatus.STOPPING
+
+        # Stable client ID 순서로 한 주문씩 처리해 다중 corruption에서도 effect 순서를 결정론적으로 만든다.
+        unresolved_states = tuple(
+            sorted(
+                (
+                    state
+                    for state in self._order_states_by_client_id.values()
+                    if (
+                        not state.order.is_terminal
+                        or state.persistence_pending
+                        or state.pending_recovery_pending
+                    )
+                ),
+                key=lambda state: state.order.client_order_id,
+            )
+        )
+        outcomes: list[TradingEvent] = []
+        for state in unresolved_states:
+            if state.order.is_terminal:
+                continue  # Terminal 저장·journal 실패는 cancel로 고치지 않고 전용 persistence 복구에 남긴다.
+
+            # 새 주문·새 intent 없이 같은 aggregate에 bounded query budget을 한 recovery cycle만 부여한다.
+            self._scheduled_order_queries.pop(
+                state.order.client_order_id,
+                None,
+            )
+            state.reconciliation_attempts = 0
+            state.stop_after_reconciliation = True
+            order_identifier = (
+                state.order.exchange_order_id
+                or state.order.client_order_id
+            )
+            outcomes.extend(
+                self._cancel_pending_order_action(
+                    CancelPendingOrder(
+                        order_id=order_identifier,
+                        reason="STOP_CONFIRMED",
+                    )
+                )
+            )
+            if not state.order.is_terminal:
+                outcomes.extend(
+                    self._reconcile_order_action(
+                        ReconcileOrder(
+                            order_id=order_identifier,
+                            stop_after_reconciliation=True,
+                        )
+                    )
+                )  # Cancel 응답은 완료로 쓰지 않고 즉시 같은 ID REST query로만 확인한다.
+
+        if outcomes:
+            self._enqueue_order_outcomes(tuple(outcomes))
+
+        # Fresh open-order·journal·memory·Context가 모두 비어야 Position 청산 단계에 진입할 수 있다.
+        if not self._manual_kill_order_cleanup_complete_locked():
+            self._mark_manual_kill_cleanup_reconciliation_locked()
+            return
+        if not self._manual_kill_stop_effect_gate_open_locked():
+            self._mark_manual_kill_cleanup_reconciliation_locked()
+            return
+
+        # Activation이 RECON 상태에서 시작됐다면 주문 ambiguity를 닫은 뒤 canonical STOP을 정확히 한 번 연다.
+        if (
+            active_stm is not None
+            and active_stm.current_state.root_state is not RootState.STOPPING
+        ):
+            if self._context.runtime.trading_phase is not TradingPhase.IDLE:
+                self._context.apply_runtime_patch(
+                    patch(trading_phase=TradingPhase.IDLE)
+                )
+            self._status = TradingSessionStatus.RUNNING
+            self.stop_trading(
+                command_id=f"manual-kill-stop-{command_id}",
+                expected_version=self._context.version,
+            )
+
+    def _manual_kill_cancel_reentry_gate_open_locked(
+        self,
+        *,
+        account_reconciliation_complete: bool,
+    ) -> bool:
+        """
+        함수 이름: _manual_kill_cancel_reentry_gate_open_locked()
+        기능: RECON 상태에서 기존 ID의 query·cancel만 허용할 최소 account/process gate를 판정한다.
+        인자: account_reconciliation_complete -> 현재 reconnect가 fresh REST와 stream gap을 닫았는지 여부
+        반환값: 신규 주문 없이 same-ID query·cancel을 안전하게 실행할 수 있으면 True
+        작성 날짜: 2026/08/29
+        """
+        return (
+            self._mode_command_enabled
+            and self._web_socket_gateway.account_ready
+            and not self._event_runtime_failed
+            and not self._process_ownership_ambiguous
+            and (
+                not self._pending_order_recovery_enabled
+                or self._startup_reconciliation_complete
+            )
+            and not self._startup_reconciliation_blocked
+            and (
+                account_reconciliation_complete
+                or not self._stream_reconciliation_required
+            )
+        )  # Market price는 cancel에 필요 없지만 account generation과 process owner는 반드시 확정돼야 한다.
+
+    def _manual_kill_stop_effect_gate_open_locked(self) -> bool:
+        """
+        함수 이름: _manual_kill_stop_effect_gate_open_locked()
+        기능: app-order ambiguity가 닫힌 뒤 canonical STOP과 잔량 SELL을 시작할 전체 effect gate를 판정한다.
+        인자: 없음
+        반환값: account·market·startup·process 사실이 모두 준비됐으면 True
+        작성 날짜: 2026/08/29
+        """
+        return (
+            self._mode_command_enabled
+            and self._web_socket_gateway.account_ready
+            and not self._stream_reconciliation_required
+            and self._market_stream_ready
+            and not self._market_stream_reconciliation_required
+            and not self._market_stream_interrupted_running_session
+            and not self._event_runtime_failed
+            and not self._process_ownership_ambiguous
+            and (
+                not self._pending_order_recovery_enabled
+                or self._startup_reconciliation_complete
+            )
+            and not self._startup_reconciliation_blocked
+        )  # 노출을 줄이는 SELL도 stale price·filter 또는 소유권 모호성 위에서 제출하지 않는다.
+
+    def _manual_kill_order_cleanup_complete_locked(self) -> bool:
+        """
+        함수 이름: _manual_kill_order_cleanup_complete_locked()
+        기능: Position을 제외한 app open order, durable journal, memory와 Context pending이 모두 0인지 읽는다.
+        인자: 없음
+        반환값: fresh authoritative 주문 정리가 완료됐으면 True
+        작성 날짜: 2026/08/29
+        """
+        if not self._web_socket_gateway.account_ready:
+            return False
+        try:
+            app_open_orders = tuple(
+                result
+                for result in self._api_gateway.list_open_order_results(
+                    _TRADING_SYMBOL
+                )
+                if result.client_order_id.startswith(
+                    APP_CLIENT_ORDER_ID_PREFIX
+                )
+            )
+            history_controller = self._require_trade_history_controller()
+            pending_records = (
+                history_controller.get_pending_order_recovery_records()
+                if history_controller.supports_pending_order_recovery
+                else ()
+            )
+        except Exception:
+            return False  # REST·journal read 실패를 빈 주문 집합으로 완화하지 않는다.
+
+        # Memory와 Context도 durable terminal/history가 끝나기 전에는 별도 unresolved 사실로 유지한다.
+        unresolved_memory_states = tuple(
+            state
+            for state in self._order_states_by_client_id.values()
+            if (
+                not state.order.is_terminal
+                or state.persistence_pending
+                or state.pending_recovery_pending
+            )
+        )
+        context_has_pending = (
+            self._context.initialized
+            and self._context.runtime.pending_order_id is not None
+        )
+        return (
+            not app_open_orders
+            and not pending_records
+            and not unresolved_memory_states
+            and not context_has_pending
+        )  # Exchange, disk, memory와 Context 네 owner가 모두 비어야 True다.
+
+    def _verify_manual_kill_cleanup_locked(self) -> bool:
+        """
+        함수 이름: _verify_manual_kill_cleanup_locked()
+        기능: app-owned open order, pending·UNKNOWN journal과 Position이 모두 0인지 권위 있게 확인한다.
+        인자: 없음
+        반환값: 세 cleanup 조건과 account stream readiness가 모두 충족되면 True
+        작성 날짜: 2026/08/29
+        """
+        if not self._requires_manual_kill_cleanup_locked():
+            self._manual_kill_cleanup_verified = True
+            return True
+
+        # Signed stream과 fresh REST·journal·memory·Context 중 하나라도 남으면 완료로 게시하지 않는다.
+        order_cleanup_complete = (
+            self._manual_kill_order_cleanup_complete_locked()
+        )
+        position = self._require_position()
+        cleanup_complete = (
+            order_cleanup_complete
+            and position.quantity == Decimal("0")
+        )
+        self._manual_kill_cleanup_verified = cleanup_complete
+        if not cleanup_complete:
+            self._mark_manual_kill_cleanup_reconciliation_locked()
+        return cleanup_complete  # 단일 bool은 위 authoritative 근거가 모두 0인 경우에만 True다.
+
+    def _mark_manual_kill_cleanup_reconciliation_locked(self) -> None:
+        """
+        함수 이름: _mark_manual_kill_cleanup_reconciliation_locked()
+        기능: cleanup 권위 조회 실패를 완료로 완화하지 않고 재시작 또는 stream 재조정 상태로 잠근다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        self._manual_kill_cleanup_verified = False
+        if not self._context.initialized:
+            self._startup_reconciliation_blocked = True
+            return  # 시작 전에는 Context 대신 startup gate가 READY publication을 차단한다.
+
+        # 이미 같은 phase면 version을 불필요하게 올리지 않고 공개 status만 다시 고정한다.
+        if self._context.runtime.trading_phase is not (
+            TradingPhase.RECONCILIATION_REQUIRED
+        ):
+            self._context.apply_runtime_patch(
+                patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
+            )
+        self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+
+    def mark_process_ownership_ambiguous(self, reason: str) -> None:
+        """
+        함수 이름: mark_process_ownership_ambiguous()
+        기능: parent/runtime identity 상실을 영구 fail-closed 상태로 표시하고 자동 effect를 중단한다.
+        인자: reason -> credential 없는 안정적 ownership loss 분류
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # Ownership loss 분류는 공백 없는 안정 문자열만 받아 secret-bearing raw 오류를 배제한다.
+        if not isinstance(reason, str):
+            raise TypeError("reason must be a string")
+        if not reason or reason != reason.strip():
+            raise ValueError("reason must be non-empty without outer whitespace")
+
+        with self._session_lock:
+            self._process_ownership_ambiguous = True
+            self._stream_reconciliation_required = True
+
+            # Active STM과 주문 identity는 보존하고 자동 market/order effect만 reconciliation 상태로 잠근다.
+            if self._context.initialized:
+                self._context.apply_runtime_patch(
+                    patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
+                )
+            if self._status in (
+                TradingSessionStatus.RUNNING,
+                TradingSessionStatus.STOPPING,
+            ):
+                self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+            self._scheduler.clear()
+            if self._event_queue is not None:
+                self._event_queue.clear()
 
     @property
     def _mode_command_enabled(self) -> bool:
@@ -1151,6 +2096,20 @@ class TradingController:
         """
         with self._session_lock:
             return tuple(self._order_trace)  # 외부 호출자가 내부 trace를 변경하지 못하게 한다.
+
+    @property
+    def public_market_boundary_trace(
+        self,
+    ) -> tuple[PublicMarketBoundaryTraceEntry, ...]:
+        """
+        함수 이름: public_market_boundary_trace()
+        기능: production 1L Kline→evaluation→Action observer evidence를 원본 순서의 immutable tuple로 반환한다.
+        인자: 없음
+        반환값: frozen PublicMarketBoundaryTraceEntry tuple
+        작성 날짜: 2026/08/31
+        """
+        with self._session_lock:
+            return tuple(self._public_market_boundary_trace)
 
     @property
     def pending_order_query_count(self) -> int:
@@ -1211,6 +2170,13 @@ class TradingController:
                 else self._position_snapshot.is_open
             )
 
+            # Configured policy의 nullable 상한과 운영 enum을 unavailable 상태와 섞지 않고 공개한다.
+            configured_risk_policy = (
+                self._risk_policy_state
+                if isinstance(self._risk_policy_state, RiskPolicy)
+                else None
+            )
+
             # mutable Context의 각 값을 session lock 아래 같은 publication에 묶는다.
             return TradingSessionSnapshot(
                 status=self._status,
@@ -1225,6 +2191,57 @@ class TradingController:
                     None
                     if configuration is None
                     else configuration.support_status
+                ),
+                risk_policy_availability=(
+                    self._risk_policy_state.availability
+                ),
+                configured_risk_policy_version=(
+                    configured_risk_policy.version
+                    if configured_risk_policy is not None
+                    else None
+                ),
+                session_risk_policy_version=(
+                    self._session_risk_policy_version
+                ),
+                risk_control_version=self._risk_control_version,
+                manual_kill_active=self._manual_kill_active,
+                manual_kill_cleanup_complete=(
+                    self._manual_kill_cleanup_verified
+                ),
+                manual_kill_activation_behavior=(
+                    self._manual_kill_behavior_at_activation
+                ),
+                manual_kill_activation_policy_version=(
+                    self._manual_kill_policy_version_at_activation
+                ),
+                last_risk_decision=self._last_risk_decision,
+                process_ownership_ambiguous=(
+                    self._process_ownership_ambiguous
+                ),
+                max_order_notional=(
+                    configured_risk_policy.max_order_notional
+                    if configured_risk_policy is not None
+                    else None
+                ),
+                max_position_notional=(
+                    configured_risk_policy.max_position_notional
+                    if configured_risk_policy is not None
+                    else None
+                ),
+                max_daily_loss=(
+                    configured_risk_policy.max_daily_loss
+                    if configured_risk_policy is not None
+                    else None
+                ),
+                daily_loss_scope=(
+                    configured_risk_policy.daily_loss_scope
+                    if configured_risk_policy is not None
+                    else None
+                ),
+                manual_kill_behavior=(
+                    configured_risk_policy.manual_kill_behavior
+                    if configured_risk_policy is not None
+                    else None
                 ),
             )
 
@@ -1427,8 +2444,18 @@ class TradingController:
             previous_force_sell_intent_id = self._force_sell_intent_id
             previous_force_sell_retry_due_at = self._force_sell_retry_due_at
             previous_order_trace = tuple(self._order_trace)
+            previous_public_market_boundary_trace = tuple(
+                self._public_market_boundary_trace
+            )
             previous_recovery_liquidation_session = (
                 self._recovered_position_liquidation_session
+            )
+            previous_session_risk_policy_version = (
+                self._session_risk_policy_version
+            )
+            previous_last_risk_decision = self._last_risk_decision
+            previous_market_evaluation_version = (
+                self._latest_market_evaluation_version
             )
 
             try:
@@ -1452,6 +2479,7 @@ class TradingController:
                     clock=self._clock,
                     order_finished_observer=self._record_order_finished_trace,
                     event_processing_observer=self._observe_processing_event,
+                    event_context_preparer=self._prepare_market_event_context,
                 )
                 self._scheduler.clear()
                 self._action_trace.clear()
@@ -1459,17 +2487,26 @@ class TradingController:
                 self._cleanup_failures.clear()
                 self._cleanup_in_progress = False
 
-                # 새 session은 이전 terminal 주문 trace와 retry 예산을 재사용하지 않는다.
+                # 새 session은 이전 runtime state를 비우되 durable intent 예산은 process restart 후에도 유지한다.
                 self._order_states_by_client_id.clear()
                 self._order_states_by_order_id.clear()
                 self._scheduled_order_queries.clear()
-                self._submission_attempts_by_intent.clear()
+                if not self._pending_order_recovery_enabled:
+                    self._submission_attempts_by_intent.clear()
                 self._quantity_overrides_by_intent.clear()
                 self._force_sell_intent_id = None
                 self._force_sell_retry_due_at = None
                 self._order_trace.clear()
+                self._public_market_boundary_trace.clear()
                 self._active_trace_event_id = None
                 self._recovered_position_liquidation_session = False  # 일반 start는 복구 청산 세션 표식을 상속하지 않는다.
+                self._session_risk_policy_version = (
+                    self._risk_policy_state.version
+                    if isinstance(self._risk_policy_state, RiskPolicy)
+                    else None
+                )  # session은 start 시점 policy version을 고정하고 hot change를 다음 BUY에서 거부한다.
+                self._last_risk_decision = None
+                self._latest_market_evaluation_version = 0
 
                 # initialize된 동일 Context snapshot으로 run을 정확히 한 번 호출한다.
                 start_result = selected_stm.run(self._context.snapshot())
@@ -1499,8 +2536,18 @@ class TradingController:
                 self._force_sell_intent_id = previous_force_sell_intent_id
                 self._force_sell_retry_due_at = previous_force_sell_retry_due_at
                 self._order_trace = list(previous_order_trace)
+                self._public_market_boundary_trace = list(
+                    previous_public_market_boundary_trace
+                )
                 self._recovered_position_liquidation_session = (
                     previous_recovery_liquidation_session
+                )
+                self._session_risk_policy_version = (
+                    previous_session_risk_policy_version
+                )
+                self._last_risk_decision = previous_last_risk_decision
+                self._latest_market_evaluation_version = (
+                    previous_market_evaluation_version
                 )
                 self._status = previous_status
                 raise
@@ -1620,7 +2667,13 @@ class TradingController:
             previous_force_sell_intent_id = self._force_sell_intent_id
             previous_force_sell_retry_due_at = self._force_sell_retry_due_at
             previous_order_trace = tuple(self._order_trace)
+            previous_public_market_boundary_trace = tuple(
+                self._public_market_boundary_trace
+            )
             previous_active_trace_event_id = self._active_trace_event_id
+            previous_market_evaluation_version = (
+                self._latest_market_evaluation_version
+            )
             previous_recovery_liquidation_session = (
                 self._recovered_position_liquidation_session
             )
@@ -1659,7 +2712,13 @@ class TradingController:
                 self._force_sell_intent_id = previous_force_sell_intent_id
                 self._force_sell_retry_due_at = previous_force_sell_retry_due_at
                 self._order_trace = list(previous_order_trace)
+                self._public_market_boundary_trace = list(
+                    previous_public_market_boundary_trace
+                )
                 self._active_trace_event_id = previous_active_trace_event_id
+                self._latest_market_evaluation_version = (
+                    previous_market_evaluation_version
+                )
                 self._recovered_position_liquidation_session = (
                     previous_recovery_liquidation_session
                 )
@@ -1689,6 +2748,7 @@ class TradingController:
                     clock=self._clock,
                     order_finished_observer=self._record_order_finished_trace,
                     event_processing_observer=self._observe_processing_event,
+                    event_context_preparer=self._prepare_market_event_context,
                 )
                 self._scheduler.clear()
                 self._action_trace.clear()
@@ -1696,17 +2756,20 @@ class TradingController:
                 self._cleanup_failures.clear()
                 self._cleanup_in_progress = False
 
-                # 이전 process에서 종료된 주문 state와 retry 예산은 새 청산 intent에 재사용하지 않는다.
+                # 이전 runtime state는 제거하되 journal이 복원한 intent 예산은 초기화하지 않는다.
                 self._order_states_by_client_id.clear()
                 self._order_states_by_order_id.clear()
                 self._scheduled_order_queries.clear()
-                self._submission_attempts_by_intent.clear()
+                if not self._pending_order_recovery_enabled:
+                    self._submission_attempts_by_intent.clear()
                 self._quantity_overrides_by_intent.clear()
                 self._force_sell_intent_id = None
                 self._force_sell_retry_due_at = None
                 self._order_trace.clear()
+                self._public_market_boundary_trace.clear()
                 self._active_trace_event_id = None
                 self._recovered_position_liquidation_session = True
+                self._latest_market_evaluation_version = 0
 
                 # Fresh STM에는 LOGIC_STARTED 대신 global STOP_CONFIRMED만 정확히 한 번 전달한다.
                 stop_event = TradingEvent(
@@ -1955,6 +3018,422 @@ class TradingController:
 
             return enqueued_event
 
+    def observe_public_market_boundary(
+        self,
+        *,
+        message_id: str,
+        event_type: str,
+        source_event_id: str,
+        market_version: int,
+    ) -> PublicMarketBoundaryTraceEntry | None:
+        """
+        함수 이름: observe_public_market_boundary()
+        기능: MarketDataController의 실제 builder 전·후 1L.1/1L.2 경계를 immutable production trace로 기록한다.
+        인자: message_id -> 1L.1 또는 1L.2
+            event_type -> KLINE_OBSERVED 또는 MARKET_EVALUATED
+            source_event_id -> canonical public Kline source identity
+            market_version -> source가 만든 authoritative MarketSnapshot version
+        반환값: 기록·dedup한 frozen entry 또는 비활성 session이면 None
+        작성 날짜: 2026/08/31
+        """
+        if message_id not in {"1L.1", "1L.2"}:
+            raise ValueError("public market observer accepts only 1L.1 and 1L.2")
+        if not isinstance(event_type, str):
+            raise TypeError("event_type must be a string")
+        if (
+            not isinstance(source_event_id, str)
+            or not source_event_id
+            or source_event_id != source_event_id.strip()
+        ):
+            raise ValueError("source_event_id must be non-empty canonical text")
+        if type(market_version) is not int or market_version < 1:
+            raise ValueError("market_version must be a positive exact integer")
+
+        with self._session_lock:
+            # Start 전 REST merge와 terminal session Kline은 다음 run의 evidence로 이월하지 않는다.
+            if (
+                self._cleanup_in_progress
+                or self._status is not TradingSessionStatus.RUNNING
+            ):
+                return None
+            active_stm = self._active_stm
+            if active_stm is None:
+                raise RuntimeError("running public market observer requires an active STM")
+            evaluation_id = f"market:{market_version}:{source_event_id}"
+            candidate = PublicMarketBoundaryTraceEntry(
+                message_id=message_id,
+                event_type=event_type,
+                source_event_id=source_event_id,
+                evaluation_id=evaluation_id,
+                market_version=market_version,
+                context_version=self._context.version,
+                regime=active_stm.regime_type,
+            )
+            existing_entries = tuple(
+                entry
+                for entry in self._public_market_boundary_trace
+                if entry.evaluation_id == evaluation_id
+            )
+            if candidate in existing_entries:
+                return candidate  # 같은 public callback replay는 새 evidence sequence를 만들지 않는다.
+            if any(entry.message_id == message_id for entry in existing_entries):
+                raise RuntimeError("public market boundary evidence conflicts with an existing step")
+            if message_id == "1L.2" and (
+                not existing_entries
+                or existing_entries[-1].message_id != "1L.1"
+            ):
+                raise RuntimeError("market evaluation evidence requires its Kline observation")
+            self._reserve_public_market_boundary_trace_capacity(
+                required_entries=1,
+                protected_evaluation_id=(
+                    evaluation_id if existing_entries else None
+                ),
+            )
+            self._public_market_boundary_trace.append(candidate)
+
+            return candidate
+
+    def _append_public_market_action_boundary(
+        self,
+        action: SubmitOrder,
+    ) -> None:
+        """
+        함수 이름: _append_public_market_action_boundary()
+        기능: 현재 public evaluation이 실제 STM SubmitOrder를 낸 순간 1L.3 evidence를 effect 전에 기록한다.
+        인자: action -> STM이 방출한 immutable SubmitOrder
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        if not isinstance(action, SubmitOrder):
+            raise TypeError("action must be a SubmitOrder")
+        evaluation_id = self._active_trace_event_id
+        if evaluation_id is None or not evaluation_id.startswith("market:"):
+            return  # Direct command와 retry event는 public 1L evaluation chain으로 가장하지 않는다.
+        matching_entries = tuple(
+            entry
+            for entry in self._public_market_boundary_trace
+            if entry.evaluation_id == evaluation_id
+        )
+        if not matching_entries:
+            raise RuntimeError(
+                "public market Action requires retained Kline and evaluation evidence"
+            )  # market:* event는 evicted·누락 1L evidence 상태에서 주문 effect로 진행하지 않는다.
+        if tuple(entry.message_id for entry in matching_entries) != (
+            "1L.1",
+            "1L.2",
+        ):
+            raise RuntimeError("public Action evidence requires exact Kline and evaluation steps")
+        evaluated_entry = matching_entries[-1]
+        if self._context.version < evaluated_entry.context_version:
+            raise RuntimeError("public Action Context version moved backward")
+        self._reserve_public_market_boundary_trace_capacity(
+            required_entries=1,
+            protected_evaluation_id=evaluation_id,
+        )
+
+        # 이전 두 entry를 변경하지 않고 effect 직전 실제 Context와 typed action만 새 frozen entry로 추가한다.
+        self._public_market_boundary_trace.append(
+            PublicMarketBoundaryTraceEntry(
+                message_id="1L.3",
+                event_type="ACTION_EMITTED",
+                source_event_id=evaluated_entry.source_event_id,
+                evaluation_id=evaluation_id,
+                market_version=evaluated_entry.market_version,
+                context_version=self._context.version,
+                regime=evaluated_entry.regime,
+                action_type="SUBMIT_ORDER",
+                side=action.side,
+                strategy=action.strategy,
+            )
+        )
+
+    def _reserve_public_market_boundary_trace_capacity(
+        self,
+        *,
+        required_entries: int,
+        protected_evaluation_id: str | None,
+    ) -> None:
+        """
+        함수 이름: _reserve_public_market_boundary_trace_capacity()
+        기능: 장기 session에서 오래된 evaluation 전체를 제거해 1L chain을 쪼개지 않는 bounded trace를 유지한다.
+        인자: required_entries -> 이번 operation이 추가할 entry 개수
+            protected_evaluation_id -> 현재 완성 중이라 제거하면 안 되는 evaluation ID 또는 None
+        반환값: 요청한 공간을 확보하면 없음
+        작성 날짜: 2026/08/31
+        """
+        if type(required_entries) is not int or required_entries < 1:
+            raise ValueError("required_entries must be a positive exact integer")
+        if protected_evaluation_id is not None and (
+            not isinstance(protected_evaluation_id, str)
+            or not protected_evaluation_id
+            or protected_evaluation_id != protected_evaluation_id.strip()
+        ):
+            raise ValueError(
+                "protected_evaluation_id must be canonical text or None"
+            )
+        if required_entries > _MAX_PUBLIC_MARKET_BOUNDARY_TRACE_ENTRIES:
+            raise RuntimeError("public market boundary reservation exceeds capacity")
+
+        # Capacity가 찰 때만 가장 오래된 evaluation의 1L.1~1L.3을 한 단위로 제거한다.
+        while (
+            len(self._public_market_boundary_trace) + required_entries
+            > _MAX_PUBLIC_MARKET_BOUNDARY_TRACE_ENTRIES
+        ):
+            oldest_evaluation_id = next(
+                (
+                    entry.evaluation_id
+                    for entry in self._public_market_boundary_trace
+                    if entry.evaluation_id != protected_evaluation_id
+                ),
+                None,
+            )
+            if oldest_evaluation_id is None:
+                raise RuntimeError(
+                    "public market boundary capacity cannot preserve active evaluation"
+                )
+            self._public_market_boundary_trace = [
+                entry
+                for entry in self._public_market_boundary_trace
+                if entry.evaluation_id != oldest_evaluation_id
+            ]  # 한 evaluation 일부만 남겨 synthetic incomplete chain을 만들지 않는다.
+
+    def observe_market_evaluation(
+        self,
+        market: MarketEvaluationSnapshot,
+        *,
+        source_event_id: str,
+        market_version: int,
+    ) -> TradingEvent | None:
+        """
+        함수 이름: observe_market_evaluation()
+        기능: 외부 시장 평가와 source version을 불변 event로 묶어 production queue에 넣는다.
+        인자: market -> Kline·지표 계산에서 만든 불변 MarketEvaluationSnapshot
+            source_event_id -> 원본 market event의 안정적이고 비밀 없는 식별자
+            market_version -> 평가가 사용한 authoritative MarketSnapshot version
+        반환값: queue identity가 부여된 TradingEvent 또는 비활성·중복이면 None
+        작성 날짜: 2026/08/24
+        """
+        # Adapter가 임의 mapping이나 공백 식별자로 시장 provenance를 가장하지 못하게 한다.
+        if not isinstance(market, MarketEvaluationSnapshot):
+            raise TypeError("market must be a MarketEvaluationSnapshot")
+        if not isinstance(source_event_id, str):
+            raise TypeError("source_event_id must be a string")
+        if not source_event_id or source_event_id != source_event_id.strip():
+            raise ValueError(
+                "source_event_id must be non-empty without outer whitespace"
+            )
+        if type(market_version) is not int:
+            raise TypeError("market_version must be an exact int")
+        if market_version <= 0:
+            raise ValueError("market_version must be positive")
+        if (
+            not market.realtime_price.is_finite()
+            or market.realtime_price <= Decimal("0")
+        ):
+            raise ValueError(
+                "market realtime_price must be a positive finite Decimal"
+            )
+
+        with self._session_lock:
+            # 비활성·종료 session에는 다음 start로 새 시장 사실을 몰래 이월하지 않는다.
+            if (
+                self._cleanup_in_progress
+                or self._status is not TradingSessionStatus.RUNNING
+            ):
+                return None
+
+            # 계산 도중 MarketSnapshot이 전진했다면 서로 다른 source를 섞지 않고 fail closed한다.
+            authoritative_market_version = self._market_snapshot.version
+            if market_version != authoritative_market_version:
+                raise ValueError(
+                    "market_version must match the authoritative MarketSnapshot"
+                )
+
+            # Queue 대기 중 다른 Kline이 도착해도 source 평가를 잃지 않도록 event 자체에 보존한다.
+            evaluation_time = self._clock()
+            event_type = self._select_market_event_type(market)
+            event = TradingEvent(
+                event_type=event_type,
+                occurred_at=evaluation_time,
+                priority=EventPriority.MARKET,
+                event_id=f"market:{market_version}:{source_event_id}",
+                lower_event_id=self._context.runtime.lower_event_id,
+                candle_id=market.current_30m_candle_id,
+                market_evaluation=market,
+                market_version=market_version,
+            )
+            return self.enqueue_event(event)  # Context mutation은 FIFO claim 직후 준비 단계에서만 수행한다.
+
+    def _prepare_market_event_context(
+        self,
+        event: TradingEvent,
+    ) -> TradingEvent:
+        """
+        함수 이름: _prepare_market_event_context()
+        기능: claimed market event의 원본 평가를 Context에 적용하고 처리 시점 runtime으로 재분류한다.
+        인자: event -> 직렬 queue가 꺼낸 immutable TradingEvent
+        반환값: same-source Context와 일치하도록 분류·scope provenance를 갱신한 event
+        작성 날짜: 2026/08/29
+        """
+        if event.market_evaluation is None:
+            return event  # 사용자·주문·내부 event는 기존 Context와 event identity를 그대로 사용한다.
+        if not isinstance(event.market_evaluation, MarketEvaluationSnapshot):
+            raise TypeError(
+                "market_evaluation must be a MarketEvaluationSnapshot"
+            )
+        if event.market_version is None:
+            raise RuntimeError("market event requires a source version")
+
+        # Queue backlog는 현재 MarketSnapshot보다 오래될 수 있지만 처리 순서는 반드시 전진해야 한다.
+        if event.market_version > self._market_snapshot.version:
+            raise ValueError(
+                "market event version cannot exceed the authoritative snapshot"
+            )
+        if event.market_version <= self._latest_market_evaluation_version:
+            raise ValueError(
+                "market event versions must be processed in strictly increasing order"
+            )
+
+        # 앞선 microstep이 만든 signal·Position 시각을 반영한 뒤 이 event의 발생 시각까지 경과를 계산한다.
+        enriched_market = self._enrich_market_evaluation_elapsed(
+            event.market_evaluation,
+            event.occurred_at,
+        )
+        event_type = self._select_market_event_type(enriched_market)
+        prepared_event = replace(
+            event,
+            event_type=event_type,
+            lower_event_id=self._context.runtime.lower_event_id,
+            candle_id=enriched_market.current_30m_candle_id,
+            market_evaluation=enriched_market,
+        )
+
+        # 모든 검증과 immutable event 생성이 끝난 뒤에만 Context와 processed version을 commit한다.
+        self._context.update_market(enriched_market)
+        self._latest_market_evaluation_version = event.market_version
+        return prepared_event
+
+    def _enrich_market_evaluation_elapsed(
+        self,
+        market: MarketEvaluationSnapshot,
+        evaluation_time: datetime,
+    ) -> MarketEvaluationSnapshot:
+        """
+        함수 이름: _enrich_market_evaluation_elapsed()
+        기능: 시장 계산기가 소유하지 않는 Position·signal·Case C timer 경과 시간을 결합한다.
+        인자: market -> 순수 시장 지표와 monotonic 연속 flag를 가진 평가
+            evaluation_time -> 이번 Context와 event가 공유할 timezone-aware 시각
+        반환값: 세 runtime 경과 시간이 채워진 새 MarketEvaluationSnapshot
+        작성 날짜: 2026/08/29
+        """
+        if not isinstance(evaluation_time, datetime):
+            raise TypeError("evaluation_time must be a datetime")
+        if (
+            evaluation_time.tzinfo is None
+            or evaluation_time.utcoffset() is None
+        ):
+            raise ValueError("evaluation_time must be timezone-aware")
+
+        # Context runtime과 authoritative Position owner를 같은 session lock 아래에서 한 번만 읽는다.
+        runtime = self._context.runtime
+        entered_at = (
+            self._position.entered_at
+            if self._position is not None
+            else None
+        )
+        holding_elapsed = self._calculate_non_negative_elapsed(
+            evaluation_time,
+            entered_at,
+            "Position entered_at",
+        )
+        signal_elapsed = self._calculate_non_negative_elapsed(
+            evaluation_time,
+            runtime.signal_time,
+            "signal_time",
+        )
+        case_c_timer_elapsed = self._calculate_non_negative_elapsed(
+            evaluation_time,
+            runtime.timer_base_time,
+            "timer_base_time",
+        )
+        return replace(
+            market,
+            holding_elapsed=holding_elapsed,
+            signal_elapsed=signal_elapsed,
+            case_c_timer_elapsed=case_c_timer_elapsed,
+        )
+
+    @staticmethod
+    def _calculate_non_negative_elapsed(
+        evaluation_time: datetime,
+        started_at: datetime | None,
+        field_name: str,
+    ) -> timedelta:
+        """
+        함수 이름: _calculate_non_negative_elapsed()
+        기능: optional 시작 시각부터 평가 시각까지 음수가 아닌 경과 시간을 계산한다.
+        인자: evaluation_time -> 현재 평가 시각
+            started_at -> runtime 또는 Position 시작 시각, 없으면 None
+            field_name -> fail-closed 오류에 사용할 필드 이름
+        반환값: 시작 시각이 없으면 0, 있으면 두 시각의 차이
+        작성 날짜: 2026/08/29
+        """
+        if started_at is None:
+            return timedelta(0)  # 활성 timer가 없으면 만료 조건을 충족시키지 않는다.
+
+        elapsed = evaluation_time - started_at
+        if elapsed < timedelta(0):
+            raise ValueError(
+                f"{field_name} must not be later than evaluation_time"
+            )
+
+        return elapsed
+
+    def _select_market_event_type(
+        self,
+        market: MarketEvaluationSnapshot,
+    ) -> TradingEventType:
+        """
+        함수 이름: _select_market_event_type()
+        기능: 현재 session scope와 밴드 사실에서 우선순위가 가장 높은 공개 시장 event를 선택한다.
+        인자: market -> 이미 Context에 적용한 same-version 시장 평가 snapshot
+        반환값: upper, 최초·신규 lower 또는 일반 market update 유형
+        작성 날짜: 2026/08/24
+        """
+        # 상단 접촉은 미구현 상단 전략 진입 대신 기존 안전 종료 전이를 가장 먼저 선택한다.
+        if (
+            market.upper_band > Decimal("0")
+            and market.realtime_price >= market.upper_band
+        ):
+            return TradingEventType.UPPER_BAND_TOUCHED
+
+        # 하단 접촉은 실시간 가격과 확정 30분봉 저가라는 명세의 두 source를 함께 사용한다.
+        lower_touched = (
+            market.lower_band > Decimal("0")
+            and (
+                market.realtime_price <= market.lower_band
+                or (
+                    market.confirmed_30m_close
+                    and market.current_30m_low <= market.lower_band
+                )
+            )
+        )
+        if not lower_touched:
+            return TradingEventType.MARKET_DATA_UPDATED
+
+        # 아직 scope가 없으면 G-02 최초 접촉, 다른 확정봉이면 G-03 신규 접촉으로 분리한다.
+        runtime = self._context.runtime
+        if runtime.lower_event_id is None:
+            return TradingEventType.LOWER_BAND_TOUCHED
+        if (
+            market.confirmed_30m_close
+            and market.current_30m_candle_id is not None
+            and market.current_30m_candle_id != runtime.touch_candle_id
+        ):
+            return TradingEventType.NEW_30M_LOWER_BAND_TOUCHED
+
+        return TradingEventType.MARKET_DATA_UPDATED  # 같은 lower scope의 반복 tick은 새 event를 열지 않는다.
+
     async def process_next_event(self) -> TradingSTMResult | None:
         """
         함수 이름: process_next_event()
@@ -1983,6 +3462,15 @@ class TradingController:
                 active_stm = self._active_stm
                 if active_stm is not None:
                     self._synchronize_status_from_context(active_stm)
+
+            # Reconciliation outcome이 RUNNING을 복원해도 active C&L은 lock 밖에 그 상태를 게시하지 않는다.
+            if (
+                self._requires_manual_kill_cleanup_locked()
+                and self._status is TradingSessionStatus.RUNNING
+            ):
+                self._begin_manual_kill_cleanup_locked(
+                    self._manual_kill_cleanup_command_id_locked()
+                )
 
             return result
 
@@ -2017,6 +3505,15 @@ class TradingController:
             active_stm = self._active_stm
             if active_stm is not None:
                 self._synchronize_status_from_context(active_stm)
+
+            # Reconciliation outcome 뒤 신규 strategy 상태가 잠깐 열려도 같은 lock에서 STOP을 재개한다.
+            if self._requires_manual_kill_cleanup_locked():
+                if self._status is TradingSessionStatus.RUNNING:
+                    self._begin_manual_kill_cleanup_locked(
+                        self._manual_kill_cleanup_command_id_locked()
+                    )
+                else:
+                    self._verify_manual_kill_cleanup_locked()
 
             return tuple(results)
 
@@ -2290,6 +3787,73 @@ class TradingController:
                     message_id=None,
                 )  # 실행 중 disconnect는 Context와 공개 status도 동시에 잠근다.
 
+    def mark_market_stream_reconciliation_required(self, reason: str) -> None:
+        """
+        함수 이름: mark_market_stream_reconciliation_required()
+        기능: Kline 세대 장애를 기록하고 신규 시장·주문 effect를 full-resync까지 잠근다.
+        인자: reason -> credential 없는 안정적 시장 stream 장애 분류
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        if not isinstance(reason, str):
+            raise TypeError("reason must be a string")
+        if not reason or reason != reason.strip():
+            raise ValueError(
+                "reason must be non-empty without outer whitespace"
+            )
+
+        with self._session_lock:
+            # 최초 RUNNING 중단만 기억해 STOPPING 또는 다른 reconciliation을 자동 재개하지 않는다.
+            self._market_stream_monitoring_started = True
+            if self._status is TradingSessionStatus.RUNNING:
+                self._market_stream_interrupted_running_session = True
+            self._market_stream_reconciliation_required = True
+            if self._status in (
+                TradingSessionStatus.RUNNING,
+                TradingSessionStatus.STOPPING,
+            ):
+                self._enter_order_reconciliation(
+                    None,
+                    OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
+                    message_id=None,
+                )
+
+            # 전략 timer는 폐기하되 이미 수신한 주문 outcome은 position·history 복구를 위해 보존한다.
+            self._scheduler.clear()
+
+    def complete_market_stream_reconciliation(
+        self,
+        market_version: int,
+    ) -> None:
+        """
+        함수 이름: complete_market_stream_reconciliation()
+        기능: 새 live 세대와 REST 평가의 정확한 version을 확인한 뒤 시장 blocker만 해제한다.
+        인자: market_version -> full-resync와 REGIME 평가가 공유한 MarketSnapshot version
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        if type(market_version) is not int:
+            raise TypeError("market_version must be an exact int")
+        if market_version <= 0:
+            raise ValueError("market_version must be positive")
+
+        with self._session_lock:
+            # Snapshot identity, version과 실제 Gateway live 세대 중 하나라도 어긋나면 gate를 유지한다.
+            self._market_stream_monitoring_started = True
+            if not self._market_snapshot.ready:
+                raise ValueError("MarketSnapshot must be ready after full resync")
+            if market_version != self._market_snapshot.version:
+                raise ValueError(
+                    "market_version must match the authoritative MarketSnapshot"
+                )
+            if not self._web_socket_gateway.kline_live_ready:
+                raise ValueError(
+                    "Kline stream must be live before reconciliation completes"
+                )
+
+            # Market source 복구 사실만 기록하고 active session의 status·phase 중단 provenance는 보존한다.
+            self._market_stream_reconciliation_required = False
+
     def reconcile_startup_state(self) -> None:
         """
         함수 이름: reconcile_startup_state()
@@ -2363,6 +3927,19 @@ class TradingController:
                 if self._pending_order_recovery_enabled
                 else ()
             )
+            if self._pending_order_recovery_enabled:
+                # REMOVE된 attempt도 journal에서 복원해 fresh process가 같은 intent 예산을 초기화하지 않게 한다.
+                durable_submission_counts = dict(
+                    history_controller.get_pending_order_submission_counts()
+                )
+                self._submission_attempts_by_intent = {
+                    intent_id: max(
+                        durable_count,
+                        self._submission_attempts_by_intent.get(intent_id, 0),
+                    )
+                    for intent_id, durable_count
+                    in durable_submission_counts.items()
+                }
             pending_orders = tuple(
                 record.order for record in pending_records
             )
@@ -2452,13 +4029,33 @@ class TradingController:
             self._startup_reconciliation_blocked = False
             for recovery_record in pending_records:
                 order = recovery_record.order
+                absence_confirms_no_submission = (
+                    recovery_record.lifecycle
+                    is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+                    or (
+                        recovery_record.lifecycle
+                        is PendingOrderRecoveryLifecycle.PREPARED
+                        and recovery_record.submission_provenance
+                        is PendingOrderSubmissionProvenance.SUBMITTED_FSYNC_PRECEDES_REST_POST
+                    )
+                )  # V3 PREPARED와 명시적 거부만 bounded absence를 미제출 증거로 승격한다.
                 result = self._query_pending_order_during_startup(
                     order,
-                    submission_rejection_confirmed=(
-                        recovery_record.lifecycle
-                        is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+                    absence_confirms_no_submission=(
+                        absence_confirms_no_submission
                     ),
                 )
+                if (
+                    result is not None
+                    and result.status in ACTIVE_ORDER_STATUSES
+                    and self._requires_manual_kill_cleanup_locked()
+                ):
+                    result = (
+                        self._cancel_pending_order_during_manual_kill_startup(
+                            order,
+                            result,
+                        )
+                    )  # Durable kill은 active same-ID를 취소·terminal 조회한 뒤에만 Position을 복원한다.
                 matching_history_trades = history_trades_by_client_id.get(
                     order.client_order_id,
                     [],
@@ -2466,19 +4063,46 @@ class TradingController:
                 if result is None:
                     if matching_history_trades:
                         raise StartupOrderReconciliationError(
-                            "durable submission rejection conflicts with history"
+                            "durable no-submission provenance conflicts with history"
                         )
                     history_controller.delete_pending_order(
                         order.client_order_id
                     )
-                    continue  # 네 번의 부재로 재확인한 durable 거부는 신규 제출 없이 정리한다.
+                    continue  # 네 번의 부재와 durable 미제출 근거를 결합해 신규 POST 없이 정리한다.
                 authoritative_order_results.append(result)
                 if matching_history_trades:
+                    if (
+                        recovery_record.lifecycle
+                        is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+                    ):
+                        raise StartupOrderReconciliationError(
+                            "durable submission rejection conflicts with history"
+                        )
                     self._confirm_pending_order_already_in_history(
                         order,
                         result,
                         matching_history_trades,
                     )
+                    try:
+                        # Phase 9 PREPARED journal도 exact history 대조 후 terminal→commit 증거로 순차 승격한다.
+                        if recovery_record.lifecycle is not (
+                            PendingOrderRecoveryLifecycle.HISTORY_COMMITTED
+                        ):
+                            if recovery_record.lifecycle is not (
+                                PendingOrderRecoveryLifecycle.TERMINAL
+                            ):
+                                history_controller.transition_pending_order_lifecycle(
+                                    order.client_order_id,
+                                    PendingOrderRecoveryLifecycle.TERMINAL,
+                                )
+                            history_controller.transition_pending_order_lifecycle(
+                                order.client_order_id,
+                                PendingOrderRecoveryLifecycle.HISTORY_COMMITTED,
+                            )
+                    except Exception as error:
+                        raise StartupOrderReconciliationError(
+                            "pending history lifecycle commit failed"
+                        ) from error
                     history_controller.delete_pending_order(
                         order.client_order_id
                     )
@@ -2487,6 +4111,7 @@ class TradingController:
                     order,
                     result,
                     history_trades_by_order_id,
+                    recovery_lifecycle=recovery_record.lifecycle,
                 )
 
             # Active/partial 주문은 설명 가능해도 terminal history가 없으므로 이번 process를 READY로 열지 않는다.
@@ -2528,20 +4153,20 @@ class TradingController:
         self,
         order: Order,
         *,
-        submission_rejection_confirmed: bool,
+        absence_confirms_no_submission: bool,
     ) -> OrderResult | None:
         """
         함수 이름: _query_pending_order_during_startup()
-        기능: durable lifecycle 주문을 1·2·4·8초 뒤 같은 ID로 조회해 존재 또는 안전한 거부를 확정한다.
+        기능: durable lifecycle 주문을 1·2·4·8초 뒤 같은 ID로 조회해 존재 또는 안전한 미제출을 확정한다.
         인자: order -> 신규 제출 없이 조회할 durable pending Order
-            submission_rejection_confirmed -> fsync된 pre-matching 거부 사실 여부
-        반환값: 확인한 concrete OrderResult 또는 거부와 4회 부재가 결합되면 None
-        작성 날짜: 2026/08/23
+            absence_confirms_no_submission -> durable 근거와 bounded absence로 미제출을 확정할지 여부
+        반환값: 확인한 concrete OrderResult 또는 근거와 4회 부재가 결합되면 None
+        작성 날짜: 2026/08/29
         """
         if not isinstance(order, Order):
             raise TypeError("order must be an Order")
-        if type(submission_rejection_confirmed) is not bool:
-            raise TypeError("submission_rejection_confirmed must be a bool")
+        if type(absence_confirms_no_submission) is not bool:
+            raise TypeError("absence_confirms_no_submission must be a bool")
 
         # Binance의 비동기 Memory=>Database 지연을 고려해 첫 조회도 1초 backoff 뒤 수행한다.
         absent_observation_count = 0
@@ -2560,15 +4185,15 @@ class TradingController:
             if result.failure_kind is OrderResultFailureKind.ORDER_NOT_VISIBLE:
                 absent_observation_count += 1
 
-        # Durable pre-matching 거부와 네 번의 정확한 부재가 모두 있으면 exchange 미생성을 확정한다.
+        # V3 PREPARED 경계 또는 durable 거부와 네 번의 정확한 부재를 결합한다.
         if (
-            submission_rejection_confirmed
+            absence_confirms_no_submission
             and absent_observation_count == len(_ORDER_RECONCILIATION_DELAYS)
             and last_error is None
         ):
             return None
 
-        # PREPARED는 POST 수락 직후 crash도 포함하므로 네 번의 부재만으로 미제출을 단정하지 않는다.
+        # Legacy PREPARED와 SUBMITTED은 POST 수락 직후 crash를 포함하므로 부재만으로 정리하지 않는다.
         failure_message = (
             "same-order startup query remained not visible"
             if absent_observation_count == len(_ORDER_RECONCILIATION_DELAYS)
@@ -2579,6 +4204,61 @@ class TradingController:
             raise startup_error from last_error
 
         raise startup_error
+
+    def _cancel_pending_order_during_manual_kill_startup(
+        self,
+        order: Order,
+        active_result: OrderResult,
+    ) -> OrderResult:
+        """
+        함수 이름: _cancel_pending_order_during_manual_kill_startup()
+        기능: durable kill 재시작에서 app-owned active 주문 하나를 취소하고 같은 ID terminal을 확인한다.
+        인자: order -> pending journal이 보존한 app-owned Order
+            active_result -> 첫 startup query가 확인한 active OrderResult
+        반환값: cancel 뒤 같은 ID에서 확인한 terminal OrderResult
+        작성 날짜: 2026/08/29
+        """
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        if not isinstance(active_result, OrderResult):
+            raise TypeError("active_result must be an OrderResult")
+        if active_result.status not in ACTIVE_ORDER_STATUSES:
+            raise ValueError("active_result must identify an active order")
+        if active_result.client_order_id != order.client_order_id:
+            raise ValueError("active_result must match the pending order")
+
+        # 개별 app client identity만 취소하고 응답은 성공·실패 어느 쪽도 terminal 사실로 신뢰하지 않는다.
+        try:
+            self._api_gateway.cancel_order(order)
+        except Exception:
+            pass  # Binance 5xx·timeout의 UNKNOWN 의미 때문에 반드시 아래 same-ID query로 확정한다.
+
+        # 취소·체결 race와 Memory=>Database 지연을 1·2·4·8초 bounded 조회로 terminal까지 관찰한다.
+        last_error: BaseException | None = None
+        last_result = active_result
+        for base_delay in _ORDER_RECONCILIATION_DELAYS:
+            selected_delay = self._jittered_order_retry_delay(base_delay)
+            try:
+                self._order_retry_waiter(selected_delay)
+                queried_result = self._api_gateway.query_order_result(order)
+            except Exception as error:
+                last_error = error
+                continue  # Transport 오류를 취소 완료로 바꾸지 않고 남은 same-ID 조회 예산을 사용한다.
+
+            last_result = queried_result
+            if queried_result.status in TERMINAL_ORDER_STATUSES:
+                return queried_result
+
+        # Active·UNKNOWN이 남으면 신규 submit이나 Position 청산을 시작하지 않고 startup을 닫는다.
+        startup_error = StartupOrderReconciliationError(
+            "manual-kill cancel remained non-terminal after same-order queries"
+        )
+        if last_error is not None:
+            raise startup_error from last_error
+
+        raise startup_error from RuntimeError(
+            f"last order status was {last_result.status.value}"
+        )
 
     def _confirm_pending_order_already_in_history(
         self,
@@ -2686,6 +4366,8 @@ class TradingController:
         order: Order,
         result: OrderResult,
         history_trades_by_order_id: dict[str, Trade],
+        *,
+        recovery_lifecycle: PendingOrderRecoveryLifecycle,
     ) -> None:
         """
         함수 이름: _recover_pending_order()
@@ -2693,12 +4375,20 @@ class TradingController:
         인자: order -> 제출 전 durable journal에서 복원한 Order
             result -> Binance REST가 반환한 같은 주문의 최신 결과
             history_trades_by_order_id -> exchange order ID별 durable Trade index
+            recovery_lifecycle -> startup replay가 확인한 마지막 durable lifecycle
         반환값: 없음
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/08/25
         """
         # Journal Order와 query 결과 상관관계를 aggregate 적용 전에 다시 검증한다.
         if not isinstance(order, Order) or not isinstance(result, OrderResult):
             raise TypeError("order and result must use canonical domain types")
+        if not isinstance(
+            recovery_lifecycle,
+            PendingOrderRecoveryLifecycle,
+        ):
+            raise TypeError(
+                "recovery_lifecycle must be a PendingOrderRecoveryLifecycle"
+            )
         if result.client_order_id != order.client_order_id:
             raise StartupOrderReconciliationError(
                 "startup query returned a different client order ID"
@@ -2715,6 +4405,11 @@ class TradingController:
             order=order,
             force_sell=False,
             pending_recovery_pending=True,
+            recovery_lifecycle=recovery_lifecycle,
+            submission_rejection_confirmable=(
+                recovery_lifecycle
+                is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+            ),
         )  # 이 state는 durable pending record에서 왔으므로 REMOVE 성공 전까지 해제할 수 없다.
         try:
             order.apply_order_result(result)
@@ -2722,6 +4417,19 @@ class TradingController:
             raise StartupOrderReconciliationError(
                 "startup order result conflicts with durable intent"
             ) from error
+
+        # Query가 증명한 누적 상태를 Position mutation 전 sidecar에 먼저 fsync한다.
+        observed_lifecycle = self._select_pending_order_lifecycle(
+            state,
+            result,
+        )
+        if not self._transition_pending_order_recovery(
+            state,
+            observed_lifecycle,
+        ):
+            raise StartupOrderReconciliationError(
+                "startup pending lifecycle transition failed"
+            )
 
         # Query가 확인한 실제 fill은 history 저장 여부와 무관하게 Position에 먼저 한 번 적용한다.
         if order.fills:
@@ -2769,6 +4477,13 @@ class TradingController:
                 history_trades_by_order_id[
                     exchange_order_id
                 ] = durable_trade  # 다음 pending record도 같은 숫자 ID를 재사용하지 못하게 한다.
+                if not self._transition_pending_order_recovery(
+                    state,
+                    PendingOrderRecoveryLifecycle.HISTORY_COMMITTED,
+                ):
+                    raise StartupOrderReconciliationError(
+                        "startup history lifecycle commit failed"
+                    )
             history_controller.delete_pending_order(order.client_order_id)
             return
 
@@ -2865,6 +4580,12 @@ class TradingController:
             raise TypeError("recovery_commit_observer must be callable or None")
 
         with self._session_lock:
+            # Parent/runtime ownership을 잃은 process는 network snapshot으로 스스로 gate를 다시 열지 않는다.
+            if self._process_ownership_ambiguous:
+                raise AccountStreamRecoveryBlockedError(
+                    "process ownership is ambiguous"
+                )
+
             # Reconnect operation 전체에서 command gate를 닫고 REST full snapshot부터 다시 적용한다.
             self._stream_reconciliation_required = True
             account_snapshot = self._api_gateway.fetch_account_snapshot(
@@ -2910,6 +4631,45 @@ class TradingController:
                     *open_app_order_results,
                     *recent_app_order_results,
                 ]  # 완료된 durable BUY도 recent app order에서 provenance 기준으로 유지한다.
+
+                # Memory index보다 sidecar identity를 먼저 replay해 fsync 후 process gap에서도 새 ID를 만들지 않는다.
+                history_controller = self._require_trade_history_controller()
+                pending_records = (
+                    history_controller.get_pending_order_recovery_records()
+                    if self._pending_order_recovery_enabled
+                    else ()
+                )
+                if self._pending_order_recovery_enabled:
+                    for intent_id, durable_count in (
+                        history_controller.get_pending_order_submission_counts()
+                    ):
+                        self._submission_attempts_by_intent[intent_id] = max(
+                            durable_count,
+                            self._submission_attempts_by_intent.get(
+                                intent_id,
+                                0,
+                            ),
+                        )
+                    for recovery_record in pending_records:
+                        recovered_order = recovery_record.order
+                        if (
+                            recovered_order.client_order_id
+                            in self._order_states_by_client_id
+                        ):
+                            continue
+                        recovered_state = _OrderExecutionState(
+                            order=recovered_order,
+                            force_sell=False,
+                            pending_recovery_pending=True,
+                            recovery_lifecycle=recovery_record.lifecycle,
+                            submission_rejection_confirmable=(
+                                recovery_record.lifecycle
+                                is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+                            ),
+                        )
+                        self._order_states_by_client_id[
+                            recovered_order.client_order_id
+                        ] = recovered_state  # 복원 state는 아래 same-ID query 외의 submit 경로를 갖지 않는다.
                 known_client_order_ids = set(self._order_states_by_client_id)
                 if any(
                     result.client_order_id not in known_client_order_ids
@@ -2926,7 +4686,6 @@ class TradingController:
                     )
 
                 # 단절 중 다른 process가 만든 app-prefix 체결도 local Position/history 없이 통과시키지 않는다.
-                history_controller = self._require_trade_history_controller()
                 durable_trades = history_controller.trade_history.trades
                 durable_trades_by_identity = {
                     (trade.client_order_id, trade.order_id): trade
@@ -2951,18 +4710,26 @@ class TradingController:
                             "stream reconnect found a reused exchange order ID"
                         )
                 if self._pending_order_recovery_enabled:
-                    pending_records = (
-                        history_controller.get_pending_order_recovery_records()
-                    )
-                    pending_client_order_ids = {
-                        record.order.client_order_id
+                    pending_records_by_client_id = {
+                        record.order.client_order_id: record
                         for record in pending_records
                     }
                     for state in self._order_states_by_client_id.values():
-                        state.pending_recovery_pending = (
+                        recovery_record = pending_records_by_client_id.get(
                             state.order.client_order_id
-                            in pending_client_order_ids
-                        )  # Sidecar replay를 in-memory marker보다 우선해 REMOVE 실패를 다시 복구한다.
+                        )
+                        if recovery_record is not None:
+                            state.pending_recovery_pending = True
+                            state.recovery_lifecycle = (
+                                recovery_record.lifecycle
+                            )
+                            state.submission_rejection_confirmable = (
+                                recovery_record.lifecycle
+                                is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+                            )  # Sidecar replay를 in-memory marker보다 우선해 REMOVE 실패를 다시 복구한다.
+                        # 기존 marker가 있는데 disk record가 없으면 REMOVE 성공·실패 경계를 추측하지 않는다.
+                        elif state.pending_recovery_pending:
+                            continue  # Terminal completion을 명시적으로 재실행하기 전까지 재연결 gate를 유지한다.
                 for result in recent_app_order_results:
                     if not result.fills:
                         continue
@@ -3025,7 +4792,37 @@ class TradingController:
                         raise AccountStreamRecoveryBlockedError(
                             "recovered startup order requires process restart"
                         )
-                    result = self._api_gateway.query_order_result(order)
+                    if (
+                        state.recovery_lifecycle
+                        is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+                    ):
+                        result = self._query_pending_order_during_startup(
+                            order,
+                            absence_confirms_no_submission=True,
+                        )
+                        if result is None:
+                            # Durable rejection와 네 번의 exact absence만 active lock을 해제하고 같은 intent 예산은 유지한다.
+                            history_controller.delete_pending_order(
+                                order.client_order_id
+                            )
+                            state.pending_recovery_pending = False
+                            self._scheduled_order_queries.pop(
+                                order.client_order_id,
+                                None,
+                            )
+                            self._context.update_pending_order(
+                                None,
+                                preserve_intent_id=not state.force_sell,
+                            )
+                            failure_event = self._create_order_outcome_event(
+                                state,
+                                succeeded=False,
+                            )
+                            state.pending_outcome = failure_event
+                            outcomes.append(failure_event)
+                            continue
+                    else:
+                        result = self._api_gateway.query_order_result(order)
                     if result.status is OrderStatus.UNKNOWN:
                         raise StartupOrderReconciliationError(
                             "stream reconnect order query remained unknown"
@@ -3175,13 +4972,31 @@ class TradingController:
                 if (
                     self._status is TradingSessionStatus.RECONCILIATION_REQUIRED
                     and not unresolved_state_remains
+                    and not self._market_stream_reconciliation_required
                     and self._context.initialized
                 ):
                     try:
-                        self._context.apply_runtime_patch(
-                            patch(trading_phase=TradingPhase.IDLE)
-                        )
-                        self._status = TradingSessionStatus.RUNNING
+                        if (
+                            self._requires_manual_kill_cleanup_locked()
+                            and self._recovered_position_liquidation_session
+                        ):
+                            self._context.apply_runtime_patch(
+                                patch(trading_phase=TradingPhase.STOPPING)
+                            )
+                            self._status = TradingSessionStatus.STOPPING
+                        else:
+                            self._context.apply_runtime_patch(
+                                patch(trading_phase=TradingPhase.IDLE)
+                            )
+                            if self._requires_manual_kill_cleanup_locked():
+                                if outcomes:
+                                    self._status = (
+                                        TradingSessionStatus.RECONCILIATION_REQUIRED
+                                    )
+                                else:
+                                    self._status = TradingSessionStatus.RUNNING
+                            else:
+                                self._status = TradingSessionStatus.RUNNING
                     except Exception as error:
                         raise AccountStreamRecoveryBlockedError(
                             "account stream recovery Context rebase conflict"
@@ -3195,6 +5010,11 @@ class TradingController:
             # Context rebase까지 성공한 뒤에만 새 handle을 publish하고 command gate를 다시 연다.
             self._account_subscription = subscription
             self._stream_reconciliation_required = unresolved_state_remains
+            if self._requires_manual_kill_cleanup_locked():
+                self._begin_manual_kill_cleanup_locked(
+                    self._manual_kill_cleanup_command_id_locked(),
+                    account_reconciliation_complete=True,
+                )  # Fresh reconnect는 active 주문의 same-ID cancel까지 재개하고 terminal 뒤에만 STOP한다.
             if recovery_commit_observer is not None:
                 try:
                     recovery_commit_observer()
@@ -3232,7 +5052,9 @@ class TradingController:
         if (
             self._startup_reconciliation_blocked
             or self._stream_reconciliation_required
+            or not self._market_stream_ready
             or self._event_runtime_failed
+            or self._process_ownership_ambiguous
         ):
             raise TradingSessionError(
                 TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
@@ -3462,10 +5284,22 @@ class TradingController:
                 "Trading session is already active",
                 current_version=self._context.version,
             )
+        if self._requires_manual_kill_cleanup_locked():
+            raise TradingSessionError(
+                TradingSessionFailureCode.COMMAND_DISABLED,
+                "Manual kill blocks a new strategy session",
+                current_version=self._context.version,
+            )
         if self._stream_reconciliation_required:
             raise TradingSessionError(
                 TradingSessionFailureCode.CONNECTION_NOT_READY,
                 "Account stream requires full REST reconciliation",
+                current_version=self._context.version,
+            )
+        if not self._market_stream_ready:
+            raise TradingSessionError(
+                TradingSessionFailureCode.CONNECTION_NOT_READY,
+                "Market stream requires a full REST reconciliation",
                 current_version=self._context.version,
             )
         if (
@@ -3621,6 +5455,10 @@ class TradingController:
         작성 날짜: 2026/08/21
         """
         self._action_trace.append(action)  # 부수 효과 전에 요청 순서를 먼저 고정한다.
+        if isinstance(action, SubmitOrder):
+            self._append_public_market_action_boundary(
+                action
+            )  # Public STM action도 journal/client ID/REST effect보다 먼저 immutable하게 관찰한다.
 
         # Context mutation은 임의 setattr 대신 domain typed method로만 적용한다.
         if isinstance(action, PatchRuntimeContext):
@@ -3657,6 +5495,11 @@ class TradingController:
 
         # 외부 effect trace는 실제 fake Gateway 실행 여부와 무관하게 원본 Action을 보존한다.
         self._external_actions.append(action)
+        if (
+            self._market_stream_interrupted_running_session
+            and isinstance(action, (SubmitOrder, ForceSellAll))
+        ):
+            return ()  # Operator/session 재조정 전에는 신규 제출만 막고 same-order 취소·조회는 허용한다.
         if not self._order_pipeline_enabled:
             if (
                 self._recovered_position_liquidation_session
@@ -3691,7 +5534,9 @@ class TradingController:
             self._mode_command_enabled
             and self._web_socket_gateway.account_ready
             and not self._stream_reconciliation_required
+            and self._market_stream_ready
             and not self._event_runtime_failed
+            and not self._process_ownership_ambiguous
             and (
                 not self._pending_order_recovery_enabled
                 or self._startup_reconciliation_complete
@@ -3727,6 +5572,11 @@ class TradingController:
 
         # 아직 제출 전이므로 현재 intent attempt에서 사용할 결정론적 client ID를 계산한다.
         submission_attempt = self._submission_attempts_by_intent.get(intent_id, 0)
+        if (
+            submission_attempt
+            >= self._maximum_order_submissions_per_intent
+        ):
+            return None  # 소진된 intent는 trace용 client ID조차 새로 계산하지 않는다.
         client_order_id = self._create_client_order_id(
             intent_id,
             submission_attempt,
@@ -3771,7 +5621,7 @@ class TradingController:
     ) -> ScheduleReevaluation | None:
         """
         함수 이름: _apply_order_retry_delay()
-        기능: STM의 retry 요청에 intent별 1·2·4·8초 지연과 총 5회 제출 예산을 적용한다.
+        기능: STM의 retry 요청에 intent별 1·2·4·8초 지연과 주입된 제출 예산을 적용한다.
         인자: action -> STM이 만든 재평가 요청
         반환값: delay를 보강한 action 또는 예산 소진이면 None
         작성 날짜: 2026/08/22
@@ -3788,7 +5638,10 @@ class TradingController:
         if intent_id is None:
             return action  # 주문 의도와 무관한 backoff는 기존 즉시 trigger 계약을 유지한다.
         submission_count = self._submission_attempts_by_intent.get(intent_id, 0)
-        if submission_count >= _MAX_SUBMISSIONS_PER_INTENT:
+        if (
+            submission_count
+            >= self._maximum_order_submissions_per_intent
+        ):
             self._handle_submission_budget_exhausted(intent_id)
             return None
 
@@ -3889,6 +5742,25 @@ class TradingController:
         # 외부 effect 입력과 optional residual 수량을 Gateway 호출 전에 검증한다.
         if not isinstance(action, SubmitOrder):
             raise TypeError("action must be a SubmitOrder")
+
+        # 일반 Case C SELL은 trace·journal·REST 전에 최초 청산 의도와 exact 대조한다.
+        if (
+            not force_sell
+            and action.strategy is StrategyType.CASE_C
+            and action.side is OrderSide.SELL
+        ):
+            runtime = self._context.runtime
+            exit_pct_b_at_intent = action.exit_pct_b_at_intent
+            if (
+                action.exit_reason is None
+                or action.exit_reason is not runtime.pending_exit_reason
+                or not isinstance(exit_pct_b_at_intent, Decimal)
+                or not exit_pct_b_at_intent.is_finite()
+                or runtime.pending_exit_pct_b != exit_pct_b_at_intent
+            ):
+                raise ValueError(
+                    "non-force Case C SELL requires exact exit intent provenance"
+                )
         if quantity_override is not None and (
             not isinstance(quantity_override, Decimal)
             or not quantity_override.is_finite()
@@ -3916,7 +5788,10 @@ class TradingController:
             action.idempotency_key,
             0,
         )
-        if submission_count >= _MAX_SUBMISSIONS_PER_INTENT:
+        if (
+            submission_count
+            >= self._maximum_order_submissions_per_intent
+        ):
             self._handle_submission_budget_exhausted(action.idempotency_key)
             return ()
 
@@ -3936,7 +5811,20 @@ class TradingController:
             None,
             context_version,
         )
-        market_price = self._market_snapshot.get_current_eth_price()
+        context_market_price = self._context.market.realtime_price
+        if self._latest_market_evaluation_version > 0:
+            # Public provenance가 있으면 claimed 30분 candidate만 허용하고 4H 값으로 조용히 대체하지 않는다.
+            if (
+                not context_market_price.is_finite()
+                or context_market_price <= Decimal("0")
+            ):
+                raise RuntimeError(
+                    "claimed market evaluation price must remain positive and finite"
+                )
+            market_price = context_market_price
+        else:
+            # Evaluation이 전혀 없는 legacy/direct 경계만 ready 4H 가격을 fallback으로 사용한다.
+            market_price = self._market_snapshot.get_current_eth_price()
         self._append_order_trace_values(
             "4",
             action.idempotency_key,
@@ -3998,7 +5886,9 @@ class TradingController:
             requested_quantity=requested_quantity,
             submitted_quantity=requested_quantity,
             market_price_at_decision=market_price,
+            risk_policy_version=self._session_risk_policy_version,
             exit_reason=action.exit_reason,
+            exit_pct_b_at_intent=action.exit_pct_b_at_intent,
         )
         # 최신 exchangeInfo filter는 요청 수량을 보존한 채 제출 수량만 내림 조정한다.
         try:
@@ -4047,6 +5937,40 @@ class TradingController:
                     "recovered-position liquidation must submit the exact full Position"
                 )  # PREPARED fsync 전이므로 상위 Operation이 동일 command 재시도를 허용한다.
 
+        # 모든 production BUY는 filter 뒤 실제 제출 수량으로 같은 cumulative risk gate를 통과한다.
+        if order.side is OrderSide.BUY:
+            risk_decision = self._evaluate_buy_order_risk(order)
+            if not risk_decision.allowed:
+                risk_block_reason = risk_decision.block_reason
+                if risk_block_reason is None:
+                    raise RuntimeError("blocked risk decision requires a reason")
+                self._append_order_trace(
+                    order,
+                    "5.1",
+                    context_version,
+                    failure_code=OrderExecutionFailureCode(
+                        risk_block_reason.value
+                    ),
+                )
+                return (
+                    TradingEvent(
+                        event_type=TradingEventType.BUY_RISK_BLOCKED,
+                        occurred_at=self._clock(),
+                        priority=EventPriority.ORDER_OUTCOME,
+                        event_id=(
+                            f"{order.client_order_id}:risk:"
+                            f"{risk_block_reason.value}"
+                        ),
+                        lower_event_id=self._context.runtime.lower_event_id,
+                        order_id=order.client_order_id,
+                        payload=BuyRiskBlockedPayload(
+                            strategy=order.strategy,
+                            reason=risk_block_reason,
+                        ),
+                    ),
+                )  # PREPARED journal과 REST POST 전에 STM에 typed feedback만 전달한다.
+            self._append_order_trace(order, "5.1", context_version)
+
         # Filter 적용을 마친 정확한 Order를 한 submission state와 durable recovery 근거로 묶는다.
         state = _OrderExecutionState(
             order=order,
@@ -4057,6 +5981,20 @@ class TradingController:
             try:
                 history_controller.save_pending_order(order)
             except Exception:
+                # Fsync 반환 전후가 불명하므로 메모리에도 같은 identity와 소비 attempt를 보수적으로 보존한다.
+                state.pending_recovery_pending = True
+                self._order_states_by_client_id[
+                    order.client_order_id
+                ] = state
+                self._submission_attempts_by_intent[
+                    action.idempotency_key
+                ] = max(
+                    submission_count + 1,
+                    self._submission_attempts_by_intent.get(
+                        action.idempotency_key,
+                        0,
+                    ),
+                )
                 self._append_order_trace(
                     order,
                     "5",
@@ -4107,6 +6045,13 @@ class TradingController:
             )
             return ()  # Durable PREPARED journal을 유지해 재시작에도 미확정 주문을 숨기지 않는다.
 
+        # REST mutation 직전 SUBMITTED를 fsync해 crash-before/after-call이 같은 ID 조회로 수렴하게 한다.
+        if not self._transition_pending_order_recovery(
+            state,
+            PendingOrderRecoveryLifecycle.SUBMITTED,
+        ):
+            return ()  # Lifecycle fsync가 불명하면 REST POST는 시작하지 않는다.
+
         # 메시지 6/6.1은 실제 Gateway 결과를 관찰한 뒤 성공·실패를 같은 식별자로 기록한다.
         gateway_version = self._context.version
         try:
@@ -4139,6 +6084,115 @@ class TradingController:
             self._append_order_trace(order, "6.1", gateway_version)
 
         return self._handle_order_result(state, result, initial=True)
+
+    def _evaluate_buy_order_risk(self, order: Order) -> RiskDecision:
+        """
+        함수 이름: _evaluate_buy_order_risk()
+        기능: filter 뒤 BUY와 current Position·예약·KST 손실을 한 RiskBudgetSnapshot으로 평가한다.
+        인자: order -> 아직 journal이나 Gateway에 전달하지 않은 BUY Order
+        반환값: 순수 RiskPolicy gate가 만든 RiskDecision
+        작성 날짜: 2026/08/24
+        """
+        # Journal 이전 gate는 exact BUY Order만 받아 다른 side의 cleanup 경로를 방해하지 않는다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        if order.side is not OrderSide.BUY:
+            raise ValueError("risk evaluation is available only for BUY orders")
+
+        # Position·history·market 값은 session RLock을 보유한 caller의 동일 원자 snapshot에서 읽는다.
+        position = self._require_position()
+        history_controller = self._require_trade_history_controller()
+        position_state = position.get_snapshot()
+        decision_price = order.market_price_at_decision
+        current_time = self._clock()
+        if not isinstance(current_time, datetime):
+            raise TypeError("clock result must be a datetime")
+        if current_time.tzinfo is None or current_time.utcoffset() is None:
+            raise ValueError("clock result must be timezone-aware UTC")
+        if current_time.utcoffset() != timedelta(0):
+            raise ValueError("clock result must use UTC")
+        current_kst_date = current_time.astimezone(_KOREA_TIME_ZONE).date()
+
+        # Active·UNKNOWN·PREPARED BUY의 미체결 수량만 후보 외 예약 예산으로 합산한다.
+        reserved_buy_notional = Decimal("0")
+        for state in self._order_states_by_client_id.values():
+            reserved_order = state.order
+            if reserved_order.side is not OrderSide.BUY or reserved_order.is_terminal:
+                continue
+            remaining_quantity = (
+                reserved_order.submitted_quantity
+                - reserved_order.filled_quantity
+            )
+            if remaining_quantity > Decimal("0"):
+                reserved_buy_notional += (
+                    remaining_quantity
+                    * reserved_order.market_price_at_decision
+                )
+
+        # Durable KST 당일 SELL만 실현손익에 포함하고 BUY/null field는 계산 대상에서 제외한다.
+        daily_realized_pnl = Decimal("0")
+        for trade in history_controller.trade_history.trades:
+            if (
+                trade.side is not OrderSide.SELL
+                or trade.executed_at.astimezone(_KOREA_TIME_ZONE).date()
+                != current_kst_date
+            ):
+                continue
+            if trade.realized_pnl is None:
+                raise RuntimeError("durable SELL Trade is missing realized PnL")
+            daily_realized_pnl += trade.realized_pnl
+
+        # Decimal128 계산 context로 ambient precision과 무관한 누적 exposure·PnL을 고정한다.
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            current_position_notional = (
+                position_state.quantity * decision_price
+            )
+            candidate_order_notional = (
+                order.submitted_quantity * decision_price
+            )
+            projected_position_notional = (
+                current_position_notional
+                + reserved_buy_notional
+                + candidate_order_notional
+            )
+            unrealized_pnl = (
+                current_position_notional - position_state.cost_basis
+            )
+
+            # Unavailable policy는 먼저 차단되므로 진단 snapshot에는 realized-only 손실을 보수적으로 둔다.
+            policy_state = self._risk_policy_state
+            loss_scope = (
+                policy_state.daily_loss_scope
+                if isinstance(policy_state, RiskPolicy)
+                else DailyLossScope.REALIZED_ONLY
+            )
+            scoped_pnl = daily_realized_pnl
+            if loss_scope is DailyLossScope.REALIZED_AND_UNREALIZED:
+                scoped_pnl += unrealized_pnl
+            daily_loss = max(-scoped_pnl, Decimal("0"))
+
+        budget = RiskBudgetSnapshot(
+            policy_version=self._session_risk_policy_version,
+            market_version=(
+                self._latest_market_evaluation_version
+                if self._latest_market_evaluation_version > 0
+                else self._market_snapshot.version
+            ),
+            account_version=self._account.version,
+            context_version=self._context.version,
+            current_position_notional=current_position_notional,
+            reserved_buy_notional=reserved_buy_notional,
+            candidate_order_notional=candidate_order_notional,
+            projected_position_notional=projected_position_notional,
+            daily_realized_pnl=daily_realized_pnl,
+            unrealized_pnl=unrealized_pnl,
+            daily_loss=daily_loss,
+            manual_kill_active=self._manual_kill_active,
+        )
+        decision = evaluate_buy_risk(policy_state, budget)
+        self._last_risk_decision = decision
+        return decision  # frozen decision은 UI publication과 fault trace가 같은 budget을 재사용한다.
 
     def _calculate_order_quantity(
         self,
@@ -4413,9 +6467,8 @@ class TradingController:
                 message_id=message_id,
             )
             return ()
-        self._append_order_trace(order, message_id, version_before)
 
-        # 공식적으로 거부된 최초 submit만 이후 네 번의 NO_SUCH_ORDER로 zero-fill 확정할 수 있다.
+        # Typed pre-matching rejection은 후속 부재 조회와 결합할 별도 durable 증거로 보존한다.
         if (
             initial
             and result.status is OrderStatus.REJECTED
@@ -4423,22 +6476,17 @@ class TradingController:
             and result.failure_kind
             is OrderResultFailureKind.SUBMISSION_REJECTED
         ):
-            if self._pending_order_recovery_enabled:
-                try:
-                    history_controller = (
-                        self._require_trade_history_controller()
-                    )
-                    history_controller.mark_pending_order_submission_rejected(
-                        order.client_order_id,
-                    )
-                except Exception:
-                    self._enter_order_reconciliation(
-                        state,
-                        OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
-                        message_id=None,
-                    )
-                    return ()  # 거부 사실 fsync 실패 시 PREPARED를 유지해 재시작도 fail closed한다.
             state.submission_rejection_confirmable = True
+        observed_lifecycle = self._select_pending_order_lifecycle(
+            state,
+            result,
+        )
+        if not self._transition_pending_order_recovery(
+            state,
+            observed_lifecycle,
+        ):
+            return ()  # Journal 상태가 관찰 사실을 따라잡지 못하면 Position·history를 전진시키지 않는다.
+        self._append_order_trace(order, message_id, version_before)
 
         # exchange ID를 처음 확인한 순간부터 client와 exchange 두 index가 같은 state를 가리킨다.
         if order.exchange_order_id is not None:
@@ -4495,6 +6543,13 @@ class TradingController:
                 preserve_intent_id=not state.force_sell,
             )
             if state.stop_after_reconciliation:
+                if (
+                    self._requires_manual_kill_cleanup_locked()
+                    and self._status
+                    is TradingSessionStatus.RECONCILIATION_REQUIRED
+                ):
+                    state.stop_followup_started = False
+                    return ()  # RECON gate에서 terminal만 반영하고 canonical STOP 재개 전 SELL을 만들지 않는다.
                 if self._require_position().quantity > Decimal("0"):
                     state.stop_followup_started = True
                     return self._force_sell_action(ForceSellAll())
@@ -4527,6 +6582,95 @@ class TradingController:
             return ()
 
         return self._finalize_terminal_execution(state)
+
+    def _select_pending_order_lifecycle(
+        self,
+        state: _OrderExecutionState,
+        result: OrderResult,
+    ) -> PendingOrderRecoveryLifecycle:
+        """
+        함수 이름: _select_pending_order_lifecycle()
+        기능: 누적 Order 사실과 typed 거부 증거에 맞는 durable lifecycle을 선택한다.
+        인자: state -> 현재 client order의 Controller 실행 상태
+            result -> 방금 적용한 same-ID Gateway 결과
+        반환값: 후퇴하지 않는 PendingOrderRecoveryLifecycle
+        작성 날짜: 2026/08/25
+        """
+        # Lifecycle 선택에 필요한 실행 상태와 Gateway 결과를 canonical domain type으로 제한한다.
+        if not isinstance(state, _OrderExecutionState):
+            raise TypeError("state must be an _OrderExecutionState")
+        if not isinstance(result, OrderResult):
+            raise TypeError("result must be an OrderResult")
+
+        # History fsync가 이미 증명된 state는 same-ID query 중에도 terminal 이전으로 후퇴하지 않는다.
+        if (
+            state.recovery_lifecycle
+            is PendingOrderRecoveryLifecycle.HISTORY_COMMITTED
+        ):
+            return PendingOrderRecoveryLifecycle.HISTORY_COMMITTED
+
+        # Confirmed rejection은 일반 terminal과 분리해 네 번의 exact absence만 REMOVE 권한을 얻게 한다.
+        if state.submission_rejection_confirmable:
+            return (
+                PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+            )
+        order = state.order
+        if order.is_terminal:
+            return PendingOrderRecoveryLifecycle.TERMINAL
+        if order.fills:
+            return PendingOrderRecoveryLifecycle.PARTIAL
+        if order.status is OrderStatus.UNKNOWN:
+            return PendingOrderRecoveryLifecycle.UNKNOWN
+
+        # 이전 timeout을 journal에 남겨 둔 주문은 fill 없는 active 확인만으로 durable 불명 경계를 되돌리지 않는다.
+        if (
+            state.recovery_lifecycle
+            is PendingOrderRecoveryLifecycle.UNKNOWN
+        ):
+            return PendingOrderRecoveryLifecycle.UNKNOWN  # Memory Order는 NEW로 전진하되 partial·terminal 전까지 same-ID query gate를 유지한다.
+
+        return PendingOrderRecoveryLifecycle.SUBMITTED  # NEW·PENDING 주문은 제출 성공 identity를 계속 유지한다.
+
+    def _transition_pending_order_recovery(
+        self,
+        state: _OrderExecutionState,
+        lifecycle: PendingOrderRecoveryLifecycle,
+    ) -> bool:
+        """
+        함수 이름: _transition_pending_order_recovery()
+        기능: 주문 lifecycle을 fsync하고 실패 시 외부 mutation gate를 유지한다.
+        인자: state -> durable pending Order를 소유한 실행 상태
+            lifecycle -> 새로 관찰한 canonical lifecycle
+        반환값: fsync 성공 또는 recovery 미사용이면 True, 실패하면 False
+        작성 날짜: 2026/08/25
+        """
+        # 잘못된 state/lifecycle이 durable journal transition을 시작하기 전에 exact type을 확인한다.
+        if not isinstance(state, _OrderExecutionState):
+            raise TypeError("state must be an _OrderExecutionState")
+        if not isinstance(lifecycle, PendingOrderRecoveryLifecycle):
+            raise TypeError("lifecycle must be a PendingOrderRecoveryLifecycle")
+        if not self._pending_order_recovery_enabled:
+            state.recovery_lifecycle = lifecycle
+            return True  # History-only fake는 기존 in-memory pipeline을 그대로 사용한다.
+
+        history_controller = self._require_trade_history_controller()
+        try:
+            history_controller.transition_pending_order_lifecycle(
+                state.order.client_order_id,
+                lifecycle,
+            )
+        except Exception:
+            state.pending_recovery_pending = True
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
+                message_id=None,
+            )
+            return False  # 쓰기 완료 여부가 불명하므로 상태를 메모리에서 추측하지 않는다.
+
+        state.recovery_lifecycle = lifecycle
+        state.pending_recovery_pending = True
+        return True  # REMOVE fsync 전이므로 lifecycle commit 후에도 pending marker는 유지한다.
 
     def _apply_unapplied_fills(self, state: _OrderExecutionState) -> bool:
         """
@@ -4584,6 +6728,10 @@ class TradingController:
                         state.allocated_cost_basis + allocated_cost_basis
                     )  # partial별 사전 원가 합도 ADR-004 Decimal128 정밀도를 유지한다.
             self._publish_position_to_context(position)
+            if not self._publish_case_c_exit_result(state):
+                # 종료 provenance 불일치에서는
+                # terminal STM feedback을 발행하지 않는다.
+                return False
             self._append_order_trace(order, "12", version_before)
         except Exception:
             self._enter_order_reconciliation(
@@ -4620,6 +6768,80 @@ class TradingController:
             context_snapshot,
             position_owner=position_state.owner,
         )  # buy fill 전에는 호출되지 않으므로 owner도 실제 fill 이후에만 설정된다.
+
+    def _publish_case_c_exit_result(
+        self,
+        state: _OrderExecutionState,
+    ) -> bool:
+        """
+        함수 이름: _publish_case_c_exit_result()
+        기능: 일반 Case C 전량 SELL 체결 시 종료 사유와
+            최초 SELL 의도 시점 %B를 Context에 고정한다.
+        인자: state -> 방금 Position에 fill을 반영한 주문 실행 상태
+        반환값: 종료 provenance가 일관되게 게시됐거나 대상이 아니면 True,
+            불일치면 False
+        작성 날짜: 2026/08/29
+        """
+        if not isinstance(state, _OrderExecutionState):
+            raise TypeError("state must be an _OrderExecutionState")
+
+        # 전역 STOP과 STOP 중 기존 주문 reconciliation은
+        # 전용 G-06F 결과를 사용하므로 건드리지 않는다.
+        order = state.order
+        if (
+            state.force_sell
+            or state.stop_after_reconciliation
+            or order.side is not OrderSide.SELL
+            or order.strategy is not StrategyType.CASE_C
+            or self._require_position().quantity > Decimal("0")
+        ):
+            return True
+
+        # 최초 청산 의도와 실제 제출 Order가 같은 사유·%B를 보존한 경우에만
+        # 종료 결과를 확정한다.
+        runtime = self._context.runtime
+        exit_reason = runtime.pending_exit_reason
+        exit_pct_b = order.exit_pct_b_at_intent
+        if (
+            exit_reason is None
+            or order.exit_reason is not exit_reason
+            or exit_pct_b is None
+            or runtime.pending_exit_pct_b != exit_pct_b
+        ):
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                message_id="12",
+            )
+            return False
+
+        # Persistence 재시도나 중복 terminal 결과는
+        # 최초 SELL 의도 시점의 %B를 덮어쓰지 않는다.
+        if (
+            runtime.case_c_exit_reason is exit_reason
+            and runtime.case_c_exit_pct_b is not None
+        ):
+            return True
+        if (
+            runtime.case_c_exit_reason is not None
+            or runtime.case_c_exit_pct_b is not None
+        ):
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                message_id="12",
+            )
+            return False
+
+        # Partial·UNKNOWN 뒤의 시장 변경과 무관하게 매도 의도 시점의
+        # immutable %B로 PC-23F provenance를 게시한다.
+        self._context.apply_runtime_patch(
+            patch(
+                case_c_exit_reason=exit_reason,
+                case_c_exit_pct_b=exit_pct_b,
+            )
+        )
+        return True
 
     def _publish_pending_order(self, state: _OrderExecutionState) -> None:
         """
@@ -4659,7 +6881,7 @@ class TradingController:
         함수 이름: _schedule_order_query()
         기능: 같은 client/exchange Order의 다음 1·2·4·8초 reconciliation 조회를 예약한다.
         인자: state -> 조회할 기존 Order 상태
-            retry_after -> Gateway가 제공한 0~30초 대기 또는 None
+            retry_after -> Gateway가 제공한 축소하지 않은 rate-limit 대기 또는 None
             scheduled_from -> 직전 query를 관찰한 scheduler 시각 또는 None
         반환값: 없음
         작성 날짜: 2026/08/22
@@ -4787,6 +7009,13 @@ class TradingController:
             )
             return ()
 
+        # Trade JSONL fsync 후 sidecar에 HISTORY_COMMITTED를 남겨 crash-before-REMOVE를 명시적으로 식별한다.
+        if not self._transition_pending_order_recovery(
+            state,
+            PendingOrderRecoveryLifecycle.HISTORY_COMMITTED,
+        ):
+            return ()  # History는 되돌리지 않고 same-ID/history 정확 대조가 끝날 때까지 gate를 잠근다.
+
         # Controller operation 성공 뒤 내부 collaborator 순서를 동일 trace 순서로 공개한다.
         self._append_order_trace(order, "13", self._context.version)
         if order.side is OrderSide.SELL:
@@ -4839,6 +7068,13 @@ class TradingController:
 
         # STOP pending reconciliation은 일반 전략 event를 내지 않고 잔량 force-sell까지 이어간다.
         if state.stop_after_reconciliation:
+            if (
+                self._requires_manual_kill_cleanup_locked()
+                and self._status
+                is TradingSessionStatus.RECONCILIATION_REQUIRED
+            ):
+                state.stop_followup_started = False
+                return ()  # Partial/history는 확정하되 fresh stream·market gate 전 청산 POST는 보류한다.
             if self._require_position().quantity > Decimal("0"):
                 state.stop_followup_started = True
                 return self._force_sell_action(ForceSellAll())
@@ -5290,7 +7526,10 @@ class TradingController:
         # retry action은 즉시 제출하지 않고 예산을 확인한 뒤 due 시각만 예약한다.
         submission_count = self._submission_attempts_by_intent.get(intent_id, 0)
         if action.retry:
-            if submission_count >= _MAX_SUBMISSIONS_PER_INTENT:
+            if (
+                submission_count
+                >= self._maximum_order_submissions_per_intent
+            ):
                 self._enter_order_reconciliation(
                     self._find_latest_state_for_intent(intent_id),
                     OrderExecutionFailureCode.SUBMISSION_BUDGET_EXHAUSTED,
@@ -5424,6 +7663,11 @@ class TradingController:
                         ),
                     )
                 raise
+            if not self._transition_pending_order_recovery(
+                state,
+                PendingOrderRecoveryLifecycle.HISTORY_COMMITTED,
+            ):
+                return ()  # History retry 성공 후 lifecycle fsync 실패도 주문 gate를 계속 유지한다.
             for message_id in ("13.5", "13.5.1"):
                 self._append_order_trace(
                     state.order,
@@ -5868,8 +8112,20 @@ class TradingController:
         root_state = stm.current_state.root_state
         runtime = self._context.runtime
 
-        # reconciliation은 일반 STOPPING보다 구체적인 운영 상태로 먼저 공개한다.
-        if runtime.trading_phase is TradingPhase.RECONCILIATION_REQUIRED:
+        # 시장 중단 provenance를 포함한 어떤 blocker도 STM 문맥 변경만으로 RUNNING을 다시 열 수 없다.
+        reconciliation_blocked = (
+            self._stream_reconciliation_required
+            or self._market_stream_reconciliation_required
+            or self._market_stream_interrupted_running_session
+            or self._event_runtime_failed
+            or self._process_ownership_ambiguous
+            or self._startup_reconciliation_blocked
+        )
+        if (
+            reconciliation_blocked
+            or runtime.trading_phase
+            is TradingPhase.RECONCILIATION_REQUIRED
+        ):
             self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
         elif root_state is RootState.LOGIC_TERMINATED:
             self._status = TradingSessionStatus.TERMINATED
@@ -6014,6 +8270,66 @@ class TradingController:
             expired_key = self._command_order.popleft()
             self._command_records.pop(expired_key, None)
 
+    def _read_manual_kill_command_record(
+        self,
+        command_id: str,
+        fingerprint: tuple[object, ...],
+    ) -> object | None:
+        """
+        함수 이름: _read_manual_kill_command_record()
+        기능: durable manual-kill command 결과를 찾고 다른 payload의 ID 재사용을 거부한다.
+        인자: command_id -> manual-kill transport command 식별자
+            fingerprint -> active와 expected risk-control version tuple
+        반환값: 저장된 결과 또는 처음 본 command이면 None
+        작성 날짜: 2026/08/29
+        """
+        # 일반 selection/start command eviction이 durable receipt 의미를 지우지 않게 전용 cache를 읽는다.
+        normalized_command_id = self._normalize_command_id(command_id)
+        record = self._manual_kill_command_records.get(normalized_command_id)
+        if record is None:
+            return None
+        if record.fingerprint != fingerprint:
+            raise TradingSessionError(
+                TradingSessionFailureCode.COMMAND_ID_REUSED,
+                "Command ID cannot be reused with a different payload",
+                current_version=self._context.version,
+            )
+
+        return record.result  # duplicate에는 durable state나 control version을 다시 변경하지 않는다.
+
+    def _store_manual_kill_command_record(
+        self,
+        command_id: str,
+        fingerprint: tuple[object, ...],
+        result: object,
+    ) -> None:
+        """
+        함수 이름: _store_manual_kill_command_record()
+        기능: manual-kill receipt의 fingerprint와 최초 성공 결과를 전용 bounded cache에 결합한다.
+        인자: command_id -> manual-kill transport command 식별자
+            fingerprint -> active와 expected risk-control version tuple
+            result -> duplicate에 반환할 최초 성공 결과
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # Repository replay와 같은 최근 1,024개 범위를 일반 command와 독립적으로 보존한다.
+        normalized_command_id = self._normalize_command_id(command_id)
+        self._manual_kill_command_records[normalized_command_id] = (
+            _CommandRecord(fingerprint, result)
+        )
+        self._manual_kill_command_order.append(normalized_command_id)
+
+        # Manual-kill command만의 adversarial ID 흐름도 process memory를 무제한 늘리지 못하게 한다.
+        while (
+            len(self._manual_kill_command_order)
+            > _MAX_MANUAL_KILL_COMMAND_RECORDS
+        ):
+            expired_command_id = self._manual_kill_command_order.popleft()
+            self._manual_kill_command_records.pop(
+                expired_command_id,
+                None,
+            )
+
     @staticmethod
     def _normalize_command_id(command_id: str) -> str:
         """
@@ -6060,6 +8376,21 @@ class TradingController:
         # Cache 값의 exact result 타입을 확인한 뒤 검증된 객체만 호출자에게 반환한다.
         if not isinstance(result, SplitRatioResult):
             raise RuntimeError("split command cache type mismatch")
+
+        return result
+
+    @staticmethod
+    def _require_manual_kill_result(result: object) -> ManualKillResult:
+        """
+        함수 이름: _require_manual_kill_result()
+        기능: command cache의 manual kill 결과 타입을 검증해 반환한다.
+        인자: result -> command cache에서 읽은 값
+        반환값: 검증된 ManualKillResult
+        작성 날짜: 2026/08/25
+        """
+        # 다른 operation의 cached value가 manual kill 결과로 잘못 재생되지 않게 exact type을 확인한다.
+        if not isinstance(result, ManualKillResult):
+            raise RuntimeError("manual kill command cache type mismatch")
 
         return result
 

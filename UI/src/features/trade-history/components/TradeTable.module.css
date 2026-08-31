@@ -50,24 +50,27 @@
 }
 
 .timeColumn {
-  width: 174px;
+  width: 159px;
 }
 
 .sideColumn {
-  width: 96px;
+  width: 104px;
 }
 
 .regimeColumn {
-  width: 92px;
+  width: 94px;
 }
 
 .strategyColumn {
-  width: 132px;
+  width: 137px;
 }
 
-.entryColumn,
-.executionColumn {
+.entryColumn {
   width: 131px;
+}
+
+.executionColumn {
+  width: 115px;
 }
 
 .quantityColumn {
@@ -75,11 +78,11 @@
 }
 
 .amountColumn {
-  width: 122px;
+  width: 106px;
 }
 
 .feeColumn {
-  width: 106px;
+  width: 122px;
 }
 
 .returnColumn {
@@ -87,7 +90,7 @@
 }
 
 .pnlColumn {
-  width: 120px;
+  width: 136px;
 }
 
 .table thead {
@@ -98,10 +101,10 @@
 
 .table th {
   box-sizing: border-box;
-  height: 44px;
+  height: 43px;
   padding: 0 10px;
   border-bottom: 1px solid var(--color-border-default);
-  background: var(--color-bg-surface-raised);
+  background: var(--fixture-table-header, var(--color-bg-surface-raised));
   color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 600;
@@ -130,8 +133,49 @@
   white-space: nowrap;
 }
 
+/* Figma column center와 값은 column width를 유지하면서 header와 body 문자의 광학 중심을 맞춘다. */
+.table th:nth-child(2),
+.table td:nth-child(2) {
+  padding-right: 20px;
+}
+
+.table th:nth-child(5),
+.table td:nth-child(5) {
+  padding-right: 16px;
+}
+
+.table th:nth-child(6),
+.table td:nth-child(6) {
+  padding-left: 15px;
+}
+
+.table th:nth-child(7),
+.table td:nth-child(7) {
+  padding-right: 15px;
+}
+
+.table th:nth-child(8),
+.table td:nth-child(8) {
+  padding-left: 28px;
+}
+
+.table th:nth-child(9),
+.table td:nth-child(9),
+.table th:nth-child(10),
+.table td:nth-child(10) {
+  padding-right: 14px;
+}
+
+.table th:nth-child(11),
+.table td:nth-child(11) {
+  padding-right: 44px;
+}
+
 .table tbody tr:nth-child(even) td {
-  background: color-mix(in srgb, var(--color-bg-surface) 84%, var(--color-bg-surface-raised));
+  background: var(
+    --fixture-table-even,
+    color-mix(in srgb, var(--color-bg-surface) 84%, var(--color-bg-surface-raised))
+  );
 }
 
 .table tbody tr:last-child td {
@@ -175,12 +219,12 @@
 
 .buy,
 .positive {
-  color: var(--color-status-positive);
+  color: var(--color-text-positive);
 }
 
 .sell,
 .negative {
-  color: var(--color-status-negative);
+  color: var(--color-text-negative);
 }
 
 .secondary {
@@ -197,11 +241,13 @@
 }
 
 .emptyRow td {
-  height: 518px;
+  height: 519px;
   background: var(--color-bg-surface);
 }
 
 .emptyContent {
+  position: relative;
+  top: 1px;
   display: flex;
   align-items: center;
   flex-direction: column;
@@ -215,7 +261,7 @@
 
 .emptyContent strong {
   margin-bottom: 16px;
-  color: var(--color-text-primary);
+  color: color-mix(in srgb, var(--color-text-primary) 42%, var(--color-text-secondary));
   font-size: 18px;
   font-weight: 600;
   line-height: 24px;
@@ -231,10 +277,10 @@
 
 .emptyContent button {
   height: 40px;
-  margin-top: 18px;
-  padding: 0 24px;
+  margin-top: 19px;
+  padding: 0 29px;
   border: 1px solid var(--color-status-positive);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--color-status-positive-strong);
   box-shadow: var(--shadow-control);
   color: var(--color-text-primary);

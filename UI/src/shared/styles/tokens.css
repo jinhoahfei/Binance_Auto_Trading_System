@@ -12,6 +12,11 @@
   --color-text-primary: #f0f1f2;
   --color-text-secondary: #a7afbb;
   --color-text-tertiary: #828a96;
+  /* 상태 도형 색과 본문용 전경색을 분리해 작은 글자의 WCAG AA 대비를 보장한다. */
+  --color-text-positive: #0fc17f;
+  --color-text-negative: #ff8797;
+  --color-text-info: #72a9ff;
+  --color-text-on-strong-status: #05080c;
   --color-status-positive: #0eb77b;
   --color-status-positive-strong: #0ea66b;
   --color-status-negative: #f03858;

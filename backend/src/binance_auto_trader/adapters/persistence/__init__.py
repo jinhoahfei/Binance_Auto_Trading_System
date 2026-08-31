@@ -2,6 +2,7 @@
 
 from .trade_history_repository import (
     HistoryCorruptedError,
+    ManualKillControlJournalCorruptedError,
     PendingOrderJournalConflictError,
     PendingOrderJournalCorruptedError,
     TradeHistoryRepository,
@@ -10,6 +11,7 @@ from .trade_history_repository import (
 
 __all__ = [
     "HistoryCorruptedError",
+    "ManualKillControlJournalCorruptedError",
     "PendingOrderJournalConflictError",
     "PendingOrderJournalCorruptedError",
     "TradeHistoryRepository",

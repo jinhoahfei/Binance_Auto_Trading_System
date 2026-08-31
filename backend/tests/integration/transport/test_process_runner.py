@@ -6,9 +6,9 @@ import os
 import secrets
 from types import SimpleNamespace
 import unittest
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from binance_auto_trader.transport import run_transport_process
+from binance_auto_trader.transport import SCHEMA_VERSION, run_transport_process
 
 from tests.unit.transport.test_contracts import _create_ready_runtime
 
@@ -164,8 +164,28 @@ class TransportProcessRunnerTests(unittest.TestCase):
 
         try:
             self.assertNotIn(token, ready_payload.decode("utf-8"))
-            self.assertEqual(ready_descriptor["schema_version"], 2)
+            self.assertEqual(
+                frozenset(ready_descriptor),
+                frozenset(
+                    {
+                        "port",
+                        "session_id",
+                        "runtime_pid",
+                        "process_start_id",
+                        "schema_version",
+                    }
+                ),
+            )
+            self.assertEqual(
+                ready_descriptor["schema_version"],
+                SCHEMA_VERSION,
+            )
             self.assertGreater(ready_descriptor["port"], 0)
+            self.assertEqual(ready_descriptor["runtime_pid"], child_process_id)
+            self.assertEqual(
+                str(UUID(ready_descriptor["process_start_id"])),
+                ready_descriptor["process_start_id"],
+            )  # Fresh exec fixture의 actual runtime identity가 secret 없는 FD4에만 공개된다.
 
             # Ready 뒤 actual child process의 authenticated health endpoint를 조회한다.
             connection = HTTPConnection(

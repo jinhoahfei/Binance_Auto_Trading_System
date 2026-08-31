@@ -1,0 +1,945 @@
+{
+  "schema_version": 1,
+  "record_type": "phase13_fault_trace",
+  "trace_id": "phase13_canonical_fault_trace",
+  "evidence_scope": "OFFLINE_CONTRACT_REPLAY",
+  "scenarios": [
+    {
+      "scenario_id": "rest_timeout",
+      "category": "REST",
+      "fault_kind": "REST_TIMEOUT",
+      "expected": {
+        "owner": "APIGateway/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "QUERY_SAME_CLIENT_ORDER_ID"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-rest-timeout",
+          "client_order_id": "bat-rest-timeout-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 1,
+          "correlation_id": "rest_timeout",
+          "payload": {"reason": "REST_TIMEOUT"}
+        }
+      ],
+      "expected_normalized_digest": "5d83f1e1dbf3a06dc819c3e3d004c623b9e5e4226e538208e2c1bde3040cf62d"
+    },
+    {
+      "scenario_id": "rest_5xx",
+      "category": "REST",
+      "fault_kind": "REST_5XX",
+      "expected": {
+        "owner": "APIGateway/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "QUERY_SAME_CLIENT_ORDER_ID"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-rest-5xx",
+          "client_order_id": "bat-rest-5xx-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 1,
+          "correlation_id": "rest_5xx",
+          "payload": {"reason": "REST_5XX"}
+        }
+      ],
+      "expected_normalized_digest": "f668d2f134f0b8a859ba8472ebc072983986358896cb4eee6c718c54bdfd866e"
+    },
+    {
+      "scenario_id": "rest_rate_limit",
+      "category": "REST",
+      "fault_kind": "REST_RATE_LIMIT",
+      "expected": {
+        "owner": "APIGateway/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "HONOR_RETRY_AFTER_THEN_QUERY_SAME_ID"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-rest-rate-limit",
+          "client_order_id": "bat-rest-rate-limit-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 1,
+          "correlation_id": "rest_rate_limit",
+          "payload": {"reason": "REST_RATE_LIMIT"}
+        }
+      ],
+      "expected_normalized_digest": "500cbaa57bed6b83eff5ba3afcd389adb59ced7c98ed718fd950190fbd367867"
+    },
+    {
+      "scenario_id": "rest_response_decode_failure",
+      "category": "REST",
+      "fault_kind": "REST_RESPONSE_DECODE_FAILURE",
+      "expected": {
+        "owner": "APIGateway/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "QUERY_SAME_CLIENT_ORDER_ID"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-rest-decode",
+          "client_order_id": "bat-rest-decode-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 1,
+          "correlation_id": "rest_response_decode_failure",
+          "payload": {"reason": "REST_RESPONSE_DECODE_FAILURE"}
+        }
+      ],
+      "expected_normalized_digest": "16b53e08f5739f709cd990ed3b817b56c7eb676d54e780b5f37c18c5cddc6ece"
+    },
+    {
+      "scenario_id": "ws_disconnect_reconnect",
+      "category": "WEBSOCKET",
+      "fault_kind": "WS_DISCONNECT_RECONNECT",
+      "expected": {
+        "owner": "WebSocketGateway/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "REST_SNAPSHOT_THEN_NEW_GENERATION"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 8,
+          "correlation_id": "ws_disconnect_reconnect",
+          "payload": {"reason": "WS_DISCONNECT_RECONNECT"}
+        }
+      ],
+      "expected_normalized_digest": "eaf6425ecb78c8163c429211e69924436e692ecd78acd6bf7f895c884e59a101"
+    },
+    {
+      "scenario_id": "ws_stale_generation",
+      "category": "WEBSOCKET",
+      "fault_kind": "WS_STALE_GENERATION",
+      "expected": {
+        "owner": "WebSocketGateway",
+        "state": "RUNNING",
+        "new_order_allowed": true,
+        "recovery_action": "DROP_STALE_GENERATION"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "FAULT_IGNORED",
+          "aggregate_version": 8,
+          "correlation_id": "ws_stale_generation",
+          "payload": {"reason": "WS_STALE_GENERATION"}
+        }
+      ],
+      "expected_normalized_digest": "01370ef8ab4a8be4c600b02496d046fe9eb73d55d96cd158f976b29f74eb8a9a"
+    },
+    {
+      "scenario_id": "ws_sequence_gap",
+      "category": "WEBSOCKET",
+      "fault_kind": "WS_SEQUENCE_GAP",
+      "expected": {
+        "owner": "WebSocketGateway/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "FULL_SNAPSHOT_RESYNC"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RESYNC_REQUIRED",
+          "aggregate_version": 8,
+          "correlation_id": "ws_sequence_gap",
+          "payload": {"reason": "WS_SEQUENCE_GAP"}
+        }
+      ],
+      "expected_normalized_digest": "97570f7ca7d6fea461b3037042118220a48eb64200a569590cdaf3cb9bf0a2ce"
+    },
+    {
+      "scenario_id": "ws_duplicate_event",
+      "category": "WEBSOCKET",
+      "fault_kind": "WS_DUPLICATE_EVENT",
+      "expected": {
+        "owner": "Order/TradeHistory",
+        "state": "RUNNING",
+        "new_order_allowed": true,
+        "recovery_action": "DEDUPLICATE_BY_ORDER_AND_FILL_ID"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-ws-duplicate",
+          "client_order_id": "bat-ws-duplicate-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "1",
+          "submitted_quantity": "1",
+          "market_price_at_decision": "100",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-ws-duplicate-1",
+          "status": "PARTIALLY_FILLED",
+          "processed_at": "2026-08-24T00:00:01Z",
+          "exchange_order_id": "13001",
+          "fills": [
+            {
+              "exchange_order_id": "13001",
+              "trade_id": "fill-ws-duplicate-a",
+              "quantity": "0.4",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:01Z"
+            }
+          ]
+        },
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-ws-duplicate-1",
+          "status": "PARTIALLY_FILLED",
+          "processed_at": "2026-08-24T00:00:01Z",
+          "exchange_order_id": "13001",
+          "fills": [
+            {
+              "exchange_order_id": "13001",
+              "trade_id": "fill-ws-duplicate-a",
+              "quantity": "0.4",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:01Z"
+            }
+          ]
+        },
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-ws-duplicate-1",
+          "status": "FILLED",
+          "processed_at": "2026-08-24T00:00:02Z",
+          "exchange_order_id": "13001",
+          "fills": [
+            {
+              "exchange_order_id": "13001",
+              "trade_id": "fill-ws-duplicate-a",
+              "quantity": "0.4",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:01Z"
+            },
+            {
+              "exchange_order_id": "13001",
+              "trade_id": "fill-ws-duplicate-b",
+              "quantity": "0.6",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:02Z"
+            }
+          ]
+        },
+        {"operation": "APPLY_NEW_FILLS"},
+        {"operation": "COMMIT_TERMINAL_TRADE"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "ORDER_EXECUTED",
+          "aggregate_version": 9,
+          "correlation_id": "ws_duplicate_event",
+          "payload": {"deduplicated": true, "order_id": "13001"}
+        }
+      ],
+      "expected_normalized_digest": "47190840cc12637c550d14eff17799266420299d1844e5d7f4de9bca7f756ea2"
+    },
+    {
+      "scenario_id": "ws_out_of_order_event",
+      "category": "WEBSOCKET",
+      "fault_kind": "WS_OUT_OF_ORDER_EVENT",
+      "expected": {
+        "owner": "Order",
+        "state": "RUNNING",
+        "new_order_allowed": true,
+        "recovery_action": "PRESERVE_MONOTONIC_ORDER_STATE"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-ws-out-of-order",
+          "client_order_id": "bat-ws-out-of-order-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "1",
+          "submitted_quantity": "1",
+          "market_price_at_decision": "100",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-ws-out-of-order-1",
+          "status": "PARTIALLY_FILLED",
+          "processed_at": "2026-08-24T00:00:01Z",
+          "exchange_order_id": "13002",
+          "fills": [
+            {
+              "exchange_order_id": "13002",
+              "trade_id": "fill-ws-out-of-order-a",
+              "quantity": "0.4",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:01Z"
+            }
+          ]
+        },
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-ws-out-of-order-1",
+          "status": "NEW",
+          "processed_at": "2026-08-24T00:00:00Z",
+          "exchange_order_id": "13002",
+          "fills": [
+            {
+              "exchange_order_id": "13002",
+              "trade_id": "fill-ws-out-of-order-a",
+              "quantity": "0.4",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:01Z"
+            }
+          ]
+        },
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-ws-out-of-order-1",
+          "status": "FILLED",
+          "processed_at": "2026-08-24T00:00:02Z",
+          "exchange_order_id": "13002",
+          "fills": [
+            {
+              "exchange_order_id": "13002",
+              "trade_id": "fill-ws-out-of-order-a",
+              "quantity": "0.4",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:01Z"
+            },
+            {
+              "exchange_order_id": "13002",
+              "trade_id": "fill-ws-out-of-order-b",
+              "quantity": "0.6",
+              "price": "100",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:02Z"
+            }
+          ]
+        },
+        {"operation": "APPLY_NEW_FILLS"},
+        {"operation": "COMMIT_TERMINAL_TRADE"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "ORDER_EXECUTED",
+          "aggregate_version": 9,
+          "correlation_id": "ws_out_of_order_event",
+          "payload": {"order_id": "13002", "state_regression_ignored": true}
+        }
+      ],
+      "expected_normalized_digest": "1bcbe3829a017a150a32c15cb4ab3f14d5c16be370d08b050be920a2499e6d79"
+    },
+    {
+      "scenario_id": "crash_before_submit",
+      "category": "PROCESS",
+      "fault_kind": "CRASH_BEFORE_SUBMIT",
+      "expected": {
+        "owner": "TradingController/TradeHistoryRepository",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "QUERY_PREPARED_IDENTITY_BEFORE_SUBMIT"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-crash-before-submit",
+          "client_order_id": "bat-crash-before-submit-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_C",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 2,
+          "correlation_id": "crash_before_submit",
+          "payload": {"reason": "CRASH_BEFORE_SUBMIT"}
+        }
+      ],
+      "expected_normalized_digest": "671f0bfc0a1d4c84f76fe2aa8f15b4283978254fb4a5e54356ff9999c0c59dfc"
+    },
+    {
+      "scenario_id": "crash_after_submit",
+      "category": "PROCESS",
+      "fault_kind": "CRASH_AFTER_SUBMIT",
+      "expected": {
+        "owner": "TradingController/TradeHistoryRepository",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "QUERY_SAME_CLIENT_ORDER_ID"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-crash-after-submit",
+          "client_order_id": "bat-crash-after-submit-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_C",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 2,
+          "correlation_id": "crash_after_submit",
+          "payload": {"reason": "CRASH_AFTER_SUBMIT"}
+        }
+      ],
+      "expected_normalized_digest": "22271e978d0cfdcb072adbfb629d9bfef887348cbdd056f682497e696f88cab9"
+    },
+    {
+      "scenario_id": "pending_journal_fsync_failure",
+      "category": "REPOSITORY",
+      "fault_kind": "PENDING_JOURNAL_FSYNC_FAILURE",
+      "expected": {
+        "owner": "TradeHistoryRepository/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "REPAIR_JOURNAL_BEFORE_SUBMIT"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-journal-fsync",
+          "client_order_id": "bat-journal-fsync-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 3,
+          "correlation_id": "pending_journal_fsync_failure",
+          "payload": {"reason": "PENDING_JOURNAL_FSYNC_FAILURE"}
+        }
+      ],
+      "expected_normalized_digest": "754b557cb446a7b276b4c1ff2d130eff244be72c57a6dfd958f00866442e0a0f"
+    },
+    {
+      "scenario_id": "pending_journal_remove_failure",
+      "category": "REPOSITORY",
+      "fault_kind": "PENDING_JOURNAL_REMOVE_FAILURE",
+      "expected": {
+        "owner": "TradeHistoryRepository/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "RETRY_DURABLE_REMOVE"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-journal-remove",
+          "client_order_id": "bat-journal-remove-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-journal-remove-1",
+          "status": "FILLED",
+          "processed_at": "2026-08-24T00:00:03Z",
+          "exchange_order_id": "13003",
+          "fills": [
+            {
+              "exchange_order_id": "13003",
+              "trade_id": "fill-journal-remove",
+              "quantity": "0.01",
+              "price": "2500",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:03Z"
+            }
+          ]
+        },
+        {"operation": "APPLY_NEW_FILLS"},
+        {"operation": "COMMIT_TERMINAL_TRADE"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 4,
+          "correlation_id": "pending_journal_remove_failure",
+          "payload": {"reason": "PENDING_JOURNAL_REMOVE_FAILURE"}
+        }
+      ],
+      "expected_normalized_digest": "8c4d5203f0ba869cf100c90e0797832a7d3c11ecb0d59ee903de5d8dd19501a2"
+    },
+    {
+      "scenario_id": "history_append_failure",
+      "category": "REPOSITORY",
+      "fault_kind": "HISTORY_APPEND_FAILURE",
+      "expected": {
+        "owner": "TradeHistoryRepository/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "RETRY_HISTORY_APPEND_THEN_REMOVE"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-history-append",
+          "client_order_id": "bat-history-append-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "0.01",
+          "submitted_quantity": "0.01",
+          "market_price_at_decision": "2500",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-history-append-1",
+          "status": "FILLED",
+          "processed_at": "2026-08-24T00:00:04Z",
+          "exchange_order_id": "13004",
+          "fills": [
+            {
+              "exchange_order_id": "13004",
+              "trade_id": "fill-history-append",
+              "quantity": "0.01",
+              "price": "2500",
+              "fee_amount": "0",
+              "fee_asset": "USDT",
+              "fee_quote_amount": "0",
+              "executed_at": "2026-08-24T00:00:04Z"
+            }
+          ]
+        },
+        {"operation": "APPLY_NEW_FILLS"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 4,
+          "correlation_id": "history_append_failure",
+          "payload": {"reason": "HISTORY_APPEND_FAILURE"}
+        }
+      ],
+      "expected_normalized_digest": "27ec7cfc3dade2f55924ea79602033759a42108d57f6e723e5ed61e490d50ef4"
+    },
+    {
+      "scenario_id": "unknown_recent_app_order",
+      "category": "EXCHANGE_STATE",
+      "fault_kind": "UNKNOWN_RECENT_APP_ORDER",
+      "expected": {
+        "owner": "TradingController/APIGateway",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "QUERY_AND_CLASSIFY_APP_ORDER"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "OPERATOR_ACTION_REQUIRED",
+          "aggregate_version": 5,
+          "correlation_id": "unknown_recent_app_order",
+          "payload": {"reason": "UNKNOWN_RECENT_APP_ORDER"}
+        }
+      ],
+      "expected_normalized_digest": "c4a4a7f7fe54d72af0812256dfd1d6db138b91940fe8f8280de5f4a7cb05a412"
+    },
+    {
+      "scenario_id": "testnet_reset",
+      "category": "EXCHANGE_STATE",
+      "fault_kind": "TESTNET_RESET",
+      "expected": {
+        "owner": "TradingController/APIGateway",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "REQUIRE_OPERATOR_RECONCILIATION"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "OPERATOR_ACTION_REQUIRED",
+          "aggregate_version": 5,
+          "correlation_id": "testnet_reset",
+          "payload": {"reason": "TESTNET_RESET"}
+        }
+      ],
+      "expected_normalized_digest": "f00a6c87eec3887401621329844a34b0c615490cecb35ecdbb75a70f5d83bec2"
+    },
+    {
+      "scenario_id": "balance_decrease",
+      "category": "EXCHANGE_STATE",
+      "fault_kind": "BALANCE_DECREASE",
+      "expected": {
+        "owner": "TradingController/Account",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "RECONCILE_ACCOUNT_AND_POSITION"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 5,
+          "correlation_id": "balance_decrease",
+          "payload": {"reason": "BALANCE_DECREASE"}
+        }
+      ],
+      "expected_normalized_digest": "fbad1c13c0cc1bc1a45a2e1b68bbce3fc0d544a8d0395f2656ff9a1d5c99759c"
+    },
+    {
+      "scenario_id": "fee_dust_mismatch",
+      "category": "EXCHANGE_STATE",
+      "fault_kind": "FEE_DUST_MISMATCH",
+      "expected": {
+        "owner": "TradingController/Position",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "RECONCILE_FILL_FEE_AND_FREE_BALANCE"
+      },
+      "input_trace": [
+        {
+          "operation": "BEGIN_ORDER",
+          "intent_id": "intent-fee-dust",
+          "client_order_id": "bat-fee-dust-1",
+          "submission_attempt": 1,
+          "symbol": "ETHUSDT",
+          "side": "BUY",
+          "strategy": "CASE_B",
+          "regime_type": "TYPE_0",
+          "requested_quantity": "1",
+          "submitted_quantity": "1",
+          "market_price_at_decision": "100",
+          "exit_reason": null
+        },
+        {"operation": "SUBMIT_ORDER"},
+        {
+          "operation": "ORDER_RESULT",
+          "symbol": "ETHUSDT",
+          "client_order_id": "bat-fee-dust-1",
+          "status": "FILLED",
+          "processed_at": "2026-08-24T00:00:05Z",
+          "exchange_order_id": "13005",
+          "fills": [
+            {
+              "exchange_order_id": "13005",
+              "trade_id": "fill-fee-dust",
+              "quantity": "1",
+              "price": "100",
+              "fee_amount": "0.001",
+              "fee_asset": "ETH",
+              "fee_quote_amount": "0.1",
+              "executed_at": "2026-08-24T00:00:05Z"
+            }
+          ]
+        },
+        {"operation": "APPLY_NEW_FILLS"},
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "RECONCILIATION_REQUIRED",
+          "aggregate_version": 6,
+          "correlation_id": "fee_dust_mismatch",
+          "payload": {"reason": "FEE_DUST_MISMATCH"}
+        }
+      ],
+      "expected_normalized_digest": "648ef68764e34a35ba7ba5a1e25a16b0efcfe6722f1c9f6007ad50ddc9eb5192"
+    },
+    {
+      "scenario_id": "sidecar_pre_ready_exit",
+      "category": "SIDECAR",
+      "fault_kind": "SIDECAR_PRE_READY_EXIT",
+      "expected": {
+        "owner": "NativeSidecarLifecycle",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "REAP_CHILD_AND_SCAN_OWNERSHIP"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "STARTUP_FAILED",
+          "aggregate_version": 0,
+          "correlation_id": "sidecar_pre_ready_exit",
+          "payload": {"reason": "SIDECAR_PRE_READY_EXIT"}
+        }
+      ],
+      "expected_normalized_digest": "1a03ba5f2a475bcc5671b2c1765cfab28f8f3fe773aeda355964f37b07af7478"
+    },
+    {
+      "scenario_id": "sidecar_late_ready",
+      "category": "SIDECAR",
+      "fault_kind": "SIDECAR_LATE_READY",
+      "expected": {
+        "owner": "NativeSidecarLifecycle",
+        "state": "WAITING_READY",
+        "new_order_allowed": false,
+        "recovery_action": "WAIT_WITHIN_READY_DEADLINE"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "STARTUP_PENDING",
+          "aggregate_version": 0,
+          "correlation_id": "sidecar_late_ready",
+          "payload": {"reason": "SIDECAR_LATE_READY"}
+        }
+      ],
+      "expected_normalized_digest": "729f86b592746eb0ad0355ea446f77fca087745a2b07a68f9cfbef9ee5d774dc"
+    },
+    {
+      "scenario_id": "sidecar_abnormal_exit",
+      "category": "SIDECAR",
+      "fault_kind": "SIDECAR_ABNORMAL_EXIT",
+      "expected": {
+        "owner": "NativeSidecarLifecycle",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "REAP_CHILD_AND_SCAN_OWNERSHIP"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "SIDECAR_EXITED",
+          "aggregate_version": 7,
+          "correlation_id": "sidecar_abnormal_exit",
+          "payload": {"reason": "SIDECAR_ABNORMAL_EXIT"}
+        }
+      ],
+      "expected_normalized_digest": "6fada45445d56eb3aced18e29a53e1b92b2c91e0ccaaf3bcf1661ae852ac9fdb"
+    },
+    {
+      "scenario_id": "main_crash_listener_orphan",
+      "category": "PROCESS",
+      "fault_kind": "MAIN_CRASH_LISTENER_ORPHAN",
+      "expected": {
+        "owner": "ProcessWatchdog/TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "VERIFY_PID_START_IDENTITY_AND_LOCK"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "PROCESS_OWNERSHIP_AMBIGUOUS",
+          "aggregate_version": 7,
+          "correlation_id": "main_crash_listener_orphan",
+          "payload": {"reason": "MAIN_CRASH_LISTENER_ORPHAN"}
+        }
+      ],
+      "expected_normalized_digest": "87337886f47e768715f209385223a507b62e2a0eb6f5f04aa9577c552567ef45"
+    },
+    {
+      "scenario_id": "shutdown_position_drift",
+      "category": "SHUTDOWN",
+      "fault_kind": "SHUTDOWN_POSITION_DRIFT",
+      "expected": {
+        "owner": "TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "RECONCILE_POSITION_BEFORE_CLOSED"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "SHUTDOWN_BLOCKED",
+          "aggregate_version": 10,
+          "correlation_id": "shutdown_position_drift",
+          "payload": {"reason": "SHUTDOWN_POSITION_DRIFT"}
+        }
+      ],
+      "expected_normalized_digest": "fe286b82632df44ead0f15a7e1c7614899cdbb65f2998e71d7f5273fee5fb978"
+    },
+    {
+      "scenario_id": "shutdown_order_drift",
+      "category": "SHUTDOWN",
+      "fault_kind": "SHUTDOWN_ORDER_DRIFT",
+      "expected": {
+        "owner": "TradingController",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "RECONCILE_ORDER_BEFORE_CLOSED"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "SHUTDOWN_BLOCKED",
+          "aggregate_version": 10,
+          "correlation_id": "shutdown_order_drift",
+          "payload": {"reason": "SHUTDOWN_ORDER_DRIFT"}
+        }
+      ],
+      "expected_normalized_digest": "082e1d9d75debd15035566469da691dc7044922314eb2e847d48cce3b77db48b"
+    },
+    {
+      "scenario_id": "shutdown_closed_ack_loss",
+      "category": "SHUTDOWN",
+      "fault_kind": "SHUTDOWN_CLOSED_ACK_LOSS",
+      "expected": {
+        "owner": "NativeSidecarLifecycle",
+        "state": "RECONCILIATION_REQUIRED",
+        "new_order_allowed": false,
+        "recovery_action": "VERIFY_CHILD_EXIT_AND_OWNERSHIP_ARTIFACT"
+      },
+      "input_trace": [
+        {"operation": "FAULT_OBSERVED"},
+        {
+          "operation": "PUBLISH_UI_EVENT",
+          "event_type": "SHUTDOWN_ACK_MISSING",
+          "aggregate_version": 11,
+          "correlation_id": "shutdown_closed_ack_loss",
+          "payload": {"reason": "SHUTDOWN_CLOSED_ACK_LOSS"}
+        }
+      ],
+      "expected_normalized_digest": "d71def748c196055419c10bf8a603b3504ce0677742dd1b67cdc383b382356a5"
+    }
+  ],
+  "expected_replay_digest": "a5f17e96f60e825faf4ccf89e0788133f8bfcac6a3654504a4f16c5c2f2f70f2"
+}

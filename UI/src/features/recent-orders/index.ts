@@ -17,5 +17,6 @@ export type {
     RecentOrderViewModel,
     TraderPanelIntent,
     TraderPanelProps,
+    TraderPanelRiskPolicyAvailability,
     TraderPanelTab,
 } from './types';

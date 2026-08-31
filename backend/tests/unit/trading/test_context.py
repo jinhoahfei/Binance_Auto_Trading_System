@@ -146,6 +146,29 @@ class TradingContextInitializationTests(unittest.TestCase):
         self.assertEqual(version_before + 1, snapshot.version)  # initialize는 항상 session version을 만든다.
         self.assertEqual(TEST_TIME, snapshot.evaluated_at)
 
+    def test_recovery_initialize_rejects_invalid_position_without_mutation(self) -> None:
+        """
+        함수 이름: test_recovery_initialize_rejects_invalid_position_without_mutation()
+        기능: Communication 8R.1.1.1의 Context 초기화가 잘못된 복구 Position을 원자적으로 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        context = TradingContext(clock=lambda: TEST_TIME)
+
+        # 복구 경로도 canonical PositionSnapshot 없이는 account나 session version을 게시하지 않는다.
+        with self.assertRaisesRegex(TypeError, "position must be a PositionSnapshot"):
+            context.initialize(
+                Account(),
+                RegimeType.TYPE_0,
+                object(),  # type: ignore[arg-type]
+                Decimal("0.25"),
+                Decimal("0.75"),
+            )
+
+        self.assertFalse(context.initialized)
+        self.assertEqual(context.version, 0)  # 실패한 복구 초기화는 session version을 만들지 않는다.
+
     def test_selection_and_ratios_increment_only_for_real_changes(self) -> None:
         """
         함수 이름: test_selection_and_ratios_increment_only_for_real_changes()

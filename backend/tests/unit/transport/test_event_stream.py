@@ -104,7 +104,7 @@ class BackendEventStreamTests(unittest.TestCase):
 
         self.assertEqual((first_event.sequence, second_event.sequence), (1, 2))
         self.assertEqual(first_event.to_dto()["payload"]["price"], "4321.5000")
-        self.assertEqual(first_event.to_dto()["schema_version"], 2)
+        self.assertEqual(first_event.to_dto()["schema_version"], 3)
         self.assertEqual(first_event.to_dto()["aggregate_version"], 7)
         self.assertEqual(event_stream.last_sequence, 2)
         self.assertNotEqual(first_event.event_id, second_event.event_id)
@@ -197,7 +197,7 @@ class BackendEventStreamTests(unittest.TestCase):
         self.assertEqual(
             event_stream.build_resync_control("REPLAY_GAP"),
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "session_id": TEST_SESSION_ID,
                 "type": "RESYNC_REQUIRED",
                 "reason": "REPLAY_GAP",

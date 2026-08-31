@@ -24,6 +24,7 @@ import type {
     ChartInterval,
     IndicatorSettingsViewModel,
     LinePointViewModel,
+    PriceChartPresentationMode,
 } from '../types';
 
 import styles from './LightweightChartSurface.module.css';
@@ -35,6 +36,8 @@ const INITIAL_MINIMUM_BAR_SPACING = 0.00001;
 const OVERVIEW_RANGE_MULTIPLIER = 2;
 const RIGHT_OFFSET_BAR_COUNT = 2.35;
 const VISIBLE_RANGE_BAR_BUFFER = 2;
+const FIXTURE_BASE_CHART_TIME = Date.UTC(2026, 5, 22, 9, 0, 0) / 1_000;
+const FIXTURE_CHART_TIME_STEP_SECONDS = 5 * 60;
 const INTERVAL_DURATION_MILLISECONDS: Readonly<Record<ChartInterval, number>> = {
     '1m': 60_000,
     '30m': 30 * 60_000,
@@ -102,6 +105,7 @@ export interface LightweightChartSurfaceProps {
     readonly indicatorSettings: IndicatorSettingsViewModel;
     readonly interval: ChartInterval;
     readonly onCoordinateSpaceChange?: ((coordinate_space: ChartCoordinateSpace | null) => void) | undefined;
+    readonly presentationMode?: PriceChartPresentationMode;
     readonly symbol?: string;
 }
 
@@ -679,6 +683,119 @@ function create_lightweight_chart(container: HTMLDivElement): LightweightChartHa
 }
 
 /**
+ * 함수 이름: create_fixture_lightweight_chart()
+ * 기능: 고정 Figma 기준 화면의 축 없는 결정적 차트 인스턴스를 생성한다.
+ * 인자: container -> fixture chart canvas를 소유할 HTML 요소
+ * 반환값: 고정 series 갱신과 정리에 필요한 chart handle
+ * 작성 날짜: 2026/08/29
+ */
+function create_fixture_lightweight_chart(container: HTMLDivElement): LightweightChartHandles {
+    const positive_color = read_color_token('--color-status-positive', '#0eb77b');
+    const negative_color = read_color_token('--color-status-negative', '#f03858');
+    const information_color = read_color_token('--color-status-info', '#1768d4');
+    const bollinger_color = read_color_token('--color-text-secondary', '#a7afbb');
+
+    // Figma 기준은 SVG 격자·축과 조합되므로 library 자체의 축·격자·상호작용은 숨긴다.
+    const chart = createChart(container, {
+        autoSize: true,
+        height: 328,
+        layout: {
+            attributionLogo: false,
+            background: { type: ColorType.Solid, color: 'transparent' },
+            textColor: 'transparent',
+        },
+        grid: {
+            horzLines: { visible: false },
+            vertLines: { visible: false },
+        },
+        crosshair: {
+            horzLine: { visible: false, labelVisible: false },
+            vertLine: { visible: false, labelVisible: false },
+        },
+        handleScale: false,
+        handleScroll: false,
+        leftPriceScale: { visible: false },
+        rightPriceScale: {
+            visible: false,
+            borderVisible: false,
+            scaleMargins: { top: 0, bottom: 0.13 },
+        },
+        timeScale: {
+            barSpacing: 20,
+            visible: false,
+            borderVisible: false,
+            fixLeftEdge: false,
+            fixRightEdge: false,
+            rightOffset: RIGHT_OFFSET_BAR_COUNT,
+        },
+    });
+
+    // 고정 series는 2026-08-12 Figma export와 같은 장식 없는 표현만 활성화한다.
+    const candle_series = chart.addSeries(CandlestickSeries, {
+        borderVisible: false,
+        downColor: negative_color,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        upColor: positive_color,
+        wickDownColor: negative_color,
+        wickUpColor: positive_color,
+    });
+    const bollinger_upper_series = chart.addSeries(LineSeries, {
+        color: bollinger_color,
+        crosshairMarkerVisible: false,
+        lastValueVisible: false,
+        lineStyle: LineStyle.Dashed,
+        lineWidth: 1,
+        priceLineVisible: false,
+    });
+    const bollinger_lower_series = chart.addSeries(LineSeries, {
+        color: bollinger_color,
+        crosshairMarkerVisible: false,
+        lastValueVisible: false,
+        lineStyle: LineStyle.Dashed,
+        lineWidth: 1,
+        priceLineVisible: false,
+    });
+    const ema_series = chart.addSeries(LineSeries, {
+        color: information_color,
+        crosshairMarkerVisible: false,
+        lastValueVisible: false,
+        lineWidth: 2,
+        priceLineVisible: false,
+    });
+    const volume_series = chart.addSeries(HistogramSeries, {
+        lastValueVisible: false,
+        priceFormat: { type: 'volume' },
+        priceLineVisible: false,
+        priceScaleId: 'volume',
+    });
+
+    chart.priceScale('volume').applyOptions({
+        scaleMargins: { top: 0.82, bottom: 0 },
+    });
+
+    return {
+        chart,
+        bollinger_lower_series,
+        bollinger_upper_series,
+        candle_series,
+        ema_series,
+        volume_series,
+    };
+}
+
+/**
+ * 함수 이름: create_fixture_chart_time()
+ * 기능: fixture 순번을 Figma 기준의 결정적 5분 간격 chart 시각으로 변환한다.
+ * 인자: index -> candle 또는 indicator의 논리 순번
+ * 반환값: Lightweight Charts UNIX timestamp
+ * 작성 날짜: 2026/08/29
+ */
+function create_fixture_chart_time(index: number): UTCTimestamp {
+    return (FIXTURE_BASE_CHART_TIME + index * FIXTURE_CHART_TIME_STEP_SECONDS) as UTCTimestamp;
+}
+
+/**
  * 함수 이름: read_crosshair_candle()
  * 기능: crosshair event에서 실제 OHLCV와 봉 시작 시각을 안전하게 읽는다.
  * 인자: event -> Lightweight Charts crosshair event, handles -> series handle
@@ -734,6 +851,7 @@ export function LightweightChartSurface({
     indicatorSettings,
     interval,
     onCoordinateSpaceChange,
+    presentationMode = 'interactive',
     symbol = 'ETHUSDT',
 }: LightweightChartSurfaceProps) {
     const container_ref = useRef<HTMLDivElement | null>(null);
@@ -760,10 +878,20 @@ export function LightweightChartSurface({
             return undefined;
         }
 
-        const handles = create_lightweight_chart(container);
+        const handles = presentationMode === 'fixture'
+            ? create_fixture_lightweight_chart(container)
+            : create_lightweight_chart(container);
         let coordinate_animation_frame: number | null = null;
 
         handles_ref.current = handles;
+
+        // Fixture는 정적 Figma 좌표를 사용하므로 live pan/zoom 구독을 만들지 않는다.
+        if (presentationMode === 'fixture') {
+            return () => {
+                handles.chart.remove();
+                handles_ref.current = null;
+            };
+        }
 
         /**
          * 함수 이름: publish_coordinate_space()
@@ -850,12 +978,46 @@ export function LightweightChartSurface({
             minimum_bar_spacing_ref.current = null;
             series_render_state_ref.current = null;
         };
-    }, [onCoordinateSpaceChange]);
+    }, [onCoordinateSpaceChange, presentationMode]);
 
     useEffect(() => {
         const handles = handles_ref.current;
 
         if (handles === null) {
+            return;
+        }
+
+        // Fixture 자료는 각 candle 사이 두 칸을 비워 Figma의 고정 막대 간격을 재현한다.
+        if (presentationMode === 'fixture') {
+            handles.candle_series.setData(candles.flatMap((candle, index) => {
+                const logical_index = index * 3;
+                const candle_point = {
+                    ...candle,
+                    time: create_fixture_chart_time(logical_index),
+                };
+
+                if (index === candles.length - 1) {
+                    return [candle_point];
+                }
+
+                return [
+                    candle_point,
+                    { time: create_fixture_chart_time(logical_index + 1) },
+                    { time: create_fixture_chart_time(logical_index + 2) },
+                ];
+            }));
+            // SVG fixture가 보조지표를 소유하므로 library 가격축에는 candle 범위만 남긴다.
+            handles.ema_series.setData([]);
+            handles.bollinger_upper_series.setData([]);
+            handles.bollinger_lower_series.setData([]);
+            handles.volume_series.setData(indicatorSettings.volume
+                ? candles.map((candle, index) => ({
+                    color: candle.close >= candle.open ? '#0eb77b66' : '#f0385866',
+                    time: create_fixture_chart_time(index * 3),
+                    value: Math.max(1, candle.high - candle.low),
+                }))
+                : []);
+            set_is_ready(true);
             return;
         }
 
@@ -989,7 +1151,15 @@ export function LightweightChartSurface({
         };
         set_is_ready(true);
         coordinate_space_publish_ref.current();
-    }, [bollingerLower, bollingerUpper, candles, ema, indicatorSettings, interval]);
+    }, [
+        bollingerLower,
+        bollingerUpper,
+        candles,
+        ema,
+        indicatorSettings,
+        interval,
+        presentationMode,
+    ]);
 
     useEffect(() => {
         set_hovered_candle(null);
@@ -1000,15 +1170,20 @@ export function LightweightChartSurface({
     const change_class = change_rate >= 0 ? styles.positiveValue : styles.negativeValue;
 
     return (
-        <div className={styles.surface}>
+        <div
+            className={styles.surface}
+            data-chart-presentation-mode={presentationMode}
+        >
             <div
                 aria-hidden="true"
-                className={styles.chartHost}
+                className={`${styles.chartHost} ${
+                    presentationMode === 'fixture' ? styles.fixtureChartHost : ''
+                }`}
                 data-chart-engine="lightweight-charts"
                 data-chart-engine-ready={is_ready}
                 ref={container_ref}
             />
-            {displayed_candle !== null ? (
+            {displayed_candle !== null && presentationMode === 'interactive' ? (
                 <div aria-label="선택한 봉 정보" className={styles.candleInformation}>
                     <time dateTime={new Date(displayed_candle.open_time).toISOString()}>
                         {format_hover_time(displayed_candle.open_time)}

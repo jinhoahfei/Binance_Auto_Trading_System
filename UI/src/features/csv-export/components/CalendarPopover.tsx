@@ -139,6 +139,13 @@ export function CalendarPopover({
   onDismiss,
 }: CalendarPopoverProps) {
   const calendar_cells = create_calendar_cells(calendar.year, calendar.month);
+  const calendar_rows = Array.from(
+    { length: calendar_cells.length / weekday_labels.length },
+    (_, row_index) => calendar_cells.slice(
+      row_index * weekday_labels.length,
+      (row_index + 1) * weekday_labels.length,
+    ),
+  );
   const disabled_dates = new Set(calendar.disabledDates ?? []);
   const year_options = Array.from({ length: 7 }, (_, index) => calendar.year - 3 + index);
 
@@ -151,13 +158,16 @@ export function CalendarPopover({
       role="dialog"
       tabIndex={-1}
     >
-      <header className={styles.header}>
+      {/* 팝오버 제목은 페이지 전역 banner와 충돌하지 않는 일반 container로 유지한다. */}
+      <div className={styles.header}>
         <span aria-hidden="true" className={styles.calendarIcon}>
-          ▣
+          ▦
         </span>
         <strong>{targetLabel}</strong>
-        <span className={styles.selectedDate}>{calendar.selectedDate.replaceAll('-', '.')}</span>
-      </header>
+        <span className={styles.selectedDate}>
+          {(calendar.headerDate ?? calendar.selectedDate).replaceAll('-', '.')}
+        </span>
+      </div>
 
       <nav aria-label="달력 월 이동" className={styles.navigation}>
         <button aria-label="이전 달" onClick={onPreviousMonth} type="button">
@@ -188,34 +198,53 @@ export function CalendarPopover({
         ))}
       </div>
 
-      <div className={styles.days} role="grid">
-        {calendar_cells.map((day, index) => {
-          if (day === null) {
-            return <span aria-hidden="true" key={`empty-${index}`} />;
-          }
+      <div
+        aria-label={`${calendar.year}년 ${calendar.month}월 날짜`}
+        className={styles.days}
+        role="grid"
+      >
+        {calendar_rows.map((calendar_row, row_index) => (
+          <div className={styles.week} key={`week-${row_index}`} role="row">
+            {calendar_row.map((day, column_index) => {
+              const cell_index = row_index * weekday_labels.length + column_index;
+              if (day === null) {
+                // 빈 칸도 accessibility tree에 남겨 각 row의 일곱 요일 column 위치를 보존한다.
+                return (
+                  <span
+                    aria-disabled="true"
+                    key={`empty-${cell_index}`}
+                    role="gridcell"
+                  />
+                );
+              }
 
-          const iso_date = create_iso_date(calendar.year, calendar.month, day);
-          const is_selected = iso_date === calendar.selectedDate;
-          const is_disabled = disabled_dates.has(iso_date);
-          const weekday = index % 7;
-          const weekend_class = weekday === 0 ? styles.sunday : weekday === 6 ? styles.saturday : '';
+              const iso_date = create_iso_date(calendar.year, calendar.month, day);
+              const is_selected = iso_date === calendar.selectedDate;
+              const is_disabled = disabled_dates.has(iso_date);
+              const weekend_class = column_index === 0
+                ? styles.sunday
+                : column_index === 6
+                  ? styles.saturday
+                  : '';
 
-          return (
-            <button
-              aria-label={`${calendar.year}년 ${calendar.month}월 ${day}일 선택`}
-              aria-selected={is_selected}
-              className={`${weekend_class} ${is_selected ? styles.selected : ''}`}
-              disabled={is_disabled}
-              key={iso_date}
-              onClick={() => onDateSelect(iso_date)}
-              onKeyDown={move_calendar_grid_focus}
-              role="gridcell"
-              type="button"
-            >
-              {day}
-            </button>
-          );
-        })}
+              return (
+                <button
+                  aria-label={`${calendar.year}년 ${calendar.month}월 ${day}일 선택`}
+                  aria-selected={is_selected}
+                  className={`${weekend_class} ${is_selected ? styles.selected : ''}`}
+                  disabled={is_disabled}
+                  key={iso_date}
+                  onClick={() => onDateSelect(iso_date)}
+                  onKeyDown={move_calendar_grid_focus}
+                  role="gridcell"
+                  type="button"
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </div>
     </section>
   );

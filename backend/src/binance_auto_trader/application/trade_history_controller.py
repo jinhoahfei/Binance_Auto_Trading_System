@@ -22,8 +22,10 @@ from binance_auto_trader.domain.trading.account import Account
 from binance_auto_trader.domain.trading.order import (
     ExecutionSummary,
     Order,
+    PendingOrderRecoveryLifecycle,
     PendingOrderRecoveryRecord,
 )
+from binance_auto_trader.domain.trading.risk import ManualKillControlState
 from binance_auto_trader.domain.trading.states import OrderSide
 
 
@@ -107,9 +109,9 @@ class TradeHistoryRepositoryPort(Protocol):
     def flush_durable_state(self) -> None:
         """
         함수 이름: flush_durable_state()
-        기능: 현재 history와 pending-order journal을 명시적인 fsync 경계까지 내린다.
+        기능: 현재 history, pending-order와 manual-kill journal을 명시적인 fsync 경계까지 내린다.
         인자: 없음
-        반환값: 두 저장소의 durability 확인이 끝나면 없음
+        반환값: 세 저장소의 durability 확인이 끝나면 없음
         작성 날짜: 2026/08/24
         """
         ...
@@ -252,6 +254,7 @@ class TradeHistoryController:
         "_repository",
         "_state",
         "_state_lock",
+        "_supports_manual_kill_control_recovery",
         "_supports_pending_order_recovery",
         "_trade_update_observer",
     )
@@ -308,13 +311,24 @@ class TradeHistoryController:
         pending_order_operation_names = (
             "delete_pending_order",
             "get_pending_order_recovery_records",
+            "get_pending_order_submission_counts",
             "mark_pending_order_submission_rejected",
             "save_pending_order",
+            "transition_pending_order_lifecycle",
         )
         self._supports_pending_order_recovery = all(
             callable(getattr(repository, operation_name, None))
             for operation_name in pending_order_operation_names
         )  # 기존 history-only fake는 optional capability 없이도 계속 조립할 수 있다.
+        manual_kill_control_operation_names = (
+            "get_manual_kill_control_replay",
+            "get_manual_kill_control_state",
+            "save_manual_kill_control_state",
+        )
+        self._supports_manual_kill_control_recovery = all(
+            callable(getattr(repository, operation_name, None))
+            for operation_name in manual_kill_control_operation_names
+        )  # 기존 fake는 그대로 두고 concrete JSONL adapter만 restart capability를 알린다.
         self._state_lock = RLock()
         self._state = _TradeHistoryLoadState(
             trade_history=TradeHistory(),
@@ -647,6 +661,100 @@ class TradeHistoryController:
         """
         return self._supports_pending_order_recovery  # startup caller가 fake와 concrete를 명시적으로 구분한다.
 
+    @property
+    def supports_manual_kill_control_recovery(self) -> bool:
+        """
+        함수 이름: supports_manual_kill_control_recovery()
+        기능: 조립된 repository가 manual kill load/save operation을 모두 제공하는지 알린다.
+        인자: 없음
+        반환값: durable manual kill 복구 지원 여부
+        작성 날짜: 2026/08/29
+        """
+        return self._supports_manual_kill_control_recovery  # Controller가 volatile fake와 concrete를 구분한다.
+
+    def get_manual_kill_control_state(self) -> ManualKillControlState:
+        """
+        함수 이름: get_manual_kill_control_state()
+        기능: repository의 durable manual kill state를 operation lock 안에서 읽는다.
+        인자: 없음
+        반환값: 재시작 뒤 복원할 ManualKillControlState
+        작성 날짜: 2026/08/29
+        """
+        with self._operation_lock:
+            get_control_state = getattr(
+                self._repository,
+                "get_manual_kill_control_state",
+                None,
+            )
+            if not callable(get_control_state):
+                raise NotImplementedError(
+                    "repository does not support manual-kill control recovery"
+                )
+            state = get_control_state()
+            if not isinstance(state, ManualKillControlState):
+                raise TypeError(
+                    "repository must return a ManualKillControlState"
+                )
+
+            return state  # frozen state는 TradingController 초기화까지 같은 값을 보존한다.
+
+    def get_manual_kill_control_replay(
+        self,
+    ) -> tuple[ManualKillControlState, ...]:
+        """
+        함수 이름: get_manual_kill_control_replay()
+        기능: repository가 검증한 bounded manual kill command receipt를 restart cache에 제공한다.
+        인자: 없음
+        반환값: 시간 순서의 ManualKillControlState tuple
+        작성 날짜: 2026/08/29
+        """
+        with self._operation_lock:
+            get_control_replay = getattr(
+                self._repository,
+                "get_manual_kill_control_replay",
+                None,
+            )
+            if not callable(get_control_replay):
+                raise NotImplementedError(
+                    "repository does not support manual-kill control recovery"
+                )
+            replay = get_control_replay()
+            if not isinstance(replay, tuple) or any(
+                not isinstance(receipt, ManualKillControlState)
+                for receipt in replay
+            ):
+                raise TypeError(
+                    "repository must return manual-kill control state tuple"
+                )
+
+            return replay  # 불변 tuple만 Controller command cache 복원에 전달한다.
+
+    def save_manual_kill_control_state(
+        self,
+        state: ManualKillControlState,
+    ) -> None:
+        """
+        함수 이름: save_manual_kill_control_state()
+        기능: 다음 manual kill 성공 command receipt를 repository의 fsync 경계까지 내린다.
+        인자: state -> 현재 state에서 실행된 exact command 결과
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # Mapping이나 tuple을 domain state로 암묵 변환하지 않고 exact value만 위임한다.
+        if not isinstance(state, ManualKillControlState):
+            raise TypeError("state must be a ManualKillControlState")
+        with self._operation_lock:
+            save_control_state = getattr(
+                self._repository,
+                "save_manual_kill_control_state",
+                None,
+            )
+            if not callable(save_control_state):
+                raise NotImplementedError(
+                    "repository does not support manual-kill control recovery"
+                )
+            save_control_state(state)  # 성공 반환이 in-memory kill state 변경의 선행 조건이다.
+
     def save_pending_order(self, order: Order) -> None:
         """
         함수 이름: save_pending_order()
@@ -708,6 +816,7 @@ class TradeHistoryController:
         반환값: 없음
         작성 날짜: 2026/08/23
         """
+        # 외부 order ID는 공백 없는 canonical 문자열이어야 repository port에 도달할 수 있다.
         if not isinstance(client_order_id, str):
             raise TypeError("client_order_id must be a string")
         if not client_order_id or client_order_id.strip() != client_order_id:
@@ -726,6 +835,45 @@ class TradeHistoryController:
                     "repository does not support pending-order lifecycle recovery"
                 )
             transition_operation(client_order_id)  # fsync 반환 뒤에만 Controller가 거부 사실을 사용한다.
+
+    def transition_pending_order_lifecycle(
+        self,
+        client_order_id: str,
+        lifecycle: PendingOrderRecoveryLifecycle,
+    ) -> None:
+        """
+        함수 이름: transition_pending_order_lifecycle()
+        기능: 제출·UNKNOWN·partial·terminal·history lifecycle의 durable 전진을 repository에 위임한다.
+        인자: client_order_id -> 전이할 application order ID
+            lifecycle -> fsync할 canonical lifecycle
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        # Order ID와 lifecycle을 repository 호출 전에 canonical application 값으로 검증한다.
+        if not isinstance(client_order_id, str):
+            raise TypeError("client_order_id must be a string")
+        if not client_order_id or client_order_id.strip() != client_order_id:
+            raise ValueError(
+                "client_order_id must be non-empty without outer whitespace"
+            )
+        if not isinstance(lifecycle, PendingOrderRecoveryLifecycle):
+            raise TypeError("lifecycle must be a PendingOrderRecoveryLifecycle")
+
+        with self._operation_lock:
+            # Generic lifecycle port가 없는 history-only fake는 durable 주문 mode로 오인하지 않는다.
+            transition_operation = getattr(
+                self._repository,
+                "transition_pending_order_lifecycle",
+                None,
+            )
+            if not callable(transition_operation):
+                raise NotImplementedError(
+                    "repository does not support pending-order lifecycle recovery"
+                )
+            transition_operation(
+                client_order_id,
+                lifecycle,
+            )  # repository의 file·directory fsync 반환이 application 사실의 commit 경계다.
 
     def get_pending_orders(self) -> tuple[Order, ...]:
         """
@@ -774,6 +922,48 @@ class TradeHistoryController:
                 )
 
             return recovery_records  # Order와 lifecycle이 같은 replay에서 나온 snapshot을 보존한다.
+
+    def get_pending_order_submission_counts(
+        self,
+    ) -> tuple[tuple[str, int], ...]:
+        """
+        함수 이름: get_pending_order_submission_counts()
+        기능: REMOVE 후에도 보존된 intent별 제출 예산 소비 snapshot을 복원한다.
+        인자: 없음
+        반환값: intent와 1 이상 submission count의 immutable tuple
+        작성 날짜: 2026/08/25
+        """
+        with self._operation_lock:
+            # Repository capability와 반환 shape를 검증해 Controller가 메모리 기본값으로 추측하지 않게 한다.
+            get_submission_counts = getattr(
+                self._repository,
+                "get_pending_order_submission_counts",
+                None,
+            )
+            if not callable(get_submission_counts):
+                raise NotImplementedError(
+                    "repository does not support pending-order submission budgets"
+                )
+            submission_counts = get_submission_counts()
+            if not isinstance(submission_counts, tuple):
+                raise TypeError(
+                    "repository submission counts must be a tuple"
+                )
+            for record in submission_counts:
+                if (
+                    not isinstance(record, tuple)
+                    or len(record) != 2
+                    or not isinstance(record[0], str)
+                    or not record[0]
+                    or record[0].strip() != record[0]
+                    or type(record[1]) is not int
+                    or record[1] < 1
+                ):
+                    raise TypeError(
+                        "repository submission counts must use canonical values"
+                    )
+
+            return submission_counts  # immutable replay snapshot을 변형 없이 Controller에 전달한다.
 
     def load_trade_history(self) -> TradeHistory:
         """

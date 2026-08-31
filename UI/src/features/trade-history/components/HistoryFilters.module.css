@@ -80,12 +80,12 @@
 
 .buy {
   border-color: color-mix(in srgb, var(--color-status-positive) 65%, var(--color-border-default));
-  color: var(--color-status-positive);
+  color: var(--color-text-positive);
 }
 
 .sell {
   border-color: color-mix(in srgb, var(--color-status-negative) 65%, var(--color-border-default));
-  color: var(--color-status-negative);
+  color: var(--color-text-negative);
 }
 
 .all.activeSide {
@@ -107,7 +107,7 @@
   padding: 0 18px;
   border-color: color-mix(in srgb, var(--color-status-info) 42%, var(--color-text-primary));
   background: var(--color-bg-surface);
-  color: var(--color-status-info);
+  color: var(--color-text-info);
 }
 
 @media (max-width: 920px) {

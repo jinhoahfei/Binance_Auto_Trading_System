@@ -4,6 +4,7 @@
 |---|---|
 | 상태 | Accepted |
 | 결정일 | 2026-08-20 |
+| 최종 검토일 | 2026-08-29 |
 | 적용 결정 | D-08 |
 | 적용 상품 | Binance Spot long-only 주문 |
 
@@ -53,6 +54,8 @@
     동일 intent를 다시 만들지 않고 `RECONCILIATION_REQUIRED`와 operator lock을 유지한다.
     sidecar가 실제로 존재하면 same client ID 복구 근거로 보존하고, 존재하지 않아도 현재
     process에서는 비어 있다고 추측해 command gate를 다시 열지 않는다.
+    다음 process는 journal을 성공 replay한 뒤 아래 §6.2의 schema별 제출 경계 근거를
+    적용한다. 현재 process의 모호한 save 반환을 restart 정책으로 업그레이드하지 않는다.
 12. 복구 Position의 최초 force-sell은 free balance와 exchange filter 적용 뒤에도
     requested/submitted 수량이 authoritative Position 전량과 정확히 같을 때만 PREPARED를
     저장한다. max-notional의 승인 의미는 노출을 늘리는 BUY entry cap이다. 일반 SELL의 기존
@@ -78,8 +81,9 @@
 
 - 각 기본 대기에 `-20%` 이상 `+20%` 이하의 jitter를 적용한다.
 - 테스트에서는 주입한 jitter factor `1.0`으로 정확히 `1, 2, 4, 8초`를 검증한다.
-- `429`/rate-limit 응답에 유효한 `Retry-After`가 있으면 그 값을 우선하되 한 번의
-  대기는 최대 30초다. 이 요청도 attempt를 소비한다.
+- `429`/`418` rate-limit 응답에 유효한 `Retry-After`가 있으면 그 wait-not-before를
+  축소하지 않고 우선한다. 표현할 수 없는 값은 짧은 대기로 대체하지 않고 fail closed한다.
+  이 요청도 attempt를 소비한다. Binance가 명시한 시각 전에는 같은 주문 조회도 수행하지 않는다.
 - 4회 뒤에도 거래소 사실을 확정할 수 없으면 `RECONCILIATION_REQUIRED`로 전이하고
   신규 전략 action과 자동 종료를 차단한다.
 
@@ -162,32 +166,39 @@ backend startup은 trading start를 받기 전에 다음 reconciliation을 완�
 
 1. JSONL 이력과 마지막 정상 order ID를 읽는다.
 2. 외부 POST 전에 file과 parent directory까지 fsync한 pending-order sidecar의
-   `PREPARED` 항목을 읽는다. legacy sidecar v1의 UPSERT도 `PREPARED`로 해석한다.
+   `PREPARED` 항목을 읽는다. legacy sidecar v1/v2의 UPSERT도 `PREPARED`로 해석한다.
 3. `APIGateway.listOpenOrderResults(symbol)`로 앱이 생성한 open order를 조회한다.
 4. 앱의 client order ID prefix에 해당하는 최근 execution을 조회해 이력 이후 fill을 찾는다.
 5. 각 pending 주문은 신규 submit 없이 `1·2·4·8초` 뒤 같은 ID로 조회하고 누락 fill을
    Position/History에 idempotent하게 반영한다. 단, Testnet reset이 과거 숫자
    `orderId`를 다른 client ID에 재사용한 충돌은 Position 반영과 sidecar 삭제 전에
    차단한다.
-6. `PREPARED`는 거래소가 POST를 수락한 직후 응답 전에 process가 종료된 상태도 포함한다.
-   따라서 네 번 모두 `-2013`이어도 미제출로 추측하거나 sidecar를 삭제하지 않고
-   `RECONCILIATION_REQUIRED`를 유지한다.
-7. 최초 submit이 Matching Engine 이전의 typed rejection으로 확정되면 sidecar v2를
+6. Schema v3 writer는 `PREPARED` UPSERT를 fsync한 뒤 REST POST 직전에 `SUBMITTED`
+   transition을 file·parent-directory까지 fsync하고, 이 transition이 실패하면 POST를
+   시작하지 않는다. 따라서 replay된 v3 `PREPARED`는 POST 미시작 근거이며, 같은 ID가
+   `1·2·4·8초` 조회에서 모두 정확히 `-2013`이고 transport/`UNKNOWN`이 없을 때만
+   sidecar `REMOVE`를 fsync해 active lock을 해제한다. 최초 UPSERT의 intent/attempt/schema와
+   후속 REMOVE line은 append-only audit에 남는다.
+7. Legacy v1/v2 `PREPARED`는 거래소가 POST를 수락한 직후 응답 전에 process가 종료된
+   상태를 배제할 수 없다. 따라서 네 번 모두 `-2013`이어도 미제출로 추측하거나
+   sidecar를 삭제하지 않고 `RECONCILIATION_REQUIRED`를 유지한다. 동일 ID의 legacy
+   UPSERT 뒤 v3 UPSERT를 덧붙여 provenance를 세탁하는 journal은 손상으로 거부한다.
+8. 최초 submit이 Matching Engine 이전의 typed rejection으로 확정되면 lifecycle sidecar를
    `SUBMISSION_REJECTED_CONFIRMED`로 전이하고 file과 parent directory를 fsync한 뒤에만
    메모리 상태를 확정한다. 이 상태에서만 같은 ID 조회가 네 번 모두 정확한 `-2013`이고
    transport/`UNKNOWN` 관찰이 한 번도 없을 때 미제출을 확정해 sidecar를 제거한다.
-8. history commit 뒤 sidecar REMOVE만 실패한 항목은 같은 client ID를 다시 조회해
+9. history commit 뒤 sidecar REMOVE만 실패한 항목은 같은 client ID를 다시 조회해
    terminal status, `(clientOrderId, orderId)` pair, metadata와 누적 execution summary가
    durable Trade 한 건과 정확히 같을 때만 sidecar를 제거한다. 누적 summary는 수량·금액,
    평균가, fee asset·원 금액·quote 환산액과 마지막 fill 시각을 포함한다.
-9. history 저장과 sidecar REMOVE 내구성은 서로 다른 marker로 추적한다. reconnect는 실제
+10. history 저장과 sidecar REMOVE 내구성은 서로 다른 marker로 추적한다. reconnect는 실제
    sidecar를 다시 읽고 REMOVE fsync가 끝나지 않았으면 signed stream을 유지하더라도
    외부 command gate를 열지 않는다.
-10. open order와 Position이 모두 설명되면 application command barrier를 READY로 열되,
+11. open order와 Position이 모두 설명되면 application command barrier를 READY로 열되,
    일반 trading session은 `NOT_STARTED`로 유지한다. Position이 0이면 이후 명시 start를,
    Position이 양수면 ADR-003의 명시적 recovered-position liquidation만 허용한다. 자동
    resume나 startup 중 전략 event 전달은 금지한다.
-11. 설명할 수 없는 주문·fill·잔액 차이가 있으면 `RECONCILIATION_REQUIRED`를 유지하고
+12. 설명할 수 없는 주문·fill·잔액 차이가 있으면 `RECONCILIATION_REQUIRED`를 유지하고
    운영자에게 order ID와 차이를 표시한다.
 
 복구가 끝나기 전에는 market event를 STM에 전달할 수 있어도 외부 주문 Action은 실행하지
@@ -268,6 +279,9 @@ Guard, retry 예산과 Action 순서는 `TradingController`가 소유하고 Gate
 - [x] Phase 9 recovered-position liquidation에서 `PREPARED` UPSERT가 file·directory fsync 뒤
   예외를 반환하는 fault를 주입해 REST POST 0회, durable journal 보존, session rollback 금지,
   `RECONCILIATION_REQUIRED`와 command gate 폐쇄를 검증했다.
+- [x] Phase 13에서 v3 `PREPARED`의 SUBMITTED-fsync-before-POST provenance를 typed replay하고,
+  4회 exact absence 뒤 신규 POST 없이 REMOVE·gate 복구·attempt audit 보존을 검증했다.
+  v1/v2 `PREPARED`는 계속 fail closed하고 legacy→v3 provenance 세탁은 손상으로 차단한다.
 - [x] Phase 9에서 복구 Position의 free·filter 전량 preflight와 terminal partial 뒤
   residual filter 실패의 operator lock, 알 수 없는 `bat-` execution report의 recovery wake와
   authoritative lifecycle publication을 검증했다.

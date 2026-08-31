@@ -14,6 +14,13 @@ const status_label_by_data_status = {
     error: '오프라인',
 } as const;
 
+// Figma frame 03은 차트 선과 별개로 세 toggle이 모두 꺼진 정적 팝오버를 요구한다.
+const FIXTURE_POPOVER_INDICATOR_SETTINGS = {
+    bollingerBand: false,
+    ema9: false,
+    volume: false,
+} as const;
+
 /**
  * 함수 이름: format_chart_symbol()
  * 기능: Binance symbol을 차트 부제에 사용할 거래쌍 표기로 변환한다.
@@ -56,6 +63,7 @@ export function PriceChartPanel({
     lineContextMenuOpen = false,
     onLoadEarlier,
     onIntent,
+    presentationMode = 'interactive',
     selectedLineId = null,
     statusMessage = null,
     symbol = 'ETHUSDT',
@@ -87,6 +95,7 @@ export function PriceChartPanel({
         return () => document.removeEventListener('pointerdown', handle_outside_pointer_down);
     }, [indicatorSettingsOpen, onIntent]);
 
+    // Fixture에서는 8월 12일 기준에 없던 live status와 symbol 접두사를 렌더하지 않는다.
     return (
         <section
             aria-labelledby="price-chart-title"
@@ -96,14 +105,20 @@ export function PriceChartPanel({
                 <div className={styles.heading}>
                     <div className={styles.titleRow}>
                         <h2 id="price-chart-title">ETH 가격 차트</h2>
-                        <span
-                            aria-live="polite"
-                            className={`${styles.dataStatus} ${status_tone_class}`}
-                        >
-                            {status_label_by_data_status[dataStatus]}
-                        </span>
+                        {presentationMode === 'interactive' ? (
+                            <span
+                                aria-live="polite"
+                                className={`${styles.dataStatus} ${status_tone_class}`}
+                            >
+                                {status_label_by_data_status[dataStatus]}
+                            </span>
+                        ) : null}
                     </div>
-                    <p>{format_chart_symbol(symbol)} · {timestampLabel}</p>
+                    <p>
+                        {presentationMode === 'interactive'
+                            ? `${format_chart_symbol(symbol)} · ${timestampLabel}`
+                            : timestampLabel}
+                    </p>
                 </div>
                 <ChartToolbar
                     activeState={activeState}
@@ -130,12 +145,18 @@ export function PriceChartPanel({
                 lineContextMenuOpen={lineContextMenuOpen}
                 onLoadEarlier={onLoadEarlier}
                 onIntent={onIntent}
+                presentationMode={presentationMode}
                 selectedLineId={selectedLineId}
                 statusMessage={statusMessage}
                 symbol={symbol}
             />
             {indicatorSettingsOpen && indicatorSettings !== undefined ? (
-                <IndicatorSettingsPopover onIntent={onIntent} settings={indicatorSettings} />
+                <IndicatorSettingsPopover
+                    onIntent={onIntent}
+                    settings={presentationMode === 'fixture'
+                        ? FIXTURE_POPOVER_INDICATOR_SETTINGS
+                        : indicatorSettings}
+                />
             ) : null}
         </section>
     );

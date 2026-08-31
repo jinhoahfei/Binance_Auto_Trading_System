@@ -14,6 +14,7 @@ from binance_auto_trader.domain.trading.order import (
     OrderResult,
     OrderStatus,
 )
+from binance_auto_trader.domain.trading.states import OrderSide
 
 
 _DECIMAL_ZERO = Decimal("0")
@@ -199,6 +200,83 @@ class SymbolTradingRules:
             raise ValueError("market_lot_size must be a MARKET_LOT_SIZE filter")
         if not isinstance(self.notional_filters, tuple):
             raise TypeError("notional_filters must be a tuple")
+
+
+@dataclass(frozen=True, slots=True)
+class OrderPreparationFilterEvidence:
+    """
+    클래스 이름: OrderPreparationFilterEvidence
+    기능: 한 Order prepare가 실제 사용한 public symbol rule과 fetch 완료 시각을 불변 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    intent_id: str
+    client_order_id: str
+    side: OrderSide
+    observed_at: datetime
+    rules: SymbolTradingRules
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 주문 identity, side, UTC 관찰 시각과 exact public rule 타입을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Credential이나 raw 응답을 담을 field가 없으며 correlation identity도 canonical text만 허용한다.
+        for field_name, field_value in (
+            ("intent_id", self.intent_id),
+            ("client_order_id", self.client_order_id),
+        ):
+            _validate_canonical_text(field_value, field_name)
+        if not isinstance(self.side, OrderSide):
+            raise TypeError("side must be an OrderSide")
+        if (
+            not isinstance(self.observed_at, datetime)
+            or self.observed_at.tzinfo is None
+            or self.observed_at.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("observed_at must be a timezone-aware UTC datetime")
+        if type(self.rules) is not SymbolTradingRules:
+            raise TypeError("rules must be an exact SymbolTradingRules")
+
+
+@dataclass(frozen=True, slots=True)
+class OrderSubmissionAttemptEvidence:
+    """
+    클래스 이름: OrderSubmissionAttemptEvidence
+    기능: 한 prepared Order의 실제 REST POST 시작 identity와 서버 정렬 UTC 시각을 불변 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    intent_id: str
+    client_order_id: str
+    side: OrderSide
+    attempted_at: datetime
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 주문 identity, side와 timezone-aware UTC submission 시각을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Raw request, signature와 credential field를 구조적으로 배제하고 safe correlation만 보존한다.
+        for field_name, field_value in (
+            ("intent_id", self.intent_id),
+            ("client_order_id", self.client_order_id),
+        ):
+            _validate_canonical_text(field_value, field_name)
+        if not isinstance(self.side, OrderSide):
+            raise TypeError("side must be an OrderSide")
+        if (
+            not isinstance(self.attempted_at, datetime)
+            or self.attempted_at.tzinfo is None
+            or self.attempted_at.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("attempted_at must be a timezone-aware UTC datetime")
 
 
 def _validate_non_negative_decimal(value: object, field_name: str) -> None:

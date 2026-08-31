@@ -172,7 +172,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "POST",
             "/v1/regime/selection",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "regime_type": "type0",
                 "expected_version": 0,
             },
@@ -181,14 +181,14 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "PATCH",
             "/v1/trading/split-ratios",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "scale_in": "0.35",
                 "scale_out": "0.65",
                 "expected_version": 1,
             },
         )
         start_body = {
-            "schema_version": 2,
+            "schema_version": 3,
             "expected_version": 2,
         }
         start_status, start_payload, start_id = self._send_command(
@@ -212,7 +212,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "POST",
             "/v1/trading/start",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "expected_version": 3,
             },
             command_id=start_id,
@@ -223,7 +223,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "POST",
             "/v1/trading/stop",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "expected_version": 3,
             },
         )
@@ -308,13 +308,13 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
         unselected_status, unselected_payload, _ = self._send_command(
             "POST",
             "/v1/trading/start",
-            {"schema_version": 2, "expected_version": 0},
+            {"schema_version": 3, "expected_version": 0},
         )
         invalid_status, invalid_payload, _ = self._send_command(
             "POST",
             "/v1/regime/selection",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "regime_type": "TYPE_0",
                 "expected_version": 0,
             },
@@ -323,7 +323,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "POST",
             "/v1/regime/selection",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "regime_type": "type1",
                 "expected_version": 0,
             },
@@ -332,14 +332,14 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             self._send_command(
                 "POST",
                 "/v1/trading/start",
-                {"schema_version": 2, "expected_version": 1},
+                {"schema_version": 3, "expected_version": 1},
             )
         )
         stale_status, stale_payload, _ = self._send_command(
             "PATCH",
             "/v1/trading/split-ratios",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "scale_in": "0.4",
                 "scale_out": "0.6",
                 "expected_version": 0,
@@ -383,6 +383,95 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
         self.assertEqual(1, self.runtime.trading_controller.context.version)
         self.assertEqual("not_started", self._get_snapshot()["trading"]["status"])
 
+    def test_manual_kill_is_versioned_idempotent_and_authoritative(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_is_versioned_idempotent_and_authoritative()
+        기능: manual kill HTTP command의 별도 version, 멱등 replay, stale 차단과 snapshot publication을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        initial_trading = self._get_snapshot()["trading"]
+        self.assertEqual("UNAVAILABLE", initial_trading["risk_policy_availability"])
+        self.assertEqual(0, initial_trading["risk_control_version"])
+        self.assertFalse(initial_trading["manual_kill_active"])
+        command_body = {
+            "schema_version": 3,
+            "active": True,
+            "expected_version": 0,
+        }
+
+        # 최초 command와 같은 key/body 재전송은 하나의 mutation과 event만 만든다.
+        status, payload, command_id = self._send_command(
+            "PATCH",
+            "/v1/trading/manual-kill",
+            command_body,
+        )
+        duplicate_status, duplicate_payload, _ = self._send_command(
+            "PATCH",
+            "/v1/trading/manual-kill",
+            command_body,
+            command_id=command_id,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(status, duplicate_status)
+        self.assertEqual(payload["data"], duplicate_payload["data"])
+        self.assertEqual(
+            {
+                "active": True,
+                "behavior": None,
+                "policy_version": None,
+                "risk_control_version": 1,
+                "manual_kill_cleanup_complete": True,
+            },
+            payload["data"],
+        )
+        self.assertEqual(1, self.event_stream.last_sequence)
+
+        # 다른 command는 오래된 risk version과 truthy 문자열로 kill 상태를 해제할 수 없다.
+        stale_status, stale_payload, _ = self._send_command(
+            "PATCH",
+            "/v1/trading/manual-kill",
+            {
+                "schema_version": 3,
+                "active": False,
+                "expected_version": 0,
+            },
+        )
+        malformed_status, malformed_payload, _ = self._send_command(
+            "PATCH",
+            "/v1/trading/manual-kill",
+            {
+                "schema_version": 3,
+                "active": "false",
+                "expected_version": 1,
+            },
+        )
+        self.assertEqual(409, stale_status)
+        self.assertEqual(
+            "STALE_RISK_CONTROL_VERSION",
+            stale_payload["error"]["code"],
+        )
+        self.assertEqual(400, malformed_status)
+        self.assertEqual(
+            "MALFORMED_REQUEST",
+            malformed_payload["error"]["code"],
+        )
+
+        # Command receipt와 독립 full snapshot 모두 unavailable 정책과 활성 kill을 그대로 보존한다.
+        final_trading = self._get_snapshot()["trading"]
+        self.assertTrue(final_trading["manual_kill_active"])
+        self.assertTrue(final_trading["manual_kill_cleanup_complete"])
+        self.assertIsNone(final_trading["manual_kill_activation_behavior"])
+        self.assertIsNone(
+            final_trading["manual_kill_activation_policy_version"]
+        )
+        self.assertEqual(1, final_trading["risk_control_version"])
+        self.assertIsNone(final_trading["risk_block_reason"])
+        self.assertFalse(final_trading["process_ownership_ambiguous"])
+
     def test_disconnected_account_stream_rejects_start_as_retryable_offline(
         self,
     ) -> None:
@@ -398,7 +487,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "POST",
             "/v1/regime/selection",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "regime_type": "type0",
                 "expected_version": 0,
             },
@@ -409,7 +498,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
         disconnect_callback()  # Runtime READY는 유지하되 command 연결 Guard만 offline으로 바꾸어야 한다.
 
         # Offline Guard를 같은 stable command ID로 재시도할 start DTO에 적용한다.
-        start_body = {"schema_version": 2, "expected_version": 1}
+        start_body = {"schema_version": 3, "expected_version": 1}
         start_status, start_payload, start_command_id = self._send_command(
             "POST",
             "/v1/trading/start",
@@ -459,7 +548,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
         invalid_bodies = (
             (
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "scale_in": 0.4,
                     "scale_out": "0.6",
                     "expected_version": 0,
@@ -469,7 +558,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             ),
             (
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "scale_in": "4E-1",
                     "scale_out": "0.6",
                     "expected_version": 0,
@@ -479,7 +568,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             ),
             (
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "scale_in": "-0.0",
                     "scale_out": "0.6",
                     "expected_version": 0,
@@ -489,7 +578,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             ),
             (
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "scale_in": "0.4",
                     "scale_out": "1.1",
                     "expected_version": 0,
@@ -499,7 +588,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             ),
             (
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "scale_in": "0.4",
                     "scale_out": "0.6",
                     "expected_version": 0,
@@ -527,7 +616,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "PATCH",
             "/v1/trading/split-ratios",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "scale_in": "0.40",
                 "scale_out": "0.60",
                 "expected_version": 0,
@@ -560,7 +649,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "POST",
             "/v1/trading/recovered-position/liquidate",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "expected_version": 0,
             },
         )
@@ -570,7 +659,7 @@ class TradingCommandHttpIntegrationTests(unittest.TestCase):
             "POST",
             "/v1/trading/recovered-position/liquidate",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "expected_version": 0,
                 "unexpected": True,
             },

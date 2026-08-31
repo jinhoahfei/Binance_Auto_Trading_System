@@ -159,6 +159,7 @@ class TradingRuntimeSnapshot:
     previous_trail_ema_slope: Decimal | None = None
 
     pending_exit_reason: ExitReason | None = None
+    pending_exit_pct_b: Decimal | None = None
     pending_return_state: PositionReturnState | None = None
     case_b_exit_reason: ExitReason | None = None
     case_c_exit_reason: ExitReason | None = None
@@ -204,6 +205,7 @@ class TradingRuntimeSnapshot:
             self.entry_pct_b,
             self.tp_price,
             self.previous_trail_ema_slope,
+            self.pending_exit_pct_b,
             self.case_c_exit_pct_b,
         )
         if any(
@@ -224,6 +226,8 @@ class TradingRuntimeSnapshot:
             raise ValueError("A pending order ID requires strategy, side, and attempt kind")
         if self.pending_exit_reason is None and self.pending_return_state is not None:
             raise ValueError("pending_return_state requires pending_exit_reason")
+        if self.pending_exit_reason is None and self.pending_exit_pct_b is not None:
+            raise ValueError("pending_exit_pct_b requires pending_exit_reason")
 
         # 저장되는 모든 runtime 시각은 timezone-aware 값이어야 한다.
         runtime_timestamps = (

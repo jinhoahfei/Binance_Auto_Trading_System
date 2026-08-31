@@ -500,6 +500,7 @@ def _create_clear_exit_patch() -> PatchRuntimeContext:
         pending_order_attempt_kind=None,
         pending_intent_id=None,
         pending_exit_reason=None,
+        pending_exit_pct_b=None,
         pending_return_state=None,
         trading_phase=TradingPhase.IDLE,
     )

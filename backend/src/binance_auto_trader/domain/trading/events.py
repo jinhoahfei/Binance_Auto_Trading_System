@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from enum import IntEnum, StrEnum
 from typing import TypeAlias
 
-from .states import OrderAttemptKind
+from .risk import RiskBlockReason
+from .states import OrderAttemptKind, StrategyType
 
 
 class EventPriority(IntEnum):
@@ -80,6 +81,7 @@ class TradingEventType(StrEnum):
     CHECK_CASE_B_HANDOFF = "CHECK_CASE_B_HANDOFF"
     CASE_B_ACTIVE_RESUME = "CASE_B_ACTIVE_RESUME"
     CASE_B_WAIT_ONLY = "CASE_B_WAIT_ONLY"
+    BUY_RISK_BLOCKED = "BUY_RISK_BLOCKED"
 
     THIRTY_MINUTE_CANDLE_CLOSED = "THIRTY_MINUTE_CANDLE_CLOSED"
     START_CASE_B_WAIT_PULLBACK_CONDITION_CHECK = (
@@ -117,6 +119,32 @@ class SellAttemptPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class BuyRiskBlockedPayload:
+    """
+    클래스 이름: BuyRiskBlockedPayload
+    기능: 제출 전 BUY 위험 차단의 전략과 typed 첫 사유를 STM feedback에 보존한다.
+    작성 날짜: 2026/08/24
+    """
+
+    strategy: StrategyType
+    reason: RiskBlockReason
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 위험 차단 feedback이 canonical 전략과 RiskBlockReason만 담는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # 문자열이나 유사 enum이 주문 상태 복구 분기를 위장하지 못하게 identity를 고정한다.
+        if not isinstance(self.strategy, StrategyType):
+            raise TypeError("strategy must be a StrategyType")
+        if not isinstance(self.reason, RiskBlockReason):
+            raise TypeError("reason must be a RiskBlockReason")
+
+
+@dataclass(frozen=True, slots=True)
 class ForceSellOutcomePayload:
     """
     클래스 이름: ForceSellOutcomePayload
@@ -149,7 +177,10 @@ class ForceSellOutcomePayload:
 
 
 TradingEventPayload: TypeAlias = (
-    BuyAttemptPayload | SellAttemptPayload | ForceSellOutcomePayload
+    BuyAttemptPayload
+    | BuyRiskBlockedPayload
+    | SellAttemptPayload
+    | ForceSellOutcomePayload
 )
 
 
@@ -170,6 +201,8 @@ class TradingEvent:
     candle_id: str | None = None
     order_id: str | None = None
     payload: TradingEventPayload | None = None
+    market_evaluation: object | None = None
+    market_version: int | None = None
 
     def __post_init__(self) -> None:
         """
@@ -194,6 +227,23 @@ class TradingEvent:
             raise ValueError("occurred_at must be timezone-aware")
         if self.sequence_number < 0:
             raise ValueError("sequence_number cannot be negative")
+
+        # Public market event는 immutable 평가와 그 source version을 항상 함께 보존한다.
+        has_market_evaluation = self.market_evaluation is not None
+        has_market_version = self.market_version is not None
+        if has_market_evaluation != has_market_version:
+            raise ValueError(
+                "market_evaluation and market_version must be provided together"
+            )
+        if self.market_version is not None:
+            if type(self.market_version) is not int:
+                raise TypeError("market_version must be an exact int")
+            if self.market_version <= 0:
+                raise ValueError("market_version must be positive")
+            if self.priority is not EventPriority.MARKET:
+                raise ValueError(
+                    "market_evaluation is allowed only on MARKET priority events"
+                )
 
     @classmethod
     def create(

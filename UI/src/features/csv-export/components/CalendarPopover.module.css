@@ -5,7 +5,7 @@
   padding: 12px 12px 11px;
   border: 1px solid var(--color-border-strong);
   border-radius: 10px;
-  background: var(--color-bg-surface-raised);
+  background: var(--fixture-calendar-raised, var(--color-bg-surface-raised));
   box-shadow: var(--shadow-modal);
   color: var(--color-text-primary);
   font-family: var(--font-ui);
@@ -27,7 +27,7 @@
 
 .calendarIcon {
   margin-right: 6px;
-  color: var(--color-status-info);
+  color: var(--color-text-info);
   font-size: 13px;
 }
 
@@ -37,7 +37,7 @@
 
 .selectedDate {
   margin-left: auto;
-  color: var(--color-status-info);
+  color: var(--color-text-info);
   font-family: var(--font-numeric);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -107,11 +107,17 @@
 }
 
 .weekdays span:first-child {
-  color: var(--color-status-negative);
+  color: var(--color-text-negative);
 }
 
 .days {
+  grid-template-columns: 1fr;
   grid-auto-rows: 24px;
+}
+
+.week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
 }
 
 .days button,
@@ -146,7 +152,7 @@
 }
 
 .days button.sunday {
-  color: var(--color-status-negative);
+  color: var(--color-text-negative);
 }
 
 .days button.saturday {

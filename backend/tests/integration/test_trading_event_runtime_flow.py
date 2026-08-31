@@ -173,7 +173,7 @@ class TradingEventRuntimeFlowTests(unittest.TestCase):
                     "743237dc-c630-4c29-8892-93301dc9b350",
                     route_context,
                     {
-                        "schema_version": 2,
+                        "schema_version": 3,
                         "expected_version": expected_version,
                     },
                     "runtime-recovered-liquidation",

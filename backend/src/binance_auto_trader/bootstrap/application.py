@@ -33,6 +33,10 @@ from binance_auto_trader.application import (
 from binance_auto_trader.application.market_data_controller import (
     DEFAULT_KLINE_LIMIT,
 )
+from binance_auto_trader.application.market_evaluation_builder import (
+    MINIMUM_PRODUCTION_KLINE_LIMIT,
+    ThirtyMinuteMarketEvaluationBuilder,
+)
 from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryRepositoryPort,
 )
@@ -44,12 +48,15 @@ from binance_auto_trader.domain.trading import (
     AccountSnapshot,
     OrderResult,
     Position,
+    RiskPolicy,
+    RiskPolicyUnavailable,
 )
 
 
 # Generic dependency-injection factory가 mode 문자열만으로 외부 주문 권한을 만들지 못하게 한다.
 _FAKE_ORDER_CAPABILITY = object()
 _TESTNET_ORDER_CAPABILITY = object()
+_DEFAULT_MAXIMUM_ORDER_SUBMISSIONS_PER_INTENT = 5
 
 
 class ExecutionMode(str, Enum):
@@ -403,6 +410,7 @@ class _AccountStreamRecoveryWorker:
         recovery_allowed: Callable[[], bool],
         *,
         retry_waiter: Callable[[float], bool] | None = None,
+        worker_name: str = "binance-account-stream-recovery",
     ) -> None:
         """
         함수 이름: __init__()
@@ -410,6 +418,7 @@ class _AccountStreamRecoveryWorker:
         인자: recovery_operation -> application lock 밖에서 실행할 full reconciliation Operation
             recovery_allowed -> READY와 startup reconciliation 완료 여부를 반환할 Guard
             retry_waiter -> 지연을 기다리고 종료 요청 여부를 반환할 optional 대기 함수
+            worker_name -> account와 market 복구 owner를 구분할 thread 이름
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -420,6 +429,12 @@ class _AccountStreamRecoveryWorker:
             raise TypeError("recovery_allowed must be callable")
         if retry_waiter is not None and not callable(retry_waiter):
             raise TypeError("retry_waiter must be callable")
+        if not isinstance(worker_name, str):
+            raise TypeError("worker_name must be a string")
+        if not worker_name or worker_name != worker_name.strip():
+            raise ValueError(
+                "worker_name must be non-empty without outer whitespace"
+            )
 
         # Worker 상태 lock은 application RLock과 분리해 callback과 종료의 lock 순서를 단순화한다.
         self._recovery_operation = recovery_operation
@@ -431,6 +446,7 @@ class _AccountStreamRecoveryWorker:
             if retry_waiter is None
             else retry_waiter
         )
+        self._worker_name = worker_name
         self._active_thread: Thread | None = None
         self._rerun_requested = False
         self._deterministic_recovery_blocked = False
@@ -457,7 +473,7 @@ class _AccountStreamRecoveryWorker:
 
             recovery_thread = Thread(
                 target=self._run,
-                name="binance-account-stream-recovery",
+                name=self._worker_name,
                 daemon=True,
             )
             self._active_thread = recovery_thread
@@ -781,6 +797,10 @@ class ApplicationRuntime:
         repr=False,
         compare=False,
     )
+    _market_stream_recovery_worker: _AccountStreamRecoveryWorker | None = field(
+        repr=False,
+        compare=False,
+    )
     _state_store: _ApplicationStateStore = field(
         repr=False,
         compare=False,
@@ -837,6 +857,16 @@ class ApplicationRuntime:
         ):
             raise TypeError(
                 "_account_stream_recovery_worker must be a recovery worker or None"
+            )
+        if (
+            self._market_stream_recovery_worker is not None
+            and not isinstance(
+                self._market_stream_recovery_worker,
+                _AccountStreamRecoveryWorker,
+            )
+        ):
+            raise TypeError(
+                "_market_stream_recovery_worker must be a recovery worker or None"
             )
 
     @property
@@ -994,6 +1024,10 @@ def create_application_runtime(
     execution_mode: object = None,
     allow_testnet_orders: bool = False,
     testnet_maximum_order_notional: Decimal | None = None,
+    maximum_order_submissions_per_intent: int = (
+        _DEFAULT_MAXIMUM_ORDER_SUBMISSIONS_PER_INTENT
+    ),
+    risk_policy_state: RiskPolicy | RiskPolicyUnavailable | None = None,
     _fake_order_capability: object | None = None,
     _testnet_order_capability: object | None = None,
     account_update_observer: Callable[[Account], object] | None = None,
@@ -1005,6 +1039,7 @@ def create_application_runtime(
     ]
     | None = None,
     clock: Callable[[], datetime] | None = None,
+    monotonic_clock: Callable[[], int] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
 ) -> ApplicationRuntime:
     """
@@ -1017,12 +1052,15 @@ def create_application_runtime(
         execution_mode -> fail-closed parser에 전달할 외부 mode 값
         allow_testnet_orders -> testnet mode 주문을 명시적으로 허용하는 별도 opt-in
         testnet_maximum_order_notional -> 주문 허용 testnet에 필수인 BUY decision-notional 진입 상한
+        maximum_order_submissions_per_intent -> journal·client ID 전 intent별 제출 상한
+        risk_policy_state -> 모든 신규 BUY에 주입할 versioned 정책 또는 명시적 미설정 상태
         _fake_order_capability -> 검증된 in-process fake 조립기만 전달하는 내부 권한 표식
         _testnet_order_capability -> 고정 endpoint Testnet 조립기만 전달하는 내부 권한 표식
         account_update_observer -> 실제 Account 변경 뒤 호출할 optional observer
         trade_history_update_observer -> durable Trade와 전체 Performance 게시 후 호출할 observer
         trading_session_update_observer -> event cycle 뒤 authoritative session을 게시할 observer
         clock -> market, gateway, repository와 performance가 공유할 optional UTC clock
+        monotonic_clock -> 5초·3분 연속 시장 조건이 공유할 optional nanosecond monotonic clock
         kline_limit -> 각 market interval에서 조회할 Kline 개수
     반환값: 동일 객체 identity와 단일 RLock을 보존하는 ApplicationRuntime
     작성 날짜: 2026/08/21
@@ -1050,15 +1088,45 @@ def create_application_runtime(
         raise TypeError("trading_session_update_observer must be callable")
     if clock is not None and not callable(clock):
         raise TypeError("clock must be callable")
+    if monotonic_clock is not None and not callable(monotonic_clock):
+        raise TypeError("monotonic_clock must be callable")
+    if isinstance(kline_limit, bool) or not isinstance(kline_limit, int):
+        raise TypeError("kline_limit must be an integer")
+    if kline_limit < MINIMUM_PRODUCTION_KLINE_LIMIT:
+        raise ValueError(
+            "production kline_limit must preserve twenty closed Klines and one open Kline"
+        )
     if type(allow_testnet_orders) is not bool:
         raise TypeError("allow_testnet_orders must be a bool")
     if testnet_maximum_order_notional is not None and (
         not isinstance(testnet_maximum_order_notional, Decimal)
         or not testnet_maximum_order_notional.is_finite()
         or testnet_maximum_order_notional <= Decimal("0")
+        or testnet_maximum_order_notional > Decimal("100")
     ):
         raise ValueError(
-            "testnet_maximum_order_notional must be a positive finite Decimal or None"
+            "testnet_maximum_order_notional must be a finite Decimal between 0 and 100 or None"
+        )
+    if isinstance(
+        maximum_order_submissions_per_intent,
+        bool,
+    ) or not isinstance(maximum_order_submissions_per_intent, int):
+        raise TypeError(
+            "maximum_order_submissions_per_intent must be an integer"
+        )
+    if not 1 <= maximum_order_submissions_per_intent <= (
+        _DEFAULT_MAXIMUM_ORDER_SUBMISSIONS_PER_INTENT
+    ):
+        raise ValueError(
+            "maximum_order_submissions_per_intent must be an integer from 1 to 5"
+        )
+    if risk_policy_state is not None and not isinstance(
+        risk_policy_state,
+        (RiskPolicy, RiskPolicyUnavailable),
+    ):
+        raise TypeError(
+            "risk_policy_state must be a RiskPolicy, "
+            "RiskPolicyUnavailable, or None"
         )
 
     # Application lock과 entity를 만들며 실행 mode도 gate 조립 전에 canonicalize한다.
@@ -1149,8 +1217,10 @@ def create_application_runtime(
 
     # WebSocket callback은 생성 뒤 할당될 Controller와 recovery worker를 안전하게 참조한다.
     trading_controller: TradingController
+    market_data_controller: MarketDataController
     trading_event_runtime_worker: _TradingEventRuntimeWorker | None = None
     account_stream_recovery_worker: _AccountStreamRecoveryWorker | None = None
+    market_stream_recovery_worker: _AccountStreamRecoveryWorker | None = None
 
     def request_trading_event_processing() -> bool:
         """
@@ -1287,7 +1357,12 @@ def create_application_runtime(
         pending_order_recovery_enabled=(
             selected_execution_mode is ExecutionMode.TESTNET
         ),
+        market_stream_recovery_enabled=True,
         maximum_order_notional=testnet_maximum_order_notional,
+        maximum_order_submissions_per_intent=(
+            maximum_order_submissions_per_intent
+        ),
+        risk_policy_state=risk_policy_state,
         event_runtime_notifier=request_trading_event_processing,
     )
 
@@ -1414,6 +1489,84 @@ def create_application_runtime(
             ),
         )  # UI가 Account와 열린 gate를 관찰한 뒤에만 Controller Operation이 반환한다.
 
+    def request_market_stream_recovery() -> bool:
+        """
+        함수 이름: request_market_stream_recovery()
+        기능: 시장 fail-close 상태를 게시하고 READY Testnet의 단일 full-resync worker를 깨운다.
+        인자: 없음
+        반환값: worker가 복구 요청을 수락했으면 True
+        작성 날짜: 2026/08/25
+        """
+        # Callback thread에서는 상태 publication과 worker wake만 수행하고 REST를 직접 호출하지 않는다.
+        with application_lock:
+            if application_state_store.state.status in (
+                ApplicationStatus.SHUTTING_DOWN,
+                ApplicationStatus.CLOSED,
+            ):
+                return False
+            try:
+                publish_trading_session_update()
+            except Exception:
+                trading_controller.mark_event_runtime_failed()
+                return False  # 상태 publication 실패 뒤 backend gate도 영구 fail closed한다.
+            recovery_can_start = (
+                selected_execution_mode is ExecutionMode.TESTNET
+                and application_state_store.state.status
+                is ApplicationStatus.READY
+                and trading_controller.startup_reconciliation_complete
+            )
+
+        recovery_worker = market_stream_recovery_worker
+        if not recovery_can_start or recovery_worker is None:
+            return False
+
+        return recovery_worker.request_recovery()
+
+    def market_stream_recovery_allowed() -> bool:
+        """
+        함수 이름: market_stream_recovery_allowed()
+        기능: 재시도 직전에 READY Testnet과 미완료 시장 blocker를 같은 lock에서 재검사한다.
+        인자: 없음
+        반환값: 자동 시장 full-resync를 계속 허용하면 True
+        작성 날짜: 2026/08/25
+        """
+        # 종료·복구 완료·ownership 상실 뒤에는 대기 중인 worker가 새 public I/O를 시작하지 않는다.
+        with application_lock:
+            return (
+                selected_execution_mode is ExecutionMode.TESTNET
+                and application_state_store.state.status
+                is ApplicationStatus.READY
+                and trading_controller.startup_reconciliation_complete
+                and trading_controller.market_stream_reconciliation_required
+                and not trading_controller.process_ownership_ambiguous
+            )
+
+    def recover_market_stream() -> MarketSnapshot:
+        """
+        함수 이름: recover_market_stream()
+        기능: 새 Kline 세대·REST 전체 병합·same-version REGIME 평가 후 거래 상태를 게시한다.
+        인자: 없음
+        반환값: 성공한 full-resync의 동일 MarketSnapshot
+        작성 날짜: 2026/08/25
+        """
+        # MarketDataController가 gate 재개까지 원자 검증하고 bootstrap은 성공 publication만 덧붙인다.
+        market_result = market_data_controller.reconcile_market_stream()
+        with application_lock:
+            if (
+                application_state_store.state.status
+                is not ApplicationStatus.READY
+            ):
+                return market_result
+            try:
+                publish_trading_session_update()
+            except Exception as error:
+                trading_controller.mark_event_runtime_failed()
+                raise AccountStreamRecoveryBlockedError(
+                    "market stream recovery publication failed"
+                ) from error
+
+        return market_result
+
     # 실제 authenticated stream을 사용하는 testnet에만 자동 복구 owner를 조립한다.
     if selected_execution_mode is ExecutionMode.TESTNET:
         account_stream_recovery_worker = _AccountStreamRecoveryWorker(
@@ -1426,13 +1579,28 @@ def create_application_runtime(
         trading_controller,
         application_lock=application_lock,
     )
+    # Production Kline path는 사용자 확정 30분 EMA9/OLS와 공개 Trading observer를 항상 한 쌍으로 갖는다.
+    market_evaluation_builder = ThirtyMinuteMarketEvaluationBuilder(
+        monotonic_clock=monotonic_clock,
+    )
     market_data_controller = MarketDataController(
         api_gateway,
         web_socket_gateway,
         market_snapshot,
         regime_controller,
         kline_limit=kline_limit,
+        market_evaluation_builder=market_evaluation_builder,
+        trading_market_observer=trading_controller,
+        market_stream_state_observer=trading_controller,
+        market_stream_recovery_requester=request_market_stream_recovery,
     )
+    if selected_execution_mode is ExecutionMode.TESTNET:
+        # 실제 주문 effect가 가능한 Testnet에만 public market 자동 복구 owner를 추가한다.
+        market_stream_recovery_worker = _AccountStreamRecoveryWorker(
+            recover_market_stream,
+            market_stream_recovery_allowed,
+            worker_name="binance-market-stream-recovery",
+        )
 
     # Startup command와 runtime은 앞서 만든 not-ready state store identity를 공유한다.
     startup_command_id = f"startup-{uuid4().hex}"
@@ -1453,6 +1621,7 @@ def create_application_runtime(
         trade_history_controller=trade_history_controller,
         _trading_event_runtime_worker=trading_event_runtime_worker,
         _account_stream_recovery_worker=account_stream_recovery_worker,
+        _market_stream_recovery_worker=market_stream_recovery_worker,
         _state_store=application_state_store,
         _shutdown_store=_ApplicationShutdownStore(),
     )

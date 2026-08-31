@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "record_type": "phase13_local_supply_chain_inventory",
+  "observed_date": "2026-08-29",
+  "inputs": [
+    {
+      "path": "backend/uv.lock",
+      "ecosystem": "PyPI",
+      "sha256": "cfecb5e02854f90c2c8fabbc67d2692c370dc81df767127329a40489e708084f",
+      "package_count": 10,
+      "coordinates_sha256": "766637940d9a4f2ac04e3556581affde48de1db7b855bf3fff039ec9e77c0c13"
+    },
+    {
+      "path": "UI/pnpm-lock.yaml",
+      "ecosystem": "npm",
+      "sha256": "dd1834c32ee46752104f3dde32558e5f661f605d88bfa9c1ac1062678bc0e24f",
+      "package_count": 412,
+      "coordinates_sha256": "1f6468a1224871d618cf8d4d71f83c6c76c5d95bda9d94109e8463005dd6b10f"
+    },
+    {
+      "path": "UI/apps/desktop/src-tauri/Cargo.lock",
+      "ecosystem": "crates.io",
+      "sha256": "759f9787c88a67c4d7b356adfe1842b14d087bf48c7825db3f186d5bedef7783",
+      "package_count": 446,
+      "coordinates_sha256": "7b54da8f5f7276c8620ab8bd050b861434ac6bef07a5a87401e3b7af0511e43c"
+    }
+  ],
+  "inventory": {
+    "package_count": 868,
+    "package_count_by_ecosystem": {
+      "PyPI": 10,
+      "npm": 412,
+      "crates.io": 446
+    }
+  },
+  "project_manifests": [
+    {
+      "path": "backend/pyproject.toml",
+      "sha256": "870e3ed233c53ead02d5a17b08a2ecdac83ea69fbce4d23e01fdf3560cb24b41",
+      "package_name": "binance-auto-trader-backend",
+      "package_version": "0.1.0",
+      "license_declared": true,
+      "license_expression": "LicenseRef-Proprietary",
+      "publish_disabled": true
+    },
+    {
+      "path": "UI/package.json",
+      "sha256": "cbb8308de39adcfc16731be6634f9543b16f48baf200bac5a01c73bde1c4fe87",
+      "package_name": "binance-auto-trader-ui",
+      "package_version": "0.1.0",
+      "license_declared": true,
+      "license_expression": "UNLICENSED",
+      "publish_disabled": true
+    },
+    {
+      "path": "UI/apps/desktop/src-tauri/Cargo.toml",
+      "sha256": "e00c353a52b9f38b946408dfbc30546506cd4fff345632c1a386984e7a3f5d02",
+      "package_name": "binance-auto-trader",
+      "package_version": "0.1.0",
+      "license_declared": true,
+      "license_expression": null,
+      "publish_disabled": true
+    }
+  ],
+  "license_inventory": {
+    "scope": "repository_project_manifests_only",
+    "project_count": 3,
+    "declared_count": 3,
+    "undeclared_count": 0,
+    "repository_license_files": [
+      {
+        "path": "LICENSE",
+        "sha256": "334aeac4d322697f352b15b48d46cd2c1858a5cbb729d37cf74bb0253506fca5"
+      }
+    ],
+    "third_party_metadata_complete": false,
+    "policy_approved": false
+  },
+  "limitations": [
+    "Lockfiles do not contain complete third-party license metadata.",
+    "Exact lockfile SBOM and license scope are bound separately; raw current OSV/license output and a current Phase 13 release remain unavailable."
+  ]
+}

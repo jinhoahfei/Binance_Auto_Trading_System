@@ -8,10 +8,25 @@ use serde::Serialize;
 use std::error::Error;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zeroize::Zeroize;
 
-const BACKEND_SCHEMA_VERSION: u32 = 2; // Python transport schema와 native descriptor gate를 맞춘다.
+/// 함수 이름: choose_csv_export_directory_for_current_host_smoke()
+/// 기능: opt-in current-host harness가 production native picker command를 동일한 Tauri plugin에서 실행한다.
+/// 인자: app -> dialog plugin을 설치한 최소 smoke application handle
+/// 반환값: 선택 directory, 취소 null 또는 path-free failure code
+/// 작성 날짜: 2026/08/29
+#[cfg(feature = "native-picker-smoke")]
+pub async fn choose_csv_export_directory_for_current_host_smoke(
+    app: AppHandle,
+) -> Result<Option<String>, &'static str> {
+    // Harness가 production command를 복제하지 않고 같은 command implementation을 직접 호출한다.
+    dialog::choose_csv_export_directory(app)
+        .await
+        .map_err(|failure| failure.code)
+}
+
+const BACKEND_SCHEMA_VERSION: u32 = 3; // Python transport schema와 native descriptor gate를 맞춘다.
 const RELEASE_PROVENANCE_MARKER: &str = env!("BINANCE_AUTO_RELEASE_PROVENANCE");
 
 /// 함수 이름: retain_release_provenance_marker()
@@ -235,7 +250,7 @@ fn select_late_ready_startup_route(
 }
 
 /// 함수 이름: setup_backend_and_window()
-/// 기능: AppKit quit gate, core dump 차단, sidecar ready/stage/monitor 뒤에만 deferred main window를 만든다.
+/// 기능: AppKit quit gate, core dump 차단, stale owner 조정과 sidecar ready/stage/monitor 뒤에만 deferred main window를 만든다.
 /// 인자: app -> startup 중인 trusted native Tauri application
 /// 반환값: startup 성공 또는 secret 없는 boxed native failure
 /// 작성 날짜: 2026/08/24
@@ -251,6 +266,18 @@ fn setup_backend_and_window(app: &mut tauri::App) -> Result<(), Box<dyn Error>> 
     if let Err(failure) = sidecar::disable_process_core_dumps() {
         schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
         return Ok(());
+    }
+    match sidecar::inspect_stale_runtime_owner(app.handle()) {
+        Ok(Some(attestation)) => {
+            // Python startup보다 먼저 stale identity를 공개해 새 owner가 기록을 덮어쓰지 않게 한다.
+            schedule_stale_runtime_owner_release(app.handle().clone(), attestation);
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(failure) => {
+            schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
+            return Ok(());
+        }
     }
     let preparation = match sidecar::prepare_backend_sidecar(app.handle()) {
         Ok(preparation) => preparation,
@@ -343,11 +370,85 @@ fn pre_ready_failure_copy(failure_code: &str) -> (&'static str, &'static str) {
             "macOS Keychain에 testnet API key와 secret을 안전하게 등록한 뒤 애플리케이션을 다시 시작하세요.",
         );
     }
+    if failure_code == "BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED" {
+        return (
+            "백엔드 소유권을 자동 확인할 수 없습니다",
+            "기록된 프로세스가 실행 중이거나 소유권 기록을 안전하게 잠그고 검증할 수 없습니다. 자동 해제하지 않았습니다. 다른 백엔드 실행 여부를 운영 절차로 확인한 뒤 다시 시작하세요.",
+        );
+    }
+    if failure_code == "BACKEND_OWNERSHIP_RELEASE_FAILED" {
+        return (
+            "백엔드 소유권을 해제하지 못했습니다",
+            "확인 이후 프로세스 또는 소유권 기록이 바뀌어 자동 해제하지 않았습니다. 현재 실행 상태를 다시 확인한 뒤 애플리케이션을 다시 시작하세요.",
+        );
+    }
 
     (
         "백엔드를 준비하지 못했습니다",
         "보안 준비 단계에서 실패했습니다. 애플리케이션을 종료한 뒤 설치 상태를 확인하고 다시 시작하세요.",
     )
+}
+
+/// 함수 이름: stale_runtime_owner_prompt_copy()
+/// 기능: exact stale process identity와 state를 secret/path 없는 operator attestation 문구로 만든다.
+/// 인자: owner_state -> ACTIVE 또는 ORPHANED artifact state,
+///      runtime_pid -> artifact가 기록한 actual Python PID,
+///      process_start_id -> artifact가 기록한 canonical process launch UUID
+/// 반환값: dialog title과 exact identity를 포함한 message
+/// 작성 날짜: 2026/08/29
+fn stale_runtime_owner_prompt_copy(
+    owner_state: sidecar::RuntimeOwnershipState,
+    runtime_pid: u32,
+    process_start_id: &str,
+) -> (&'static str, String) {
+    let message = format!(
+        "이전 백엔드 소유권 기록을 발견했습니다.\n\n상태: {}\n런타임 PID: {}\n프로세스 시작 ID: {}\n\n현재 PID 부재를 확인했지만 자동으로 소유권을 해제하지 않았습니다. 계속하면 이 exact 기록의 상태만 RELEASED로 저장한 뒤 애플리케이션을 재시작합니다. 실행 중인 프로세스 종료, 주문 취소 또는 포지션 청산은 수행하지 않습니다. 이 실행을 직접 확인한 운영자만 계속하세요.",
+        owner_state.as_str(),
+        runtime_pid,
+        process_start_id,
+    );
+    ("이전 백엔드 소유권 확인", message)
+}
+
+/// 함수 이름: schedule_stale_runtime_owner_release()
+/// 기능: stale identity를 native dialog로 확인받고 재검증된 같은 inode만 RELEASED fsync 후 재시작한다.
+/// 인자: app_handle -> native dialog와 restart owner,
+///      attestation -> lock·PID 검증을 통과해 화면에 고정할 stale identity snapshot
+/// 반환값: 없음
+/// 작성 날짜: 2026/08/29
+fn schedule_stale_runtime_owner_release(
+    app_handle: AppHandle,
+    attestation: sidecar::StaleRuntimeOwnershipAttestation,
+) {
+    let (title, message) = stale_runtime_owner_prompt_copy(
+        attestation.owner_state,
+        attestation.runtime_pid,
+        &attestation.process_start_id,
+    );
+    let release_handle = app_handle.clone();
+
+    // 취소는 artifact를 그대로 두며, 확인도 dialog 이후 exact inode·identity·PID를 다시 검증한다.
+    app_handle
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "확인 후 해제·재시작".to_owned(),
+            "취소".to_owned(),
+        ))
+        .show(move |confirmed| {
+            if !confirmed {
+                release_handle.exit(1);
+                return;
+            }
+            match sidecar::release_stale_runtime_owner(&release_handle, &attestation) {
+                Ok(()) => release_handle.restart(),
+                Err(failure) => {
+                    schedule_pre_ready_startup_failure(release_handle, failure.code);
+                }
+            }
+        });
 }
 
 /// 함수 이름: schedule_pre_ready_startup_failure()
@@ -668,6 +769,58 @@ mod tests {
         assert!(!combined.contains("api-key"));
         assert!(!combined.contains("api-secret"));
         assert!(!combined.contains("BACKEND_CREDENTIALS_UNAVAILABLE"));
+    }
+
+    /// 함수 이름: ownership_failures_use_fixed_fail_closed_operator_copy()
+    /// 기능: live/invalid owner와 release race가 path나 artifact 원문 없이 서로 다른 고정 안내를 쓰는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/29
+    #[test]
+    fn ownership_failures_use_fixed_fail_closed_operator_copy() {
+        let (reconciliation_title, reconciliation_message) =
+            pre_ready_failure_copy("BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED");
+        let (release_title, release_message) =
+            pre_ready_failure_copy("BACKEND_OWNERSHIP_RELEASE_FAILED");
+        let combined = format!(
+            "{reconciliation_title} {reconciliation_message} {release_title} {release_message}"
+        );
+
+        assert!(reconciliation_message.contains("자동 해제하지 않았습니다"));
+        assert!(release_message.contains("바뀌어 자동 해제하지 않았습니다"));
+        assert_ne!(reconciliation_title, release_title);
+        assert!(!combined.contains(".backend-runtime.lock"));
+        assert!(!combined.contains("BACKEND_OWNERSHIP"));
+        assert!(!combined.contains("api-key"));
+        assert!(!combined.contains("api-secret"));
+    }
+
+    /// 함수 이름: stale_runtime_owner_prompt_binds_exact_nonsecret_identity()
+    /// 기능: public 확인 문구가 state/PID/start UUID와 non-mutation 범위를 정확히 표시하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/29
+    #[test]
+    fn stale_runtime_owner_prompt_binds_exact_nonsecret_identity() {
+        for owner_state in [
+            sidecar::RuntimeOwnershipState::Active,
+            sidecar::RuntimeOwnershipState::Orphaned,
+        ] {
+            let (title, message) =
+                stale_runtime_owner_prompt_copy(owner_state, 4_321, TEST_SESSION_ID);
+            let combined = format!("{title} {message}");
+
+            assert!(combined.contains(owner_state.as_str()));
+            assert!(combined.contains("4321"));
+            assert!(combined.contains(TEST_SESSION_ID));
+            assert!(combined.contains("RELEASED"));
+            assert!(combined.contains("프로세스 종료"));
+            assert!(combined.contains("주문 취소"));
+            assert!(combined.contains("포지션 청산"));
+            assert!(!combined.contains(".backend-runtime.lock"));
+            assert!(!combined.contains("api-key"));
+            assert!(!combined.contains("api-secret"));
+        }
     }
 
     /// 함수 이름: late_ready_start_failure_never_returns_headless()

@@ -12,6 +12,7 @@ import type {
     LinePointViewModel,
     PriceChartDataStatus,
     PriceChartIntent,
+    PriceChartPresentationMode,
 } from '../types';
 import {
     LightweightChartSurface,
@@ -27,6 +28,8 @@ const CHART_WIDTH = 862;
 const CHART_HEIGHT = 328;
 const CHART_PADDING_TOP = -22;
 const CHART_PADDING_BOTTOM = 46;
+const FIXTURE_CANDLE_FIRST_CENTER_X = 77;
+const FIXTURE_CANDLE_HORIZONTAL_STEP = 60;
 const FALLBACK_CHART_RANGE: ChartRange = { minimum: 0, maximum: 1 };
 const FALLBACK_CHART_END_TIME = Date.UTC(2026, 5, 22, 2, 0, 0);
 const INTERVAL_DURATION_MILLISECONDS: Readonly<Record<ChartInterval, number>> = {
@@ -35,6 +38,30 @@ const INTERVAL_DURATION_MILLISECONDS: Readonly<Record<ChartInterval, number>> = 
     '4h': 4 * 60 * 60_000,
     '1d': 24 * 60 * 60_000,
 };
+
+interface FixtureCandleGeometry {
+    readonly body_bottom_y: number;
+    readonly body_top_y: number;
+    readonly wick_bottom_y: number;
+    readonly wick_top_y: number;
+}
+
+/* 2026-08-12 Figma PNG의 13개 candle body와 wick을 chart-local pixel로 고정한다. */
+const FIXTURE_CANDLE_GEOMETRIES: ReadonlyArray<FixtureCandleGeometry> = [
+    { body_top_y: 210, body_bottom_y: 237, wick_top_y: 193, wick_bottom_y: 254 },
+    { body_top_y: 199, body_bottom_y: 223, wick_top_y: 181, wick_bottom_y: 242 },
+    { body_top_y: 166, body_bottom_y: 198, wick_top_y: 151, wick_bottom_y: 217 },
+    { body_top_y: 145, body_bottom_y: 171, wick_top_y: 131, wick_bottom_y: 190 },
+    { body_top_y: 138, body_bottom_y: 157, wick_top_y: 120, wick_bottom_y: 172 },
+    { body_top_y: 105, body_bottom_y: 136, wick_top_y: 86, wick_bottom_y: 153 },
+    { body_top_y: 119, body_bottom_y: 144, wick_top_y: 102, wick_bottom_y: 163 },
+    { body_top_y: 90, body_bottom_y: 119, wick_top_y: 73, wick_bottom_y: 138 },
+    { body_top_y: 60, body_bottom_y: 94, wick_top_y: 39, wick_bottom_y: 114 },
+    { body_top_y: 69, body_bottom_y: 90, wick_top_y: 53, wick_bottom_y: 108 },
+    { body_top_y: 33, body_bottom_y: 64, wick_top_y: 16, wick_bottom_y: 83 },
+    { body_top_y: 2, body_bottom_y: 36, wick_top_y: -17, wick_bottom_y: 54 },
+    { body_top_y: 16, body_bottom_y: 41, wick_top_y: -1, wick_bottom_y: 61 },
+];
 
 export interface ChartCanvasProps {
     readonly bollingerLower: ReadonlyArray<LinePointViewModel>;
@@ -57,6 +84,7 @@ export interface ChartCanvasProps {
     readonly symbol?: string;
     readonly onLoadEarlier?: (() => void) | undefined;
     readonly onIntent?: ((intent: PriceChartIntent) => void) | undefined;
+    readonly presentationMode?: PriceChartPresentationMode;
 }
 
 interface ChartRange {
@@ -432,6 +460,7 @@ export function ChartCanvas({
     symbol = 'ETHUSDT',
     onLoadEarlier,
     onIntent,
+    presentationMode = 'interactive',
 }: ChartCanvasProps) {
     const history_boundary_request_ref = useRef<string | null>(null);
     const history_navigation_armed_ref = useRef(false);
@@ -447,7 +476,10 @@ export function ChartCanvas({
         return drawing.points.map((point) => ({ value: Number(point.price) }));
     });
     const should_render_fallback_market = chart_coordinate_space === null;
-    const chart_range = should_render_fallback_market
+
+    // Fixture는 library 좌표와 무관하게 Figma가 고정한 수동 축 범위를 함께 표시한다.
+    const should_render_fixture_axes = presentationMode === 'fixture';
+    const chart_range = should_render_fallback_market || should_render_fixture_axes
         ? get_chart_range(candles, [
             visible_indicators.bollingerBand ? bollingerLower : [],
             visible_indicators.bollingerBand ? bollingerUpper : [],
@@ -459,10 +491,14 @@ export function ChartCanvas({
         ? CHART_WIDTH / candles.length
         : CHART_WIDTH;
     const candle_width = Math.max(7, Math.min(14, horizontal_step * 0.24));
-    const axis_values = should_render_fallback_market ? create_axis_values(chart_range) : [];
-    const time_axis_labels = should_render_fallback_market
-        ? create_time_axis_labels(candles, interval)
+    const axis_values = should_render_fallback_market || should_render_fixture_axes
+        ? create_axis_values(chart_range)
         : [];
+    const time_axis_labels = should_render_fixture_axes
+        ? ['09:00', '09:30', '10:00', '10:30', '11:00']
+        : should_render_fallback_market
+            ? create_time_axis_labels(candles, interval)
+            : [];
     const chart_width = chart_coordinate_space?.pane_width ?? CHART_WIDTH;
     const chart_height = chart_coordinate_space?.pane_height ?? CHART_HEIGHT;
     const context_menu_left = contextMenuPosition === null
@@ -553,7 +589,9 @@ export function ChartCanvas({
 
     return (
         <div
-            className={`${styles.canvas} ${isFullscreen ? styles.fullscreenCanvas : ''}`}
+            className={`${styles.canvas} ${
+                presentationMode === 'fixture' ? styles.fixtureCanvas : ''
+            } ${isFullscreen ? styles.fullscreenCanvas : ''}`}
             data-chart-bars-before={chart_coordinate_space?.bars_before ?? undefined}
             data-chart-visible-from={chart_coordinate_space?.visible_from ?? undefined}
             data-chart-visible-to={chart_coordinate_space?.visible_to ?? undefined}
@@ -593,6 +631,7 @@ export function ChartCanvas({
                 indicatorSettings={visible_indicators}
                 interval={interval}
                 onCoordinateSpaceChange={handle_coordinate_space_change}
+                presentationMode={presentationMode}
                 symbol={symbol}
             />
             <svg
@@ -669,7 +708,12 @@ export function ChartCanvas({
             >
                 {should_render_fallback_market ? (
                     <>
-                        <g aria-hidden="true" className={`${styles.grid} ${styles.marketLayer}`}>
+                        <g
+                            aria-hidden="true"
+                            className={`${styles.grid} ${
+                                presentationMode === 'fixture' ? '' : styles.marketLayer
+                            }`}
+                        >
                     {Array.from({ length: 5 }, (_, index) => (
                         <line
                             key={`horizontal-${index}`}
@@ -715,11 +759,23 @@ export function ChartCanvas({
                     {candles.map((candle, index) => {
                         const candle_is_positive = candle.close >= candle.open;
                         const candle_color_class = candle_is_positive ? styles.positiveCandle : styles.negativeCandle;
-                        const candle_center_x = horizontal_step * index + horizontal_step / 2;
-                        const open_y = map_price_to_y(candle.open, chart_range);
-                        const close_y = map_price_to_y(candle.close, chart_range);
+                        // Fixture candle은 Figma의 60px 중심 간격을, production fallback은 가용 폭을 사용한다.
+                        const candle_center_x = presentationMode === 'fixture'
+                            ? FIXTURE_CANDLE_FIRST_CENTER_X + FIXTURE_CANDLE_HORIZONTAL_STEP * index
+                            : horizontal_step * index + horizontal_step / 2;
+                        const fixture_geometry = presentationMode === 'fixture'
+                            ? FIXTURE_CANDLE_GEOMETRIES[index]
+                            : undefined;
+                        const open_y = fixture_geometry?.body_top_y
+                            ?? map_price_to_y(candle.open, chart_range);
+                        const close_y = fixture_geometry?.body_bottom_y
+                            ?? map_price_to_y(candle.close, chart_range);
                         const body_y = Math.min(open_y, close_y);
                         const body_height = Math.max(Math.abs(close_y - open_y), 3);
+                        const wick_top_y = fixture_geometry?.wick_top_y
+                            ?? map_price_to_y(candle.high, chart_range);
+                        const wick_bottom_y = fixture_geometry?.wick_bottom_y
+                            ?? map_price_to_y(candle.low, chart_range);
 
                         return (
                             <g className={candle_color_class} key={`candle-${index}`}>
@@ -727,8 +783,8 @@ export function ChartCanvas({
                                     className={styles.wick}
                                     x1={candle_center_x}
                                     x2={candle_center_x}
-                                    y1={map_price_to_y(candle.high, chart_range)}
-                                    y2={map_price_to_y(candle.low, chart_range)}
+                                    y1={wick_top_y}
+                                    y2={wick_bottom_y}
                                 />
                                 <rect
                                     height={body_height}
@@ -749,7 +805,9 @@ export function ChartCanvas({
                     >
                         {candles.map((candle, index) => {
                             const candle_is_positive = candle.close >= candle.open;
-                            const candle_center_x = horizontal_step * index + horizontal_step / 2;
+                            const candle_center_x = presentationMode === 'fixture'
+                                ? FIXTURE_CANDLE_FIRST_CENTER_X + FIXTURE_CANDLE_HORIZONTAL_STEP * index
+                                : horizontal_step * index + horizontal_step / 2;
                             const volume = candle.volume ?? Math.max(1, candle.high - candle.low);
                             const range_ratio = Math.min(1, Math.max(0.18, volume / maximum_volume));
                             const bar_height = 12 + range_ratio * 34;
@@ -913,7 +971,7 @@ export function ChartCanvas({
                 </div>
             ) : null}
 
-            {should_render_fallback_market ? (
+            {should_render_fallback_market || should_render_fixture_axes ? (
                 <>
                     <div aria-hidden="true" className={styles.priceAxis}>
                         {axis_values.map((value) => (

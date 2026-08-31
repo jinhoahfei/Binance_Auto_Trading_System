@@ -166,6 +166,31 @@ Operation 표는 UML 표기이므로 기존 다이어그램의 camelCase를 보�
 | `1.5` | `MarketDataController -> RegimeController` | `recommendRegime(indicators : IndicatorSnapshot) : RegimeType` | 4H IndicatorSnapshot | 추천 REGIME | 현재 4H 데이터에 대한 추천 REGIME을 요청한다. | RegimeController가 같은 MarketSnapshot version의 `RegimeEvaluationContext`를 준비하고 `1.5.1`의 두 microstep 결과 Action을 수행한다. `ApplyRecommendedRegime`이 성공한 뒤 façade가 타입을 반환하며 추천값은 사용자 선택값을 덮어쓰지 않는다. |
 | `1.5.1` | `RegimeController -> RegimeSTM` | `handle(event : RegimeEvent, context : RegimeEvaluationContext?) : RegimeSTMResult` | 최초/4H 마감 event와 optional Context, 이어지는 `EVALUATION_READY`와 필수 Context | 전이와 ordered Action 요청 | Regime STM의 한 판정 microstep을 실행한다. | 첫 호출은 `EA-001` 또는 `EA-101`~`EA-105`와 `StartRegimeEvaluation`을 반환한다. Controller가 그 Action을 수행한 뒤 같은 `evaluation_id`의 `EVALUATION_READY`와 Context로 동일 Operation을 다시 호출하고, `EA-002`~`EA-008`과 `ApplyRecommendedRegime`을 수행한다. STM은 외부 상태를 직접 변경하지 않는다. |
 
+초기 snapshot을 게시한 뒤에는 같은 Kline 구독을 끊었다가 다시 만드는 대신 buffer 소유권을
+live observer로 원자 전환한다. 이 Phase 13 연속 경로는 다음 메시지를 사용한다.
+
+| 번호 | 호출자 -> 수신자 | Operation | Parameter | Return | 설명 | 동작 과정 |
+|---|---|---|---|---|---|---|
+| `1L` | `MarketDataController -> WebSocketGateway` | `promoteKlineBufferToLive(observer : Callable<Kline>, subscription : Subscription? = null) : Subscription` | 정규화 Kline observer와 optional 현재 handle | 같은 세대의 live 구독 handle | 초기화 buffer와 지속 stream 사이의 손실 없는 소유권 전환을 요청한다. | Gateway lock 아래 남은 buffer를 순서대로 전달한 뒤 동일 generation의 후속 Kline을 observer로 보낸다. 새 구독을 열어 시간 공백을 만들지 않는다. stale generation과 중복 `(symbol, interval, openTime, eventTime)`은 전달하지 않는다. |
+| `1L.1` | `WebSocketGateway -> MarketDataController` | `observeKline(kline : Kline) : void` | 정규화된 현재 generation Kline | `void` | 지속 시장 event를 application owner에 전달한다. | Controller는 interval별 단조 event time과 open time을 검사한다. UTC 4H 경계에서는 `(1m close, 30m close, 4H close, next 4H open)` 네 source를, UTC 자정에는 여기에 `(1D close, next 1D open)`을 더한 여섯 source를 bounded slot에 모아 유효 arrival order와 무관하게 한 번만 게시한다. |
+| `1L.2` | `MarketDataController -> MarketSnapshot` | `mergeKline(kline : Kline) : MarketSnapshot` | 중복 제거와 연속성 검사를 통과한 Kline | 새 version의 시장 snapshot | 현재 봉 교체 또는 새 봉 추가를 원자 반영한다. | REST/WS 초기화와 같은 symbol·interval·openTime 규칙을 사용한다. 경계 tuple 전체가 모이기 전에는 이전 snapshot을 유지하며 overflow, boundary mismatch, upper open-before-close와 조기 event time은 publication 없이 fail closed하고 full resync를 요청한다. |
+| `1L.3` | `MarketDataController -> TradingController` | `observeMarketEvaluation(evaluation : MarketEvaluationSnapshot, marketVersion : int, sourceEventId : String) : TradingEvent?` | 같은 snapshot version에서 계산한 전략 지표와 provenance | queue identity가 부여된 event 또는 비활성·중복이면 `null` | private Action 호출 없이 시장 평가를 Trading event path에 넣는다. | TradingController는 immutable evaluation/version을 event에 결합해 직렬 queue에 넣고 bounded worker를 깨운다. Worker가 해당 event를 claim한 뒤 queue preparer가 그 evaluation으로 Context market을 갱신하고 lower/new-30m/upper/market-updated 중 정확한 event로 재분류한다. 뒤 Kline이 먼저 관찰돼도 앞 event가 뒤 Context로 처리되지 않는다. 4H 확정봉이면 RegimeController 재평가도 수행하지만 사용자가 선택한 REGIME은 변경하지 않는다. |
+
+현재 Kline 세대의 disconnect, payload gap 또는 observer 실패는 Gateway가 한 번만
+`markMarketStreamReconciliationRequired`로 알린다. Controller는 이전 snapshot provenance와 이미
+관찰한 주문 결과를 보존하고 전략 scheduler를 비운 뒤, 새 stream 세대와 전체 REST Kline을 다시
+결합해 같은 version의 MarketSnapshot과 REGIME 평가를 만든다. 복구 순서는 새 generation
+buffering → 전체 REST 조회 → 동일 handle의 live promotion과 buffer drain → REST/WS를 한
+MarketSnapshot version으로 병합 → `reconcileRegime(snapshot)`이다. 새 4H source candle이면
+정상 재평가하고, 동일 candle이면 지표와 기존 추천·STM state를 검증한 뒤 STM transition을
+반복하지 않고 새 `sourceMarketVersion`에 결과만 재결합한다. `RegimeResult.sourceMarketVersion`,
+authoritative `MarketSnapshot.version`, completion version과 Gateway live readiness가 모두 일치한
+뒤에만 `completeMarketStreamReconciliation`이 시장 source blocker를 해제한다. `None`, version
+mismatch 또는 평가 실패면 새 구독을 닫고 시장 gate를 계속 차단한다. 장애 당시
+`RUNNING`이던 세션의 중단 provenance는 이 성공으로 지우지 않는다. 같은 주문의 cancel/query와
+terminal history 복구는 허용하지만, terminal patch가 Context를 `IDLE`로 바꾸더라도 공개 status와
+command gate는 operator 세션 재조정 전까지 `RECONCILIATION_REQUIRED`로 남는다.
+
 ### 4.2 계좌 초기 snapshot 및 account stream
 
 | 번호 | 호출자 -> 수신자 | Operation | Parameter | Return | 설명 | 동작 과정 |
@@ -280,8 +305,9 @@ prepare가 전량을 내림 조정하면 위 `8R.1.1` 명령 전 상태로 원�
 | `1` | `TradingController -> TradingSTM` | `handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult` | 전략/시장 조건 event와 같은 평가 시점의 불변 Context view | STM action 결과 | 전략 event를 STM에 전달한다. | 원본 라벨은 `hadle(event)`이다. Controller가 현재 Context version의 view를 함께 전달하고 STM이 매수 또는 매도 Action을 결정한다. 반환 Action은 별도 응답 화살표 없이 `2`의 입력으로 사용한다. |
 | `2` | `TradingController -> TradingContext` | `applyTradingSTMResult(result : TradingSTMResult) : void` | 메시지 `1`의 결과 | `void` | STM action을 runtime context에 반영한다. | 그림의 매수 예시는 `positionOwner = CASE_B`, `pendingOrderSide = BUY`, `pendingStrategy = CASE_B`, `tradingPhase = ENTRY_ORDER_PENDING`이다. 실제 보유 수량은 체결 뒤 `12`에서 반영한다. |
 | `3` | `TradingController -> TradingContext` | `getSplitRatio() : Decimal` | 없음 | 현재 주문 방향의 분할 비율 | 이번 주문에 적용할 분할 비율을 조회한다. | pending side가 BUY면 scale-in 비율, SELL이면 scale-out 비율을 사용한다. |
-| `4` | `TradingController -> MarketSnapshot` | `getCurrentETHPrice() : Decimal` | 없음 | 주문 결정 시점 ETH 가격 | 주문 결정을 내린 순간의 시장가격을 얻는다. | `marketPriceAtDecision`으로 Order에 저장하며 실제 `fillPrice`와 구분한다. |
+| `4` | `TradingController -> claimed MarketEvaluationSnapshot` | `getRealtimePrice() : Decimal` | claim된 `TradingEvent`의 immutable evaluation/version | 주문 결정 시점의 30분 candidate 가격 | Public market event를 주문으로 변환할 때 그 event에 결합된 `evaluation.realtime_price`를 얻는다. | Claim 직전 같은 evaluation으로 Context를 적용·재분류한 뒤 이 가격을 `marketPriceAtDecision`으로 Order에 저장하며 실제 `fillPrice`와 구분한다. Event evaluation이 없는 legacy/direct 경로만 `MarketSnapshot.getCurrentETHPrice()`를 fallback으로 사용하고, 그 4H current price로 public event 가격을 덮어쓰지 않는다. |
 | `5` | `TradingController -> Order` | `Order(symbol : String, side : OrderSide, strategy : StrategyType, requestedQuantity : Decimal, marketPriceAtDecision : Decimal) : Order` | 주문 의도와 결정 가격 | 로컬 Order | 거래소 호출 전에 어떤 주문을 제출하려는지 로컬에 기록한다. | 분할 비율과 가용 잔액/포지션으로 수량을 계산하고 초기 상태의 Order를 만든다. |
+| `5.1` | `TradingController` 내부 Operation | `evaluateBuyRisk(order : Order) : RiskDecision` | exchange filter로 실제 제출 수량이 확정된 BUY Order와 같은 lock에서 캡처한 Account/Position/Market/History/pending snapshot | 허용 또는 typed risk 차단과 `RiskBudgetSnapshot` | 모든 신규 노출 BUY와 retry가 공유하는 최종 risk gate다. | pending journal fsync와 `6`의 POST 전에 실행한다. policy 미설정은 `RISK_POLICY_UNAVAILABLE`, session/restart version 불일치는 `RISK_POLICY_VERSION_MISMATCH`, manual kill·단건·누적 position·KST daily loss 초과는 각각 typed code로 차단한다. active/partial/UNKNOWN BUY의 미체결 금액은 보수적으로 예약하고 confirmed zero-fill terminal에서만 해제한다. SELL, cancel, same-ID query, reconciliation, history retry와 STOP/recovery 청산은 신규 노출 gate를 소비하지 않는다. |
 | `6` | `TradingController -> APIGateway` | `submitOrder(order : Order) : OrderResult` | 로컬 Order | 정규화된 최초 주문 결과 | 주문 의도를 Gateway에 제출한다. | `6.1`의 Binance 응답을 내부 OrderResult로 정규화한다. |
 | `6.1` | `APIGateway -> Binance REST API` | `placeOrder(symbol : String, side : OrderSide, quantity : Decimal) : BinanceOrderResponse` | symbol, side, 수량 | Binance 최초 주문 응답 | Binance에 실제 주문을 생성한다. | 반환 응답은 `6`의 return으로 처리하고 별도 reply 메시지를 표시하지 않는다. |
 | `7` | `TradingController -> Order` | `applyOrderResult(result : OrderResult) : void` | 최초 주문 결과 | `void` | 최초 REST 응답을 로컬 Order에 반영한다. | 거래소 주문 ID, 상태, 체결 수량·금액, 처리 시각과 fill 정보를 갱신한다. `FILLED`면 `10`으로, 미완료/불명이면 `8`로 간다. |
@@ -494,6 +520,10 @@ Attribute
 - `apiGateway : APIGateway {not null}`
 - `webSocketGateway : WebSocketGateway {not null}`
 - `tradeHistoryController : TradeHistoryController {not null}`
+- `riskPolicyState : RiskPolicyState {not null}`
+- `manualKillActive : boolean = false {not null}`
+- `manualKillCleanupComplete : boolean = true {not null}`
+- `riskControlVersion : int = 0 {not null}`
 - `selectedRegime : RegimeType? = null`
 
 Operation
@@ -508,6 +538,13 @@ Operation
 - `reconcileStartupState() : void`
 - `reconnectAccountStreamAfterReconciliation(recoveryCommitObserver : Callable? = null) : Subscription`
 - `observeOrderResult(result : OrderResult) : boolean`
+- `observeMarketEvaluation(evaluation : MarketEvaluationSnapshot, marketVersion : int, sourceEventId : String) : TradingEvent?`
+- `markMarketStreamReconciliationRequired(reason : String) : void`
+- `completeMarketStreamReconciliation(marketVersion : int) : void`
+- `evaluateBuyRisk(order : Order) : RiskDecision`
+- `setManualKill(active : boolean, commandId : String, expectedVersion : int) : ManualKillResult`
+- `resumeManualKillCleanup() : boolean`
+- `markProcessOwnershipAmbiguous(reason : ProcessOwnershipFailure) : void`
 
 `fetchSelectedTradingLogic`은 `TYPE_0`을 정확히 109개 transition의 lower-BB
 registry에만 매핑하고 상단 BB 접촉은 `SAFE_TERMINATION`으로 완결한다.
@@ -522,10 +559,49 @@ pending sidecar를 exchange open/recent/same-ID 사실에 대조한다. numeric 
 확보하고, 그 뒤 주문 snapshot/rebase와 두 번째 account snapshot을 완료한 조용한
 barrier에서만 command를 다시 허용한다. 위 camelCase Operation은 Python의
 `commit_regime_selection`, `update_split_ratios`, `start_trading`, `stop_trading`,
-`liquidate_recovered_position`에 각각 대응한다. 복구 청산은 durable open lot의 REGIME과
-owner를 검증한 liquidation-only session에서만 `STOP_CONFIRMED`를 처리하며 `run()`이나
+`liquidate_recovered_position`, `observe_market_evaluation`, `set_manual_kill`,
+`resume_manual_kill_cleanup`에 각각 대응한다.
+manual kill의 `expectedVersion`은 TradingContext가 아니라 별도 `riskControlVersion`이며 같은
+command ID와 payload는 최초 결과를 재생한다. 최근 1,024개 이하 성공 command의 active/version,
+expectedVersion과 policy provenance는 toggle·no-op 모두 별도 strict JSONL v2에 fsync하므로
+response loss 뒤 process가 재시작되어도 최초 결과와 ID/payload 충돌 판정을 복원한다. 복구 청산은
+durable open lot의 REGIME과 owner를 검증한 liquidation-only session에서만 `STOP_CONFIRMED`를 처리하며 `run()`이나
 자동 전략 event를 실행하지 않는다. mutable `Position`이 authoritative 주문 체결 수량을 소유하고
 `PositionSnapshot`은 Context publication과 start/stop Guard에 그 값을 전달한다.
+
+확정된 manual kill behavior는 `CANCEL_AND_LIQUIDATE`다. Activation receipt를 먼저
+fsync해 신규 BUY를 차단한 뒤 app-owned pending/UNKNOWN/open 주문을 same-ID
+query·cancel·reconcile하고, 잔여 Position을 기존 STOP/recovery path로 정확히
+청산한다. 현재 구현은 durable pending same-ID query → 개별 cancel → same-ID
+terminal requery → partial History/Position reconcile → canonical STOP/recovery SELL 순서를
+재사용한다. Restart는 control version에서 같은 cleanup identity를 재구성해 strategy
+`run()` 없이 재개하고, exact activation replay와 active no-op은 effect를 중복하거나
+최초 activation의 behavior·policy version을 바꾸지 않는다. `manualKillCleanupComplete`는
+account stream readiness와 app-owned open/pending/memory order, Context pending과 Position을 모두
+권위 확인한 뒤에만 `true`다. RECON activation, reconnect same-ID re-cancel, partial residual SELL,
+fresh release TOCTOU와 cleanup-incomplete shutdown 차단의 focused local test는 통과했다. 실제 Phase 13
+Testnet public-path와 local suite에 없는 추가 외부 timeout/5xx/persistence 조합은 GAP으로 유지한다.
+
+Phase 13의 risk policy와 process ownership은 global command gate에 섞지 않는다. 신규 BUY만
+`evaluateBuyRisk`를 반드시 통과하고, 안전 SELL, cancel, same-ID query, reconciliation,
+read-only 조회와 안전 종료는 risk 차단 중에도 허용한다. process owner, listener 또는 policy
+version이 불명확하면 신규 BUY를 차단하고 자동 kill이나 새 client-order ID 제출을 하지 않는다.
+Tauri는 launcher child handle/PID와 READY의 Python `runtime_pid`/`process_start_id`를 별도로
+소유한다. Python의 `.backend-runtime.lock`은 그 runtime identity와
+`ACTIVE|ORPHANED|RELEASED`만 durable하게 기록하며, port·parent PID·token을 기록하지
+않는다. Parent control FD EOF는 `ORPHANED`를 fsync하고 order gate를 닫지만
+listener/process/lock을 임의로 종료하지 않는다.
+
+FD5 writer는 native parent만 소유하므로 parent가 종료되면 kernel EOF가 liveness 신호가 된다.
+Python은 시간 기반 heartbeat timeout을 추측하지 않고 EOF를 읽은 같은 waiter iteration에
+ownership gate와 artifact fsync를 적용한다.
+
+다음 native startup은 Python spawn 전에 ownership artifact의 exclusive lock, exact schema,
+owner-only regular single-link inode와 recorded PID 부재를 검증한다. stale `ACTIVE`/`ORPHANED`만
+state/PID/start UUID를 operator dialog에 표시하며 명시적 확인 뒤 같은 device/inode·identity와 PID
+부재를 다시 검증한 경우에만 같은 artifact를 `RELEASED`로 fsync하고 재시작한다. 취소, live 또는
+permission-ambiguous PID, lock 경합, invalid artifact와 dialog 이후 교체는 mutation 없이 fail closed하며
+process kill, order cancel·청산 또는 새 order submit을 수행하지 않는다.
 
 ### 8.5 TradingSTM
 
@@ -572,7 +648,7 @@ Operation
 
 ### 8.7 MarketDataController
 
-기능: REST 과거 봉과 초기화 중 WebSocket buffer를 병합해 일관된 MarketSnapshot을 만들고 4H REGIME 계산을 시작한다.
+기능: REST 과거 봉과 WebSocket buffer를 병합해 일관된 MarketSnapshot을 만들고, 같은 generation의 지속 Kline을 전략 평가 경계까지 전달한다.
 
 Attribute
 
@@ -586,6 +662,28 @@ Attribute
 Operation
 
 - `InitializeMarketData(symbol : String = "ETHUSDT") : MarketSnapshot`
+- `reconcileMarketStream() : MarketSnapshot`
+- `observeKline(kline : Kline) : void`
+
+30분 EMA는 period 9, 첫 9개 시간순 확정봉 종가의 SMA seed, alpha 0.2,
+최근 EMA9 6개의 `x=0..5` OLS, Decimal 유효숫자 34와 threshold 비교 전
+최종 8자리 `ROUND_HALF_EVEN`으로 확정했다. 진행 30분봉의 realtime price,
+Case C `tp_price`와 확정 1분봉 `close_1m`은 같은 직전 확정 EMA에서 매번
+독립 후보를 계산하고 확정 EMA 시계열에 commit하지 않는다.
+
+Raw OLS slope는 `raw_ols_slope / candidate_price * 100`, 단위 `%/30분봉`으로
+정규화한다. Actual close, realtime, Case C `tp_price`, 확정 1분봉 `close_1m` 계산은
+각각 실제로 대입한 가격을 동일 계산의 분모로 사용한다. Shared Decimal helper와 concrete
+builder, monotonic tracker의 reset/rebase, immutable evaluation/version queue preparer와
+production bootstrap observer wiring을 구현했다. Concrete builder는 기존
+`MarketEvaluationBuilder` seam의 `MarketDataController` 소유 application 구현 세부사항이며,
+신규 business lifeline 또는 package public API가 아니다. Architecture audit 대상에는 포함한다.
+Production builder golden·seed·threshold·HALF_EVEN·non-accumulation·actual close·1분 결합·
+reset/rebase 직접 회귀 20개와 연속 market-version queue provenance를 통과했다. 4H 경계 12개와
+UTC 자정 180개 유효 arrival permutation은 정확히 한 atomic version과 같은-version REGIME 평가를
+검증한다. Public `observeKline`에서 시작하는 immediate/partial/UNKNOWN/failure/SELL/STOP 여섯 흐름과
+production Spot REST memory-HTTP E2E도 private Action 호출 없이 통과했다. Actual Phase 13 Testnet
+order/fill trace는 이 local 완료와 별도로 남는다.
 
 ### 8.8 APIGateway
 
@@ -637,6 +735,7 @@ Attribute
 Operation
 
 - `startAllKlineBuffering(symbol : String, intervals : Set<Interval>) : Subscription`
+- `promoteKlineBufferToLive(observer : Callable<Kline>, subscription : Subscription? = null) : Subscription`
 - `startAccountInfoStream() : Subscription`
 - `rebaseOrderResults(results : List<OrderResult>) : void`
 - `isAccountReady() : boolean`
@@ -679,6 +778,7 @@ Operation
 
 - `calculate4HIndicators(snapshot : MarketSnapshot) : IndicatorSnapshot`
 - `recommendRegime(indicators : IndicatorSnapshot) : RegimeType`
+- `reconcileRegime(snapshot : MarketSnapshot) : RegimeResult?`
 - `setRegimeType(regimeType : RegimeType, commandId : String, expectedVersion : int) : TradingLogicSelectionResult`
 
 `recommendRegime`은 호환 façade이며 내부에서 `RegimeSTM.handle(...)`과 Action dispatcher를
@@ -725,6 +825,7 @@ Attribute
 - `intentId : String {not null}`
 - `clientOrderId : String {not null}`
 - `submissionAttempt : int = 0 {not null}`
+- `riskPolicyVersion : int? = null`
 - `symbol : String {not null}`
 - `side : OrderSide {not null}`
 - `strategy : StrategyType {not null}`
@@ -836,7 +937,7 @@ Operation
 
 ### 8.19 TradeHistoryController
 
-기능: 거래 저장, 상세 조회, 성과 계산, repository 접근 및 CSV 내보내기를 조정한다.
+기능: 거래 저장, 상세 조회, 성과 계산, manual kill receipt, repository 접근 및 CSV 내보내기를 조정한다.
 
 Attribute
 
@@ -852,14 +953,18 @@ Operation
 - `recordOrderExecution(order : Order, summary : ExecutionSummary, costBasis : Decimal?) : void`
 - `getTradeDetails(period : HistoryPeriod = TODAY, side : TradeSide = ALL) : TradeDetailsResult`
 - `exportCSV(options : CSVExportOptions) : CSVExportResult`
+- `getManualKillControlState() : ManualKillControlState`
+- `getManualKillControlReplay() : List<ManualKillControlState>`
+- `saveManualKillControlState(state : ManualKillControlState) : void`
 
 ### 8.20 TradeHistoryRepository
 
-기능: 로컬 파일에 저장된 Trade의 전체 읽기, 단건 저장 및 streaming 조회를 담당한다.
+기능: 로컬 Trade의 전체 읽기·단건 저장·streaming 조회와 manual kill receipt 복구를 담당한다.
 
 Attribute
 
 - `storagePath : Path {not null}`
+- `manualKillControlStoragePath : Path {not null}`
 - `fileSystem : FileSystem {not null}`
 
 Operation
@@ -867,6 +972,36 @@ Operation
 - `getTradeHistory() : List<Trade>`
 - `saveThisTradeByOrderID(orderId : Long, trade : Trade) : void`
 - `streamTrades(query : TradeHistoryQuery) : Stream<Trade>`
+- `savePendingOrder(order : Order) : void`
+- `transitionPendingOrderLifecycle(clientOrderId : String, lifecycle : PendingOrderRecoveryLifecycle) : void`
+- `removePendingOrder(clientOrderId : String) : void`
+- `getManualKillControlState() : ManualKillControlState`
+- `getManualKillControlReplay() : List<ManualKillControlState>`
+- `saveManualKillControlState(state : ManualKillControlState) : void`
+
+Pending order sidecar는 `PREPARED`, `SUBMITTED`, `PARTIAL`, `UNKNOWN`, `TERMINAL`,
+`HISTORY_COMMITTED`, `SUBMISSION_REJECTED_CONFIRMED` 전이를 append-only로 fsync한다. 제출 시도
+번호와 policy version은 UPSERT 전에 예약되어 restart 뒤에도 같은 intent의 총 제출 예산과
+risk provenance가 복원된다. timeout 또는 decode failure는 실패가 아니라 `UNKNOWN`이며 새
+identity를 만들지 않는다.
+
+Schema v3 writer는 REST POST 직전 `SUBMITTED`를 fsync하며 전이 실패 시 POST를 호출하지
+않는다. 따라서 v3 `PREPARED`는 POST 미시작 provenance로 replay하고, 1·2·4·8초 same-ID
+조회가 모두 exact absence인 경우만 REMOVE한다. Legacy v1/v2 `PREPARED`는 POST 직후
+crash를 배제할 수 없으므로 계속 fail closed하며, 동일 ID의 후속 UPSERT로 provenance를
+업그레이드하지 않는다. REMOVE는 active lock만 해제하고 기존 intent/attempt audit line을
+지우지 않는다.
+
+Manual kill control journal은 pending journal과 별도 파일이다. Schema v1의 연속 toggle을 호환
+replay하고 schema v2는 toggle과 no-op 성공 command를 모두 기록한다. 각 v2 line의
+`expectedVersion`은 직전 authoritative version과 같아야 하고, active가 바뀌면 result version이
+1 증가하며 no-op이면 그대로다. 최근 1,024개 이하 receipt를 일반 UI command eviction과 독립된
+restart 전용 command cache에 복원해 같은 ID·payload는 최초 결과를 재생하고 다른 payload는
+거부한다. 매 load/append는 same-inode single-link regular file의 strict replay, cached receipt와
+stat anchor 및 post-write replay를 결합한다. 파일 부재만 최초 inactive version 0이며, 실행 중
+empty·unlink·valid-prefix rollback, path 교체, partial tail·중복 key·추가 field와 version/ID 충돌은
+fail closed한다. Cached receipt가 있는 shutdown barrier는 missing path도 검증해 정상 종료 ACK를
+내보내지 않는다.
 
 ### 8.21 Account
 
@@ -991,6 +1126,108 @@ Operation
 - `chooseDirectory() : Path?`
 - `writeCSV(trades : Stream<Trade>, options : CSVExportOptions) : CSVExportResult`
 
+### 8.28 RiskPolicy
+
+Stereotype: `<<value object>>`
+
+기능: 사용자가 승인한 단건·누적 position·KST daily loss 및 manual kill 동작을 한 version으로
+묶는다. Configured policy의 세 상한에서 `null`/언어별 `None`은 명시적
+무제한을 뜻한다. Policy 문서·주입 자체가 없거나 strict conversion에 실패한
+`UNAVAILABLE`과 구분하며, `None`을 숫자 `0`이나 거대한 Decimal로 치환하지 않는다.
+
+Attribute
+
+- `version : int {not null}`
+- `maxOrderNotional : Decimal? = null`
+- `maxPositionNotional : Decimal? = null`
+- `maxDailyLoss : Decimal? = null`
+- `dailyLossScope : DailyLossScope {not null}`
+- `manualKillBehavior : ManualKillBehavior {not null}`
+
+2026-08-29 configured 값은 세 상한 모두 `null`, `REALIZED_ONLY`,
+`CANCEL_AND_LIQUIDATE`다. 상한이 `null`이어도 후보 주문·현재·예약·예상
+Position notional과 KST 실현 손실을 Decimal로 계산·게시하며 해당 비교만
+건너뛴다. 유한 Decimal이면 기존 차단 우선순위와 equality 경계를 유지한다.
+
+### 8.29 RiskBudgetSnapshot
+
+Stereotype: `<<value object>>`
+
+기능: 한 BUY 판단에서 사용한 authoritative source version과 현재·예약·후보 노출 및 KST 손실을
+불변으로 보존한다.
+
+Attribute
+
+- `policyVersion : int? {not null when configured}`
+- `marketVersion : int {not null}`
+- `accountVersion : int {not null}`
+- `contextVersion : int {not null}`
+- `currentPositionNotional : Decimal {not null}`
+- `reservedBuyNotional : Decimal {not null}`
+- `candidateOrderNotional : Decimal {not null}`
+- `projectedPositionNotional : Decimal {not null}`
+- `dailyRealizedPnl : Decimal {not null}`
+- `unrealizedPnl : Decimal {not null}`
+- `dailyLoss : Decimal {not null}`
+- `manualKillActive : boolean {not null}`
+
+### 8.30 RiskDecision
+
+Stereotype: `<<value object>>`
+
+기능: 신규 BUY 허용 여부와 첫 typed 차단 사유를 해당 판단의 위험 예산에 연결한다.
+
+Attribute
+
+- `allowed : boolean {not null}`
+- `budget : RiskBudgetSnapshot {not null}`
+- `blockReason : RiskBlockReason? = null`
+
+허용 결과에는 차단 사유가 없고 차단 결과에는 정확히 하나의 typed 사유가 있다. 차단 우선순위는
+policy availability/version, manual kill, 단건 notional, KST daily loss, 누적 position notional
+순서이며 같은 입력 snapshot은 같은 첫 사유를 반환한다. Configured `null` 상한은
+그 비교만 건너뛰지 policy availability/version 또는 manual kill 차단을 건너뛰지 않는다.
+
+### 8.31 ManualKillResult
+
+Stereotype: `<<value object>>`
+
+기능: manual kill command의 활성 상태와 policy·control version provenance를 불변 보존한다.
+
+Attribute
+
+- `active : boolean {not null}`
+- `behavior : ManualKillBehavior?`
+- `policyVersion : int?`
+- `riskControlVersion : int {not null}`
+
+동일 command ID와 payload는 최초 결과를 재생하며 다른 payload 재사용과 stale
+`riskControlVersion`은 mutation 없이 거부한다. policy가 `UNAVAILABLE`이어도 manual kill 활성화는
+허용해 신규 BUY fail-closed 상태를 강화할 수 있다.
+
+### 8.32 ManualKillControlState
+
+Stereotype: `<<value object>>`
+
+기능: 한 manual kill 성공 command receipt와 그 결과의 authoritative active/control version 및
+policy provenance를 restart-safe 값으로 보존한다.
+
+Attribute
+
+- `active : boolean {not null}`
+- `version : int {not null}`
+- `commandId : String?`
+- `expectedVersion : int?`
+- `behavior : ManualKillBehavior?`
+- `policyVersion : int?`
+
+Command가 없는 inactive version 0만 파일 부재의 초기 상태다. Schema v2 receipt는 command ID와
+expected version을 반드시 가지며, toggle 결과는 version을 1 증가시키고 no-op 결과는 같은 version을
+유지한다. behavior와 policy version은 configured policy에서만 함께 존재한다.
+
+이 다섯 타입은 기존 27개 business lifeline에 coordinating class를 추가하지 않는 immutable
+value object다. 계산과 정책 적용 Operation의 owner는 계속 `TradingController`다.
+
 ## 9. 외부 Actor의 호출 계약
 
 외부 Actor는 시스템 클래스의 Attribute/Operation 목록 대상은 아니지만, 다이어그램에서 호출되는 계약을 구현 참고용으로 정리한다.
@@ -1036,6 +1273,7 @@ Operation
 | `ADR-003-stop-and-product-mode.md` | Spot `ETHUSDT` long-only, stop guard, 실행 mode와 live gate |
 | `ADR-004-persistence-performance-and-csv.md` | 4H 지표 golden vector, JSONL, Performance/KST, summary, CSV |
 | `ADR-005-loopback-transport-and-sidecar-security.md` | endpoint, 응답/event envelope, token, sequence와 reconnect |
+| `ADR-006-phase13-risk-recovery-and-readiness.md` | versioned risk gate, durable intent, process ownership, market resync, evidence와 live 잠금 |
 
 ADR의 세부 numeric/schema 표는 이 문서의 Operation이 구현할 정책이다. 서로 충돌하면
 더 구체적인 ADR을 먼저 적용하고 본 문서와 roadmap을 같은 변경 묶음에서 동기화한다.
@@ -1074,12 +1312,29 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 
 `ExecutionMode`는 `disabled`, `fake`, `testnet`, `live` 네 값만 허용하며 default는
 `disabled`다. Phase 9의 `testnet` bootstrap은 공식 Spot Testnet endpoint만 고정해
-사용하고 credential 기반 read-only 실행과 주문 실행을 분리한다. 주문은 별도 opt-in과
-양수 BUY entry max-notional 상한, startup reconciliation이 모두 있어야 하며, 상한은 decision
-price 기준 신규 노출 사전 추정치이므로 거래소 filter 검증을 대체하지 않는다. STOP/recovery
-SELL은 Position과 free ETH 수량으로 제한하고 이 quote entry cap을 적용하지 않는다. `live`는 ADR-003의
-release 승인, 매 실행 확인, 세 가지 non-null Decimal 한도와 reconciliation을 모두
-통과해야 하지만 Phase 13 전에는 구현 경로와 관계없이 비활성이다.
+사용하고 credential 기반 read-only 실행과 주문 실행을 분리한다. Phase 13 actual
+Testnet Case 2는 local in-scope gate 통과 후만 `ETHUSDT`에 별도 opt-in하고,
+각 신규 BUY decision notional을 `100 USDT` 이하로 제한한다. 이 상한은 신규
+노출 사전 추정치이므로 거래소 filter 검증을 대체하지 않는다. STOP/recovery SELL은
+Position·free ETH·최신 filter 안의 정확한 보유 수량으로 제한하고 BUY cap을 적용하지
+않는다. `live`는 ADR-003의 release 승인, 매 실행 확인, configured policy의
+version·nullable 세 상한·`REALIZED_ONLY`·`CANCEL_AND_LIQUIDATE`와 reconciliation을
+모두 통과해야 한다. Phase 13 구현 여부와 관계없이 별도 사용자 live 승인
+record와 서명된 release checklist가 생기기 전에는 configuration, backend와 UI 세
+경계에서 계속 비활성이다.
+
+프로젝트 자체는 비공개·개인용으로 배포 license를 부여하지 않는다. Python의
+`LicenseRef-Proprietary`·`Private :: Do Not Upload`, npm의 `private: true`·`UNLICENSED`,
+Cargo의 `publish = false`·repository `LICENSE`를 local supply inventory가 세 manifest와
+root notice byte에 결합한다. Backend notice와 README도 같은 정책을 고지한다. Project 자체
+`UNKNOWN` license group은 제거됐지만 retained scan은 current manifest bytes를 결합하지 않아
+`current_vs_scanned_match=false`다. PyInstaller 계열의 `non-standard`, `GPL-2.0` 두 third-party group과 raw
+license scan·SBOM·release artifact binding은 `NO_GO`이며 dependency license·notice
+의무는 계속 준수한다. 24시간 이상 Testnet soak는 Phase 13에서 영구 제외했으며 실행
+또는 PASS로 표시하지 않는다. Exact lockfile·dependency metadata를 외부 OSV 서비스로
+전송하는 것은 영구 불허다. `scripts/run_phase13_offline_osv.py`의 OS network deny와 scanner
+offline cached DB만 허용하고 최신 advisory 확인 불가 또는 local cache 부재는 fail closed한다.
+30분 raw OLS slope는 `raw_ols_slope / candidate_price * 100`, `%/30분봉`으로 확정한다.
 
 Testnet account stream 재연결은 첫 full account REST snapshot을 적용한 뒤 signed stream
 subscribe ACK를 먼저 확보한다. 그 ACK 아래에서 open/recent/same-ID 주문을 조회·적용하고
@@ -1118,6 +1373,12 @@ snapshot barrier를 다시 수행한다.
 | D-08 / startup 복구 | `TradingController -> APIGateway` | `listRecentOrderResults(symbol, limit) : List<OrderResult>` | 앱 client ID prefix의 최근 주문·누적 fill을 정규화해 durable history 이후 누락 execution과 Testnet reset provenance를 대조 |
 | D-08 / stream 재연결 | `TradingController -> WebSocketGateway/APIGateway` | `reconnectAccountStreamAfterReconciliation(recoveryCommitObserver?) : Subscription` | 첫 account REST 뒤 stream ACK를 먼저 얻고 open/recent/same-ID → rebase → 두 번째 account REST를 수행한다. numeric ID collision은 Order/Position 적용 전에 막고 terminal fill은 durable pair+summary와 exact match한다. pending REMOVE·backlog·disconnect·검증 실패에서는 gate를 유지한다. optional application hook은 gate commit 직후 같은 RLock에서 Account/trading publication을 수행한다. |
 | D-04 / Case 2 `14`, `8.1.1.3` | `TradingController -> TradingSTM` | `orderFinished(event, context) : TradingSTMResult` | concrete normalized outcome만 허용, `handle`로 위임 |
+| P13-01 / Case 2 `5.1` | `TradingController` | `evaluateBuyRisk(order) : RiskDecision` | filter 뒤·journal/POST 전 단일 BUY gate. Configured `null`인 비교만 건너뛰고 Decimal authoritative budget 계산·게시, availability/version/manual kill과 안전 정리 예외를 유지. Domain·wire·UI strict configured-unbounded test 통과 |
+| P13-01 / manual kill recovery | `TradingController -> TradeHistoryController/APIGateway/TradingSTM` | `setManualKill(...)`, `resumeManualKillCleanup()`, `saveManualKillControlState(state)`, `getManualKillControlReplay()` | receipt fsync 후 durable pending same-ID query·개별 cancel·terminal requery·partial reconcile·canonical STOP/recovery SELL. RECON activation, reconnect re-cancel, fresh release TOCTOU, cleanup-incomplete shutdown, restart·activation replay·active-epoch provenance와 authoritative cleanup bool focused local test 통과; actual Testnet public path와 local suite 밖 추가 외부 fault 조합은 GAP |
+| P13-03 / process ownership | `TradingController` | `markProcessOwnershipAmbiguous(reason) : void` | parent/sidecar/PyInstaller/listener identity가 불명확하면 신규 BUY와 relaunch를 잠그고 자동 kill·재주문 금지 |
+| P13-03 / stale owner release | `Tauri native startup -> runtime ownership artifact` | `inspectStaleRuntimeOwner() : Attestation?`, `releaseStaleRuntimeOwner(attestation) : void` | Python spawn 전 exclusive lock 획득·PID-absent ACTIVE/ORPHANED만 exact identity로 표시하고, 확인 뒤 같은 inode와 PID 부재를 재검증해 RELEASED fsync. 취소·경합·변경은 mutation 없이 fail closed하며 kill/cancel/청산 금지 |
+| P13-04 / `1L.1`~`1L.3` | `MarketDataController -> TradingController` | `observeMarketEvaluation(evaluation, marketVersion, sourceEventId) : TradingEvent?` | 확정 OLS 정규화식과 concrete implementation-detail builder로 지속 Kline의 immutable evaluation/version을 serial TradingEvent에 결합한다. Claim 시 queue preparer가 Context update·event 재분류를 수행하고 private Action 호출은 금지한다. Bootstrap wiring·monotonic reset/rebase, builder 직접 회귀 20개, all-interval 원자 경계, public local Case 2 여섯 흐름과 production Spot REST memory-HTTP E2E를 통과했다. Actual Phase 13 Testnet order/fill trace는 별도 GAP이다. |
+| P13-04 / market full-resync | `MarketDataController -> RegimeController` | `reconcileMarketStream() : MarketSnapshot`, `reconcileRegime(snapshot) : RegimeResult?` | 동일 4H candle은 지표·추천·STM을 재검증하고 무전이로 새 version에 결합한다. 새 candle만 재평가하며 결과/source/completion version 불일치나 실패는 gate를 열지 않음 |
 | D-07 / `1.4` | `MarketDataController -> RegimeController` | `calculate4HIndicators(snapshot) : IndicatorSnapshot` | ADR-004의 확정봉·Decimal·golden formula 사용 |
 | D-10~D-13 / Case 2 `13`, Case 3·4 | `TradingController/UIStateController -> TradeHistoryController` | 기존 `recordOrderExecution`, `getTradeDetails`, `exportCSV` | JSONL/Performance/KST/CSV 정책을 조정, 새 업무 클래스 불필요 |
 | D-14 / process boundary | `BackendUiAdapter -> transport route -> 기존 Controller` | ADR-005의 `/v1/*` HTTP/WS 계약 | adapter/route는 wire 변환만 수행하고 업무 Guard 복제 금지 |
@@ -1150,3 +1411,14 @@ snapshot barrier를 다시 수행한다.
   `READY`로 고정했고 `TYPE_1`~`TYPE_4`는 typed failure로 거부했다.
 - [x] Registry `READY`와 실행 mode·account stream readiness를 결합한
   `command_enabled` gate를 분리했다.
+- [x] Configured-unbounded 세 상한, `REALIZED_ONLY`, `CANCEL_AND_LIQUIDATE`와
+  Phase 13 `ETHUSDT` BUY `100 USDT` outer cap 결정을 명세에 동기화했다.
+- [x] 30분 EMA9/SMA9 seed/alpha 0.2/최근 6개 OLS/Decimal 34/최종 HALF_EVEN과
+  `raw_ols_slope / candidate_price * 100`·`%/30분봉`을 확정했다. Concrete builder는 기존
+  seam의 application 구현 세부사항으로 기록하고 architecture audit 대상에 포함했다.
+- [x] Public `1L.1`~`1L.3`과 Case 2 전체를 local deterministic/production REST memory transport로
+  검증하고, actual current-host Tauri picker의 선택·취소 terminal 계약까지 확인해 Communication
+  manifest `126/126`을 완료했다. Actual Phase 13 Testnet 주문 증거는 별도 readiness 경계다.
+- [x] 외부 OSV 서비스 전송을 영구 불허하고 OS network deny·offline cached DB·fail-closed
+  최신성 경계를 명세에 동기화했다.
+- [x] 24시간 soak 영구 제외를 PASS 증거와 구분했다.

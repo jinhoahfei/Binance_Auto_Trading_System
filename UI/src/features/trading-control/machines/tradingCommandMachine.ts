@@ -1,6 +1,12 @@
 import { assign, fromPromise, setup } from 'xstate';
 import {
     DEFAULT_TRADING_LOGIC_COVERAGE,
+    type BackendDailyLossScope,
+    type BackendDecimalString,
+    type BackendManualKillBehavior,
+    type BackendRiskBudgetSnapshot,
+    type BackendRiskBlockReason,
+    type BackendRiskPolicyAvailability,
     type BackendTradingStatus,
     type RegimeType,
     type TradingLogicCoverage,
@@ -13,6 +19,24 @@ export interface TradingCommandContext {
     readonly selected_regime: RegimeType | null;
     readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled: boolean;
+    readonly risk_policy_availability: BackendRiskPolicyAvailability | undefined;
+    readonly configured_risk_policy_version: number | null | undefined;
+    readonly max_order_notional: BackendDecimalString | null | undefined;
+    readonly max_position_notional: BackendDecimalString | null | undefined;
+    readonly max_daily_loss: BackendDecimalString | null | undefined;
+    readonly daily_loss_scope: BackendDailyLossScope | null | undefined;
+    readonly manual_kill_behavior: BackendManualKillBehavior | null | undefined;
+    readonly session_risk_policy_version: number | null | undefined;
+    readonly risk_control_version: number | undefined;
+    readonly manual_kill_active: boolean | undefined;
+    readonly manual_kill_cleanup_complete: boolean | undefined;
+    readonly manual_kill_activation_behavior:
+        BackendManualKillBehavior | null | undefined;
+    readonly manual_kill_activation_policy_version: number | null | undefined;
+    readonly last_risk_decision_allowed: boolean | null | undefined;
+    readonly last_risk_budget: BackendRiskBudgetSnapshot | null | undefined;
+    readonly risk_block_reason: BackendRiskBlockReason | null | undefined;
+    readonly process_ownership_ambiguous: boolean | undefined;
     readonly is_trading: boolean;
     readonly is_recovery_liquidation: boolean;
     readonly has_open_position: boolean;
@@ -33,6 +57,23 @@ export type TradingUnavailableReason = 'unsupported_logic' | 'command_disabled';
 export interface TradingCommandMachineOptions {
     readonly logic_coverage?: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled?: boolean;
+    readonly risk_policy_availability?: BackendRiskPolicyAvailability;
+    readonly configured_risk_policy_version?: number | null;
+    readonly max_order_notional?: BackendDecimalString | null;
+    readonly max_position_notional?: BackendDecimalString | null;
+    readonly max_daily_loss?: BackendDecimalString | null;
+    readonly daily_loss_scope?: BackendDailyLossScope | null;
+    readonly manual_kill_behavior?: BackendManualKillBehavior | null;
+    readonly session_risk_policy_version?: number | null;
+    readonly risk_control_version?: number;
+    readonly manual_kill_active?: boolean;
+    readonly manual_kill_cleanup_complete?: boolean;
+    readonly manual_kill_activation_behavior?: BackendManualKillBehavior | null;
+    readonly manual_kill_activation_policy_version?: number | null;
+    readonly last_risk_decision_allowed?: boolean | null;
+    readonly last_risk_budget?: BackendRiskBudgetSnapshot | null;
+    readonly risk_block_reason?: BackendRiskBlockReason | null;
+    readonly process_ownership_ambiguous?: boolean;
     readonly is_trading?: boolean;
     readonly has_open_position?: boolean;
 }
@@ -43,6 +84,23 @@ export type TradingCommandEvent =
         readonly selected_regime: RegimeType | null;
         readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
         readonly command_enabled: boolean;
+        readonly risk_policy_availability?: BackendRiskPolicyAvailability;
+        readonly configured_risk_policy_version?: number | null;
+        readonly max_order_notional?: BackendDecimalString | null;
+        readonly max_position_notional?: BackendDecimalString | null;
+        readonly max_daily_loss?: BackendDecimalString | null;
+        readonly daily_loss_scope?: BackendDailyLossScope | null;
+        readonly manual_kill_behavior?: BackendManualKillBehavior | null;
+        readonly session_risk_policy_version?: number | null;
+        readonly risk_control_version?: number;
+        readonly manual_kill_active?: boolean;
+        readonly manual_kill_cleanup_complete?: boolean;
+        readonly manual_kill_activation_behavior?: BackendManualKillBehavior | null;
+        readonly manual_kill_activation_policy_version?: number | null;
+        readonly last_risk_decision_allowed?: boolean | null;
+        readonly last_risk_budget?: BackendRiskBudgetSnapshot | null;
+        readonly risk_block_reason?: BackendRiskBlockReason | null;
+        readonly process_ownership_ambiguous?: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
         readonly lifecycle_status: BackendTradingStatus;
@@ -52,6 +110,23 @@ export type TradingCommandEvent =
         readonly selected_regime: RegimeType | null;
         readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
         readonly command_enabled: boolean;
+        readonly risk_policy_availability?: BackendRiskPolicyAvailability;
+        readonly configured_risk_policy_version?: number | null;
+        readonly max_order_notional?: BackendDecimalString | null;
+        readonly max_position_notional?: BackendDecimalString | null;
+        readonly max_daily_loss?: BackendDecimalString | null;
+        readonly daily_loss_scope?: BackendDailyLossScope | null;
+        readonly manual_kill_behavior?: BackendManualKillBehavior | null;
+        readonly session_risk_policy_version?: number | null;
+        readonly risk_control_version?: number;
+        readonly manual_kill_active?: boolean;
+        readonly manual_kill_cleanup_complete?: boolean;
+        readonly manual_kill_activation_behavior?: BackendManualKillBehavior | null;
+        readonly manual_kill_activation_policy_version?: number | null;
+        readonly last_risk_decision_allowed?: boolean | null;
+        readonly last_risk_budget?: BackendRiskBudgetSnapshot | null;
+        readonly risk_block_reason?: BackendRiskBlockReason | null;
+        readonly process_ownership_ambiguous?: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
         readonly lifecycle_status: BackendTradingStatus;
@@ -234,6 +309,126 @@ export function create_trading_command_machine(
                         ? event.command_enabled
                         : context.command_enabled;
                 },
+                // Optional risk fields는 수신한 snapshot 값만 갱신하고 생략 시 기존 authoritative 값을 보존한다.
+                risk_policy_availability: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.risk_policy_availability !== undefined
+                        ? event.risk_policy_availability
+                        : context.risk_policy_availability;
+                },
+                configured_risk_policy_version: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.configured_risk_policy_version !== undefined
+                        ? event.configured_risk_policy_version
+                        : context.configured_risk_policy_version;
+                },
+                max_order_notional: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.max_order_notional !== undefined
+                        ? event.max_order_notional
+                        : context.max_order_notional;
+                },
+                max_position_notional: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.max_position_notional !== undefined
+                        ? event.max_position_notional
+                        : context.max_position_notional;
+                },
+                max_daily_loss: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.max_daily_loss !== undefined
+                        ? event.max_daily_loss
+                        : context.max_daily_loss;
+                },
+                daily_loss_scope: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.daily_loss_scope !== undefined
+                        ? event.daily_loss_scope
+                        : context.daily_loss_scope;
+                },
+                manual_kill_behavior: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.manual_kill_behavior !== undefined
+                        ? event.manual_kill_behavior
+                        : context.manual_kill_behavior;
+                },
+                session_risk_policy_version: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.session_risk_policy_version !== undefined
+                        ? event.session_risk_policy_version
+                        : context.session_risk_policy_version;
+                },
+                risk_control_version: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.risk_control_version !== undefined
+                        ? event.risk_control_version
+                        : context.risk_control_version;
+                },
+                manual_kill_active: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.manual_kill_active !== undefined
+                        ? event.manual_kill_active
+                        : context.manual_kill_active;
+                },
+                manual_kill_cleanup_complete: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.manual_kill_cleanup_complete !== undefined
+                        ? event.manual_kill_cleanup_complete
+                        : context.manual_kill_cleanup_complete;
+                },
+                manual_kill_activation_behavior: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.manual_kill_activation_behavior !== undefined
+                        ? event.manual_kill_activation_behavior
+                        : context.manual_kill_activation_behavior;
+                },
+                manual_kill_activation_policy_version: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.manual_kill_activation_policy_version !== undefined
+                        ? event.manual_kill_activation_policy_version
+                        : context.manual_kill_activation_policy_version;
+                },
+                last_risk_decision_allowed: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.last_risk_decision_allowed !== undefined
+                        ? event.last_risk_decision_allowed
+                        : context.last_risk_decision_allowed;
+                },
+                last_risk_budget: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.last_risk_budget !== undefined
+                        ? event.last_risk_budget
+                        : context.last_risk_budget;
+                },
+                risk_block_reason: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.risk_block_reason !== undefined
+                        ? event.risk_block_reason
+                        : context.risk_block_reason;
+                },
+                process_ownership_ambiguous: ({ context, event }) => {
+                    return (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED')
+                        && event.process_ownership_ambiguous !== undefined
+                        ? event.process_ownership_ambiguous
+                        : context.process_ownership_ambiguous;
+                },
                 is_trading: ({ context, event }) => {
                     if (event.type !== 'TRADING_SNAPSHOT_SYNCHRONIZED'
                         && event.type !== 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') {
@@ -375,6 +570,24 @@ export function create_trading_command_machine(
             selected_regime: null,
             logic_coverage: options.logic_coverage ?? DEFAULT_TRADING_LOGIC_COVERAGE,
             command_enabled: options.command_enabled ?? false,
+            risk_policy_availability: options.risk_policy_availability,
+            configured_risk_policy_version: options.configured_risk_policy_version,
+            max_order_notional: options.max_order_notional,
+            max_position_notional: options.max_position_notional,
+            max_daily_loss: options.max_daily_loss,
+            daily_loss_scope: options.daily_loss_scope,
+            manual_kill_behavior: options.manual_kill_behavior,
+            session_risk_policy_version: options.session_risk_policy_version,
+            risk_control_version: options.risk_control_version,
+            manual_kill_active: options.manual_kill_active,
+            manual_kill_cleanup_complete: options.manual_kill_cleanup_complete,
+            manual_kill_activation_behavior: options.manual_kill_activation_behavior,
+            manual_kill_activation_policy_version:
+                options.manual_kill_activation_policy_version,
+            last_risk_decision_allowed: options.last_risk_decision_allowed,
+            last_risk_budget: options.last_risk_budget,
+            risk_block_reason: options.risk_block_reason,
+            process_ownership_ambiguous: options.process_ownership_ambiguous,
             is_trading: options.is_trading ?? false,
             is_recovery_liquidation: false,
             has_open_position: options.has_open_position ?? false,

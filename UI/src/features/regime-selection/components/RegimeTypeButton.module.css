@@ -34,12 +34,13 @@
 
 .negative {
     --button-tone: var(--color-status-negative);
+    color: var(--color-text-negative);
 }
 
 .selected {
     background: var(--button-tone);
     border-color: var(--button-tone);
-    color: var(--color-text-primary);
+    color: var(--color-text-on-strong-status);
 }
 
 .selected:hover:not(:disabled) {
@@ -84,13 +85,13 @@
 }
 
 .supported {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }
 
 .unsupported {
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
 }
 
 .selected .supportBadge {
-    color: var(--color-text-primary);
+    color: var(--color-text-on-strong-status);
 }

@@ -7,6 +7,13 @@ from decimal import Decimal
 import unittest
 
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
+from binance_auto_trader.adapters.binance.mappers import (
+    NotionalFilter,
+    OrderPreparationFilterEvidence,
+    OrderSubmissionAttemptEvidence,
+    QuantityFilter,
+    SymbolTradingRules,
+)
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.trading.order import (
     Order,
@@ -21,6 +28,115 @@ from binance_auto_trader.domain.trading.states import (
 
 
 PROCESSED_AT = datetime(2026, 8, 22, 2, 0, tzinfo=timezone.utc)
+
+
+def _symbol_trading_rules(
+    *,
+    symbol: str = "ETHUSDT",
+) -> SymbolTradingRules:
+    """
+    함수 이름: _symbol_trading_rules()
+    기능: Gateway public rule 반환 계약에 사용할 엄격 symbol rule fixture를 생성한다.
+    인자: symbol -> fixture에 결속할 canonical symbol
+    반환값: 모든 MARKET filter가 채워진 SymbolTradingRules
+    작성 날짜: 2026/08/31
+    """
+    # 수량과 notional을 모두 채워 raw dictionary를 Gateway 밖으로 노출하지 않는다.
+    return SymbolTradingRules(
+        symbol=symbol,
+        status="TRADING",
+        base_asset="ETH",
+        quote_asset="USDT",
+        base_asset_precision=8,
+        order_types=frozenset({"LIMIT", "MARKET"}),
+        is_spot_trading_allowed=True,
+        lot_size=QuantityFilter(
+            filter_type="LOT_SIZE",
+            minimum_quantity=Decimal("0.0001"),
+            maximum_quantity=Decimal("1000"),
+            step_size=Decimal("0.0001"),
+        ),
+        market_lot_size=QuantityFilter(
+            filter_type="MARKET_LOT_SIZE",
+            minimum_quantity=Decimal("0.001"),
+            maximum_quantity=Decimal("100"),
+            step_size=Decimal("0.001"),
+        ),
+        notional_filters=(
+            NotionalFilter(
+                filter_type="NOTIONAL",
+                minimum_notional=Decimal("10"),
+                maximum_notional=Decimal("100000"),
+                apply_minimum_to_market=True,
+                apply_maximum_to_market=True,
+                average_price_minutes=5,
+            ),
+        ),
+    )
+
+
+class FakeSymbolRulesRESTClient:
+    """
+    클래스 이름: FakeSymbolRulesRESTClient
+    기능: public symbol rule 호출과 설정된 반환값을 별도 order surface 없이 기록한다.
+    작성 날짜: 2026/08/31
+    """
+
+    def __init__(self, result: object) -> None:
+        """
+        함수 이름: __init__()
+        기능: 설정 반환값과 빈 symbol 호출 기록을 초기화한다.
+        인자: result -> fetch_symbol_trading_rules의 반환 후보
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        self.result = result
+        self.symbols: list[str] = []
+        self.filter_evidence_result: object = None
+        self.client_order_ids: list[str] = []
+        self.submission_evidence_result: object = None
+        self.submission_client_order_ids: list[str] = []
+
+    def fetch_symbol_trading_rules(self, *, symbol: str) -> object:
+        """
+        함수 이름: fetch_symbol_trading_rules()
+        기능: 전달된 symbol을 기록하고 설정된 rule 후보를 반환한다.
+        인자: symbol -> Gateway가 canonical 형식으로 전달한 symbol
+        반환값: 설정된 object
+        작성 날짜: 2026/08/31
+        """
+        self.symbols.append(symbol)  # 호출별 신선 조회 위임을 횟수로 검증할 수 있게 한다.
+        return self.result
+
+    def get_order_preparation_filter_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> object:
+        """
+        함수 이름: get_order_preparation_filter_evidence()
+        기능: 전달된 order identity를 기록하고 설정한 filter evidence 후보를 반환한다.
+        인자: client_order_id -> Gateway가 전달한 application Order identity
+        반환값: 설정된 evidence 후보
+        작성 날짜: 2026/08/31
+        """
+        self.client_order_ids.append(client_order_id)  # Cache 우회와 identity 결속을 호출 기록으로 검증한다.
+        return self.filter_evidence_result
+
+    def get_order_submission_attempt_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> object:
+        """
+        함수 이름: get_order_submission_attempt_evidence()
+        기능: 전달된 order identity를 기록하고 설정한 submission evidence 후보를 반환한다.
+        인자: client_order_id -> Gateway가 전달한 application Order identity
+        반환값: 설정된 evidence 후보
+        작성 날짜: 2026/08/31
+        """
+        self.submission_client_order_ids.append(client_order_id)  # POST 시작 evidence도 별도 read로 센다.
+        return self.submission_evidence_result
 
 
 def _order(
@@ -187,6 +303,129 @@ def _fake_client(
         query_result=selected_query_result,
         cancel_result=selected_cancel_result,
     )
+
+
+class APIGatewaySymbolRulesTests(unittest.TestCase):
+    """
+    클래스 이름: APIGatewaySymbolRulesTests
+    기능: public symbol rule port의 canonical 입력과 exact domain 반환 경계를 검증한다.
+    작성 날짜: 2026/08/31
+    """
+
+    def test_fetch_symbol_rules_forwards_each_canonical_public_read(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_fetch_symbol_rules_forwards_each_canonical_public_read()
+        기능: Gateway가 연속 요청을 각각 port에 위임하고 동일 rule identity를 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        rules = _symbol_trading_rules()
+        client = FakeSymbolRulesRESTClient(rules)
+        gateway = APIGateway(client)
+
+        # Gateway 자체 cache를 두지 않아 각 호출이 REST client의 fresh GET 계약으로 이어진다.
+        first_result = gateway.fetch_symbol_trading_rules(" ethusdt ")
+        second_result = gateway.fetch_symbol_trading_rules("ETHUSDT")
+
+        self.assertIs(first_result, rules)
+        self.assertIs(second_result, rules)
+        self.assertEqual(client.symbols, ["ETHUSDT", "ETHUSDT"])
+
+    def test_fetch_symbol_rules_rejects_raw_or_mismatched_results(self) -> None:
+        """
+        함수 이름: test_fetch_symbol_rules_rejects_raw_or_mismatched_results()
+        기능: raw mapping과 다른 symbol의 domain rule이 Gateway 밖으로 나가지 못하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        invalid_results = (
+            ({"symbol": "ETHUSDT"}, TypeError),
+            (_symbol_trading_rules(symbol="BTCUSDT"), ValueError),
+        )
+
+        # 타입 오류와 symbol correlation 오류를 독립 Gateway로 분리해 인과를 고정한다.
+        for invalid_result, expected_error in invalid_results:
+            with self.subTest(expected_error=expected_error.__name__):
+                client = FakeSymbolRulesRESTClient(invalid_result)
+                gateway = APIGateway(client)
+
+                with self.assertRaises(expected_error):
+                    gateway.fetch_symbol_trading_rules("ETHUSDT")
+
+                self.assertEqual(client.symbols, ["ETHUSDT"])
+
+    def test_get_order_submission_provenance_is_exact_and_correlated(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_get_order_submission_provenance_is_exact_and_correlated()
+        기능: filter/submission evidence가 frozen DTO와 요청 client ID를 만족해야 하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        rules = _symbol_trading_rules()
+        evidence = OrderPreparationFilterEvidence(
+            intent_id="filter-evidence-intent",
+            client_order_id="bat-filter-evidence-client",
+            side=OrderSide.BUY,
+            observed_at=PROCESSED_AT,
+            rules=rules,
+        )
+        submission_evidence = OrderSubmissionAttemptEvidence(
+            intent_id="filter-evidence-intent",
+            client_order_id="bat-filter-evidence-client",
+            side=OrderSide.BUY,
+            attempted_at=PROCESSED_AT,
+        )
+        client = FakeSymbolRulesRESTClient(rules)
+        client.filter_evidence_result = evidence
+        client.submission_evidence_result = submission_evidence
+        gateway = APIGateway(client)
+
+        # Getter는 network mutation 없이 same-client frozen evidence identity를 그대로 보존한다.
+        result = gateway.get_order_preparation_filter_evidence(
+            "bat-filter-evidence-client"
+        )
+        submission_result = gateway.get_order_submission_attempt_evidence(
+            "bat-filter-evidence-client"
+        )
+
+        self.assertIs(evidence, result)
+        self.assertIs(submission_evidence, submission_result)
+        self.assertEqual(
+            ["bat-filter-evidence-client"],
+            client.client_order_ids,
+        )
+        self.assertEqual(
+            ["bat-filter-evidence-client"],
+            client.submission_client_order_ids,
+        )
+
+        # Raw mapping이나 다른 client identity는 provenance로 확대 해석하지 않는다.
+        for invalid_evidence, expected_error in (
+            ({"client_order_id": "bat-filter-evidence-client"}, TypeError),
+            (
+                OrderPreparationFilterEvidence(
+                    intent_id="other-filter-intent",
+                    client_order_id="bat-other-filter-client",
+                    side=OrderSide.BUY,
+                    observed_at=PROCESSED_AT,
+                    rules=rules,
+                ),
+                ValueError,
+            ),
+        ):
+            with self.subTest(expected_error=expected_error.__name__):
+                client.filter_evidence_result = invalid_evidence
+                with self.assertRaises(expected_error):
+                    gateway.get_order_preparation_filter_evidence(
+                        "bat-filter-evidence-client"
+                    )
 
 
 class APIGatewayOrderTests(unittest.TestCase):

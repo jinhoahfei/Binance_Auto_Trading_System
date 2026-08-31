@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, localcontext
+from decimal import Decimal, ROUND_CEILING, localcontext
 import hashlib
 import hmac
 import json
@@ -14,7 +14,7 @@ import socket
 from typing import Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from binance_auto_trader.domain.trading.order import (
     FeeAssetReconciliationRequiredError,
@@ -28,6 +28,8 @@ from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 from .mappers import (
     BinancePayloadError,
+    OrderPreparationFilterEvidence,
+    OrderSubmissionAttemptEvidence,
     SymbolFilterError,
     SymbolTradingRules,
     format_decimal_parameter,
@@ -42,7 +44,6 @@ SPOT_TESTNET_API_BASE_URL = "https://testnet.binance.vision/api"
 SPOT_TESTNET_ALTERNATE_API_BASE_URL = "https://api1.testnet.binance.vision/api"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 12
 DEFAULT_RECV_WINDOW_MILLISECONDS = 5_000
-MAXIMUM_RETRY_AFTER_SECONDS = 30
 APPLICATION_CLIENT_ORDER_ID_PREFIX = "bat-"
 _OFFICIAL_TESTNET_BASE_URLS = frozenset(
     {
@@ -137,12 +138,61 @@ class HTTPTransport(Protocol):
         ...
 
 
+class _FailClosedHTTPRedirectHandler(HTTPRedirectHandler):
+    """
+    클래스 이름: _FailClosedHTTPRedirectHandler
+    기능: urllib이 3xx Location을 자동으로 열어 인증 요청을 재전송하지 못하게 한다.
+    작성 날짜: 2026/08/31
+    """
+
+    def redirect_request(
+        self,
+        request: Request,
+        response: object,
+        code: int,
+        message: str,
+        headers: Mapping[str, str],
+        new_url: str,
+    ) -> Request | None:
+        """
+        함수 이름: redirect_request()
+        기능: 모든 HTTP redirect를 원 응답의 HTTPError로 종료해 두 번째 요청을 차단한다.
+        인자: request -> 최초 요청
+            response -> 3xx 원 응답 body stream
+            code -> 3xx HTTP status
+            message -> 3xx HTTP reason
+            headers -> Location을 포함한 원 응답 header
+            new_url -> urllib이 열려고 한 redirect URL
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # Location의 origin과 무관하게 redirect 요청을 생성하지 않고 원 응답을 상위로 보존한다.
+        raise HTTPError(
+            request.full_url,
+            code,
+            message,
+            headers,
+            response,
+        )
+
+
 class UrllibHTTPTransport:
     """
     클래스 이름: UrllibHTTPTransport
     기능: Python 표준 urllib로 Binance HTTPS 요청을 수행한다.
     작성 날짜: 2026/08/22
     """
+
+    def __init__(self) -> None:
+        """
+        함수 이름: __init__()
+        기능: 3xx 자동 추적을 차단한 urllib opener를 생성한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # 기본 HTTPRedirectHandler를 fail-closed handler로 교체해 opener 내부 우회를 막는다.
+        self._opener = build_opener(_FailClosedHTTPRedirectHandler())
 
     def request(
         self,
@@ -172,7 +222,10 @@ class UrllibHTTPTransport:
             method=method,
         )
         try:
-            with urlopen(request_value, timeout=timeout_seconds) as response:
+            with self._opener.open(
+                request_value,
+                timeout=timeout_seconds,
+            ) as response:
                 response_headers = {
                     header_name: header_value
                     for header_name, header_value in response.headers.items()
@@ -214,7 +267,7 @@ class BinanceAPIError(RuntimeError):
         기능: 안전한 status·code·대기 시간만 오류 객체에 보존한다.
         인자: status_code -> HTTP status
             api_code -> Binance 정수 오류 코드 또는 None
-            retry_after -> 0~30초로 제한한 대기 시간 또는 None
+            retry_after -> 공식 wait-not-before를 축소하지 않은 대기 시간 또는 None
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -240,7 +293,7 @@ class _PreparedOrderFingerprint:
     """
     클래스 이름: _PreparedOrderFingerprint
     기능: 준비된 Order 객체 identity와 journal 대상 입력 metadata 전체를 불변으로 고정한다.
-    작성 날짜: 2026/08/22
+    작성 날짜: 2026/08/25
     """
 
     object_identity: int
@@ -254,7 +307,9 @@ class _PreparedOrderFingerprint:
     requested_quantity: Decimal
     submitted_quantity: Decimal
     market_price_at_decision: Decimal
+    risk_policy_version: int | None
     exit_reason: str | None
+    exit_pct_b_at_intent: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,10 +508,10 @@ def _read_api_code(payload: object) -> int | None:
 def _read_retry_after(headers: Mapping[str, str]) -> timedelta | None:
     """
     함수 이름: _read_retry_after()
-    기능: REST Retry-After seconds를 domain 허용 범위인 0~30초로 제한한다.
+    기능: REST Retry-After seconds를 줄이지 않고 표현 가능한 timedelta로 변환한다.
     인자: headers -> HTTP response header mapping
-    반환값: 제한한 timedelta 또는 header가 없으면 None
-    작성 날짜: 2026/08/22
+    반환값: 원래 wait-not-before 이상인 timedelta 또는 header가 없으면 None
+    작성 날짜: 2026/08/24
     """
     retry_after_text = next(
         (
@@ -475,14 +530,20 @@ def _read_retry_after(headers: Mapping[str, str]) -> timedelta | None:
     if not retry_after_seconds.is_finite() or retry_after_seconds < Decimal("0"):
         raise BinancePayloadError("Retry-After must be finite and non-negative")
 
-    # ADR/domain은 최대 30초만 표현하므로 더 긴 ban은 30초 뒤에도 재조회로만 이어진다.
-    bounded_seconds = min(
-        retry_after_seconds,
-        Decimal(MAXIMUM_RETRY_AFTER_SECONDS),
+    # Microsecond보다 작은 양수도 아래로 버리지 않고 다음 표현 가능한 시각까지 올림한다.
+    retry_after_microseconds = int(
+        (retry_after_seconds * Decimal("1000000")).to_integral_value(
+            rounding=ROUND_CEILING
+        )
     )
-    retry_after_microseconds = int(bounded_seconds * Decimal("1000000"))
-
-    return timedelta(microseconds=retry_after_microseconds)  # Decimal seconds를 정수 microseconds로 옮긴다.
+    try:
+        return timedelta(
+            microseconds=retry_after_microseconds
+        )  # 공식 wait-not-before를 절대 축소하지 않은 정수 microsecond 값이다.
+    except OverflowError as error:
+        raise BinancePayloadError(
+            "Retry-After exceeds the supported duration"
+        ) from error  # 표현할 수 없는 ban을 짧은 retry로 바꾸지 않는다.
 
 
 def _safe_failure_reason(prefix: str, api_code: int | None = None) -> str:
@@ -519,6 +580,7 @@ class BinanceSpotRESTClient:
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         recv_window_milliseconds: int = DEFAULT_RECV_WINDOW_MILLISECONDS,
         maximum_order_notional: Decimal | None = None,
+        allow_order_timestamp_retry: bool = True,
     ) -> None:
         """
         함수 이름: __init__()
@@ -532,8 +594,9 @@ class BinanceSpotRESTClient:
             request_timeout_seconds -> 양수 HTTP timeout
             recv_window_milliseconds -> 1~60000ms signed request window
             maximum_order_notional -> STOP cleanup 외 주문에 적용할 선택 Testnet quote 금액 상한
+            allow_order_timestamp_retry -> POST /v3/order의 -1021 단일 재전송 허용 여부
         반환값: 없음
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/08/25
         """
         selected_transport = transport or UrllibHTTPTransport()
         if not callable(getattr(selected_transport, "request", None)):
@@ -556,8 +619,13 @@ class BinanceSpotRESTClient:
             not isinstance(maximum_order_notional, Decimal)
             or not maximum_order_notional.is_finite()
             or maximum_order_notional <= Decimal("0")
+            or maximum_order_notional > Decimal("100")
         ):
-            raise ValueError("maximum_order_notional must be a positive finite Decimal")
+            raise ValueError(
+                "maximum_order_notional must be a finite Decimal between 0 and 100"
+            )
+        if type(allow_order_timestamp_retry) is not bool:
+            raise TypeError("allow_order_timestamp_retry must be a bool")
 
         # Credentials는 공개 property나 repr에 노출하지 않고 private signing state로만 둔다.
         self._api_key = _normalize_secret_text(api_key, "api_key")
@@ -572,11 +640,22 @@ class BinanceSpotRESTClient:
         self._request_timeout_seconds = request_timeout_seconds
         self._recv_window_milliseconds = recv_window_milliseconds
         self._maximum_order_notional = maximum_order_notional
+        self._allow_order_timestamp_retry = (
+            allow_order_timestamp_retry
+        )  # Phase 13 actual target은 논리 주문 하나가 HTTP POST 하나만 소비하게 한다.
         self._server_time_offset_milliseconds: int | None = None
         self._symbol_rules_by_symbol: dict[str, SymbolTradingRules] = {}
         self._prepared_orders_by_client_id: dict[
             str,
             _PreparedOrderFingerprint,
+        ] = {}
+        self._preparation_filter_evidence_by_client_id: dict[
+            str,
+            OrderPreparationFilterEvidence,
+        ] = {}
+        self._submission_attempt_evidence_by_client_id: dict[
+            str,
+            OrderSubmissionAttemptEvidence,
         ] = {}
 
     def __repr__(self) -> str:
@@ -676,6 +755,101 @@ class BinanceSpotRESTClient:
 
         return response.payload  # APIGateway가 raw rate를 할인 가능성 정책으로 축약한다.
 
+    def fetch_symbol_trading_rules(
+        self,
+        *,
+        symbol: str,
+    ) -> SymbolTradingRules:
+        """
+        함수 이름: fetch_symbol_trading_rules()
+        기능: 공식 exchangeInfo를 매번 새로 조회해 한 Spot symbol의 엄격 rule을 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: 최신 public exchangeInfo에서 해석한 SymbolTradingRules
+        작성 날짜: 2026/08/31
+        """
+        rules, _rules_observed_at = self._fetch_symbol_trading_rules_with_observed_at(
+            symbol=symbol
+        )
+
+        return rules  # Public preflight는 cache나 내부 observation mapping을 노출하지 않는다.
+
+    def get_order_preparation_filter_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> OrderPreparationFilterEvidence | None:
+        """
+        함수 이름: get_order_preparation_filter_evidence()
+        기능: 성공한 prepare가 사용한 exact public filter provenance를 credential 없이 조회한다.
+        인자: client_order_id -> 준비된 application Order identity
+        반환값: immutable filter evidence 또는 해당 prepare가 없으면 None
+        작성 날짜: 2026/08/31
+        """
+        if (
+            not isinstance(client_order_id, str)
+            or _CLIENT_ORDER_ID_PATTERN.fullmatch(client_order_id) is None
+        ):
+            raise ValueError("client_order_id must match Binance's format")
+
+        # Frozen DTO만 반환하므로 caller는 client cache나 다음 submit의 rule을 바꿀 수 없다.
+        return self._preparation_filter_evidence_by_client_id.get(
+            client_order_id
+        )
+
+    def get_order_submission_attempt_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> OrderSubmissionAttemptEvidence | None:
+        """
+        함수 이름: get_order_submission_attempt_evidence()
+        기능: 실제 REST submission이 시작된 identity와 서버 정렬 UTC 시각을 credential 없이 조회한다.
+        인자: client_order_id -> 제출을 시작한 application Order identity
+        반환값: immutable submission evidence 또는 POST 시작 전이면 None
+        작성 날짜: 2026/08/31
+        """
+        if (
+            not isinstance(client_order_id, str)
+            or _CLIENT_ORDER_ID_PATTERN.fullmatch(client_order_id) is None
+        ):
+            raise ValueError("client_order_id must match Binance's format")
+
+        # Frozen DTO는 signature, request parameter나 credential을 포함할 schema가 없다.
+        return self._submission_attempt_evidence_by_client_id.get(
+            client_order_id
+        )
+
+    def _fetch_symbol_trading_rules_with_observed_at(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[SymbolTradingRules, datetime]:
+        """
+        함수 이름: _fetch_symbol_trading_rules_with_observed_at()
+        기능: fresh public exchangeInfo를 엄격 해석하고 응답 처리 완료 UTC 시각을 함께 반환한다.
+        인자: symbol -> 조회할 Binance Spot symbol
+        반환값: exact SymbolTradingRules와 fetch 완료 UTC datetime tuple
+        작성 날짜: 2026/08/31
+        """
+        normalized_symbol = self._normalize_symbol(symbol)
+
+        # 이 public read는 cache를 조회하지 않아 preflight마다 거래소의 현재 filter를 받는다.
+        response = self._request_json(
+            method="GET",
+            endpoint="/v3/exchangeInfo",
+            parameters={"symbol": normalized_symbol},
+            signed=False,
+        )
+        rules = parse_symbol_trading_rules(
+            response.payload,
+            normalized_symbol,
+        )
+        observed_at = self._provenance_time(require_server_alignment=False)
+
+        # 같은 submit의 fill asset mapping은 엄격 해석이 끝난 최신 rule만 재사용한다.
+        self._symbol_rules_by_symbol[normalized_symbol] = rules
+        return rules, observed_at
+
     def get_server_timestamp_milliseconds(self) -> int:
         """
         함수 이름: get_server_timestamp_milliseconds()
@@ -720,15 +894,12 @@ class BinanceSpotRESTClient:
                 )
             return order  # journal 이전의 중복 prepare도 최초 준비 결과를 그대로 사용한다.
 
-        # 매 제출 직전 최신 Testnet 상태·filter를 조회해 reset 또는 설정 변경을 반영한다.
-        response = self._request_json(
-            method="GET",
-            endpoint="/v3/exchangeInfo",
-            parameters={"symbol": order.symbol},
-            signed=False,
+        # Preflight 조회와 별개로 매 제출 직전 다시 조회한 rule만 수량 준비의 권위가 된다.
+        rules, rules_observed_at = (
+            self._fetch_symbol_trading_rules_with_observed_at(
+                symbol=order.symbol
+            )
         )
-        rules = parse_symbol_trading_rules(response.payload, order.symbol)
-        self._symbol_rules_by_symbol[order.symbol] = rules  # 같은 submit의 fill 자산 mapping에 재사용한다.
 
         prepared_order = prepare_market_order(order, rules)
 
@@ -746,13 +917,25 @@ class BinanceSpotRESTClient:
                     prepared_order.submitted_quantity
                     * prepared_order.market_price_at_decision
                 )
-            if prepared_notional > self._maximum_order_notional:
+            if (
+                prepared_notional > self._maximum_order_notional
+                or prepared_notional > Decimal("100")
+            ):
                 raise SymbolFilterError("FILTER_CONFIGURED_MAXIMUM_NOTIONAL")
 
         # 모든 filter와 적용 대상 local cap을 통과한 뒤에만 journal/submit 불변 표식을 만든다.
         self._prepared_orders_by_client_id[prepared_order.client_order_id] = (
             self._order_preparation_fingerprint(prepared_order)
         )
+        self._preparation_filter_evidence_by_client_id[
+            prepared_order.client_order_id
+        ] = OrderPreparationFilterEvidence(
+            intent_id=prepared_order.intent_id,
+            client_order_id=prepared_order.client_order_id,
+            side=prepared_order.side,
+            observed_at=rules_observed_at,
+            rules=rules,
+        )  # Journal과 POST 전 성공한 exact prepare만 read-only provenance로 공개한다.
 
         return prepared_order  # 원 aggregate identity와 requested_quantity를 그대로 유지한다.
 
@@ -780,6 +963,18 @@ class BinanceSpotRESTClient:
             "newOrderRespType": "FULL",
         }
         try:
+            # 첫 signed POST 전에 server offset을 확정해 attempt와 Binance fill이 같은 시간축을 사용한다.
+            attempted_at = self._provenance_time(
+                require_server_alignment=True
+            )
+            self._submission_attempt_evidence_by_client_id[
+                order.client_order_id
+            ] = OrderSubmissionAttemptEvidence(
+                intent_id=order.intent_id,
+                client_order_id=order.client_order_id,
+                side=order.side,
+                attempted_at=attempted_at,
+            )
             response = self._request_json(
                 method="POST",
                 endpoint="/v3/order",
@@ -1015,9 +1210,11 @@ class BinanceSpotRESTClient:
             requested_quantity=order.requested_quantity,
             submitted_quantity=order.submitted_quantity,
             market_price_at_decision=order.market_price_at_decision,
+            risk_policy_version=order.risk_policy_version,
             exit_reason=(
                 None if order.exit_reason is None else order.exit_reason.value
             ),
+            exit_pct_b_at_intent=order.exit_pct_b_at_intent,
         )  # Enum·Decimal은 변환 손실 없이 journal과 HTTP 의미를 같은 snapshot으로 고정한다.
 
     def _consume_prepared_order(self, order: Order) -> None:
@@ -1065,8 +1262,15 @@ class BinanceSpotRESTClient:
         if signed and self._server_time_offset_milliseconds is None:
             self._synchronize_server_time()
 
-        # -1021은 Matching Engine 도달 전 rejection이므로 같은 요청을 새 timestamp로 한 번만 보낸다.
-        maximum_attempts = 2 if signed else 1
+        # 일반 signed 조회는 기존 재동기화를 유지하되 Phase 13 주문 POST는 단일 wire attempt로 고정한다.
+        order_timestamp_retry_blocked = (
+            method == "POST"
+            and endpoint == "/v3/order"
+            and not self._allow_order_timestamp_retry
+        )
+        maximum_attempts = (
+            2 if signed and not order_timestamp_retry_blocked else 1
+        )
         for attempt_index in range(maximum_attempts):
             response = self._perform_request(
                 method=method,
@@ -1078,11 +1282,16 @@ class BinanceSpotRESTClient:
             if (
                 signed
                 and api_code == _INVALID_TIMESTAMP_API_CODE
-                and attempt_index == 0
+                and attempt_index + 1 < maximum_attempts
             ):
                 self._synchronize_server_time()
                 continue
-            if response.transport_response.status_code >= 400 or api_code is not None:
+
+            # Redirect를 포함한 모든 비-2xx는 payload 형태와 무관하게 API 실패로 종료한다.
+            if (
+                not 200 <= response.transport_response.status_code <= 299
+                or api_code is not None
+            ):
                 raise BinanceAPIError(
                     status_code=response.transport_response.status_code,
                     api_code=api_code,
@@ -1182,7 +1391,9 @@ class BinanceSpotRESTClient:
             signed=False,
         )
         local_after_milliseconds = self._local_time_milliseconds()
-        if response.transport_response.status_code >= 400:
+
+        # Time sync도 2xx 원 응답만 신뢰해 redirect body의 시각을 적용하지 않는다.
+        if not 200 <= response.transport_response.status_code <= 299:
             raise BinanceAPIError(
                 status_code=response.transport_response.status_code,
                 api_code=_read_api_code(response.payload),
@@ -1227,6 +1438,34 @@ class BinanceSpotRESTClient:
             raise ValueError("result_clock must return timezone-aware datetime")
 
         return result_time.astimezone(timezone.utc)  # domain에는 UTC만 전달한다.
+
+    def _provenance_time(
+        self,
+        *,
+        require_server_alignment: bool,
+    ) -> datetime:
+        """
+        함수 이름: _provenance_time()
+        기능: filter/submission provenance에 사용할 UTC 시각을 가능한 경우 Binance server 축에 맞춘다.
+        인자: require_server_alignment -> signed POST 전 server offset을 반드시 동기화할지 여부
+        반환값: timezone-aware UTC datetime
+        작성 날짜: 2026/08/31
+        """
+        if type(require_server_alignment) is not bool:
+            raise TypeError("require_server_alignment must be a bool")
+        if require_server_alignment and self._server_time_offset_milliseconds is None:
+            self._synchronize_server_time()
+        if self._server_time_offset_milliseconds is None:
+            local_timestamp_milliseconds = self._local_time_milliseconds()
+            return _UNIX_EPOCH + timedelta(
+                milliseconds=local_timestamp_milliseconds
+            )  # Public-only 호출은 추가 `/time` I/O나 OrderResult fallback clock 없이 primary UTC를 쓴다.
+
+        # Signed request의 timestamp와 같은 local clock+offset 정수를 UTC datetime으로 변환한다.
+        server_timestamp_milliseconds = self.get_server_timestamp_milliseconds()
+        return _UNIX_EPOCH + timedelta(
+            milliseconds=server_timestamp_milliseconds
+        )
 
     def _map_order_payload(
         self,
@@ -1537,7 +1776,7 @@ class BinanceSpotRESTClient:
         인자: order -> 결과가 속한 Order
             failure_reason -> 안전한 내부 분류 문자열
             failure_kind -> 문자열과 분리한 선택 normalized 실패 사실
-            retry_after -> 0~30초 대기 또는 None
+            retry_after -> 축소하지 않은 rate-limit 대기 또는 None
         반환값: UNKNOWN OrderResult
         작성 날짜: 2026/08/22
         """

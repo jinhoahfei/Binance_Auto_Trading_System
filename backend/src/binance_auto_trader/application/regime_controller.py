@@ -15,6 +15,14 @@ from binance_auto_trader.domain.market import (
     Kline,
     MarketSnapshot,
     SwingStructure,
+    calculate_ema9_series,
+    calculate_normalized_ols_slope,
+)
+from binance_auto_trader.domain.market.ema_slope import (
+    DECIMAL_PRECISION,
+    EMA_ALPHA,
+    EMA_COMPLEMENT,
+    SLOPE_SAMPLE_SIZE,
 )
 from binance_auto_trader.domain.regime import (
     ApplyRecommendedRegime,
@@ -30,15 +38,9 @@ from binance_auto_trader.domain.regime import (
 )
 
 
-EMA_PERIOD = 9
-EMA_ALPHA = Decimal("0.2")
-EMA_COMPLEMENT = Decimal("0.8")
 MINIMUM_CLOSED_KLINES = 14
-SLOPE_SAMPLE_SIZE = 6
-SLOPE_QUANTUM = Decimal("0.00000001")
 SWING_SIDE_SIZE = 2
 SWING_CHANGE_THRESHOLD = Decimal("0.30")
-DECIMAL_PRECISION = 34
 
 _SUCCESS_COMMUNICATION_STEPS = (
     "1.4:MarketDataController->RegimeController.calculate_4h_indicators",
@@ -340,21 +342,9 @@ def _calculate_ema9_series(closed_klines: tuple[Kline, ...]) -> tuple[Decimal, .
             "at least fourteen closed four-hour Klines are required",
         )
 
-    seed_total = sum(
-        (kline.close for kline in closed_klines[:EMA_PERIOD]),
-        Decimal("0"),
-    )
-    current_ema9 = seed_total / Decimal(EMA_PERIOD)
-    ema9_series = [current_ema9]
-
-    for kline in closed_klines[EMA_PERIOD:]:
-        current_ema9 = (
-            kline.close * EMA_ALPHA
-            + current_ema9 * EMA_COMPLEMENT
-        )
-        ema9_series.append(current_ema9)
-
-    return tuple(ema9_series)
+    # 4H 전용 최소 개수 검증 뒤 interval-independent EMA9 Decimal helper를 공유한다.
+    close_prices = tuple(kline.close for kline in closed_klines)
+    return calculate_ema9_series(close_prices)
 
 
 def _calculate_normalized_slope(
@@ -376,25 +366,10 @@ def _calculate_normalized_slope(
             "six EMA9 values are required for slope calculation",
         )
 
-    x_values = tuple(Decimal(index) for index in range(SLOPE_SAMPLE_SIZE))
-    x_mean = Decimal("2.5")
-    y_mean = sum(recent_ema9, Decimal("0")) / Decimal(SLOPE_SAMPLE_SIZE)
-    numerator = sum(
-        (
-            (x_value - x_mean) * (y_value - y_mean)
-            for x_value, y_value in zip(x_values, recent_ema9)
-        ),
-        Decimal("0"),
-    )
-    denominator = sum(
-        ((x_value - x_mean) ** 2 for x_value in x_values),
-        Decimal("0"),
-    )
-    raw_slope = numerator / denominator
-    normalized_slope = raw_slope / current_price * Decimal("100")
-    return normalized_slope.quantize(
-        SLOPE_QUANTUM,
-        rounding=ROUND_HALF_EVEN,
+    # 4H는 기존 계약대로 진행봉 현재가를 분모로 주되 OLS 핵심은 30분 builder와 공유한다.
+    return calculate_normalized_ols_slope(
+        recent_ema9,
+        current_price,
     )
 
 
@@ -1030,6 +1005,77 @@ class RegimeController:
                             error,
                         )
                     return None
+
+    def reconcile_regime(
+        self,
+        market_snapshot: MarketSnapshot,
+    ) -> RegimeResult | None:
+        """
+        함수 이름: reconcile_regime()
+        기능: full-resync snapshot을 검증하고 새 확정봉은 평가하며 같은 확정봉은 STM 반복 없이 재결합한다.
+        인자: market_snapshot -> 새 WebSocket 세대와 REST 병합을 끝낸 authoritative snapshot
+        반환값: 새 market version에 결합된 RegimeResult 또는 fail closed이면 None
+        작성 날짜: 2026/08/29
+        """
+        if not isinstance(market_snapshot, MarketSnapshot):
+            raise TypeError("market_snapshot must be a MarketSnapshot")
+
+        with self._evaluation_lock:
+            previous_result = self._last_regime_result
+            if previous_result is None:
+                return self.evaluate_regime(
+                    RegimeEvaluationTrigger.INITIAL,
+                    market_snapshot,
+                )
+
+            # 새 version의 4H 입력과 지표를 먼저 완전히 검증해 단순 version 복사로 gate를 열지 않는다.
+            trace_count_before = len(self._evaluation_traces)
+            indicators: IndicatorSnapshot | None = None
+            try:
+                indicators = self.calculate_4h_indicators(
+                    market_snapshot
+                )
+                if indicators.source_candle_id != previous_result.source_candle_id:
+                    self.recommend_regime(indicators)
+                    return self._last_regime_result
+
+                # 같은 확정봉은 새 trigger가 아니므로 기존 추천과 STM state를 검증한 뒤 provenance만 재결합한다.
+                if (
+                    self._recommended_regime is not previous_result.recommended_type
+                    or self._regime_stm.current_state is not previous_result.state
+                ):
+                    raise RegimeEvaluationError(
+                        RegimeEvaluationFailureCode.ACTION_CONTRACT_MISMATCH,
+                        "reconciled REGIME state does not match the last recommendation",
+                    )
+                rebound_result = RegimeResult(
+                    evaluation_id=(
+                        "regime-reconciliation:"
+                        f"{indicators.source_market_version}:"
+                        f"{indicators.source_candle_id}"
+                    ),
+                    recommended_type=previous_result.recommended_type,
+                    previous_recommended_type=previous_result.recommended_type,
+                    changed=False,
+                    transition_id=previous_result.transition_id,
+                    state=previous_result.state,
+                    source_market_version=indicators.source_market_version,
+                    source_candle_id=indicators.source_candle_id,
+                    calculated_at=indicators.calculated_at,
+                )
+                self._last_regime_result = rebound_result
+                return rebound_result
+            except RegimeEvaluationError as error:
+                # calculate/recommend가 아직 trace를 만들지 않은 failure만 한 번 기록한다.
+                if len(self._evaluation_traces) == trace_count_before:
+                    self._record_failure(
+                        RegimeEvaluationTrigger.FOUR_HOUR_CANDLE_CLOSE,
+                        indicators,
+                        error.failure_code,
+                        market_snapshot,
+                        error,
+                    )
+                return None
 
     def _infer_evaluation_trigger(self) -> RegimeEvaluationTrigger:
         """

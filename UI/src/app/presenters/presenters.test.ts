@@ -80,6 +80,69 @@ function create_market_kline(
 }
 
 describe('application presenters', () => {
+    it('authoritative risk와 process ownership 상태를 계산 없이 TraderPanel 경계에 전달한다', () => {
+        const view_model = create_demo_view_model();
+        const last_risk_budget = {
+            policy_version: 4,
+            market_version: 7,
+            account_version: 3,
+            context_version: 9,
+            current_position_notional: '125.50',
+            reserved_buy_notional: '24.25',
+            candidate_order_notional: '50.25',
+            projected_position_notional: '200.00',
+            daily_realized_pnl: '-12.75',
+            unrealized_pnl: '-3.50',
+            daily_loss: '12.75',
+            manual_kill_active: false,
+        } as const;
+        const risk_view_model: AppViewModel = {
+            ...view_model,
+            trading: {
+                ...view_model.trading,
+                configured_risk_policy_version: 4,
+                max_order_notional: null,
+                max_position_notional: null,
+                max_daily_loss: null,
+                daily_loss_scope: 'REALIZED_ONLY',
+                manual_kill_behavior: 'BLOCK_NEW_ORDERS',
+                last_risk_decision_allowed: false,
+                last_risk_budget,
+                manual_kill_active: true,
+                manual_kill_cleanup_complete: false,
+                manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+                manual_kill_activation_policy_version: 3,
+                process_ownership_ambiguous: true,
+                risk_block_reason: 'MANUAL_KILL_SWITCH_ACTIVE',
+                risk_policy_availability: 'CONFIGURED',
+                session_risk_policy_version: 3,
+            },
+        };
+        const { controller } = create_recording_controller(risk_view_model);
+        const trader_props = present_dashboard_props(risk_view_model, controller).trader;
+
+        // Presenter는 backend 값을 재해석하거나 raw detail을 추가하지 않고 feature Boundary로 전달한다.
+        expect(trader_props).toMatchObject({
+            configured_risk_policy_version: 4,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: 'REALIZED_ONLY',
+            manual_kill_behavior: 'BLOCK_NEW_ORDERS',
+            last_risk_decision_allowed: false,
+            last_risk_budget,
+            manual_kill_active: true,
+            manual_kill_cleanup_complete: false,
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 3,
+            process_ownership_ambiguous: true,
+            risk_block_reason: 'MANUAL_KILL_SWITCH_ACTIVE',
+            risk_policy_availability: 'CONFIGURED',
+            session_risk_policy_version: 3,
+        });
+        expect(trader_props.last_risk_budget).toBe(last_risk_budget);
+    });
+
     it('account와 history summary actor snapshot을 route props에 투영한다', () => {
         const view_model = create_demo_view_model();
         const { controller } = create_recording_controller(view_model);

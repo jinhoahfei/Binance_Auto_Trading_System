@@ -1,0 +1,2652 @@
+{
+  "schema_version": 1,
+  "source_document": "Design/Architecture/Communication_Diagram_Message_Flow_Specification.md",
+  "entries": [
+    {
+      "case": "CASE_1",
+      "message_id": "1",
+      "caller": "UIStateController",
+      "receiver": "MarketDataController",
+      "operation": "InitializeMarketData(symbol : String = \"ETHUSDT\") : MarketSnapshot",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/market_data_controller.py",
+        "symbol": "initialize_market_data"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_market_initialization_flow.py",
+        "test": "test_initialization_follows_messages_and_loads_four_intervals"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_market_initialization_flow.py",
+        "test": "test_one_interval_rest_failure_does_not_publish_partial_ready"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.1",
+      "caller": "MarketDataController",
+      "receiver": "WebSocketGateway",
+      "operation": "startAllKlineBuffering(symbol : String, intervals : Set<Interval>) : Subscription",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/websocket_gateway.py",
+        "symbol": "start_all_kline_buffering"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/market/test_binance_gateways.py",
+        "test": "test_start_uses_normalized_symbol_and_requested_official_intervals"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/market/test_binance_gateways.py",
+        "test": "test_synchronous_disconnect_during_subscribe_fails_and_closes_handle"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.1.1",
+      "caller": "WebSocketGateway",
+      "receiver": "Binance WebSocket",
+      "operation": "subscribeAllKlineStreams(symbol : String, intervals : Set<Interval>) : Subscription",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_websocket_client.py",
+        "symbol": "subscribe_all_kline_streams"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_websocket_client.py",
+        "test": "test_public_kline_uses_testnet_combined_url_and_forwards_frame"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_websocket_client.py",
+        "test": "test_public_kline_disconnect_notifies_once_after_start"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.2",
+      "caller": "MarketDataController",
+      "receiver": "APIGateway",
+      "operation": "loadAllKlines(symbol : String, limit : int) : Map<Interval, List<Kline>>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/api_gateway.py",
+        "symbol": "load_all_klines"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/market/test_binance_gateways.py",
+        "test": "test_load_all_klines_calls_four_intervals_in_canonical_order"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/market/test_binance_gateways.py",
+        "test": "test_one_interval_failure_never_returns_a_partial_mapping"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.2.1",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "get1mKlines(symbol : String, limit : int) : List<Kline>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "get_klines"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_supports_all_communication_intervals"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_rejects_non_array_payload"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.2.2",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "get30mKlines(symbol : String, limit : int) : List<Kline>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "get_klines"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_supports_all_communication_intervals"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_rejects_non_array_payload"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.2.3",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "get4hKlines(symbol : String, limit : int) : List<Kline>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "get_klines"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_supports_all_communication_intervals"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_rejects_non_array_payload"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.2.4",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "get1dKlines(symbol : String, limit : int) : List<Kline>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "get_klines"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_supports_all_communication_intervals"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_klines_directly_rejects_non_array_payload"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.3",
+      "caller": "MarketDataController",
+      "receiver": "MarketSnapshot",
+      "operation": "update(klines : Map<Interval, List<Kline>>) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/market/market_snapshot.py",
+        "symbol": "def update"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/market/test_market_snapshot.py",
+        "test": "test_successful_update_commits_complete_read_only_snapshot"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/market/test_market_snapshot.py",
+        "test": "test_failed_update_preserves_previous_state_atomically"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.4",
+      "caller": "MarketDataController",
+      "receiver": "RegimeController",
+      "operation": "calculate4HIndicators(snapshot : MarketSnapshot) : IndicatorSnapshot",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/regime_controller.py",
+        "symbol": "calculate_4h_indicators"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_regime_evaluation_flow.py",
+        "test": "test_regime_evaluation_flow_initializes_golden_type_2"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_regime_evaluation_flow.py",
+        "test": "test_regime_evaluation_flow_re_evaluates_and_fails_closed"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.4.1",
+      "caller": "RegimeController",
+      "receiver": "IndicatorSnapshot",
+      "operation": "update(ema9Series : List<Decimal>, ema9Slope : Decimal, swingStructure : SwingStructure, liveEma9 : Decimal) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/market/indicator_snapshot.py",
+        "symbol": "def update"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/market/test_indicator_snapshot.py",
+        "test": "test_calculates_exact_adr_004_golden_vector"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/market/test_indicator_snapshot.py",
+        "test": "test_failed_update_is_atomic_and_rejects_float_values"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.5",
+      "caller": "MarketDataController",
+      "receiver": "RegimeController",
+      "operation": "recommendRegime(indicators : IndicatorSnapshot) : RegimeType",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/regime_controller.py",
+        "symbol": "recommend_regime"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_regime_evaluation_flow.py",
+        "test": "test_regime_evaluation_flow_initializes_golden_type_2"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/regime/test_regime_controller.py",
+        "test": "test_insufficient_input_records_failure_without_calling_stm"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1.5.1",
+      "caller": "RegimeController",
+      "receiver": "RegimeSTM",
+      "operation": "handle(event : RegimeEvent, context : RegimeEvaluationContext?) : RegimeSTMResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/regime/stm.py",
+        "symbol": "def handle"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/regime/test_stm.py",
+        "test": "test_initial_event_selects_ea_001"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/regime/test_stm.py",
+        "test": "test_evaluation_id_mismatch_fails_without_state_change"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1L",
+      "caller": "MarketDataController",
+      "receiver": "WebSocketGateway",
+      "operation": "promoteKlineBufferToLive(observer : Callable<Kline>, subscription : Subscription? = null) : Subscription",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/websocket_gateway.py",
+        "symbol": "def promote_kline_buffer_to_live"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/market/test_kline_live_promotion.py",
+        "test": "test_handoff_race_delivers_buffer_before_live_on_same_subscription"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/market/test_kline_live_promotion.py",
+        "test": "test_duplicate_and_stale_generation_events_are_not_redelivered"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1L.1",
+      "caller": "WebSocketGateway",
+      "receiver": "MarketDataController",
+      "operation": "observeKline(kline : Kline) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/market_data_controller.py",
+        "symbol": "def observe_kline"
+      },
+    "positive_test": {
+      "path": "backend/tests/integration/test_market_all_interval_boundary_flow.py",
+      "test": "test_all_valid_arrival_permutations_commit_one_atomic_version"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_market_live_stream_flow.py",
+        "test": "test_gap_event_preserves_snapshot_and_emits_no_market_evaluation"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1L.2",
+      "caller": "MarketDataController",
+      "receiver": "MarketSnapshot",
+      "operation": "mergeKline(kline : Kline) : MarketSnapshot",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/market/market_snapshot.py",
+        "symbol": "def update"
+      },
+    "positive_test": {
+      "path": "backend/tests/integration/test_market_all_interval_boundary_flow.py",
+      "test": "test_all_valid_arrival_permutations_commit_one_atomic_version"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_market_live_stream_flow.py",
+        "test": "test_gap_event_preserves_snapshot_and_emits_no_market_evaluation"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "1L.3",
+      "caller": "MarketDataController",
+      "receiver": "TradingController",
+      "operation": "observeMarketEvaluation(evaluation : MarketEvaluationSnapshot, marketVersion : int, sourceEventId : String) : TradingEvent?",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "def observe_market_evaluation"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_kline_opens_case_c_and_persists_immediate_buy"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_market_live_stream_flow.py",
+        "test": "test_market_observer_failure_closes_gate_before_publication"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "2",
+      "caller": "UIStateController",
+      "receiver": "TradingController",
+      "operation": "loadAccount(asset : String = \"ETH\") : Account",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "load_account"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_account_stream_flow.py",
+        "test": "test_account_startup_and_stream_trace_applies_rest_before_delta"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_account_stream_flow.py",
+        "test": "test_load_account_does_not_start_stream_when_rest_fails"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "2.1",
+      "caller": "TradingController",
+      "receiver": "APIGateway",
+      "operation": "fetchAccountSnapshot(asset : String = \"ETH\") : AccountSnapshot",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/api_gateway.py",
+        "symbol": "fetch_account_snapshot"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/market/test_account_binance_gateways.py",
+        "test": "test_fetch_account_snapshot_calls_get_account_and_preserves_all_assets"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/market/test_account_binance_gateways.py",
+        "test": "test_fetch_account_snapshot_propagates_client_failure"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "2.1.1",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "getAccount() : BinanceAccountResponse",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "get_account"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_account_directly_signs_and_returns_object_payload"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_get_account_directly_rejects_non_object_payload"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "2.2",
+      "caller": "TradingController",
+      "receiver": "WebSocketGateway",
+      "operation": "startAccountInfoStream() : Subscription",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/websocket_gateway.py",
+        "symbol": "start_account_info_stream"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_account_stream_flow.py",
+        "test": "test_account_startup_and_stream_trace_applies_rest_before_delta"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_account_stream_flow.py",
+        "test": "test_load_account_propagates_stream_start_failure_after_rest_commit"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "2.2.1",
+      "caller": "WebSocketGateway",
+      "receiver": "Binance WebSocket",
+      "operation": "subscribeAccountInfo() : Subscription",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_websocket_client.py",
+        "symbol": "subscribe_account_info"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_websocket_client.py",
+        "test": "test_account_stream_sends_current_hmac_signature_subscription"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_websocket_client.py",
+        "test": "test_account_subscription_rejection_fails_startup_without_secret"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "3",
+      "caller": "UIStateController",
+      "receiver": "TradeHistoryController",
+      "operation": "loadTradeHistory() : TradeHistory",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trade_history_controller.py",
+        "symbol": "load_trade_history"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trade_history_flow.py",
+        "test": "test_history_startup_trace_reproduces_golden_snapshot"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trade_history_flow.py",
+        "test": "test_controller_keeps_previous_state_when_local_restore_fails"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "3.1",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistoryRepository",
+      "operation": "getTradeHistory() : List<Trade>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py",
+        "symbol": "get_trade_history"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trade_history_flow.py",
+        "test": "test_history_startup_trace_reproduces_golden_snapshot"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trade_history_flow.py",
+        "test": "test_controller_keeps_previous_state_when_local_restore_fails"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "3.1.1",
+      "caller": "TradeHistoryRepository",
+      "receiver": "Local File System",
+      "operation": "read(path : Path) : String",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py",
+        "symbol": "_read_history_file"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_streams_multiple_records_and_rebuilds_order_index"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_decoding_and_permission_errors_are_not_hidden_as_empty"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "3.2",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistory",
+      "operation": "TradeHistory(trades : List<Trade>) : TradeHistory",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/trade_history.py",
+        "symbol": "class TradeHistory"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trade_history_flow.py",
+        "test": "test_history_startup_trace_reproduces_golden_snapshot"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history.py",
+        "test": "test_constructor_rejects_non_iterable_and_non_trade_values"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "3.3",
+      "caller": "TradeHistoryController",
+      "receiver": "Performance",
+      "operation": "Performance(trades : List<Trade>) : Performance",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/performance.py",
+        "symbol": "class Performance"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trade_history_flow.py",
+        "test": "test_history_startup_trace_reproduces_golden_snapshot"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_performance.py",
+        "test": "test_constructor_rejects_invalid_clock_and_non_trade_values"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "4",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "run(initialEvent : UIEvent = APP_STARTED) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/app/machines/uiShellMachine.ts",
+        "symbol": "create_ui_shell_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/app/bootstrap/createLiveUiApplication.process.test.mjs",
+        "test": "Python startup 1~3 뒤 UISTM 4와 AppShell 5가 실제 snapshot을 표시한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/bootstrap/createLiveUiApplication.test.tsx",
+        "test": "startup snapshot이 ready가 아니면 facade나 demo state를 만들지 않고 typed 실패한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "5",
+      "caller": "UIStateController",
+      "receiver": "AppShellUI",
+      "operation": "startInterface() : void",
+      "production_owner": {
+        "path": "UI/src/app/App.tsx",
+        "symbol": "export function App"
+      },
+      "positive_test": {
+        "path": "UI/src/app/bootstrap/createLiveUiApplication.process.test.mjs",
+        "test": "Python startup 1~3 뒤 UISTM 4와 AppShell 5가 실제 snapshot을 표시한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/bootstrap/createLiveUiApplication.test.tsx",
+        "test": "startup snapshot이 ready가 아니면 facade나 demo state를 만들지 않고 typed 실패한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "6",
+      "caller": "User",
+      "receiver": "AppShellUI",
+      "operation": "selectRegime(regimeType : RegimeType) : void",
+      "production_owner": {
+        "path": "UI/src/features/regime-selection/components/RegimePanel.tsx",
+        "symbol": "export function RegimePanel"
+      },
+      "positive_test": {
+        "path": "UI/src/features/regime-selection/components/RegimePanel.test.tsx",
+        "test": "CR-02: 적용 타입을 표시하고 선택 intent를 전달한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/regime-selection/components/RegimePanel.test.tsx",
+        "test": "test_regime_selection_disabled_does_not_emit_intent"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "6.1",
+      "caller": "AppShellUI",
+      "receiver": "UIStateController",
+      "operation": "selectRegime(regimeType : RegimeType) : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/app/App.test.tsx",
+        "test": "초기 REGIME 선택부터 자동매매 시작, route, CSV와 중지 흐름을 연결한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+        "test": "test_regime_selection_dispatch_failure_stays_unapplied"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "6.1.1",
+      "caller": "UIStateController",
+      "receiver": "RegimeController",
+      "operation": "setRegimeType(regimeType : RegimeType, commandId : String, expectedVersion : int) : TradingLogicSelectionResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/regime_controller.py",
+        "symbol": "set_regime_type"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/transport/test_trading_commands.py",
+        "test": "test_case1_select_split_start_duplicate_and_zero_position_stop"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/transport/test_trading_commands.py",
+        "test": "test_unselected_unsupported_invalid_regime_and_stale_fail_closed"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "6.1.1.1",
+      "caller": "RegimeController",
+      "receiver": "TradingController",
+      "operation": "fetchSelectedTradingLogic(regimeType : RegimeType) : TradingSTM",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "fetch_selected_trading_logic"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_account_stream_flow.py",
+        "test": "test_message_6_1_1_1_selects_exact_trading_logic_without_fallback"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_logic_registry.py",
+        "test": "test_unsupported_regimes_expose_no_registry_or_fallback"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "6.1.1.1.1",
+      "caller": "TradingController",
+      "receiver": "TradingSTM",
+      "operation": "getSTMInstance(regimeType : RegimeType) : TradingSTM",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/stm.py",
+        "symbol": "get_stm_instance"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/trading/test_logic_registry.py",
+        "test": "test_type_zero_uses_exact_lower_bb_registry_and_safe_termination"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_logic_registry.py",
+        "test": "test_unsupported_regimes_expose_no_registry_or_fallback"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "7",
+      "caller": "User",
+      "receiver": "AppShellUI",
+      "operation": "startConfirmed() : void",
+      "production_owner": {
+        "path": "UI/src/features/trading-control/components/TradingConfirmationDialog.tsx",
+        "symbol": "export function TradingConfirmationDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/app/App.test.tsx",
+        "test": "초기 REGIME 선택부터 자동매매 시작, route, CSV와 중지 흐름을 연결한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/trading-control/components/TradingConfirmationDialog.test.tsx",
+        "test": "Radix modal은 첫 action에 focus하고 Escape로 확인 절차를 우회하지 않는다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "7.1",
+      "caller": "AppShellUI",
+      "receiver": "UIStateController",
+      "operation": "startTrading() : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/app/App.test.tsx",
+        "test": "초기 REGIME 선택부터 자동매매 시작, route, CSV와 중지 흐름을 연결한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "Phase 6: 시작 확인 뒤 backend resync가 gate를 닫으면 stale 확인 명령을 차단한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "7.1.1",
+      "caller": "UIStateController",
+      "receiver": "TradingController",
+      "operation": "startTrading(commandId : String, expectedVersion : int) : TradingSessionResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "start_trading"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_supported_selection_starts_exactly_once_and_rejects_active_swap"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_unselected_unsupported_offline_and_disabled_start_fail_closed"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "7.1.1.1",
+      "caller": "TradingController",
+      "receiver": "TradingContext",
+      "operation": "initialize(account : Account, selectedRegime : RegimeType, position : PositionSnapshot, scaleInRatio : Decimal, scaleOutRatio : Decimal) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/context.py",
+        "symbol": "def initialize"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/trading/test_context.py",
+        "test": "test_initialize_connects_inputs_and_resets_previous_runtime"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_start_failure_rolls_back_context_and_session_ownership"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "7.1.1.2",
+      "caller": "TradingController",
+      "receiver": "TradingSTM",
+      "operation": "run(context : TradingContextView) : TradingSTMResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/stm.py",
+        "symbol": "def run"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/trading/test_stm.py",
+        "test": "test_g_01_run_enters_lower_touch_watch"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_supported_selection_starts_exactly_once_and_rejects_active_swap"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8",
+      "caller": "User",
+      "receiver": "AppShellUI",
+      "operation": "stopConfirmed() : void",
+      "production_owner": {
+        "path": "UI/src/features/trading-control/components/TradingConfirmationDialog.tsx",
+        "symbol": "export function TradingConfirmationDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/app/App.test.tsx",
+        "test": "초기 REGIME 선택부터 자동매매 시작, route, CSV와 중지 흐름을 연결한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/trading-control/components/TradingConfirmationDialog.test.tsx",
+        "test": "test_stop_confirmation_cancel_and_escape_do_not_confirm"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1",
+      "caller": "AppShellUI",
+      "receiver": "UIStateController",
+      "operation": "stopTrading() : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/app/App.test.tsx",
+        "test": "초기 REGIME 선택부터 자동매매 시작, route, CSV와 중지 흐름을 연결한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "Phase 7 lifecycle event는 stopping을 pending으로 유지하고 terminated에서만 완료한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1",
+      "caller": "UIStateController",
+      "receiver": "TradingController",
+      "operation": "stopTrading(commandId : String, expectedVersion : int) : TradingSessionResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "stop_trading"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_zero_position_stop_terminates_without_sell_and_cleans_subscription"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_subscription_close_failure_keeps_terminal_state_consistent"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1.1",
+      "caller": "TradingController",
+      "receiver": "TradingSTM",
+      "operation": "handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/stm.py",
+        "symbol": "def handle"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/trading/test_stm.py",
+        "test": "test_g_05_zero_quantity_ignores_stale_position_owner"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_stm.py",
+        "test": "test_g_06p_pending_stop_wins_over_position_stop"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1.2a",
+      "caller": "TradingController",
+      "receiver": "TradingController",
+      "operation": "no sell operation",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "def stop_trading"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_zero_position_stop_terminates_without_sell_and_cleans_subscription"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_open_position_stop_generates_one_force_sell_and_blocks_events"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1.2p",
+      "caller": "TradingController",
+      "receiver": "APIGateway",
+      "operation": "queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/api_gateway.py",
+        "symbol": "query_order_result"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_order_reconciliation_flow.py",
+        "test": "test_pending_stop_queries_cancels_and_queries_same_order_again"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_order_reconciliation_flow.py",
+        "test": "test_pending_stop_does_not_trust_terminal_cancel_when_query_is_active"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1.2p.1",
+      "caller": "TradingController",
+      "receiver": "APIGateway",
+      "operation": "cancelOrder(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/api_gateway.py",
+        "symbol": "cancel_order"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_order_reconciliation_flow.py",
+        "test": "test_pending_stop_queries_cancels_and_queries_same_order_again"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_order_api_gateway.py",
+        "test": "test_all_operations_reject_a_different_client_order_id"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1.2b",
+      "caller": "TradingController",
+      "receiver": "APIGateway",
+      "operation": "sellAllPosition(symbol : String, quantity : Decimal) : OrderResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/api_gateway.py",
+        "symbol": "sell_all_position"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_open_position_stop_generates_one_force_sell_and_blocks_events"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_zero_position_stop_terminates_without_sell_and_cleans_subscription"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1.2b.1",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "sellAllPosition(symbol : String, quantity : Decimal) : BinanceOrderResponse",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "submit_order"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_submit_percent_encodes_then_signs_and_never_exposes_secret"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_submit_requires_prepare_before_any_http_request"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8.1.1.3",
+      "caller": "TradingController",
+      "receiver": "TradingSTM",
+      "operation": "orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/stm.py",
+        "symbol": "order_finished"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/trading/test_stm.py",
+        "test": "test_g_07_position_uses_force_sell_then_g_06f_completion"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_stm.py",
+        "test": "test_g_07_force_sell_failure_uses_g_06r_retry_policy"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8R",
+      "caller": "User",
+      "receiver": "AppShellUI",
+      "operation": "recoveredPositionLiquidationConfirmed() : void",
+      "production_owner": {
+        "path": "UI/src/features/trading-control/components/TradingConfirmationDialog.tsx",
+        "symbol": "export function TradingConfirmationDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/trading-control/components/TradingConfirmationDialog.test.tsx",
+        "test": "Phase 9: 복구 Position을 자동매매 재개와 구분한 청산 문구를 표시한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/trading-control/components/TradingConfirmationDialog.test.tsx",
+        "test": "test_recovery_liquidation_confirm_and_cancel_are_distinct"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8R.1",
+      "caller": "AppShellUI",
+      "receiver": "UIStateController",
+      "operation": "liquidateRecoveredPosition() : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "Phase 9: 복구 Position은 별도 확인 modal과 liquidation command로 조정한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "Phase 9: STOPPING 복구 청산은 실행 상태를 되살리지 않고 start를 계속 차단한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8R.1.1",
+      "caller": "UIStateController",
+      "receiver": "TradingController",
+      "operation": "liquidateRecoveredPosition(commandId : String, expectedVersion : int) : TradingSessionResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "liquidate_recovered_position"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_testnet_restart_reconciliation_flow.py",
+        "test": "test_recovered_position_is_liquidated_without_strategy_resume_or_duplicate_submit"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_testnet_restart_reconciliation_flow.py",
+        "test": "test_recovered_position_liquidation_guards_submit_zero_times"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8R.1.1.1",
+      "caller": "TradingController",
+      "receiver": "TradingContext",
+      "operation": "initialize(account : Account, recoveredRegime : RegimeType, position : PositionSnapshot, scaleInRatio : Decimal, scaleOutRatio : Decimal); updatePosition(position : PositionSnapshot, owner : PositionOwner) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/context.py",
+        "symbol": "def initialize"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_testnet_restart_reconciliation_flow.py",
+        "test": "test_recovered_position_is_liquidated_without_strategy_resume_or_duplicate_submit"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_context.py",
+        "test": "test_recovery_initialize_rejects_invalid_position_without_mutation"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_1",
+      "message_id": "8R.1.1.2",
+      "caller": "TradingController",
+      "receiver": "TradingSTM",
+      "operation": "handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/stm.py",
+        "symbol": "def handle"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_testnet_restart_reconciliation_flow.py",
+        "test": "test_recovered_position_is_liquidated_without_strategy_resume_or_duplicate_submit"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_stm.py",
+        "test": "test_recovery_stop_after_stopping_is_no_op_without_duplicate_force_sell"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "1",
+      "caller": "TradingController",
+      "receiver": "TradingSTM",
+      "operation": "handle(event : TradingEvent, context : TradingContextView) : TradingSTMResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/stm.py",
+        "symbol": "def handle"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_kline_opens_case_c_and_persists_immediate_buy"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_stm.py",
+        "test": "test_g_07_does_not_trigger_below_upper_band"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "2",
+      "caller": "TradingController",
+      "receiver": "TradingContext",
+      "operation": "applyTradingSTMResult(result : TradingSTMResult) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/context.py",
+        "symbol": "apply_trading_stm_result"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_kline_opens_case_c_and_persists_immediate_buy"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_context.py",
+        "test": "test_stale_result_is_rejected_without_partial_mutation"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "3",
+      "caller": "TradingController",
+      "receiver": "TradingContext",
+      "operation": "getSplitRatio() : Decimal",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/context.py",
+        "symbol": "get_split_ratio"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_kline_opens_case_c_and_persists_immediate_buy"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_context.py",
+        "test": "test_pending_side_selects_scale_in_and_scale_out_ratios"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "4",
+      "caller": "TradingController",
+      "receiver": "claimed MarketEvaluationSnapshot",
+      "operation": "getRealtimePrice() : Decimal",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "def _submit_order_action"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_kline_opens_case_c_and_persists_immediate_buy"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_trading_session_flow.py",
+        "test": "test_market_observation_rejects_non_positive_price_without_fallback"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "5",
+      "caller": "TradingController",
+      "receiver": "Order",
+      "operation": "Order(symbol : String, side : OrderSide, strategy : StrategyType, requestedQuantity : Decimal, marketPriceAtDecision : Decimal) : Order",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/order.py",
+        "symbol": "class Order"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_kline_opens_case_c_and_persists_immediate_buy"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_order.py",
+        "test": "test_rejects_float_non_finite_non_utc_and_invalid_quantity_intent"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "5.1",
+      "caller": "TradingController",
+      "receiver": "TradingController",
+      "operation": "evaluateBuyRisk(order : Order) : RiskDecision",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trading_controller.py",
+        "symbol": "def _evaluate_buy_order_risk"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_kline_opens_case_c_and_persists_immediate_buy"
+      },
+      "negative_test": {
+        "path": "backend/tests/integration/test_buy_sell_flow.py",
+        "test": "test_unavailable_risk_policy_blocks_before_journal_and_rest"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "6",
+      "caller": "TradingController",
+      "receiver": "APIGateway",
+      "operation": "submitOrder(order : Order) : OrderResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/api_gateway.py",
+        "symbol": "def submit_order"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_order_api_gateway.py",
+        "test": "test_all_operations_reject_raw_dict_results"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "6.1",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "placeOrder(symbol : String, side : OrderSide, quantity : Decimal) : BinanceOrderResponse",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "def submit_order"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_submit_requires_prepare_before_any_http_request"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "7",
+      "caller": "TradingController",
+      "receiver": "Order",
+      "operation": "applyOrderResult(result : OrderResult) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/order.py",
+        "symbol": "apply_order_result"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_order.py",
+        "test": "test_mixed_fee_assets_and_order_identity_conflicts_fail_before_commit"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "8",
+      "caller": "TradingController",
+      "receiver": "APIGateway",
+      "operation": "queryOrderResult(symbol : String, orderId : Long? = null, clientOrderId : String? = null) : OrderResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/api_gateway.py",
+        "symbol": "query_order_result"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_order_api_gateway.py",
+        "test": "test_all_operations_reject_a_different_client_order_id"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "8.1",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "getOrderStatus(symbol : String, orderId : Long) : BinanceOrderStatusResponse",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "query_order_result"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_query_no_such_order_preserves_typed_not_visible_fact"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "8.2",
+      "caller": "APIGateway",
+      "receiver": "Binance REST API",
+      "operation": "getAccountTrades(symbol : String, orderId : Long) : List<Fill>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py",
+        "symbol": "_load_order_fills"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/binance/test_spot_rest_client.py",
+        "test": "test_query_rejects_fill_from_different_order_without_partial_result"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "9",
+      "caller": "TradingController",
+      "receiver": "Order",
+      "operation": "reapplyOrderResult(result : OrderResult) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/order.py",
+        "symbol": "reapply_order_result"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_order.py",
+        "test": "test_mixed_fee_assets_and_order_identity_conflicts_fail_before_commit"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "10",
+      "caller": "TradingController",
+      "receiver": "Order",
+      "operation": "buildExecutionSummary() : ExecutionSummary",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/order.py",
+        "symbol": "build_execution_summary"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_spot_rest_case2_flow.py",
+        "test": "test_public_case_c_partials_use_real_spot_rest_boundary_once"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_order.py",
+        "test": "test_terminal_partial_builds_summary_but_terminal_zero_fill_does_not"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "11",
+      "caller": "TradingController",
+      "receiver": "Position",
+      "operation": "getCostBasis(executedQuantity : Decimal) : Decimal",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/position.py",
+        "symbol": "get_cost_basis"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_position.py",
+        "test": "test_invalid_cost_basis_requests_do_not_mutate_position"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "12",
+      "caller": "TradingController",
+      "receiver": "Position",
+      "operation": "applyExecution(summary : ExecutionSummary) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/position.py",
+        "symbol": "apply_execution"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_position.py",
+        "test": "test_zero_bad_symbol_and_bad_side_summaries_are_atomic_no_ops"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "13",
+      "caller": "TradingController",
+      "receiver": "TradeHistoryController",
+      "operation": "recordOrderExecution(order : Order, summary : ExecutionSummary, costBasis : Decimal?) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trade_history_controller.py",
+        "symbol": "record_order_execution"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_storage_failure_keeps_published_state_clean_until_same_order_retry"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "13.1",
+      "caller": "TradeHistoryController",
+      "receiver": "Performance",
+      "operation": "calculateRealizedResult(summary : ExecutionSummary, costBasis : Decimal) : RealizedResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/performance.py",
+        "symbol": "calculate_realized_result"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_performance.py",
+        "test": "test_calculate_realized_result_rejects_zero_cost_as_typed_failure"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "13.2",
+      "caller": "TradeHistoryController",
+      "receiver": "Trade",
+      "operation": "Trade(order : Order, summary : ExecutionSummary, realizedResult : RealizedResult?) : Trade",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/trade.py",
+        "symbol": "class Trade"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade.py",
+        "test": "test_factory_rejects_mismatched_execution_identity_without_trade"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "13.3",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistory",
+      "operation": "addTrade(trade : Trade) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/trade_history.py",
+        "symbol": "add_trade"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history.py",
+        "test": "test_same_order_with_different_content_raises_conflict"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "13.4",
+      "caller": "TradeHistoryController",
+      "receiver": "Performance",
+      "operation": "applyNewTrade(trade : Trade) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/performance.py",
+        "symbol": "apply_new_trade"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_performance.py",
+        "test": "test_apply_new_trade_rejects_same_order_with_different_content"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "13.5",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistoryRepository",
+      "operation": "saveThisTradeByOrderID(orderId : Long, trade : Trade) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py",
+        "symbol": "save_this_trade_by_order_id"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_fsync_failure_retry_reloads_same_order_without_duplicate_append"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "13.5.1",
+      "caller": "TradeHistoryRepository",
+      "receiver": "Local File System",
+      "operation": "write(path : Path, data : String) : void",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py",
+        "symbol": "save_this_trade_by_order_id"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_fsync_failure_retry_reloads_same_order_without_duplicate_append"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_2",
+      "message_id": "14",
+      "caller": "TradingController",
+      "receiver": "TradingSTM",
+      "operation": "orderFinished(event : TradingEvent, context : TradingContextView) : TradingSTMResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/stm.py",
+        "symbol": "order_finished"
+      },
+      "positive_test": {
+        "path": "backend/tests/integration/test_public_market_case2_flow.py",
+        "test": "test_public_case_c_tp_fallback_persists_sell_and_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_event_queue.py",
+        "test": "test_order_finished_rejects_non_outcome_without_state_mutation"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1",
+      "caller": "User",
+      "receiver": "RecentOrderUI",
+      "operation": "showAllTradingDetails() : void",
+      "production_owner": {
+        "path": "UI/src/features/recent-orders/components/TraderPanel.tsx",
+        "symbol": "ALL_ORDERS_REQUESTED"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "test_show_trade_details_message_trace"
+      },
+      "negative_test": {
+        "path": "UI/src/features/recent-orders/components/TraderPanel.test.tsx",
+        "test": "test_all_orders_without_handler_is_safe_no_op"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1",
+      "caller": "RecentOrderUI",
+      "receiver": "UIStateController",
+      "operation": "showAllTradingDetails() : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "test_show_trade_details_message_trace"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+        "test": "test_history_dispatch_initial_and_filter_failures_are_fail_closed"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1.1",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "handle(event : UIEvent = SHOW_ALL_TRADING_DETAILS) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/app/machines/uiShellMachine.ts",
+        "symbol": "create_ui_shell_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "test_show_trade_details_message_trace"
+      },
+      "negative_test": {
+        "path": "UI/src/app/machines/uiShellMachine.phase13Trace.test.ts",
+        "test": "test_duplicate_show_history_transition_is_idempotent"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1.2",
+      "caller": "UIStateController",
+      "receiver": "TradeHistoryController",
+      "operation": "getTradeDetails(period : HistoryPeriod = TODAY, side : TradeSide = ALL) : TradeDetailsResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trade_history_controller.py",
+        "symbol": "get_trade_details"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_get_trade_details_supports_all_twelve_filter_combinations"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_details_reject_noncanonical_filters_and_clock"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1.2.1",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistoryQuery",
+      "operation": "TradeHistoryQuery(startDate : LocalDate, endDate : LocalDate, side : TradeSide = ALL) : TradeHistoryQuery",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/query.py",
+        "symbol": "class TradeHistoryQuery"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_get_trade_details_supports_all_twelve_filter_combinations"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history.py",
+        "test": "test_query_rejects_datetime_string_side_and_reverse_range"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1.2.2",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistory",
+      "operation": "find(query : TradeHistoryQuery) : List<Trade>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/trade_history.py",
+        "symbol": "def find"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history.py",
+        "test": "test_find_uses_kst_midnight_and_inclusive_date_bounds"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_empty_default_query_preserves_account_and_zero_summary"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1.2.3",
+      "caller": "TradeHistoryController",
+      "receiver": "Account",
+      "operation": "getHoldings(asset : String = \"ETH\") : Decimal",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/trading/account.py",
+        "symbol": "get_holdings"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_details_reads_find_then_account_then_performance"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/trading/test_account.py",
+        "test": "test_starts_empty_not_ready_at_version_zero"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1.2.4",
+      "caller": "TradeHistoryController",
+      "receiver": "Performance",
+      "operation": "getPerformance() : Performance",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/performance.py",
+        "symbol": "get_performance"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_performance.py",
+        "test": "test_performance_is_frozen_and_returns_same_snapshot"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_performance_day_rollover.py",
+        "test": "test_get_performance_refreshes_daily_values_after_kst_midnight"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "1.1.3",
+      "caller": "UIStateController",
+      "receiver": "TradeHistoryUI",
+      "operation": "displayTradeDetails(details : TradeDetailsResult) : void",
+      "production_owner": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.tsx",
+        "symbol": "export function TradeHistoryPage"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "test_show_trade_details_message_trace"
+      },
+      "negative_test": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.test.tsx",
+        "test": "test_trade_history_page_replaces_rows_with_empty_and_failure_states"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "2",
+      "caller": "User",
+      "receiver": "TradeHistoryUI",
+      "operation": "selectFilter(period : HistoryPeriod, side : TradeSide) : void",
+      "production_owner": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.tsx",
+        "symbol": "export function TradeHistoryPage"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "test_trade_history_filter_message_trace"
+      },
+      "negative_test": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.test.tsx",
+        "test": "test_trade_history_disabled_filters_and_export_emit_nothing"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "2.1",
+      "caller": "TradeHistoryUI",
+      "receiver": "UIStateController",
+      "operation": "tradeHistoryFilterChanged(period : HistoryPeriod, side : TradeSide) : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "test_trade_history_filter_message_trace"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+        "test": "test_history_dispatch_initial_and_filter_failures_are_fail_closed"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "2.1.1",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "handle(event : UIEvent) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/features/trade-history/machines/tradeHistoryMachine.ts",
+        "symbol": "create_trade_history_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/trade-history/machines/tradeHistoryMachine.test.ts",
+        "test": "test_trade_history_filter_combination"
+      },
+      "negative_test": {
+        "path": "UI/src/features/trade-history/machines/tradeHistoryMachine.test.ts",
+        "test": "page-size 또는 query 실패 뒤 filter를 좁혀 새로운 결합 query로 복구한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "2.1.2",
+      "caller": "UIStateController",
+      "receiver": "TradeHistoryController",
+      "operation": "getTradeDetails(period : HistoryPeriod, side : TradeSide) : TradeDetailsResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trade_history_controller.py",
+        "symbol": "get_trade_details"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_get_trade_details_supports_all_twelve_filter_combinations"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_details_reject_noncanonical_filters_and_clock"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "2.1.2.1",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistoryQuery",
+      "operation": "TradeHistoryQuery(startDate : LocalDate, endDate : LocalDate, side : TradeSide) : TradeHistoryQuery",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/query.py",
+        "symbol": "class TradeHistoryQuery"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_get_trade_details_supports_all_twelve_filter_combinations"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history.py",
+        "test": "test_query_rejects_datetime_string_side_and_reverse_range"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "2.1.2.2",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistory",
+      "operation": "find(query : TradeHistoryQuery) : List<Trade>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/trade_history.py",
+        "symbol": "def find"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history.py",
+        "test": "test_find_filters_side_without_reordering"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_empty_default_query_preserves_account_and_zero_summary"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_3",
+      "message_id": "2.1.3",
+      "caller": "UIStateController",
+      "receiver": "TradeHistoryUI",
+      "operation": "displayFilteredTrades(trades : List<Trade>) : void",
+      "production_owner": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.tsx",
+        "symbol": "export function TradeHistoryPage"
+      },
+      "positive_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.test.ts",
+        "test": "test_trade_history_filter_message_trace"
+      },
+      "negative_test": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.test.tsx",
+        "test": "test_trade_history_page_replaces_rows_with_empty_and_failure_states"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "1",
+      "caller": "User",
+      "receiver": "TradeHistoryUI",
+      "operation": "clickCSVExport() : void",
+      "production_owner": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.tsx",
+        "symbol": "export function TradeHistoryPage"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다"
+      },
+      "negative_test": {
+        "path": "UI/src/routes/trade-history/TradeHistoryPage.test.tsx",
+        "test": "test_trade_history_disabled_filters_and_export_emit_nothing"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "1.1",
+      "caller": "TradeHistoryUI",
+      "receiver": "UIStateController",
+      "operation": "openCSVExport() : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+        "test": "test_csv_facade_rejects_conflict_closed_edits_and_invalid_export"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "1.1.1",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "handle(event : UIEvent = CSV_EXPORT_CLICKED) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "test_csv_export_clicked_while_editing_is_ignored"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "1.1.2",
+      "caller": "UIStateController",
+      "receiver": "CSVExportOptions",
+      "operation": "CSVExportOptions(period : CSVPeriod = TODAY, startDate : LocalDate = today, endDate : LocalDate = today, fileName : String = defaultFileName) : CSVExportOptions",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-05/VR-07: 저장 위치가 없으면 export 명령을 차단하고 필드를 표시한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "1.1.3",
+      "caller": "UIStateController",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "showCSVExportOptions(options : CSVExportOptions) : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+        "symbol": "export function CSVExportDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "저장 위치, 기간, 파일명과 내보내기 의도를 전달한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "모달이 제거되면 모달을 열었던 요소로 초점을 복원한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "2",
+      "caller": "User",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "selectSaveLocation() : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+        "symbol": "export function CSVExportDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR1-02~04: 폴더 picker가 열려도 기간과 파일명 region을 보존한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "test_exporting_dialog_disables_picker_edits_and_duplicate_confirm"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "2.1",
+      "caller": "csvPopup : PopupUI",
+      "receiver": "UIStateController",
+      "operation": "saveLocationSelectionRequested() : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR1-02~04: 폴더 picker가 열려도 기간과 파일명 region을 보존한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+        "test": "test_csv_picker_dispatch_failure_keeps_directory_unselected"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "2.1.1",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "handle(event : UIEvent = SAVE_LOCATION_SELECT_CLICKED) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR1-02~04: 폴더 picker가 열려도 기간과 파일명 region을 보존한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR1-03/CR-12: picker 취소는 기존 선택 경로를 유지하고 export를 시작하지 않는다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "2.1.2",
+      "caller": "UIStateController",
+      "receiver": "CSVFileGateway",
+      "operation": "chooseDirectory() : Path?",
+      "production_owner": {
+        "path": "UI/src/shared/api/BackendUiAdapter.ts",
+        "symbol": "pick_csv_directory"
+      },
+      "positive_test": {
+        "path": "UI/src/shared/api/BackendUiAdapter.test.ts",
+        "test": "native picker의 $label 결과를 손실 없이 반환한다"
+      },
+      "negative_test": {
+        "path": "UI/src/shared/api/BackendUiAdapter.test.ts",
+        "test": "native picker의 string/null 외 결과 %j를 fail closed한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "2.1.2.1",
+      "caller": "CSVFileGateway",
+      "receiver": "File System",
+      "operation": "openDirectoryPicker() : Path?",
+      "production_owner": {
+        "path": "UI/apps/desktop/src-tauri/src/dialog.rs",
+        "symbol": "choose_csv_export_directory"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR1-02~04: 폴더 picker가 열려도 기간과 파일명 region을 보존한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR1-03/CR-12: picker 취소는 기존 선택 경로를 유지하고 export를 시작하지 않는다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "2.1.3",
+      "caller": "UIStateController",
+      "receiver": "CSVExportOptions",
+      "operation": "setSaveLocation(path : Path) : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR1-02~04: 폴더 picker가 열려도 기간과 파일명 region을 보존한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "빈 문자열 경로는 폴더 선택 결과로 수락하지 않는다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "2.1.4",
+      "caller": "UIStateController",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "displaySaveLocation(path : Path) : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+        "symbol": "export function CSVExportDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "저장 위치, 기간, 파일명과 내보내기 의도를 전달한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "저장 위치와 날짜 오류를 각각 경고로 표시한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "3",
+      "caller": "User",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "changeCSVOptions(period : CSVPeriod, startDate : LocalDate?, endDate : LocalDate?, fileName : String) : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+        "symbol": "export function CSVExportDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR2-02/CR2-04/CR2-14: 기간 preset과 사용자 지정 달력 상태를 명시적으로 전이한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "test_exporting_dialog_disables_picker_edits_and_duplicate_confirm"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "3.1",
+      "caller": "csvPopup : PopupUI",
+      "receiver": "UIStateController",
+      "operation": "csvOptionChanged(period : CSVPeriod, startDate : LocalDate?, endDate : LocalDate?, fileName : String) : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR2-02/CR2-04/CR2-14: 기간 preset과 사용자 지정 달력 상태를 명시적으로 전이한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+        "test": "test_csv_facade_rejects_conflict_closed_edits_and_invalid_export"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "3.1.1",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "handle(event : UIEvent) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR2-02/CR2-04/CR2-14: 기간 preset과 사용자 지정 달력 상태를 명시적으로 전이한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR2-14/CR2-15: 열린 달력에서 반대 날짜 필드를 누르면 대상 달력으로 교체한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "3.1.2",
+      "caller": "UIStateController",
+      "receiver": "CSVExportOptions",
+      "operation": "apply(period : CSVPeriod, startDate : LocalDate?, endDate : LocalDate?, fileName : String) : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "CR2-16/CR2-18: 날짜 선택은 달력을 유지하고 외부 클릭에서만 닫는다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "3.1.3",
+      "caller": "UIStateController",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "refresh(options : CSVExportOptions) : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+        "symbol": "export function CSVExportDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "저장 위치, 기간, 파일명과 내보내기 의도를 전달한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "저장 위치와 날짜 오류를 각각 경고로 표시한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4",
+      "caller": "User",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "exportConfirmed() : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+        "symbol": "export function CSVExportDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-04/TD4-06: 유효한 draft는 한 번 내보내고 완료 receipt를 저장한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "test_exporting_dialog_disables_picker_edits_and_duplicate_confirm"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1",
+      "caller": "csvPopup : PopupUI",
+      "receiver": "UIStateController",
+      "operation": "exportCSV() : void",
+      "production_owner": {
+        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "symbol": "dispatch(intent"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-04/TD4-06: 유효한 draft는 한 번 내보내고 완료 receipt를 저장한다"
+      },
+      "negative_test": {
+        "path": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+        "test": "test_csv_facade_rejects_conflict_closed_edits_and_invalid_export"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.1",
+      "caller": "UIStateController",
+      "receiver": "CSVExportOptions",
+      "operation": "validate() : ValidationResult",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "validate_csv_context"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-04/TD4-06: 유효한 draft는 한 번 내보내고 완료 receipt를 저장한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-05/VR-07: 저장 위치가 없으면 export 명령을 차단하고 필드를 표시한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.2",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "handle(event : UIEvent) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-04/TD4-06: 유효한 draft는 한 번 내보내고 완료 receipt를 저장한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-07/TD4-08: export 실패는 실제 오류와 option을 유지해 수정 후 재시도하게 한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.3a",
+      "caller": "UIStateController",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "showValidationError(result : ValidationResult) : void",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+        "symbol": "export function CSVExportDialog"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-04/TD4-06: 유효한 draft는 한 번 내보내고 완료 receipt를 저장한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+        "test": "test_valid_csv_dialog_has_no_validation_error_surface"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.3b",
+      "caller": "UIStateController",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "showExportInProgress() : void",
+      "production_owner": {
+        "path": "UI/src/app/components/AppModalHost.tsx",
+        "symbol": "export function AppModalHost"
+      },
+      "positive_test": {
+        "path": "UI/src/app/components/AppModalHost.phase13Trace.test.tsx",
+        "test": "test_csv_progress_surface_and_non_progress_absence"
+      },
+      "negative_test": {
+        "path": "UI/src/app/components/AppModalHost.phase13Trace.test.tsx",
+        "test": "test_csv_export_complete_surface_and_error_absence"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.4",
+      "caller": "UIStateController",
+      "receiver": "TradeHistoryController",
+      "operation": "exportCSV(options : CSVExportOptions) : CSVExportResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/application/trade_history_controller.py",
+        "symbol": "export_csv"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_export_csv_resolves_weekly_kst_range_and_streams_all_sides"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_export_csv_fails_closed_without_stream_or_writer"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.4.1",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistoryQuery",
+      "operation": "TradeHistoryQuery(startDate : LocalDate, endDate : LocalDate, side : TradeSide = ALL) : TradeHistoryQuery",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/domain/history/query.py",
+        "symbol": "class TradeHistoryQuery"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_controller.py",
+        "test": "test_export_csv_resolves_weekly_kst_range_and_streams_all_sides"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history.py",
+        "test": "test_query_rejects_datetime_string_side_and_reverse_range"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.4.2",
+      "caller": "TradeHistoryController",
+      "receiver": "TradeHistoryRepository",
+      "operation": "streamTrades(query : TradeHistoryQuery) : Stream<Trade>",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py",
+        "symbol": "stream_trades"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_stream_trades_filters_inclusive_kst_dates_and_side"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_stream_trades_missing_file_is_an_empty_iterator"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.4.2.1",
+      "caller": "TradeHistoryRepository",
+      "receiver": "File System",
+      "operation": "openReadStream(path : Path) : InputStream",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py",
+        "symbol": "_stream_history_snapshot"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_stream_trades_snapshot_excludes_later_append_and_closes_reader"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/history/test_trade_history_repository.py",
+        "test": "test_stream_trades_missing_file_is_an_empty_iterator"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.4.3",
+      "caller": "TradeHistoryController",
+      "receiver": "CSVFileGateway",
+      "operation": "writeCSV(trades : Stream<Trade>, options : CSVExportOptions) : CSVExportResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/filesystem/csv_file_gateway.py",
+        "symbol": "write_csv"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/filesystem/test_csv_file_gateway.py",
+        "test": "test_writes_byte_exact_golden_with_bom_crlf_rfc4180_and_mixed_versions"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/filesystem/test_csv_file_gateway.py",
+        "test": "test_permission_write_fsync_and_commit_faults_are_redacted_and_cleaned"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.4.3.1",
+      "caller": "CSVFileGateway",
+      "receiver": "File System",
+      "operation": "createCustomizedCSV(path : Path, fileName : String, rows : Stream<String>) : CSVExportResult",
+      "production_owner": {
+        "path": "backend/src/binance_auto_trader/adapters/filesystem/csv_file_gateway.py",
+        "symbol": "_write_csv_content"
+      },
+      "positive_test": {
+        "path": "backend/tests/unit/filesystem/test_csv_file_gateway.py",
+        "test": "test_writes_byte_exact_golden_with_bom_crlf_rfc4180_and_mixed_versions"
+      },
+      "negative_test": {
+        "path": "backend/tests/unit/filesystem/test_csv_file_gateway.py",
+        "test": "test_commit_race_maps_to_destination_exists_without_overwrite"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.5",
+      "caller": "UIStateController",
+      "receiver": "UISTM",
+      "operation": "handle(event : UIEvent) : UITransitionResult",
+      "production_owner": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+        "symbol": "create_csv_export_machine"
+      },
+      "positive_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-04/TD4-06: 유효한 draft는 한 번 내보내고 완료 receipt를 저장한다"
+      },
+      "negative_test": {
+        "path": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+        "test": "TD4-07/TD4-08: export 실패는 실제 오류와 option을 유지해 수정 후 재시도하게 한다"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.6a",
+      "caller": "UIStateController",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "showExportError(reason : String) : void",
+      "production_owner": {
+        "path": "UI/src/app/components/AppModalHost.tsx",
+        "symbol": "export function AppModalHost"
+      },
+      "positive_test": {
+        "path": "UI/src/app/components/AppModalHost.phase13Trace.test.tsx",
+        "test": "test_csv_export_error_surface"
+      },
+      "negative_test": {
+        "path": "UI/src/app/components/AppModalHost.phase13Trace.test.tsx",
+        "test": "test_csv_export_complete_surface_and_error_absence"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    },
+    {
+      "case": "CASE_4",
+      "message_id": "4.1.6b",
+      "caller": "UIStateController",
+      "receiver": "csvPopup : PopupUI",
+      "operation": "showExportComplete(path : Path) : void",
+      "production_owner": {
+        "path": "UI/src/app/components/AppModalHost.tsx",
+        "symbol": "export function AppModalHost"
+      },
+      "positive_test": {
+        "path": "UI/src/app/components/AppModalHost.phase13Trace.test.tsx",
+        "test": "test_csv_export_complete_surface_and_error_absence"
+      },
+      "negative_test": {
+        "path": "UI/src/app/components/AppModalHost.phase13Trace.test.tsx",
+        "test": "test_csv_export_error_surface"
+      },
+      "completion_status": "COMPLETE",
+      "gap_reason": null
+    }
+  ]
+}

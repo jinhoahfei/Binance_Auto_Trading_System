@@ -62,6 +62,7 @@ from tests.integration.test_account_stream_flow import (
     _ready_market_snapshot,
 )
 from tests.integration.test_order_fault_matrix import MutableClock
+from tests.integration.phase13_risk_fixture import create_test_risk_policy
 
 
 OrderResultHandler = Callable[[Order], OrderResult]
@@ -266,6 +267,7 @@ class OrderTraceInvariantIntegrationTests(unittest.TestCase):
             command_gate=True,
             position=position,
             trade_history_controller=history_controller,
+            risk_policy_state=create_test_risk_policy(),
             clock=clock,
         )
 

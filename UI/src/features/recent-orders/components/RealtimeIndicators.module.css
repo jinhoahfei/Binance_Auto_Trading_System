@@ -5,6 +5,11 @@
     padding-top: 20px;
 }
 
+/* 실시간 지표 fixture는 tab 보정 뒤에도 첫 지표 행의 기준 위치를 유지한다. */
+[data-figma-frame='realtime-indicator'] .groups {
+    padding-top: 5px;
+}
+
 .group h3 {
     margin: 0 0 15px;
     color: var(--color-text-secondary);
@@ -57,11 +62,11 @@
 }
 
 .positive {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }
 
 .negative {
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
 }
 
 .neutral {
@@ -90,5 +95,5 @@
 }
 
 .group small b {
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
 }

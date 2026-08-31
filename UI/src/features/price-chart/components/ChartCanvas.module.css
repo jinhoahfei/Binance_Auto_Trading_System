@@ -11,6 +11,25 @@
     outline-offset: 2px;
 }
 
+/* Figma fixture는 8월 12일의 결정적 차트 좌표와 도구 위치를 그대로 재현한다. */
+.fixtureCanvas {
+    padding-right: 46px;
+    padding-bottom: 50px;
+    overflow: visible;
+}
+
+.fixtureCanvas .chart {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 328px;
+}
+
+.fixtureCanvas .tools {
+    right: -3px;
+    bottom: -2px;
+}
+
 .canvas[data-drawing-active='true'] .chart {
     cursor: crosshair;
     pointer-events: auto;
@@ -30,6 +49,15 @@
 
 .canvas:has([data-chart-engine-ready='true']) .marketLayer {
     opacity: 0;
+}
+
+/* Fixture는 browser canvas 대신 Figma와 같은 결정적 SVG market layer 전체를 사용한다. */
+.fixtureCanvas:has([data-chart-engine-ready='true']) .marketLayer {
+    opacity: 1;
+}
+
+.fixtureCanvas [data-chart-presentation-mode='fixture'] {
+    visibility: hidden;
 }
 
 .dataStatus {
@@ -80,7 +108,7 @@
 
 .historyDataStatus button {
     padding: 0;
-    color: var(--color-status-info);
+    color: var(--color-text-info);
     font: inherit;
     background: transparent;
     border: 0;
@@ -200,7 +228,7 @@
 .lineContextMenu button {
     width: 100%;
     padding: 7px 10px;
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
     text-align: left;
     background: transparent;
     border: 0;

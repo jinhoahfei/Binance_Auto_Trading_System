@@ -478,6 +478,9 @@ def _start_history_and_performance(runtime: ApplicationRuntime) -> None:
             failure=failure,
         )
 
+    # Durable CANCEL_AND_LIQUIDATE는 startup query/history가 끝난 뒤에만 recovery SELL을 재개한다.
+    runtime.trading_controller.resume_manual_kill_cleanup()
+
     # Message 3은 local history와 exchange reconciliation이 모두 끝난 startup version을 기록한다.
     _record_startup_trace(
         runtime,
@@ -610,6 +613,12 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     recovery_worker = runtime._account_stream_recovery_worker
     if recovery_worker is not None:
         recovery_worker.close()
+    market_recovery_worker = runtime._market_stream_recovery_worker
+    if market_recovery_worker is not None:
+        market_recovery_worker.close()
+
+    # Market callback이 application lock을 재사용하므로 Kline handle도 lock 밖에서 먼저 닫는다.
+    runtime.market_data_controller.close_market_stream()
 
     with runtime.application_lock:
         # CLOSED publication은 멱등 반환하고 다른 상태만 소유 자원을 정리한다.
@@ -620,7 +629,7 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
         # 거래 상태를 강제 종료하지 않고 callback·timer·session 구독부터 차단한다.
         runtime.trading_controller.close_session_resources()
 
-        # Kline startup 구독은 MarketDataController가 이미 닫으므로 account만 정리한다.
+        # Market stream과 worker를 모두 회수한 뒤 마지막 authenticated account handle을 정리한다.
         account_subscription = runtime.trading_controller.account_subscription
         if account_subscription is not None:
             account_subscription.close()
@@ -859,8 +868,11 @@ def request_application_shutdown(
         recovery_worker = runtime._account_stream_recovery_worker
         if recovery_worker is not None:
             recovery_worker.close()
+        market_recovery_worker = runtime._market_stream_recovery_worker
+        if market_recovery_worker is not None:
+            market_recovery_worker.close()
 
-        # Callback mutation을 동결하고 worker join 사이에 생긴 exposure도 마지막으로 재검사한다.
+        # 두 recovery worker를 모두 join한 뒤 callback mutation과 새 exposure를 마지막으로 재검사한다.
         with runtime.application_lock:
             final_safety_receipt = _read_shutdown_safety_receipt(runtime)
             if not final_safety_receipt.accepted:

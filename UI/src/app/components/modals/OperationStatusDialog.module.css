@@ -40,15 +40,15 @@
 }
 
 .progress {
-    color: var(--color-status-info);
+    color: var(--color-text-info);
 }
 
 .success {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }
 
 .error {
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
 }
 
 .progressBar {

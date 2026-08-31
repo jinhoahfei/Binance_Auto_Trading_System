@@ -101,6 +101,7 @@ def _create_web_socket_kline_payload(
     close: str,
     open_time_milliseconds: int = OPEN_TIME_MILLISECONDS,
     closed: bool = False,
+    event_time_milliseconds: int | None = None,
 ) -> dict[str, object]:
     """
     함수 이름: _create_web_socket_kline_payload()
@@ -109,6 +110,7 @@ def _create_web_socket_kline_payload(
         close -> OHLC에 사용할 종가 문자열
         open_time_milliseconds -> 봉 시작 Unix millisecond
         closed -> 공식 x 확정봉 flag
+        event_time_milliseconds -> 선택적인 공식 E event millisecond
     반환값: 공식 Kline event schema를 따르는 payload
     작성 날짜: 2026/08/20
     """
@@ -121,9 +123,15 @@ def _create_web_socket_kline_payload(
         - 1
     )
 
+    selected_event_time = (
+        open_time_milliseconds
+        if event_time_milliseconds is None
+        else event_time_milliseconds
+    )
+
     return {
         "e": "kline",
-        "E": open_time_milliseconds,
+        "E": selected_event_time,
         "s": SYMBOL,
         "k": {
             "t": open_time_milliseconds,
@@ -439,12 +447,16 @@ class TracingWebSocketGateway(WebSocketGateway):
         self,
         symbol: str,
         intervals: Iterable[Interval] = SUPPORTED_INTERVALS,
+        *,
+        reconciliation_required_callback: Callable[[str], object]
+        | None = None,
     ) -> object:
         """
         함수 이름: start_all_kline_buffering()
         기능: 메시지 1.1 호출을 기록한 뒤 production 구독을 시작한다.
         인자: symbol -> 구독할 Binance 거래 symbol
             intervals -> 구독할 canonical interval 모음
+            reconciliation_required_callback -> 시장 장애를 받을 optional callback
         반환값: fake client가 반환한 구독 handle
         작성 날짜: 2026/08/20
         """
@@ -452,21 +464,29 @@ class TracingWebSocketGateway(WebSocketGateway):
         return super().start_all_kline_buffering(
             symbol=symbol,
             intervals=intervals,
+            reconciliation_required_callback=(
+                reconciliation_required_callback
+            ),
         )
 
-    def drain_kline_buffer(
+    def promote_kline_buffer_to_live(
         self,
-        subscription: object,
-    ) -> dict[Interval, tuple[Kline, ...]]:
+        observer: Callable[[Kline], object],
+        subscription: object | None = None,
+    ) -> object:
         """
-        함수 이름: drain_kline_buffer()
-        기능: 초기화 buffer 배출 호출을 기록한 뒤 production 값을 반환한다.
-        인자: subscription -> 현재 초기화와 연결된 구독 handle
-        반환값: canonical interval별 수신 Kline tuple
-        작성 날짜: 2026/08/20
+        함수 이름: promote_kline_buffer_to_live()
+        기능: 메시지 1L 승격 호출을 기록한 뒤 production 동일 구독을 반환한다.
+        인자: observer -> 연속 정규화 Kline callback
+            subscription -> 검증할 현재 초기화 구독 handle
+        반환값: 재구독하지 않은 동일한 구독 handle
+        작성 날짜: 2026/08/25
         """
-        self._operation_trace.append("drain_kline_buffer")
-        return super().drain_kline_buffer(subscription)
+        self._operation_trace.append("promote_kline_buffer_to_live")
+        return super().promote_kline_buffer_to_live(
+            observer,
+            subscription,
+        )
 
 
 class TracingMarketSnapshot(MarketSnapshot):
@@ -495,16 +515,22 @@ class TracingMarketSnapshot(MarketSnapshot):
     def update(
         self,
         klines_by_interval: Mapping[Interval, Iterable[Kline]],
+        *,
+        source_klines: Iterable[Kline] | None = None,
     ) -> None:
         """
         함수 이름: update()
         기능: 메시지 1.3 호출을 기록한 뒤 production 원자 update를 실행한다.
         인자: klines_by_interval -> REST 봉 뒤에 WebSocket 봉을 배치한 전체 mapping
+            source_klines -> 현재 version을 발생시킨 optional WebSocket Kline
         반환값: 없음
         작성 날짜: 2026/08/20
         """
         self._operation_trace.append("market_snapshot.update")
-        super().update(klines_by_interval)
+        super().update(
+            klines_by_interval,
+            source_klines=source_klines,
+        )
 
 
 class BlockingMarketSnapshot(TracingMarketSnapshot):
@@ -535,11 +561,14 @@ class BlockingMarketSnapshot(TracingMarketSnapshot):
     def update(
         self,
         klines_by_interval: Mapping[Interval, Iterable[Kline]],
+        *,
+        source_klines: Iterable[Kline] | None = None,
     ) -> None:
         """
         함수 이름: update()
         기능: 첫 commit만 테스트 event가 허용할 때까지 대기한 뒤 위임한다.
         인자: klines_by_interval -> 주기별 초기화 Kline mapping
+            source_klines -> 현재 version을 발생시킨 optional WebSocket Kline
         반환값: 없음
         작성 날짜: 2026/08/20
         """
@@ -549,7 +578,10 @@ class BlockingMarketSnapshot(TracingMarketSnapshot):
             if not self.allow_first_update.wait(timeout=2):
                 raise RuntimeError("test did not release first update")
 
-        super().update(klines_by_interval)
+        super().update(
+            klines_by_interval,
+            source_klines=source_klines,
+        )
 
 
 class NoOpRegimeController:
@@ -559,27 +591,80 @@ class NoOpRegimeController:
     작성 날짜: 2026/08/20
     """
 
+    def __init__(self) -> None:
+        """
+        함수 이름: __init__()
+        기능: Phase 2 격리를 유지하면서 same-version 평가 계약을 추적한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # 실제 REGIME 계산은 격리하되 Controller gate가 요구하는 source version은 보존한다.
+        self._last_regime_result: _NoOpRegimeResult | None = None
+
     @property
-    def last_regime_result(self) -> None:
+    def last_regime_result(self) -> "_NoOpRegimeResult | None":
         """
         함수 이름: last_regime_result()
         기능: Phase 2 격리 double에는 적용된 추천 결과가 없음을 반환한다.
         인자: 없음
-        반환값: 항상 None
-        작성 날짜: 2026/08/20
+        반환값: 마지막 same-version 평가 표식 또는 초기 None
+        작성 날짜: 2026/08/29
         """
-        return None
+        return self._last_regime_result
 
-    def evaluate_regime(self, trigger: object, market_snapshot: object) -> None:
+    def evaluate_regime(
+        self,
+        trigger: object,
+        market_snapshot: MarketSnapshot,
+    ) -> "_NoOpRegimeResult":
         """
         함수 이름: evaluate_regime()
         기능: 시장 초기화 회귀 trace를 바꾸지 않고 추천 평가 요청을 소비한다.
         인자: trigger -> production Controller에 전달되는 평가 trigger
             market_snapshot -> production Controller에 전달되는 시장 snapshot
-        반환값: 없음
-        작성 날짜: 2026/08/20
+        반환값: source market version을 담은 격리용 결과
+        작성 날짜: 2026/08/29
         """
-        del trigger, market_snapshot
+        del trigger
+        self._last_regime_result = _NoOpRegimeResult(
+            market_snapshot.version
+        )
+        return self._last_regime_result
+
+    def reconcile_regime(
+        self,
+        market_snapshot: MarketSnapshot,
+    ) -> "_NoOpRegimeResult":
+        """
+        함수 이름: reconcile_regime()
+        기능: 재초기화 snapshot을 새 version에 결합하는 production 계약만 대역한다.
+        인자: market_snapshot -> REST·WebSocket 병합을 마친 snapshot
+        반환값: source market version을 담은 격리용 결과
+        작성 날짜: 2026/08/29
+        """
+        self._last_regime_result = _NoOpRegimeResult(
+            market_snapshot.version
+        )
+        return self._last_regime_result
+
+
+class _NoOpRegimeResult:
+    """
+    클래스 이름: _NoOpRegimeResult
+    기능: Phase 2 test double에서 same-version gate만 충족하는 결과다.
+    작성 날짜: 2026/08/29
+    """
+
+    def __init__(self, source_market_version: int) -> None:
+        """
+        함수 이름: __init__()
+        기능: 평가가 읽은 MarketSnapshot version을 보존한다.
+        인자: source_market_version -> 평가 source version
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        self.source_market_version = source_market_version
 
 
 class MarketInitializationFlowTests(unittest.TestCase):
@@ -664,7 +749,7 @@ class MarketInitializationFlowTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_initialization_follows_messages_and_loads_four_intervals()
-        기능: 메시지 1.1, 1.2, buffer drain, 1.3 순서와 네 주기 결과를 검증한다.
+        기능: 메시지 1.1, 1.2, 동일 구독 승격, 1.3 순서와 네 주기 결과를 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/20
@@ -677,7 +762,7 @@ class MarketInitializationFlowTests(unittest.TestCase):
             [
                 "start_all_kline_buffering",
                 "load_all_klines",
-                "drain_kline_buffer",
+                "promote_kline_buffer_to_live",
                 "market_snapshot.update",
             ],
         )
@@ -720,7 +805,7 @@ class MarketInitializationFlowTests(unittest.TestCase):
         )
         completed_subscription = self.web_socket_client.latest_handle
         self.assertIsNotNone(completed_subscription)
-        self.assertTrue(completed_subscription.closed)
+        self.assertFalse(completed_subscription.closed)
         self.assertEqual(self.rest_client.order_call_count, 0)
         self.assertEqual(
             self.web_socket_client.account_stream_call_count,
@@ -847,7 +932,10 @@ class MarketInitializationFlowTests(unittest.TestCase):
                 for interval in SUPPORTED_INTERVALS
             )
         )
-        self.assertNotIn("drain_kline_buffer", self.operation_trace)
+        self.assertNotIn(
+            "promote_kline_buffer_to_live",
+            self.operation_trace,
+        )
         self.assertNotIn("market_snapshot.update", self.operation_trace)
 
     def test_rest_failure_preserves_ready_snapshot_and_version(self) -> None:
@@ -1007,6 +1095,9 @@ class MarketInitializationFlowTests(unittest.TestCase):
                     _create_web_socket_kline_payload(
                         Interval.FOUR_HOURS,
                         "403",
+                        event_time_milliseconds=(
+                            OPEN_TIME_MILLISECONDS + 1
+                        ),
                     ),
                 )
 

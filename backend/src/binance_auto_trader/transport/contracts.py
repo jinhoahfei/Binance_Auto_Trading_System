@@ -26,9 +26,13 @@ from binance_auto_trader.domain.history import (
 from binance_auto_trader.domain.trading.logic_registry import (
     list_trading_logic_configurations,
 )
+from binance_auto_trader.domain.trading.risk import (
+    DailyLossScope,
+    ManualKillBehavior,
+)
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MAX_HTTP_BODY_BYTES = 1024 * 1024
 MAX_WEBSOCKET_FRAME_BYTES = 1024 * 1024
 MAX_TRADE_PAGE_SIZE = 1_000
@@ -1074,6 +1078,54 @@ def map_trading_logic_coverage() -> list[JsonObject]:
     ]
 
 
+def map_risk_budget_snapshot(risk_budget: object | None) -> JsonObject | None:
+    """
+    함수 이름: map_risk_budget_snapshot()
+    기능: 마지막 BUY 판정의 Decimal 예산과 source version provenance를 wire DTO로 변환한다.
+    인자: risk_budget -> authoritative RiskBudgetSnapshot 또는 아직 평가 전인 None
+    반환값: 정밀도가 보존된 risk budget DTO 또는 None
+    작성 날짜: 2026/08/29
+    """
+    if risk_budget is None:
+        return None  # BUY 평가 전 상태를 0 예산으로 추측하지 않는다.
+
+    # 한 frozen budget의 노출·PnL·source version을 분리 조회 없이 하나의 DTO로 묶는다.
+    return normalize_json_object(
+        {
+            "policy_version": getattr(risk_budget, "policy_version"),
+            "market_version": getattr(risk_budget, "market_version"),
+            "account_version": getattr(risk_budget, "account_version"),
+            "context_version": getattr(risk_budget, "context_version"),
+            "current_position_notional": getattr(
+                risk_budget,
+                "current_position_notional",
+            ),
+            "reserved_buy_notional": getattr(
+                risk_budget,
+                "reserved_buy_notional",
+            ),
+            "candidate_order_notional": getattr(
+                risk_budget,
+                "candidate_order_notional",
+            ),
+            "projected_position_notional": getattr(
+                risk_budget,
+                "projected_position_notional",
+            ),
+            "daily_realized_pnl": getattr(
+                risk_budget,
+                "daily_realized_pnl",
+            ),
+            "unrealized_pnl": getattr(risk_budget, "unrealized_pnl"),
+            "daily_loss": getattr(risk_budget, "daily_loss"),
+            "manual_kill_active": getattr(
+                risk_budget,
+                "manual_kill_active",
+            ),
+        }
+    )
+
+
 def map_trading_snapshot(
     trading_controller: object,
     execution_mode: object,
@@ -1092,6 +1144,72 @@ def map_trading_snapshot(
     status_text = getattr(session_status, "value", session_status)
     mode_text = getattr(execution_mode, "value", execution_mode)
 
+    # 최근 위험 판정은 enum identity를 숨기지 않는 stable wire 값과 nullable 결과로 평탄화한다.
+    risk_policy_availability = getattr(
+        session_snapshot,
+        "risk_policy_availability",
+    )
+    risk_policy_availability_text = getattr(
+        risk_policy_availability,
+        "value",
+        risk_policy_availability,
+    )
+    last_risk_decision = getattr(
+        session_snapshot,
+        "last_risk_decision",
+    )
+    last_risk_decision_allowed = (
+        None
+        if last_risk_decision is None
+        else getattr(last_risk_decision, "allowed")
+    )
+    last_risk_budget = map_risk_budget_snapshot(
+        None
+        if last_risk_decision is None
+        else getattr(last_risk_decision, "budget")
+    )  # 허용·차단 결과와 같은 frozen decision에서 예산을 읽는다.
+    risk_block_reason = (
+        None
+        if last_risk_decision is None
+        else getattr(last_risk_decision, "block_reason")
+    )
+    risk_block_reason_text = getattr(
+        risk_block_reason,
+        "value",
+        risk_block_reason,
+    )
+
+    # Configured policy enum은 wire 문자열로 평탄화하고 nullable Decimal은 정규화기에 그대로 맡긴다.
+    daily_loss_scope = getattr(
+        session_snapshot,
+        "daily_loss_scope",
+        None,
+    )
+    daily_loss_scope_text = getattr(
+        daily_loss_scope,
+        "value",
+        daily_loss_scope,
+    )
+    manual_kill_behavior = getattr(
+        session_snapshot,
+        "manual_kill_behavior",
+        None,
+    )
+    manual_kill_behavior_text = getattr(
+        manual_kill_behavior,
+        "value",
+        manual_kill_behavior,
+    )
+    manual_kill_activation_behavior = getattr(
+        session_snapshot,
+        "manual_kill_activation_behavior",
+    )
+    manual_kill_activation_behavior_text = getattr(
+        manual_kill_activation_behavior,
+        "value",
+        manual_kill_activation_behavior,
+    )
+
     # Controller lock 아래 만든 snapshot 하나로 lifecycle과 optimistic version을 일치시킨다.
     return normalize_json_object(
         {
@@ -1106,6 +1224,58 @@ def map_trading_snapshot(
                 "has_open_position",
             ),
             "session_id": getattr(session_snapshot, "session_id"),
+            "risk_policy_availability": risk_policy_availability_text,
+            "configured_risk_policy_version": getattr(
+                session_snapshot,
+                "configured_risk_policy_version",
+            ),
+            "max_order_notional": getattr(
+                session_snapshot,
+                "max_order_notional",
+                None,
+            ),
+            "max_position_notional": getattr(
+                session_snapshot,
+                "max_position_notional",
+                None,
+            ),
+            "max_daily_loss": getattr(
+                session_snapshot,
+                "max_daily_loss",
+                None,
+            ),
+            "daily_loss_scope": daily_loss_scope_text,
+            "manual_kill_behavior": manual_kill_behavior_text,
+            "session_risk_policy_version": getattr(
+                session_snapshot,
+                "session_risk_policy_version",
+            ),
+            "risk_control_version": getattr(
+                session_snapshot,
+                "risk_control_version",
+            ),
+            "manual_kill_active": getattr(
+                session_snapshot,
+                "manual_kill_active",
+            ),
+            "manual_kill_cleanup_complete": getattr(
+                session_snapshot,
+                "manual_kill_cleanup_complete",
+            ),
+            "manual_kill_activation_behavior": (
+                manual_kill_activation_behavior_text
+            ),
+            "manual_kill_activation_policy_version": getattr(
+                session_snapshot,
+                "manual_kill_activation_policy_version",
+            ),
+            "last_risk_decision_allowed": last_risk_decision_allowed,
+            "last_risk_budget": last_risk_budget,
+            "risk_block_reason": risk_block_reason_text,
+            "process_ownership_ambiguous": getattr(
+                session_snapshot,
+                "process_ownership_ambiguous",
+            ),
             "logic_coverage": map_trading_logic_coverage(),
         }
     )
@@ -1195,6 +1365,14 @@ def render_typescript_contracts() -> str:
         f"'{wire_value}'"
         for wire_value in _CSV_PERIOD_FROM_WIRE
     )  # Domain enum 선언 순서와 wire command 계약을 deterministic하게 보존한다.
+    daily_loss_scope_values = " | ".join(
+        f"'{scope.value}'"
+        for scope in DailyLossScope
+    )  # Risk domain enum 선언 순서를 generated union에 그대로 반영한다.
+    manual_kill_behavior_values = " | ".join(
+        f"'{behavior.value}'"
+        for behavior in ManualKillBehavior
+    )  # Manual kill 동작도 domain 외 별도 문자열 목록을 만들지 않는다.
     return f"""/* 이 파일은 Python transport schema에서 생성됩니다. 직접 수정하지 마세요. */
 
 export const BACKEND_SCHEMA_VERSION = {SCHEMA_VERSION} as const;
@@ -1218,6 +1396,16 @@ export type BackendHistoryPeriod = 'today' | 'last7days' | 'last30days' | 'all';
 export type BackendTradeSideFilter = 'all' | 'buy' | 'sell';
 export type BackendCsvPeriod = {csv_period_values};
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
+export type BackendRiskPolicyAvailability = 'CONFIGURED' | 'UNAVAILABLE';
+export type BackendDailyLossScope = {daily_loss_scope_values};
+export type BackendManualKillBehavior = {manual_kill_behavior_values};
+export type BackendRiskBlockReason =
+    | 'RISK_POLICY_UNAVAILABLE'
+    | 'RISK_POLICY_VERSION_MISMATCH'
+    | 'MANUAL_KILL_SWITCH_ACTIVE'
+    | 'RISK_ORDER_NOTIONAL_EXCEEDED'
+    | 'RISK_DAILY_LOSS_EXCEEDED'
+    | 'RISK_POSITION_NOTIONAL_EXCEEDED';
 
 export interface BackendConnectionSnapshot {{
     readonly status: 'online';
@@ -1266,6 +1454,21 @@ export interface BackendTradingLogicCoverage {{
     readonly start_guard: BackendTradingLogicStartGuard;
 }}
 
+export interface BackendRiskBudgetSnapshot {{
+    readonly policy_version: number | null;
+    readonly market_version: number;
+    readonly account_version: number;
+    readonly context_version: number;
+    readonly current_position_notional: BackendDecimalString;
+    readonly reserved_buy_notional: BackendDecimalString;
+    readonly candidate_order_notional: BackendDecimalString;
+    readonly projected_position_notional: BackendDecimalString;
+    readonly daily_realized_pnl: BackendDecimalString;
+    readonly unrealized_pnl: BackendDecimalString;
+    readonly daily_loss: BackendDecimalString;
+    readonly manual_kill_active: boolean;
+}}
+
 export interface BackendTradingSnapshot {{
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
@@ -1275,6 +1478,23 @@ export interface BackendTradingSnapshot {{
     readonly scale_out: BackendDecimalString;
     readonly has_open_position: boolean;
     readonly session_id: string | null;
+    readonly risk_policy_availability: BackendRiskPolicyAvailability;
+    readonly configured_risk_policy_version: number | null;
+    readonly max_order_notional: BackendDecimalString | null;
+    readonly max_position_notional: BackendDecimalString | null;
+    readonly max_daily_loss: BackendDecimalString | null;
+    readonly daily_loss_scope: BackendDailyLossScope | null;
+    readonly manual_kill_behavior: BackendManualKillBehavior | null;
+    readonly session_risk_policy_version: number | null;
+    readonly risk_control_version: number;
+    readonly manual_kill_active: boolean;
+    readonly manual_kill_cleanup_complete: boolean;
+    readonly manual_kill_activation_behavior: BackendManualKillBehavior | null;
+    readonly manual_kill_activation_policy_version: number | null;
+    readonly last_risk_decision_allowed: boolean | null;
+    readonly last_risk_budget: BackendRiskBudgetSnapshot | null;
+    readonly risk_block_reason: BackendRiskBlockReason | null;
+    readonly process_ownership_ambiguous: boolean;
     readonly logic_coverage: ReadonlyArray<BackendTradingLogicCoverage>;
 }}
 

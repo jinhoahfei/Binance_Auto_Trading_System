@@ -2,12 +2,13 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 개인용 ad-hoc desktop package·credential·shutdown 검증 완료 |
-| 기준일 | 2026-08-24 (Asia/Seoul) |
+| 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 개인용 ad-hoc desktop package·credential·shutdown 검증 완료, Phase 13 부분 구현·live readiness `NO_GO` |
+| 기준일 | 2026-08-31 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. 따라서 Phase 9와 Phase 12 master는 `[x]`이며 live는 Phase 13 별도 승인 전까지 잠겨 있다. |
+| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. Phase 13은 2026-08-29 기준 장애 복구, configured-unbounded 위험 정책, `CANCEL_AND_LIQUIDATE`, 30분 EMA9/OLS production 계산, 전 interval 원자 경계와 public local Case 2를 구현했고 Communication `126/126`, 실제 native picker 선택·취소와 actual-browser axe `16/16 Violations 0`을 검증했다. 다만 Phase 13 actual Testnet order trace, visual SSIM `4/16` PASS·`12/16` FAIL 및 third-party supply-chain `NO_GO`가 남았다. 따라서 Phase 9와 Phase 12 master만 `[x]`이고 Phase 13과 live는 별도 승인 전까지 잠겨 있다. |
+| 2026-08-31 갱신 | Phase 13 actual 전용 target의 absolute BUY cap, 세 번째 opt-in, exact BUY→STOP SELL permit, 주문 POST 1회, process lease, real `1L.1`→`1L.3` observer, exact order trace, known-safe failure recovery와 atomic secret-free artifact를 구현했다. 주문 없는 Backend `901`(8 safe skip), scripts `169/169`, UI `373/373`, Rust `40/40`을 통과했다. 이번 session의 Keychain credential 읽기·signed request·Testnet 주문은 모두 0건이다. Current signed preflight/단일 actual Case 2는 명시적 사용자 승인 대기, visual `4/16`, supply/readiness `NO_GO`이므로 최종 `check_all.sh`는 예상대로 exit `1`이고 Phase 13과 live는 계속 `[ ]`/disabled다. 최신 재개 계약은 §16.14다. |
 
 ---
 
@@ -246,10 +247,11 @@ runtime으로 봉인했지만 배포 인증서가 아니므로 Gatekeeper 배포
   lifecycle harness, 공개 복구 UI/Operation과 실제 subprocess cold-restart harness를
   구현했다. credential 기반 read-only와 actual order/cold restart를 통과했고 전체 UI
   Communication E2E는 Phase 13에 남아 있다.
-- [ ] 부분 완료 — actual Testnet harness는 caught failure에서 새 runtime cleanup을 시도하지만,
-  parent `SIGKILL` 또는 host crash에는 외부 watchdog/orphan artifact scanner가 없다. 따라서
-  credential/승인 cap 외부 실행은 운영자가 같은 artifact의 cleanup owner를 유지하는 제한된
-  검증이다.
+- [x] 완료 — actual Testnet harness는 caught failure에서 새 runtime cleanup을 시도한다. Phase 13은
+  parent가 독점 소유한 FD5의 kernel EOF를 liveness 신호로 사용해 parent `SIGKILL`에서도 Python이
+  같은 iteration에 신규 BUY를 잠그고 `ORPHANED`를 fsync한다. 다음 native startup은 stale artifact의
+  lock·identity·PID 부재를 검증하고 명시적 operator 확인 뒤에만 같은 inode를 `RELEASED`로 바꾼다.
+  자동 process kill, order cancel·청산은 수행하지 않는다.
 
 ### 3.4 Phase 1~12에서 해소한 위험과 남은 계약 공백
 
@@ -376,10 +378,10 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 | [x] | `AppShellUI` | React `App`, `AppHeader`, modal host와 live snapshot/loading/typed failure Boundary를 구현 | 없음 |
 | [x] | `UIStateController` | `UiApplicationFacade`가 snapshot/event bridge, Phase 7 command, Phase 10 Trade History와 Phase 11 native picker/export lifecycle을 조정 | 없음 |
 | [x] | `UISTM` | root/feature XState actor와 Phase 5 snapshot 전체 동기화/reconnect를 구현 | 후속 command ack E2E 추가 |
-| [x] | `TradingController` | account, strict selection, session start/stop, queue/scheduler, Phase 8 Order/Position/history/force-sell 실행과 Phase 9 pending journal·confirmed-rejection durability·startup/reconnect reconciliation 및 actual lifecycle/cold restart를 구현·검증 | 없음; market-event→strategy 전체 E2E와 soak는 Phase 13 범위 |
+| [x] | `TradingController` | account, strict selection, session start/stop, queue/scheduler, Phase 8 Order/Position/history/force-sell 실행, Phase 9 pending journal·reconciliation, public market evaluation→Case 2 local trace와 production Spot REST memory-HTTP E2E를 구현·검증 | Phase 13 actual Testnet order trace는 별도 미완료 |
 | [x] | `TradingSTM` | exact 109개 lower-BB transition·queue, 5-row immutable coverage, typed unsupported/no-fallback, G-07 안전 종료와 session `run` 연결을 구현 | 없음 |
 | [x] | `TradingContext` | mutable/versioned owner, `initialize`, ordered runtime patch 적용, typed mutation·split ratio·Position/pending Order publication을 구현 | 없음 |
-| [ ] | `MarketDataController` | backend authoritative WS-first/REST/merge/snapshot 초기화와 RegimeController 최초/full-resync 평가를 구현 | 4H/30m live event 발행과 후속 runtime 연결 |
+| [x] | `MarketDataController` | authoritative WS-first/REST/merge/snapshot 초기화, live promotion, 1m·30m·4H·1D 원자 경계, 30분 production 평가와 Regime/Trading observer 연결을 구현 | 없음; actual Testnet order 증거는 Controller 구현과 별도 |
 | [x] | `APIGateway` | Kline/Spot account 정규화, normalized 주문 Operation과 실제 Testnet authenticated REST client의 raw order/open/recent/same-ID mapping을 구현하고 read-only 및 actual mutation parity를 통과 | 없음 |
 | [x] | `WebSocketGateway` | Kline·account/order event 정규화, stale·duplicate·generation 방어와 실제 Testnet signed session·disconnect reconciliation을 연결하고 signed stream 활성 상태의 actual lifecycle을 통과 | 장시간 disconnect/soak는 Phase 13 범위 |
 | [x] | `MarketSnapshot` | canonical Decimal/UTC Kline 4주기, current ETH price, monotonic version과 same-version 지표 파생을 구현 | 없음 |
@@ -409,8 +411,8 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 
 | Case | 현재 완료 범위 | 현재 끊기는 지점 | 완료 Phase |
 |---|---|---|---|
-| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, fake session branch와 실제 Testnet lifecycle/cold restart, Phase 12 packaged credential/safe shutdown을 구현·검증 | Phase 13 전체 trace와 fault/soak | Phase 7, 9, 12~13 |
-| Case 2 Buy/Sell | fake pipeline 메시지 `1`~`14`, 실제 Binance order mapping·pending journal·startup/reconnect reconciliation, actual BUY/STOP SELL과 recovered-position 전량 SELL을 구현·검증 | harness의 BUY trigger가 test-only private action seam이므로 market-event→strategy E2E와 fault/soak는 Phase 13에 남음 | Phase 8~9, 13 |
+| Case 1 Start/Stop | UI 확인 흐름, RegimeSTM/TradingSTM core, backend startup, actual-process 메시지 `1`~`5`, public `1L.1`~`1L.3`, 실제 Testnet lifecycle/cold restart와 Phase 12 packaged credential/safe shutdown을 구현·검증 | 없음 | Phase 7, 9, 12~13 |
+| Case 2 Buy/Sell | fake pipeline과 public `observeKline` 기반 메시지 `1`~`14`, 실제 Binance order mapping·pending journal·startup/reconnect reconciliation, local immediate/partial/UNKNOWN/failure/SELL/STOP와 production Spot REST memory-HTTP 흐름을 구현·검증 | Phase 13 actual Testnet order/fill trace | Phase 8~9, 13 |
 | Case 3 Trade History | `SHOW_TRADE_HISTORY` 최초 `TODAY + ALL`, 12개 결합 filter, backend composite details, D-12 summary/rows 분리, order/account/performance event와 gap resync/KST 자정 갱신을 구현 | 없음 | Phase 10 |
 | Case 4 CSV Export | popup, backend option/KST 검증, byte snapshot `stream_trades`, native picker, 실제 atomic file write와 typed receipt/failure를 구현 | 없음 | Phase 11 |
 
@@ -1479,7 +1481,7 @@ open order 0건을 확인했다. local deterministic timeout/partial-fill/discon
 - [x] 2026-08-24 기준 공식 Binance Spot Testnet REST/WebSocket 문서를 다시 확인하고 고정 Testnet endpoint와 현재 payload schema를 adapter fixture test에 반영했다.
 - [x] API key/secret을 renderer, URL, localStorage, source, 일반 log에 넣지 않고 configuration/client `repr`에서도 값과 길이를 redaction한다.
 - [x] server time offset과 `-1021` 단일 재동기화, percent-encoding 후 HMAC signature,
-  timeout/5xx/`-1007` UNKNOWN, `429`/`418` 및 최대 30초 `Retry-After`, retryable/terminal
+  timeout/5xx/`-1007` UNKNOWN, `429`/`418` 및 축소하지 않은 `Retry-After`, retryable/terminal
   오류를 분류했다. `-2010` duplicate 응답도 제출 거부로 단정하지 않고 UNKNOWN으로
   유지해 같은 client ID 조회로만 확정한다.
 - [x] symbol의 `TRADING` 상태, Spot·`MARKET` 허용 여부, base precision,
@@ -1835,32 +1837,45 @@ operator attestation을 함께 검토한다. 이 선택 경로의 미완료 상�
 
 **작업 체크리스트:**
 
-- [ ] startup 메시지 1~5 전체 trace.
-- [ ] REGIME 선택/start/stop 메시지 6~8 전체 trace.
-- [ ] Case 2 buy/sell 즉시 fill, partial, unknown, failure trace.
-- [ ] Case 3 history initial/filter/empty/failure trace.
-- [ ] Case 4 CSV validation/success/I/O failure trace.
-- [ ] REST timeout, WS disconnect, out-of-order/duplicate event, rate limit fault injection.
-- [ ] process crash 직전/직후 pending order reconciliation.
-- [ ] repository append 실패와 재시작 복구.
-- [ ] sidecar crash/restart와 snapshot sequence resync.
-- [ ] 13개 Regime ID와 지원되는 모든 Trading registry ID coverage report.
-- [ ] deterministic trace replay 결과 일치.
-- [ ] UI 16개 visual regression, keyboard/focus, reduced motion, accessibility 검사.
-- [ ] secret scanning과 dependency/license/security 검사.
-- [ ] 24시간 이상 testnet soak test에서 memory/task/socket leak 확인.
-- [ ] live notional, daily loss, max position, manual kill switch를 확정한다.
-- [ ] live mode enable은 별도 사용자 승인과 release checklist 서명이 있을 때만 가능하게 한다.
+- [x] startup 메시지 1~5 전체 trace.
+- [x] REGIME 선택/start/stop 메시지 6~8 전체 trace.
+- [x] Case 2 local public-path buy/sell 즉시 fill, partial, unknown, failure trace.
+- [ ] 같은 public path의 actual Phase 13 Testnet order/fill trace.
+- [x] Case 3 history initial/filter/empty/failure trace.
+- [x] Case 4 CSV validation/success/I/O failure와 actual native picker 선택·취소 trace.
+- [x] REST timeout, WS disconnect, out-of-order/duplicate event, rate limit fault injection.
+- [x] process crash 직전/직후 pending order reconciliation.
+- [x] repository append 실패와 재시작 복구.
+- [x] sidecar crash/restart와 snapshot sequence resync.
+- [x] 13개 Regime ID와 지원되는 모든 Trading registry ID coverage report.
+- [x] deterministic trace replay 결과 일치.
+- [x] Figma reference PNG 16개의 filename·1440×1024·SHA-256 manifest, keyboard/focus·reduced-motion
+  회귀와 axe WCAG A/AA 구조 규칙 `16/16`을 통과했다. Actual browser 16개도 capture·digest-bound하고
+  reference pixel diff gate를 실행했다.
+- [x] Actual browser axe를 16개 상태에서 다시 실행해 layout 기반 color contrast를 포함한
+  `16/16 Violations 0`을 확인했다.
+- [ ] Actual browser comparison의 SSIM mismatch를 수정한다. 현재 `4/16` PASS,
+  `12/16` FAIL이며 threshold는 `0.980000`으로 유지한다.
+- [x] Credential canary secret scanning을 통과했다.
+- [ ] Current raw dependency/license/security scan, SBOM, third-party notice와 release artifact binding을 완료한다.
+- [x] 24시간 이상 testnet soak는 사용자 결정으로 영구 범위 제외했다. 실행·PASS 증거가 아니다.
+- [x] Live risk는 세 notional/loss 상한 configured-unbounded, `REALIZED_ONLY`, manual kill
+  `CANCEL_AND_LIQUIDATE`로 확정하고 local fail-closed 구현을 검증했다.
+- [x] live mode enable은 별도 사용자 승인과 release checklist 서명이 있을 때만 가능하게 한다.
 
 **최종 완료 조건:**
 
-- [ ] `scripts/check_all.sh` 한 번으로 backend unit/integration, UI test/typecheck/build, contract drift, E2E 선택 suite를 실행할 수 있다.
-- [ ] 모든 Communication message가 코드 Operation과 최소 한 개의 test로 역추적된다.
-- [ ] fake/testnet/live mode가 명확히 분리되고 default는 `disabled`다.
-- [ ] open order/position이 있는 crash 이후 중복 주문 없이 복구한다.
-- [ ] 사용자 승인 전에는 어떤 경로에서도 live order가 제출되지 않는다.
+- [x] `scripts/check_all.sh` 한 번으로 backend unit/integration, UI test/typecheck/build, contract drift, E2E 선택 suite를 실행할 수 있다.
+- [x] 모든 Communication message가 코드 Operation과 최소 한 개의 positive/negative test로 역추적된다.
+- [x] fake/testnet/live mode가 명확히 분리되고 default는 `disabled`다.
+- [x] open order/position이 있는 crash 이후 중복 주문 없이 복구한다.
+- [x] 사용자 승인 전에는 어떤 경로에서도 live order가 제출되지 않는다.
 
-**완료 증거:** 미기록
+**부분 구현·NO_GO 증거:**
+`Design/Architecture/Phase_13_Live_Readiness_Report.md`에 2026-08-29 기준 구현, 실제 Testnet
+read-only 6/6, local 전체 회귀, Communication 126/126과 supply-chain NO_GO를 기록했다.
+개별 증거가 완료된 하위 항목만 `[x]`로 동기화했으며, 남은 actual Testnet·UI·supply 조건으로 인해
+Phase 13 master는 `[ ]`를 유지한다.
 
 ---
 
@@ -2036,7 +2051,7 @@ Communication message/operation:
 - [x] Phase 11 — CSV 실제 export
 - [x] Phase 12 — Tauri sidecar/package/shutdown (개인용 ad-hoc package actual smoke 완료)
 - [ ] Phase 13 — 장애 복구/E2E/live readiness
-- [ ] 모든 Communication message ↔ code ↔ test 추적성 완료
+- [x] 모든 Communication message ↔ code ↔ test 추적성 `126/126` 완료
 - [ ] 별도 사용자 승인에 따른 live release 완료
 
 ---
@@ -2052,8 +2067,10 @@ Phase 12 개인용 ad-hoc desktop package는 완료했다. 이제 구현할 범�
 - [x] Phase 9 actual Testnet lifecycle/cold restart와 Phase 10/11/12 선행 산출물이 완료됐다.
 - [x] 개인용 packaged app의 Keychain read-only READY, 주문 mutation 0, safe shutdown과 orphan 0이
   검증됐다.
-- [x] Backend 643개, UI 280개, Rust 31개, release script 114개와 Phase 12 architecture 5개
-  baseline이 통과했다.
+- [x] 2026-08-29 최신 기능 baseline은 Backend 전체 `830`개 중 non-skipped `823`개 통과와
+  외부 Testnet `7`개 safe skip, UI `372/372`, Rust 기본 `40/40`, native picker `2/2`,
+  release/root script `161/161`이다. Communication은 `126/126`, actual-browser axe는
+  `16/16 Violations 0`이다.
 - [x] 현재 `live` mode는 disabled이며 Phase 13의 별도 승인 전 활성화하지 않는다.
 
 Phase 13 작업은 기존 개인용 package 형식을 다시 설계하지 않는다. 발견된 package/security bug는
@@ -2064,16 +2081,16 @@ ADR-004/005와 `TradeHistoryRepository.stream_trades()` 경계도 유지한다. 
 
 ### 16.2 구현 순서
 
-| 순서 | 작업 | 핵심 산출물 | 완료 기준 |
-|---|---|---|---|
-| P13-01 | 누적 위험 한도와 kill switch | versioned `RiskPolicy`, cumulative position/daily loss/manual kill 결정표 | 단일 주문 cap과 누적 계정 위험이 분리되고 모든 신규 BUY 경로가 같은 gate를 사용 |
-| P13-02 | intent 예산과 crash reconciliation | 한 intent의 submit/retry budget, durable journal, startup/reconnect recovery | timeout·partial·unknown·confirmed rejection에서 중복 주문 0 |
-| P13-03 | process watchdog과 orphan recovery | main/sidecar/PyInstaller child ownership, heartbeat, restart/scan 정책 | parent crash 전후 orphan listener/process/artifact를 식별하고 신규 주문을 fail closed |
-| P13-04 | 실제 market-event→strategy→order E2E | test-only private BUY trigger를 사용하지 않는 Testnet trace | market snapshot부터 strategy Action, order, fill, Position, History까지 한 provenance로 연결 |
-| P13-05 | fault matrix와 deterministic replay | REST/WS/repository/process fault injector와 canonical trace fixture | 같은 입력 trace의 state/outcome이 반복 실행에서 일치 |
-| P13-06 | Communication·UI 종단 간 추적 | 네 Case message↔Operation↔test matrix, visual/a11y suite | 모든 message가 code owner와 최소 한 test로 역추적 |
-| P13-07 | 장시간 soak와 통합 실행기 | `scripts/check_all.sh`, 24시간 이상 Testnet soak report | memory/task/socket leak과 미회수 process가 없고 전체 gate 1회 실행 가능 |
-| P13-08 | live readiness 판정 | non-secret evidence와 명시적 go/no-go checklist | Phase 13 master 완료; live는 별도 사용자 승인 없이는 계속 disabled |
+| 순서 | 상태 | 작업 | 핵심 산출물 | 남은 완료 기준 |
+|---|---|---|---|---|
+| P13-01 | [x] 완료 | 누적 위험 한도와 kill switch | versioned `RiskPolicy`, cumulative position/daily loss/manual kill 결정표 | 증거 보존; 회귀 시에만 재개 |
+| P13-02 | [x] 완료 | intent 예산과 crash reconciliation | 한 intent의 submit/retry budget, durable journal, startup/reconnect recovery | 증거 보존; 회귀 시에만 재개 |
+| P13-03 | [x] 완료 | process watchdog과 orphan recovery | main/sidecar/PyInstaller child ownership, kernel FD5 EOF liveness, restart/scan 정책 | 증거 보존; 회귀 시에만 재개 |
+| P13-04 | [ ] 부분 완료 | 실제 market-event→strategy→order E2E | public-path local `9/9`, Spot REST memory-HTTP `1/1`, actual 전용 cap/opt-in/one-shot/recovery/trace harness 완료 | 명시적 승인 뒤 current signed preflight와 private BUY seam 없는 actual Testnet order/fill/History/UI trace |
+| P13-05 | [x] 완료 | fault matrix와 deterministic replay | REST/WS/repository/process fault injector와 canonical trace fixture | 증거 보존; 회귀 시에만 재개 |
+| P13-06 | [ ] 부분 완료 | Communication·UI 종단 간 추적 | Communication `126/126`, picker `2/2`, actual-browser axe `16/16` 완료 | SSIM 미달 12개를 수정해 visual `16/16` PASS |
+| P13-07 | [ ] 부분 완료 | 통합 실행기와 soak 범위 관리 | `scripts/check_all.sh`, 사용자 결정에 따른 soak 영구 제외 기록 | visual·supply·readiness를 포함한 주문 없는 aggregate exit `0` |
+| P13-08 | [ ] 미완료 | live readiness 판정 | non-secret evidence와 명시적 go/no-go checklist | current Testnet·visual·supply·release provenance를 결속해 Phase 13 master 완료; live는 별도 승인 전 disabled |
 
 ### 16.3 P13-01 — 누적 위험 정책과 manual kill switch
 
@@ -2085,6 +2102,14 @@ ADR-004/005와 `TradeHistoryRepository.stream_trades()` 경계도 유지한다. 
 - open/pending/unknown order가 위험 예산을 점유·해제하는 시점
 - manual kill switch가 신규 주문만 차단할지, cancel·안전 청산까지 요청할지
 - policy 변경 중인 session과 restart 후 policy version mismatch 처리
+
+2026-08-29 사용자는 `max_order_notional`, `max_position_notional`, `max_daily_loss`를 모두
+`None`, `daily_loss_scope`를 `REALIZED_ONLY`, `manual_kill_behavior`를
+`CANCEL_AND_LIQUIDATE`로 확정했다. 여기서 configured policy의 `None`은 **명시적 무제한**이며
+정책 자체가 없는 `RISK_POLICY_UNAVAILABLE`과 다르다. 2026-08-29 구현에서 `RiskPolicy`의 세
+상한을 `Decimal | None`으로 확장했고, `None`인 비교만 건너뛰되 current/reserved/candidate/projected
+노출과 `REALIZED_ONLY` 손실 및 source version을 계속 계산·게시한다. `max_daily_loss=None`이면
+그 값으로 BUY를 차단하지 않지만 정책 부재·version mismatch·manual kill gate는 그대로 fail closed한다.
 
 정책 숫자를 임의 기본값으로 만들지 않는다. 값이 미확정이면 신규 BUY는
 `RISK_POLICY_UNAVAILABLE`로 차단하되 read-only 조회, reconciliation과 안전 종료는 허용한다.
@@ -2101,13 +2126,22 @@ HTTP timeout을 주문 실패로 단정해 새 주문을 제출하지 않으며 
 startup/reconnect reconciliation으로 기존 identity를 먼저 확정한다.
 
 - PREPARED → SUBMITTED → PARTIAL/UNKNOWN/TERMINAL journal 전이를 fsync한다.
+- v3 PREPARED는 SUBMITTED fsync-before-POST provenance로 replay해 4회 exact absence 뒤에만
+  REMOVE하고, legacy v1/v2 PREPARED는 모호하게 유지한다.
 - confirmed rejection만 새 intent 가능 상태로 해제한다.
 - partial fill은 새 delta만 Position/History에 반영한다.
 - repository append 실패와 journal REMOVE 실패는 신규 주문 gate를 유지한다.
 - parent/main/sidecar/PyInstaller child의 PID·start identity·listener ownership을 구분한다.
+- parent가 독점 소유한 FD5 writer의 kernel EOF를 liveness 신호로 사용해 시간 기반 heartbeat의
+  timeout·clock 추측 없이 parent 소멸을 감지하고, 같은 waiter iteration에 `ORPHANED`와 effect gate를
+  fail closed한다.
 - watchdog은 position/order ambiguity에서 자동 kill이나 자동 재주문을 하지 않는다.
 - restart 뒤 orphan process 또는 app-owned unknown order가 있으면
   `RECONCILIATION_REQUIRED`로 시작한다.
+- stale `ACTIVE`/`ORPHANED` artifact는 native startup에서 lock·exact identity·PID 부재를 검증해
+  운영자에게 표시하고, 명시적 확인 뒤 같은 inode와 PID 부재를 재검증한 경우에만 `RELEASED`로
+  fsync하고 재시작한다. 취소·경합·identity 변경에서는 기록을 보존하며 자동 kill/cancel/청산을
+  수행하지 않는다.
 
 **완료 기준:** submit 직전/직후 process crash, response loss, duplicate/out-of-order event,
 sidecar crash와 repository failure 조합에서 exchange order 1개 이하, durable Trade 1개 이하와
@@ -2128,6 +2162,11 @@ Testnet scenario에서 다음 provenance가 끊기지 않아야 한다.
 
 Harness 전용 seam은 외부 market/account event 주입과 clock/fault control에만 둔다. Production
 Controller의 private Action을 직접 호출해 성공 trace를 만드는 방식은 완료 증거로 사용하지 않는다.
+
+Market full-resync는 `reconcileRegime`으로 새 snapshot의 4H 입력을 검증한다. 동일 source
+candle은 기존 추천과 STM state를 검증한 뒤 transition 없이 새 version에 재결합하고, 새
+candle만 재평가한다. REGIME 결과와 authoritative snapshot/completion version이 정확히
+일치하지 않으면 신규 effect gate를 열지 않는다.
 
 **완료 기준:** 즉시 fill, partial, unknown, confirmed failure와 STOP/recovery SELL trace가 모두
 Communication caller/receiver, message ID, state version, command/order ID로 역추적된다.
@@ -2160,55 +2199,913 @@ deterministic replay가 byte-stable 또는 명시적으로 정규화된 digest�
 - Case 4: CSV validation/picker/success/I/O failure/경합
 
 UI는 16개 주요 상태의 visual regression, keyboard/focus, reduced motion, accessibility와
-offline/recovery/risk-blocked/operator-action 화면을 검증한다. Renderer는 credential, raw token,
-filesystem writer나 exchange SDK를 소유하지 않는다.
+offline/recovery/risk-blocked/operator-action 화면을 검증한다. Renderer는 Binance credential,
+raw exchange token, filesystem writer나 exchange SDK를 소유하지 않는다. 이 문장의 `raw token`은
+Binance API credential/token을 뜻하며 ADR-005의 local launch session token을 뜻하지 않는다.
+ADR-005대로 Tauri가 한 launch에 한 번 전달한 local session token은 renderer live adapter의
+closure/private memory에서만 사용하고 storage, URL, state snapshot, error 또는 log에 남기지 않는
+조건으로 허용한다.
 
 **완료 기준:** 모든 Communication message가 정확히 한 owner Operation과 최소 한 positive/negative
 test로 역추적되고, UI가 backend authoritative state보다 앞서 성공이나 Position을 표시하지 않는다.
 
-### 16.8 P13-07 — 통합 실행기와 24시간 soak
+### 16.8 P13-07 — 통합 실행기와 24시간 soak 영구 제외
 
 `scripts/check_all.sh`를 만들어 기본 실행은 외부 주문 없이 backend/UI/Rust/script, contract drift,
-typecheck/build, secret scanner와 deterministic E2E를 한 번에 수행하게 한다. 실제 Testnet order와
-24시간 soak는 명시 flag와 기존 order cap 없이는 실행되지 않게 분리한다.
+typecheck/build, secret scanner와 deterministic E2E를 한 번에 수행하게 한다. 실제 Testnet order는
+명시 flag, 고정 Testnet endpoint와 승인된 BUY cap 없이는 실행되지 않게 분리한다.
 
-Soak 동안 최소 다음 값을 주기적으로 기록한다.
+- [x] `scripts/check_all.sh` 구현과 외부 주문 없는 기능 suite 실행은 완료했다.
+- [x] 24시간 이상 Testnet soak와 memory/task/socket leak 판정은 사용자가 Phase 13 범위에서
+  **영구 제외**했다. 이 체크는 사용자 범위 결정을 기록한 것이며 soak 실행 또는 PASS 증거가 아니다.
+- [ ] supply-chain, visual 및 readiness 하위 gate의 실제 `NO_GO`를 해소한 뒤
+  `scripts/check_all.sh`가 전체 in-scope gate에서 exit `0`을 반환해야 한다.
 
-- main/sidecar/Python process와 task/thread 수
-- open FD, loopback listener와 reconnect generation
-- memory high-water mark와 queue/replay buffer 크기
-- pending/unknown order, Position, History count와 sequence
-- shutdown/relaunch 뒤 orphan process/listener 수
+기존 `scripts/phase13_soak.py`는 선택적 진단 도구로만 보존하고 Phase 13 master 완료 조건이나 다음
+세션의 실행 목록에 포함하지 않는다. §10 Phase 13과 기존 ADR/report의 soak 문구는 다음 문서 동기화
+때 이 사용자 범위 변경에 맞춰 수정하되, 과거에 soak를 통과한 것처럼 기록해서는 안 된다.
 
-**완료 기준:** 24시간 이상 Testnet stream/reconnect와 승인된 제한 주문 scenario에서 memory/task/
-socket의 단조 누수, 중복 주문, unresolved pending과 orphan이 없고 종료 후 fresh READY가 재현된다.
+**완료 기준:** soak를 제외한 backend/UI/Rust/script, contract, deterministic E2E, Communication,
+visual, secret와 supply evidence gate를 한 번에 실행하고 모든 in-scope gate가 통과한다.
 
 ### 16.9 P13-08 — Phase 13 완료와 live 경계
 
 다음 항목이 모두 충족돼야 Phase 13 master를 `[x]`로 변경한다.
 
-- [ ] cumulative position, daily loss와 manual kill switch 정책·test 완료
-- [ ] intent budget, crash/reconnect reconciliation과 watchdog fault matrix 완료
+- [x] versioned risk budget, unavailable fail-close, pending/partial/UNKNOWN 예약과 manual-kill
+  영속 control 기반 완료
+- [x] configured-unbounded 세 상한, `REALIZED_ONLY` 계약과 `CANCEL_AND_LIQUIDATE` 실제 실행·test 완료
+- [x] intent budget, crash/reconnect reconciliation과 watchdog fault matrix 완료
 - [ ] private BUY trigger 없는 market-event→strategy→order Testnet E2E 완료
-- [ ] deterministic replay와 네 Communication Case 추적성 완료
-- [ ] UI visual/a11y/recovery 검증 완료
-- [ ] `scripts/check_all.sh`와 24시간 이상 soak 완료
-- [ ] secret/dependency/license/security scan과 non-secret evidence 기록 완료
-- [ ] default `disabled`, Testnet와 live endpoint/credential/order-enable 분리 재검증
+- [x] deterministic replay 완료
+- [x] 네 Communication Case 추적성 `126/126` 완료
+- [x] 16-state reference manifest와 axe WCAG A/AA 구조 검사 완료
+- [x] actual browser screenshot/pixel diff gate를 fresh capture로 재실행해 `4/16` PASS,
+  `12/16` FAIL인 SSIM `NO_GO`를 기록했다.
+- [x] Actual native picker 선택·취소와 recovery UI E2E 완료
+- [x] actual browser axe color contrast를 포함해 `16/16 Violations 0` 완료
+- [ ] SSIM이 미달한 12-state visual mismatch 수정·재실행 PASS
+- [x] `scripts/check_all.sh` 통합 실행기 구현 완료
+- [x] 24시간 이상 soak는 사용자 결정으로 영구 범위 제외됨. soak PASS를 의미하지 않음
+- [x] credential canary 기반 secret scan 완료
+- [x] exact-lockfile CycloneDX SBOM `868` components와 coordinate-complete inventory 생성·결속 완료
+- [ ] current offline advisory/license 원본, 제3자 `866`개 검증 license/attribution/text,
+  final notice, current Phase 13 artifact/source provenance 결속 완료
+- [x] default `disabled`, Testnet와 live endpoint/credential/order-enable 분리 재검증
 
 Phase 13 master 완료는 live 주문 승인이 아니다. Live mode는 사용자가 위험 한도와 release evidence를
 검토하고 별도로 명시 승인하기 전까지 configuration, UI와 backend 세 경계에서 모두 disabled다.
 
-### 16.10 바로 시작할 구현 작업
+### 16.10 현재 다음 작업의 실행 순서
 
-가장 먼저 P13-01을 수행한다.
+P13-01의 configured-unbounded 정책, atomic gate, `CANCEL_AND_LIQUIDATE` local 구현과 fail-closed
+검증은 §16.11과 같이 완료했다. Public-path Testnet evidence는 Phase 13 전체 blocker로 남는다.
+2026-08-29 확정 계약과 정확한 EMA 인계는 §16.12가 보존하며, §16.13은 2026-08-30 당시 구현
+입력으로 보존한다. 2026-08-31 이후 실제 재개 순서와 중단 조건은 §16.14를 최신 authoritative
+handoff로 사용한다.
 
-1. 기존 `max_notional`, Position, pending/unknown order와 daily Performance 계산 owner를 감사한다.
-2. `RiskPolicy`/`RiskBudgetSnapshot`의 field, version과 fail-closed error를 명세한다.
-3. 아직 사용자 결정이 필요한 숫자는 `None`으로 숨기지 말고 명시적 미설정 상태로 표현한다.
-4. 한 BUY cap과 cumulative/daily/manual gate의 순서 및 atomic snapshot 경계를 table test로 고정한다.
-5. production BUY entry와 recovery SELL이 각각 어떤 gate를 사용하는지 분리 검증한다.
+1. [x] ADR-003/006, Communication 명세와 readiness report를 §16.12의 사용자 결정에 동기화했다.
+2. [x] configured-unbounded `RiskPolicy`와 `CANCEL_AND_LIQUIDATE`의 cancel·reconcile·안전 청산을
+   구현하고 restart/reconnect/fault table test를 통과했다.
+3. [x] 사용자 확정식 `raw_ols_slope / candidate_price * 100`(`%/30분봉`)을 적용한 30분
+   EMA9/slope production builder와 bootstrap observer, 직접 회귀 20개 및 1m·30m·4H·1D
+   cross-stream 원자 경계의 4H 12개·UTC 자정 180개 유효 arrival permutation을 통과했다.
+4. [x] private BUY seam 없이 public `1L.1`~`1L.3` market event에서 시작하는 local deterministic
+   Case 2 `9/9`과 production `BinanceSpotRESTClient` memory-HTTP E2E `1/1`, 합계 `10/10`을 통과했다.
+5. [x] Testnet 설정의 `100 USDT` absolute ceiling, public `1L.1`~`1L.3`에서 시작하는 actual 전용
+   harness, 세 번째 opt-in, exact one-shot·failure recovery·process lease와 secret-free atomic
+   trace/fail-closed test를 구현했다. 실제 credential·signed request·주문은 실행하지 않았다.
+6. [ ] Keychain credential 읽기, 고정 Spot Testnet으로의 signed read-only 전송과 단일 mutation에
+   대한 명시적 사용자 승인을 받은 뒤 주문 flag를 모두 `0`으로 둔 current read-only preflight를
+   먼저 통과한다. 그 뒤에만 Spot Testnet `ETHUSDT`, 신규 BUY decision notional 최대 `100 USDT`의
+   **단일 targeted public Case 2**를 직렬 실행하고 해당 run의 정확한 Position만 recovery SELL한다.
+7. [x] 실제 native picker 선택·취소, Communication 126/126과 actual browser axe
+   `16/16 Violations 0`을 완료했다.
+8. [ ] Dashboard/chart 공통 원인부터 Fresh actual-browser visual mismatch 12개를 수정해 SSIM
+   `16/16` gate를 마감하고 axe `16/16 Violations 0`을 회귀 검증한다.
+9. [ ] 외부 OSV 전송 없이 local cached DB와 로컬 package source만 사용해 current advisory,
+   제3자 `866`개 license/attribution/text, final notice와 current Phase 13 release binding을 마감한다.
+10. [ ] supply/readiness의 현재 `NO_GO` 전용 schema/checker를 evidence-bound positive path로
+    version-up하고 actual Testnet·visual·supply·source·app/DMG 증거를 같은 source provenance에 결속한다.
+11. [ ] 24시간 soak 없이 `/bin/sh scripts/check_all.sh`를 재실행해 모든 in-scope gate가 exit `0`일
+    때만 Phase 13 master를 완료한다.
 
-P13-01의 정책 구조와 fail-closed test는 외부 credential 없이 구현할 수 있다. 실제 cumulative/daily
-한도 숫자와 manual kill 동작은 코드가 임의로 정하지 않고 사용자 확인을 받아 versioned policy에
-고정한다.
+실제 live endpoint와 live 주문은 이 실행 순서에 포함하지 않는다. 확정된 slope 식과 외부 OSV
+전송 금지를 코드·evidence 경계에서 우회하지 않으며, production 준비가 끝나도 별도 사용자 live
+승인 전까지 configuration/UI/backend의 live-disabled 경계를 유지한다.
+
+### 16.11 2026-08-29 실행 결과와 다음 blocker
+
+사용자 지시에 따라 24시간 이상 Testnet soak와 그 memory/task/socket leak 판정은 Phase 13에서
+영구 제외했다. 이는 원 완료 조건을 수행한 것으로 표기하지 않는 사용자 승인 범위 변경이다. 그
+밖의 안전한 구현과 검증은 다음과 같이 진행했다.
+
+- [x] versioned risk policy 구조, explicit `RISK_POLICY_UNAVAILABLE`, 모든 production BUY의
+  filter 뒤·journal/POST 전 cumulative gate와 pending/partial/UNKNOWN 예약을 구현했다.
+- [x] manual kill active/version과 최근 1,024개 이하의 toggle·no-op command receipt 및 policy
+  provenance를 별도 strict JSONL v2에 file/directory fsync한다. v1 toggle을 호환 replay하고,
+  재시작은 일반 UI command eviction과 독립된 전용 cache로 response-loss duplicate와 ID/payload
+  충돌을 복원하며 empty/corrupt journal이나 저장 결과가 불명확한 process는 신규 effect를 fail
+  closed한다. 매 append는 `O_NOFOLLOW|O_APPEND` same-inode의 stat/cache anchor와 post-write strict
+  replay를 검증해 실행 중 empty·unlink·valid-prefix rollback도 release 전에 거부한다. Cached
+  receipt가 있는 shutdown barrier도 path 부재를 건너뛰지 않고 같은 strict 검증을 수행한다.
+- [x] intent당 총 5회 durable submit budget, lifecycle fsync, policy version replay와
+  crash/reconnect/history·REMOVE failure 회귀를 구현했다.
+- [x] v3 `PREPARED`는 SUBMITTED fsync-before-POST provenance와 4회 exact absence를 결합해
+  신규 submit 없이 정리하고 command gate를 복구한다. Legacy v1/v2는 fail closed하며
+  append-only UPSERT/REMOVE와 intent attempt audit는 restart 뒤에도 보존한다.
+- [x] launcher/Python runtime identity, `ACTIVE|ORPHANED|RELEASED`, parent EOF의 fail-closed
+  ownership과 시장 stream disconnect의 전체 REST/new-generation resync를 구현했다.
+- [x] stale `ACTIVE`/`ORPHANED` owner는 Python spawn 전 native dialog에 exact state/PID/start UUID를
+  표시한다. 명시적 확인 뒤 같은 device/inode·identity·PID 부재를 재검증한 경우에만 같은 artifact를
+  `RELEASED`로 fsync하고 재시작하며, 취소·live/locked/invalid/race 경로는 mutation 없이 닫는다.
+- [x] 시장 복구 뒤 same-order terminal patch가 interrupted session을 자동 `RUNNING`으로 되살리지
+  않는 gate와 shutdown market-worker lock-order 회귀를 추가했다.
+- [x] Case C SELL의 최초 판단 `%B`를 pending runtime, `SubmitOrder`, `Order`와 pending-order
+  sidecar v4에 고정했다. Partial/UNKNOWN/reconciliation 중 시장값이 바뀌어도 terminal
+  `case_c_exit_pct_b`와 PC-27/PC-28 인계는 최초 intent 값을 사용하고, v1~v3 sidecar는
+  backward replay한다. 일반 Case C SELL은 reason과 finite `%B`의 exact runtime 일치를
+  trace·journal·REST 전에 검증하고, REMOVE 뒤에도 intent audit을 유지해 append/replay drift를
+  fail closed한다.
+- [x] 동일 4H candle full-resync의 무중복 STM rebind와 REGIME 실패·version mismatch 시
+  subscription close·market gate 유지 회귀를 추가했다.
+- [x] 7개 category·25개 fault의 canonical replay를 10회 실행해 digest
+  `a5f17e96f60e825faf4ccf89e0788133f8bfcac6a3654504a4f16c5c2f2f70f2`가 일치했다.
+- [x] Communication manifest/checker가 126개 message를 모두 COMPLETE로 검증하고 exit 0을
+  반환한다. Duplicate JSON key·NaN·stale test symbol은 계속 거부한다.
+- [x] Case 2 메시지 `8.2`, `13.2`, `14`는 각각 다른 order의 fill, mismatched execution identity,
+  non-outcome event를 부분 결과·Trade·STM 전이 없이 거부하는 exact negative test를 갖는다.
+- [x] Figma 16-state reference는 filename·1440×1024·SHA-256 manifest에 byte-bound했고, 독립 axe
+  WCAG A/AA scanner `16/16`을 통과했다. 이어 실제 Storybook browser에서 addon-a11y를 각 상태마다
+  재실행해 layout 기반 color contrast를 포함한 `16/16 Violations 0`을 확인했다. Calendar
+  `grid→row→gridcell`, 중복 banner landmark와 시작 progress의 live `status` 결함도 수정했다.
+- [x] 실제 Testnet은 verified closed history를 사용하고 order opt-in `0`으로 account/Kline REST,
+  open·recent order, signed account stream, public Kline WebSocket handshake와 in-memory fault를
+  6/6 통과했다. 이번 실행의 주문 mutation은 0건이다.
+- [x] Backend 전체 `830`개 중 non-skipped `823`개 통과·외부 Testnet `7`개 safe skip,
+  UI `372/372`, Rust 기본 `40/40`과 native picker harness `2/2`, release/root script
+  `161/161`을 통과했다.
+- [x] `scripts/check_all.sh`는 hostile Testnet 주문 환경을 제거하고 local Vitest/TypeScript/Vite를
+  사용하도록 고정했다. 기능 suite는 모두 통과했고 supply evidence binding, offline vulnerability,
+  offline license, visual, Communication과 readiness의 여섯 gate를 모두 실행한 뒤 의도대로 하나의
+  non-zero `NO_GO`로 집계했다.
+- [x] 세 위험 상한의 configured `None`을 정책 부재와 분리하고 finite 한도 경계를 보존했다.
+  current/reserved/candidate/projected notional, KST `REALIZED_ONLY` PnL·daily loss와 policy/market/
+  account/context version을 `Decimal` 문자열 wire와 UI 운영자 표로 게시한다.
+- [x] `CANCEL_AND_LIQUIDATE`는 durable activation을 먼저 fsync한 뒤 같은 app order ID를
+  query→개별 cancel→query하고 terminal partial을 history/Position에 반영한 뒤 정확한 잔량만
+  recovery SELL한다. 이미 `RECONCILIATION_REQUIRED`인 activation, reconnect 재취소, cancel race,
+  restart, active nonterminal과 cleanup 뒤 새 open order의 release TOCTOU를 fail closed test로 고정했다.
+- [x] Cleanup 미완료는 session reconciliation과 shutdown blocker이며 HTTP activation receipt는
+  `manual_kill_cleanup_complete=false`를 포함한 `202`로, 권위 완료만 `200`으로 분리한다. Active
+  epoch의 behavior/policy version도 hot policy와 별도 wire 상태로 보존한다.
+- [x] Python/npm/Cargo project manifest와 project notice에 비공개·개인용 non-publish/
+  proprietary 정책을 반영했다. Offline Python wheel의 실제 `METADATA`에도
+  `License-Expression: LicenseRef-Proprietary`, `Private :: Do Not Upload`와 packaged `LICENSE.txt`가
+  포함됨을 확인했다. 이 완료는 제3자 dependency license·notice 의무를 제거하지 않는다.
+- [x] Raw 30분 OLS slope를 `raw_ols_slope / candidate_price * 100`으로 정규화하고 단위를
+  `%/30분봉`으로 확정했다. Actual/realtime/TP/1분 trailing은 각각 그 계산에 실제 대입한 가격을
+  분모로 사용한다.
+- [x] 30분 builder 직접 회귀 `20/20`, 4H 경계 12개·UTC 자정 180개 유효 arrival permutation,
+  observer 실패 fail-close, public local Case 2 `8/8`과 production Spot REST memory-HTTP `1/1`을
+  통과했다. Public decision price는 claim된 30분 realtime price이며 4H price는 legacy/direct
+  fallback에서만 사용한다.
+- [x] Current-host Tauri harness가 production `choose_csv_export_directory`를 직접 호출해
+  선택 결과의 absolute UTF-8 계약과 취소의 `null` 계약을 경로 비노출로 각각 통과했다.
+  Communication checker 결과는 `126 COMPLETE / 0 GAP`이다.
+- [x] 외부 OSV 서비스로 dependency·lockfile metadata를 전송하지 않기로 영구 확정했다.
+  `scripts/run_phase13_offline_osv.py`만 OS network deny와 scanner offline cached DB를 함께
+  강제한다. 실제 local-only vulnerability/license 실행은 local DB 부재로 각각 exit `127`을
+  반환했으며, 최신 advisory 확인 불가 또는 local cache 부재를 fail closed한다.
+- [x] 세 exact lockfile의 `10 + 412 + 446 = 868` component를 CycloneDX 1.6 SBOM과
+  coordinate-complete license inventory로 재생성하고 main supply evidence에 raw byte hash로 결합했다.
+  Version-matched local installed metadata에서 third-party 494개의 선언과 source hash를
+  관찰했고, 나머지 372개는 추측 대신 `NOASSERTION`으로 표시했다. 이 선언은
+  법적 승인이 아니며 notice review는 `NOT RELEASE-READY`로 고정했다.
+- [x] Phase 12 local-fixed app은 content-tree SHA-256, DMG는
+  `563136398d4d6544c0e1e585e67df66cf6f0d3ce61d6a7050eabe7c640964d05`로 결합했다.
+  이 기록은 `HISTORICAL_PHASE12_LOCAL_FIXED`이며 current Phase 13 candidate/source provenance가
+  아님을 명시해 current release 증거로 승격하지 않는다.
+
+다음 항목은 아직 완료되지 않았다.
+
+- [ ] Phase 13 actual Testnet은 아직 실행하지 않았다. Local public Case 2와 production Spot REST
+  memory-HTTP 검증은 실제 exchange order/fill/History/UI 증거를 대신하지 않는다.
+- [ ] 16-state reference baseline 무결성, 독립 axe scanner, actual native picker와 Communication
+  126/126은 완료했다. Actual browser addon-a11y도 color contrast를 포함해 `16/16 Violations 0`이다.
+  최종 fresh evidence는 대칭 anti-alias 정규화 뒤 SSIM `0.914102`~`0.981147`이며 `4/16` PASS,
+  `12/16` FAIL이므로 visual gate는 계속 `NO_GO`다.
+- [ ] 부분 완료 — current local inventory와 exact CycloneDX SBOM은 868 packages, 최신
+  lockfile/project manifest bytes에 결합했고, 과거 2026-08-25 scan은 historical input으로
+  분리했다. Coordinate license inventory와 notice review도 결합했지만 third-party
+  494개는 local metadata 선언만 관찰했고 372개는 `NOASSERTION`이며 final notice가 아니다.
+  Phase 12 app/DMG digest는 historical로만
+  보존했다. Current offline OSV/license 실행은 local DB 부재로 각각 exit `127`이며, 완전한
+  third-party metadata/final notice와
+  current Phase 13 release artifact/source provenance가 없어 `current_vs_scanned_match=false`,
+  `complete=false`다. 외부 OSV 전송은 영구 불허이며 최신 advisory 확인 불가 또는
+  local cache 부재는 supply/readiness `NO_GO`를 유지한다.
+
+상세 판정과 실행 근거는 `Design/Architecture/Phase_13_Live_Readiness_Report.md`에 기록했다.
+따라서 Phase 13 master와 live release는 `[ ]`이며 default `disabled`를 유지한다.
+
+### 16.12 다음 세션용 authoritative handoff — 사용자 결정과 구현 명세
+
+이 subsection은 2026-08-29 사용자가 제출한 답변과 현재 코드 감사를 함께 보존한다. 다음 세션은
+§16.10 순서와 이 subsection을 먼저 읽고 작업한다. 과거 §10 Phase 13 또는 ADR/report에 남은
+“위험 값·30분 EMA 전체 미확정”, “24시간 soak 필수” 문구와 충돌하면 이 subsection의 최신 사용자
+결정을 기준으로 문서를 먼저 동기화한다. 완료 체크가 있는 기존 항목은 되돌리지 않으며, 아래
+미구현 항목은 코드와 자동 검증 증거가 생기기 전까지 `[ ]`를 유지한다.
+
+#### 16.12.1 확정된 사용자 결정
+
+| 항목 | 확정 값 | 구현 시 해석 |
+|---|---|---|
+| `max_order_notional` | `None` | configured policy의 명시적 무제한. 정책 부재가 아님 |
+| `max_position_notional` | `None` | configured policy의 명시적 무제한. 노출은 계산·게시하되 이 값으로 차단하지 않음 |
+| `max_daily_loss` | `None` | configured policy의 명시적 무제한. daily loss는 계산·게시하되 이 값으로 차단하지 않음 |
+| `daily_loss_scope` | `REALIZED_ONLY` | KST 당일 durable SELL의 실현 PnL만 daily loss에 포함 |
+| `manual_kill_behavior` | `CANCEL_AND_LIQUIDATE` | kill 영속화와 신규 BUY 차단 뒤 app-owned 주문 취소·reconcile 및 정확한 Position 안전 청산 |
+| 30분 EMA period | `9` | alpha `2 / (9 + 1) = 0.2` |
+| EMA seed | 첫 9개 확정 30분봉 종가 평균 | 시간순 확정봉만 seed에 사용 |
+| slope lookback | 최근 EMA9 `6`개 | `x = 0..5` OLS 기울기 |
+| 계산 정밀도 | Decimal 유효숫자 `34` | 중간값에 별도 quantize 금지 |
+| slope 최종 확정 | 소수점 8자리 `ROUND_HALF_EVEN` | 전략 threshold 비교 전에 한 번만 quantize |
+| slope 정규화 | `raw_ols_slope / candidate_price * 100` | 단위 `%/30분봉`; actual/realtime/TP/1분 trailing마다 실제 계산 입력 가격을 분모로 사용 |
+| Phase 13 Testnet | 주문 허용, `ETHUSDT` | live endpoint가 아닌 고정 Spot Testnet만 사용 |
+| Testnet 최대 notional | `100 USDT` | 노출을 늘리는 각 신규 BUY의 decision price × submitted quantity hard cap |
+| recovery SELL | 허용 | authoritative Position/free ETH와 최신 filter 안에서 정확한 보유 수량 청산; BUY cap으로 막지 않음 |
+| 프로젝트 라이선스 | 비공개·개인용 | 프로젝트 자체는 배포 라이선스를 부여하지 않되 제3자 dependency 의무는 별도 준수 |
+| 외부 OSV 서비스 | 영구 전송 불허 | OS network deny와 scanner offline cached DB만 허용; 최신성 공백·cache 부재는 fail closed |
+| 24시간 soak | 영구 제외 | 실행하지 않고 Phase 13 완료 조건에서 제거; PASS 증거로 기록하지 않음 |
+
+이번 대화에서 추가로 확인한 두 결정인 OLS 정규화와 외부 OSV 전송 금지는 모두 확정됐다.
+Slope 계산은 네 사용 위치마다 실제 대입 가격을
+`candidate_price`로 사용한다. 외부 OSV 서비스로의 전송은 허용 경로가 없으며, local/offline
+cached evidence만 사용한다. 이 결정은 최신 advisory 확인 불가를 PASS로 바꾸지 않는다.
+
+#### 16.12.2 30분 EMA9와 Case B/Case C 계산 계약
+
+시간순 확정 30분봉 종가를 `C1, C2, ...`라고 할 때 첫 EMA9와 이후 EMA는 다음과 같다.
+
+```text
+E9 = (C1 + C2 + ... + C9) / 9
+Et = Decimal("0.2") * Ct + Decimal("0.8") * E(t-1)
+```
+
+현재 진행 중인 30분봉에 후보 가격 `p`를 임시 종가로 넣는 계산은 다음과 같다.
+
+```text
+Et(p) = Decimal("0.2") * p + Decimal("0.8") * E(t-1)
+Y(p) = [E(t-5), E(t-4), E(t-3), E(t-2), E(t-1), Et(p)]
+```
+
+`x = [0, 1, 2, 3, 4, 5]`, `x_mean = 2.5`로 OLS raw slope를 계산한다. 중간 seed, EMA와
+회귀값은 Decimal precision 34 안에서 별도 반올림하지 않는다. 각 계산의 실제 대입 가격 `p`를
+분모로 `normalized = raw_ols_slope / p * 100`을 계산하며 단위는 `%/30분봉`이다. Normalized
+slope만 `Decimal("0.00000001")`에 `ROUND_HALF_EVEN`으로 확정하고 그 값으로
+`-0.55`, `-0.08`, `-0.03`, `0.04`, `0.08` threshold를 비교한다.
+
+후보 계산의 핵심 불변식은 다음과 같다.
+
+- 실제 30분봉 close만 `Et`를 확정 EMA 시계열에 commit한다.
+- realtime tick, `tp_price`와 `close_1m`은 모두 같은 마지막 확정 `E(t-1)`에서 매번 다시 계산한다.
+- 이전 realtime 후보 EMA를 다음 tick의 `E(t-1)`로 사용해 같은 진행봉을 반복 누적하지 않는다.
+- 후보 계산은 확정 EMA 시계열을 변경하지 않는다.
+- 확정 slope에는 최소 14개 확정 30분봉이 필요하다. 진행봉 후보 slope에는 seed 이후 직전 확정
+  EMA 5개와 후보 EMA 1개가 필요하며, 입력 부족·gap·stale generation은 거래 event 없이 fail closed한다.
+
+Case별 대입 가격과 생명주기는 다음과 같다.
+
+| 사용 위치 | 후보 또는 확정 가격과 정규화 분모 | 계산·저장 규칙 |
+|---|---|---|
+| Case B signal/30분봉 stop의 `ema_slope` | 실제 확정 30분봉 종가 | `Et`를 commit한 최근 확정 EMA 6개 raw slope를 같은 확정 종가로 정규화해 `ema_slope_30m_close`로 사용 |
+| Case B TP/Trend Hold의 `realtime_ema_slope` | 현재 진행 30분봉의 실제 close 가격 | 진행봉 임시 close로 계산하고 같은 realtime 가격으로 정규화하며 commit하지 않음 |
+| Case C 익절권 진입의 `ema_slope_30m(tp_price)` | `lower + 0.10 * (upper - lower)` | 같은 snapshot의 band로 계산한 raw slope를 같은 `tp_price`로 정규화하고 후보 slope만 `previous_trail_ema_slope`에 저장하며 EMA 시계열은 변경하지 않음 |
+| Case C trailing의 `ema_slope_30m(close_1m)` | 방금 확정된 1분봉 종가 | 1분 EMA가 아니라 진행 30분봉의 임시 close로 계산하고 같은 `close_1m`으로 정규화. 이전 slope보다 크면 기준을 갱신하고, 작거나 같으면 SELL |
+| Case C stop의 realtime 30분 slope | 현재 진행 30분봉의 실제 close 가격 | 진행봉의 임시 close로 계산하고 같은 realtime 가격으로 정규화한 값이 `<= -0.55`로 3분 유지될 때 STOP |
+
+Case B와 Case C는 같은 30분 EMA9/OLS 수학을 사용하지만 입력 가격, 평가 시점, 확정 여부와 상태
+사용법이 다르다. 이 구분은 `Lower_bb_logic_specification.md`의 Case B realtime close 치환과 Case C
+`ema_slope_30m(tp_price|close_1m)` 계약을 따른다.
+
+#### 16.12.3 현재 코드에서 맞는 부분과 비구현 부분
+
+- [x] `MarketEvaluationSnapshot`은 `ema_slope_30m_close`, `realtime_ema_slope`,
+  `current_close_ema_slope`, `tp_reference_ema_slope`를 서로 다른 Decimal field로 보존한다.
+- [x] Case B signal/stop은 확정 slope를, TP/Trend Hold는 realtime slope를 사용한다.
+- [x] Case C는 TP 기준 slope를 저장하고 확정 1분봉 시점의 30분 후보 slope와 비교한다.
+- [x] 4H REGIME에는 EMA9 SMA seed, alpha 0.2, 최근 6개 OLS/current-price 정규화와 최종 8자리
+  `ROUND_HALF_EVEN` 구현 및 golden test가 있다. 이는 재사용 가능한 수학 참고이며 30분 builder가 아니다.
+- [x] 실제 30분/1분 Kline에서 위 네 slope와 5초/3분 유지 flag를 만드는 concrete production
+  builder, shared interval-independent Decimal helper와 monotonic-duration tracker를 구현했다.
+- [x] Production bootstrap이 builder와 `TradingController.observe_market_evaluation`을
+  `MarketDataController`에 한 쌍으로 주입한다.
+- [x] Case C의 `tp_reference_ema_slope`는 같은 market snapshot의 band로 계산한 `tp_price`를
+  후보와 정규화 분모에 함께 사용한다.
+- [x] 조건 false, candle/generation 변경, gap/disconnect와 full-resync를 위한 monotonic tracker
+  reset/rebase 경계를 구현했다.
+- [x] Public market event의 주문 decision price는 claim된 immutable
+  `MarketEvaluationSnapshot.realtime_price`를 사용한다. 4H current price인
+  `MarketSnapshot.get_current_eth_price()` 재조회는 evaluation이 없는 legacy/direct 경로의
+  fallback으로만 남기고 public event 가격을 덮어쓰지 않는다.
+- [x] Builder golden·seed·threshold·HALF_EVEN·non-accumulation·actual close·1분 결합·reset/rebase
+  직접 회귀 20개와 처리 전 연속 enqueue된 market version의 queue-claim provenance를 통과했다.
+- [x] 1분·30분 cross-stream과 4H/1D 상위 경계의 arrival-order·source event-time을 검증했다.
+  4H 경계 12개와 UTC 자정 180개 유효 permutation은 정확히 한 atomic version을 게시하고,
+  overflow·mismatch·open-before-close·early event는 publication 없이 fail closed한다.
+- [x] Public Kline event부터 `1L.3`, TradingSTM Action, local order/fill, Position, History와
+  publication까지 이어지는 Case 2 public-path `8/8`을 검증했다. 이 묶음은 여섯 behavior 흐름
+  (immediate/partial/UNKNOWN/failure/SELL/STOP)과 Case C intent/provenance 불변식 두 개를 포함하며,
+  production Spot REST memory-HTTP 흐름도 private Action seam 없이 별도 `1/1`로 검증했다.
+- [ ] Actual Phase 13 Testnet order/fill/History/UI trace는 아직 없다. Local memory transport
+  증거를 실제 exchange 증거로 승격하지 않는다.
+
+#### 16.12.4 확정 계약과 남은 항목별 구현·검증 기준
+
+1. **Configured-unbounded 위험 정책**
+
+   - [x] `RiskPolicyUnavailable`은 정책 문서/주입 자체가 없는 상태로 유지하고, configured
+     `RiskPolicy`의 세 상한 field만 `Decimal | None`으로 확장한다. wire의 명시적 `null`도 같은
+     의미로 strict 변환한다.
+   - [x] `None`인 gate만 건너뛰고 후보 order, 현재/reserved/projected position과 KST daily loss
+     계산 및 publication은 그대로 유지한다. finite Decimal이 설정된 경우 기존 초과 차단 순서와
+     equality 경계를 보존한다.
+   - [x] policy version mismatch, unavailable, explicit-unbounded를 서로 다른 test와 UI 상태로
+     고정한다. `None`을 거대한 Decimal 상수로 치환하지 않는다.
+   - [x] ADR-003의 non-null live limit 요구와 ADR-006의 양수 Decimal 요구를 사용자 결정에 맞춰
+     먼저 개정하고, 전략 손절과 운영 위험 상한이 서로 다른 개념이라는 잔여 위험을 기록한다.
+
+2. **`CANCEL_AND_LIQUIDATE` manual kill**
+
+   - [x] kill active/version/behavior receipt를 먼저 fsync한 뒤 신규 BUY, 새 strategy entry와 새
+     non-recovery effect를 차단한다.
+   - [x] pending/UNKNOWN과 app-owned open order를 authoritative REST/signed stream으로 같은 ID
+     조회하고, 취소 가능한 주문만 취소한 뒤 terminal/partial 결과를 먼저 reconcile한다.
+   - [x] reconcile 뒤 Position이 남으면 기존 STOP/recovery SELL 경로로 effective free ETH와 최신
+     symbol filter를 검증해 정확한 보유 수량을 청산한다. 위험 상한 `None` 또는 Testnet BUY cap은
+     노출을 줄이는 SELL을 차단하지 않는다.
+   - [x] open app order 0, pending/UNKNOWN 0, Position 0이 authoritative하게 확인된 뒤에만 성공을
+     게시한다. timeout·부분체결·cancel race·journal/history 실패·restart에서는 같은 command/order
+     identity를 재사용하고 `RECONCILIATION_REQUIRED`를 유지한다.
+   - [x] Binance cancel/query/order status, user-data event와 current symbol filter 동작은 구현 직전
+     Binance 공식 Spot/Testnet 문서를 다시 확인해 fixture와 ADR에 링크한다.
+
+3. **30분 production market evaluation**
+
+   - [x] 확정 정규화식의 golden vector를 추가했다. seed 경계, 14번째 확정봉, 후보 가격
+     치환, actual close commit, tick 비누적, 30분 rollover, 1분 close, exact threshold와 final
+     HALF_EVEN을 20개 production builder 회귀로 고정했다.
+   - [x] 기존 `MarketEvaluationBuilder` seam에 interval-independent pure Decimal helper와 concrete
+     implementation을 연결했다. Concrete builder는 `MarketDataController`가 소유하는 application
+     package 구현 세부사항이며 신규 business lifeline이 아니므로 §6.2 신규 클래스 절차 대상이
+     아니다. Application package public export에서도 제외하고 architecture audit 대상에는 포함한다.
+   - [x] authoritative `MarketSnapshot`의 시간순 확정 30분봉과 현재 진행봉만 사용한다. live tick,
+     1분 close와 30분 close가 같은 source version에서 충돌하지 않도록 interval/open-time/event-time
+     provenance를 검증한다.
+   - [x] 5초와 3분 유지 조건은 wall clock이 아니라 주입 가능한 monotonic clock으로 추적하고,
+     조건 false, candle/generation 변경, gap/disconnect와 full-resync에서 안전하게 reset한다.
+   - [x] production bootstrap에 builder와 public Trading observer를 한 쌍으로 주입해 Communication
+     `1L.3`을 활성화한다. builder 실패, stale market version과 observer 실패는 신규 effect gate를
+     닫고 resync/reconciliation을 요청한다.
+
+4. **Public-path local/Testnet Case 2 E2E**
+
+   - [x] network/order 없는 deterministic harness에서 외부 Kline/account event와 clock/fault만
+     제어하고 public `MarketDataController.observe_kline`부터 BUY/SELL/partial/unknown/failure 및
+     STOP/recovery를 검증한다. `TradingController._execute_action` 같은 private seam 호출은 금지한다.
+   - [x] Communication `1L.1`~`1L.3`과 Case 2 전체 24개 message에 caller/receiver, source event,
+     market/context version, intent/client/exchange order ID, result/failure를 한 provenance로 기록한다.
+     Production `BinanceSpotRESTClient`의 signed POST/query/trades도 memory-only HTTP transport로
+     같은 public path에서 검증해 외부 network나 주문 mutation 없이 adapter 경계를 포함했다.
+   - [ ] local gate가 모두 통과한 뒤에만 actual Testnet order opt-in을 켠다. symbol은 `ETHUSDT`, 각
+     신규 BUY decision notional은 `100 USDT` 이하로 제한하고 제출 직전 실제 `exchangeInfo`, account,
+     commission, open/recent order와 stream readiness를 Binance 공식 문서 기준으로 재검증한다.
+   - [ ] BUY 이후 STOP 또는 장애가 발생하면 승인된 recovery SELL로 정확한 authoritative Position을
+     청산한다. 마지막 fresh runtime에서 Position 0, pending 0, matching open order 0과 durable
+     History 일치를 확인한다. 24시간 soak는 실행하지 않는다.
+
+5. **Communication/UI 마감**
+
+   - [x] `1L.3`과 public-path Case 2를 통과해 해당 GAP을 COMPLETE로 바꿨다. 실제 native directory
+     picker `2.1.2.1`도 current-host Tauri integration에서 선택·취소 두 terminal 계약을 직접
+     검증했으며 최종 checker는 `126/126`이다.
+   - [x] Actual browser에서 16개 상태를 1440×1024·DPR1 explicit clip으로 capture하고 repository에
+     보존해 SHA-256으로 고정된 reference와 pixel compare했다. Capture/digest/dimension/SSIM gate와
+     baseline 자동 갱신 금지를 구현했다.
+   - [ ] SSIM `0.98` 미만인 12개 실제 mismatch를 수정하고 같은 gate를 재실행해 16/16 PASS한다.
+   - [x] keyboard/focus, reduced motion, axe와 실제 browser color contrast를 함께 실행하고 backend
+     authoritative state보다 UI가 먼저 성공·Position을 표시하지 않는 recovery/risk-blocked 상태를
+     검증했다. Actual browser 결과는 `16/16 Violations 0`, UI 전체 suite는 `372/372`다.
+
+6. **Supply-chain과 비공개·개인용 라이선스**
+
+   - [x] Python, npm과 Cargo project manifest에 ecosystem이 지원하는 private/non-publish와
+     proprietary 또는 `UNLICENSED` 의미를 일관되게 기록한다. 이 결정은 제3자 dependency의 license와
+     notice 의무를 제거하지 않는다.
+   - [x] 외부 OSV 서비스 전송을 영구 불허하고 `scripts/run_phase13_offline_osv.py`를 유일한 실행
+     경계로 고정했다. OS network deny와 scanner offline cached DB를 함께 강제하며 최신 advisory
+     확인 불가 또는 local cache 부재는 fail closed하고 readiness `NO_GO`에 명시한다.
+   - [x] Exact lockfile 기반 CycloneDX SBOM 868 components, coordinate-complete dependency license
+     inventory, `NOT RELEASE-READY` notice review와 historical Phase 12 app/DMG digest를 supply evidence
+     schema v4에 byte-bind했다. Third-party 494개의 version-matched local metadata 선언을
+     source hash와 함께 보존했고, 미관찰 372개는 license를 추측하지 않고
+     `NOASSERTION`으로 남겼다. Historical release도 current Phase 13으로 승격하지 않는다.
+   - [ ] Offline cached DB의 current advisory/raw license output, third-party 866개의 검증된
+     license/attribution/text와 final required notice, advisory별 reachable/upgrade/accepted-risk 판정,
+     present source·lockfile provenance와 결합된 current Phase 13 app/DMG를 마감한다.
+
+7. **최종 Phase 13 판정**
+
+   - [x] `scripts/check_all.sh`를 재실행해 기능·Communication PASS와 visual·supply·readiness
+     `NO_GO`를 기록했다. 24시간 soak는 실행/판정 목록에서 제외했다.
+   - [ ] 남은 in-scope 항목을 완료한 뒤 같은 실행기의 visual·supply·readiness까지 모두 exit `0`인지
+     기록한다.
+   - [ ] `Phase_13_Live_Readiness_Report.md`에 실행 명령, test 수, artifact digest, 실제 Testnet 주문과
+     최종 exposure를 기록한 뒤에만 Phase 13 master를 `[x]`로 바꾼다.
+   - [ ] Phase 13 완료와 live 주문 허용은 별개다. 별도 사용자의 live 승인 전에는 `live` mode를
+     configuration, backend와 UI 세 경계에서 계속 disabled로 둔다.
+
+#### 16.12.5 다음 세션 재개 지침
+
+다음 세션은 새 Phase를 시작하지 말고 Phase 13을 이어서 수행한다. 먼저 본 문서 전체와 §1,
+§16.10~16.13, Communication Diagram의 `1L.1`~`1L.3`,
+`Design/Specification/Lower_bb_logic_specification.md`, ADR-003/006과
+`CODING_CONVENTIONS.md` 전체를 읽는다. 특히 신규·수정 Python code에는 함수·클래스 docstring뿐
+아니라 coding convention의 블록 주석과 문장 주석을 빠뜨리지 않는다.
+
+Slope 정규화식·단위와 외부 OSV 영구 전송 불허는 확정됐으므로 다시 질문하거나 다른 기본값을
+도입하지 않는다. Actual Testnet에는 기존 사용자의 standing scope authorization이 있으나,
+`scripts/check_all.sh`나 broad discovery가 주문 flag를 켜서는 안 된다. §16.13의 code·read-only
+preflight를 통과한 dedicated target에서만 `ETHUSDT`, 각 신규 BUY 최대 `100 USDT`, 해당 run이 만든
+정확한 Position의 recovery SELL을 허용한다. 24시간 soak와 live endpoint/live 주문은 실행하지 않는다.
+
+다음 문장으로 작업을 재개할 수 있다.
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §1과 전체 문서, §16.10~16.13을 기준으로
+Phase 13의 가장 앞선 미완료 항목부터 이어서 구현하라. 기존 [x] 증거를 보존하고,
+24시간 soak와 live 주문은 제외하며, §16.13의 전용 opt-in·100 USDT absolute ceiling·local 및
+read-only preflight 통과 전에는 Testnet 주문을 실행하지 마라.
+```
+
+### 16.13 2026-08-30 다음 세션 실행 지침 — historical implementation input
+
+이 subsection은 **다음 세션에서 실제로 따를 작업 순서, 허용 범위, 중단 조건과 완료 증거**다.
+§16.12는 확정된 수학·정책 계약과 이미 완료한 구현 근거로 보존하고, “이제 무엇을 할 것인가”에
+대해서는 당시 이 subsection을 우선했다. 2026-08-31 구현 결과 이후에는 아래 §16.14가 이 절의
+미완료 명세와 수치에 우선한다. 새 Phase를 시작하지 말고 Phase 13의 가장 앞선 미완료 P13-04부터
+이어간다는 범위는 유지한다.
+
+#### 16.13.1 재개 시점의 정확한 상태
+
+| 영역 | 2026-08-30 현재 상태 | 다음 세션에서의 의미 |
+|---|---|---|
+| P13-01~03, P13-05 | 완료 | 기존 `[x]`와 회귀 증거를 보존하고 관련 변경 시에만 재검증 |
+| Public local Case 2 | `8/8` PASS | 실제 exchange 증거가 아니므로 Testnet 완료로 승격 금지 |
+| Spot REST memory-HTTP | `1/1` PASS | production adapter 경계의 local 증거이며 actual fill 증거가 아님 |
+| Actual Phase 13 Testnet | 미실행, 이번 snapshot 주문 mutation `0` | 가장 앞선 미완료 항목. private Action seam 없는 새 전용 target 필요 |
+| 기능 baseline | Backend `830` 중 non-skipped `823` PASS·외부 Testnet `7` safe skip, UI `372/372`, Rust `40/40`, picker `2/2`, release/root script `161/161` | 숫자는 새 변경 뒤 다시 측정하며 예상치로 PASS 처리하지 않음 |
+| Communication/a11y | `126/126`, actual-browser axe `16/16 Violations 0` | 완료 증거 보존; UI 변경 뒤 actual browser로 회귀 확인 |
+| Visual | threshold `0.980000`, `4/16` PASS·`12/16` FAIL, SSIM `0.914102`~`0.981147` | SSIM 미달 12개를 실제 UI 구현으로 수정해야 함 |
+| Supply | exact-lockfile SBOM `868`; third-party `866` 중 local declaration `494`, `NOASSERTION` `372` | SBOM 자체는 완료. current offline scan·license text/attribution·final notice·release binding은 미완료 |
+| Aggregate | 기능 suite는 PASS지만 visual·supply·readiness 때문에 `scripts/check_all.sh` exit `1` | 알려진 `NO_GO`를 숨기지 말고 각 하위 gate를 해소한 뒤에만 exit `0` 요구 |
+| Source provenance | HEAD `aca6f1262e934fddc94c93b4f42e41ef8f4dd604` 위 dirty working tree | 현 상태를 자동 정리·reset·commit하지 말 것. 최종 artifact 전에 하나의 canonical source provenance 필요 |
+
+#### 16.13.2 변경할 수 없는 결정과 금지 범위
+
+- OLS 정규화는 `raw_ols_slope / candidate_price * 100`, 단위 `%/30분봉`이다. 네 사용 위치마다
+  실제 계산에 대입한 가격을 분모로 사용하며 다른 정규화·단위·암묵 기본값을 도입하지 않는다.
+- 외부 OSV 서비스, 외부 vulnerability/license API, remote scan과 dependency/lockfile metadata
+  전송은 영구 불허다. `osv-scanner` raw 직접 호출과 `--download-offline-databases`도 금지한다.
+- 허용된 실제 주문 범위는 **고정 Binance Spot Testnet의 `ETHUSDT`**, 노출을 늘리는 각 신규 BUY의
+  `decision_price × final_submitted_quantity <= 100 USDT`, 그리고 **그 실행이 만든 정확한
+  authoritative Position**의 recovery SELL뿐이다.
+- `100 USDT`는 사용자 설정값의 권장치가 아니라 넘을 수 없는 absolute ceiling이다. BUY cap으로
+  recovery SELL을 막지 않으며, recovery라는 이름으로 기존 자산이나 다른 run의 Position을 매도하지 않는다.
+- Live endpoint, live credential과 live 주문은 승인 범위 밖이다. configuration, backend와 UI의
+  live-disabled 경계를 유지한다.
+- 24시간 soak와 장시간 memory/task/socket leak 판정은 Phase 13에서 영구 제외했다.
+  `phase13_soak.py --validate-only`는 주문 없는 설정 검사일 뿐 soak PASS가 아니다.
+- Actual Testnet 증거에 `TradingController._execute_action`, private BUY trigger, 전략 threshold patch,
+  성공 상태 직접 주입을 사용하지 않는다. Harness seam은 외부 market/account event, 주입 clock과
+  fault control에만 둔다.
+- 현재 working tree의 사용자 변경을 reset, checkout, clean 또는 임의로 덮어쓰지 않는다. Release
+  provenance를 위한 commit이 필요하면 자동 commit하지 말고 사용자에게 별도 허가를 받는다.
+- 신규·수정 code는 `CODING_CONVENTIONS.md` 전체를 적용한다. 특히 class/function docstring뿐 아니라
+  **블록 주석과 문장 주석**을 생략하지 않고, 해당 주석이 이유·불변식·fail-closed 경계를 설명하게 한다.
+- 완료 증거가 없으면 `[x]`로 바꾸지 않는다. 실패, skip, local-only, historical artifact와
+  범위 제외를 PASS로 승격하지 않는다.
+
+#### 16.13.3 0단계 — 문서 재독, 변경 보존과 주문 없는 baseline
+
+코드 수정 전에 다음 자료를 순서대로 읽는다.
+
+1. 이 Roadmap의 §1과 **문서 전체**, 그중 §16.10~16.13
+2. `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` 전체와 특히
+   Case 2 `1L.1`~`1L.3`, 주문 `1`~`14`, Position/History/Performance/UI publication
+3. `Design/Specification/Lower_bb_logic_specification.md`
+4. `Design/Architecture/Decisions/ADR-002-order-retry-and-reconciliation.md`, ADR-003,
+   ADR-005, ADR-006
+5. `CODING_CONVENTIONS.md` 전체
+6. 실제 변경할 backend Testnet/bootstrap/test와 UI·visual·supply 파일
+
+그 다음 `git status --short`와 현재 revision을 기록하되 working tree를 정리하지 않는다. 모든 자동
+baseline은 `BINANCE_RUN_TESTNET=0`, `BINANCE_RUN_TESTNET_ORDERS=0`으로 실행하고 credential·cap 환경도
+child process에 전달하지 않는다. 최소한 다음을 확인한다.
+
+```sh
+cd backend
+BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 PYTHONPATH=src \
+  .venv/bin/python -m unittest -q tests.integration.test_public_market_case2_flow
+cd ..
+/bin/sh scripts/check_all.sh
+```
+
+첫 command의 현재 기대값은 `8/8` PASS다. 두 번째 command는 주문 flag를 내부에서 제거해야 하며,
+기능 하위 suite는 PASS하되 알려진 visual·supply·readiness `NO_GO` 때문에 전체 exit `1`일 수 있다.
+이 exit `1`을 actual Testnet preflight 실패와 혼동하거나 gate를 제거해 숨기지 않는다.
+
+#### 16.13.4 1단계 — `100 USDT` absolute ceiling과 전용 public Testnet target 구현
+
+Actual 주문 전에 반드시 다음 안전 공백을 먼저 닫는다.
+
+1. `backend/src/binance_auto_trader/bootstrap/testnet.py`의 현재
+   `_read_positive_max_notional()`은 finite 양수만 검사하므로 `100` 초과도 허용한다. Configured cap은
+   `0 < cap <= Decimal("100")`만 허용하도록 absolute ceiling을 production code에 둔다.
+2. 제출 직전 filter를 적용해 얻은 **최종 수량**과 claim된 immutable evaluation의 decision price로
+   notional을 다시 계산하고, configured cap과 absolute `100` 중 하나라도 넘으면 journal/REST 전에
+   fail closed한다. Float/JS number를 쓰지 않는다.
+3. exact `100` 허용, `100` 초과, 0/음수, `NaN`/무한대, whitespace, filter 전에는 통과하지만
+   filter 뒤 cap을 넘는 경계, decision/evaluation provenance mismatch와 recovery SELL 예외를 각각
+   unit/integration test로 고정한다.
+4. 기존 `BINANCE_RUN_TESTNET=1`, `BINANCE_RUN_TESTNET_ORDERS=1` 외에 Phase 13 public Case 2만 위한
+   전용 opt-in(권장 이름 `BINANCE_RUN_PHASE13_PUBLIC_CASE2=1`)을 추가한다. 기본값과 알 수 없는 값은
+   `0`으로 수렴하게 하고 broad discovery와 `scripts/check_all.sh`는 이 flag를 반드시 제거한다.
+5. 새 actual target은 권장 경로
+   `backend/tests/testnet/test_phase13_public_market_case2.py`에 둔다. 기존
+   `test_binance_testnet_order_lifecycle.py`의 private `_execute_action` trigger는 Phase 9 historical
+   evidence로만 보존하며 Phase 13 public evidence로 재사용하지 않는다.
+6. 새 target은 public `MarketDataController.observe_kline`/공개 account event에서 시작해
+   `1L.1`→`1L.2`→`1L.3`→TradingSTM Action→risk/session/intent→production Testnet REST/stream→fill→
+   Position→History→Performance→transport/UI event batch를 한 provenance로 연결한다.
+7. secret-free trace에는 source Kline identity/event time, market/context/policy version, regime와
+   Action, intent/client/exchange order ID, decision price, final submitted quantity/notional,
+   incremental fills, durable Trade ID, Position/Performance와 UI event sequence를 기록한다. API key,
+   signature, raw credential/header와 local session token은 artifact·stdout·exception에 기록하지 않는다.
+8. production signal 조건이 성립하지 않으면 `NO_SIGNAL/BLOCKED`로 기록한다. Private Action 호출,
+   threshold 완화나 성공 trace 직접 작성으로 주문을 강제하지 않는다.
+
+이 단계에서는 실제 주문 flag를 켜지 않는다. Production code·negative test·local public Case 2와
+trace validator가 모두 통과한 뒤에만 2단계로 이동한다.
+
+#### 16.13.5 2단계 — 실제 주문 없는 Testnet read-only preflight
+
+구현 또는 실행 직전 Binance 동작을 확인해야 하면 추측하지 말고 **Binance 공식 Spot API와 Spot
+Test Network 문서만** 다시 확인해 endpoint, symbol filter, order status, user-data stream, query와
+commission 계약을 fixture/ADR에 링크한다.
+
+1. Keychain의 Testnet credential을 한 backend child의 memory에만 주입하고
+   `BINANCE_RUN_TESTNET=1`, `BINANCE_RUN_TESTNET_ORDERS=0`, public-case opt-in `0`으로 기존 actual
+   read-only suite를 먼저 실행한다.
+2. 고정 Spot Testnet endpoint인지, hostile live/base-URL 환경을 무시하는지, account `canTrade`,
+   `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`/`MARKET_LOT_SIZE`/`NOTIONAL`, commission, balances,
+   open/recent orders, signed account stream READY와 public Kline stream READY를 확인한다.
+3. 이전 `bat-` order가 보이면 `BINANCE_TESTNET_BASELINE_HISTORY_PATH`는 absolute·non-empty이고
+   pending `0`, replay Position `0`, closed history가 exchange recent order와 일치하는 verified
+   baseline만 사용한다. Guard를 완화하거나 증거 파일을 지우지 않는다.
+4. 주문 직전 fresh runtime에서 Position `0`, pending/UNKNOWN `0`, run-owned open order `0`과
+   설명되지 않은 balance/open order가 없음을 확인한다. 하나라도 불명확하면 주문을 중단하고
+   `RECONCILIATION_REQUIRED` 증거만 남긴다.
+
+#### 16.13.6 3단계 — 단일 actual Spot Testnet public Case 2
+
+2단계가 모두 통과한 같은 source와 fresh runtime에서만 세 opt-in을 명시적으로 켜고, 새 targeted
+public Case 2 module 하나만 직렬 실행한다. Test discovery 전체, Phase 9 lifecycle/cold-restart와의
+동시 실행, 병렬 worker 실행은 금지한다.
+
+- 제출 직전 fresh filter/account/commission/stream 상태와
+  `decision_price × final_submitted_quantity <= configured_cap <= 100 USDT`를 trace에 고정한다.
+- 신규 BUY는 한 intent/client-order identity와 bounded submit budget만 사용한다. HTTP response가
+  불명확하면 같은 client order ID로 query/reconcile하며 새 ID로 BUY를 재제출하지 않는다.
+- Partial/UNKNOWN은 incremental fill만 반영하고 권위 terminal 결과 전 성공·Position owner를
+  확정하지 않는다. Persistence 실패 뒤 주문을 재제출하지 않는다.
+- 청산이 필요하면 같은 run이 만든 authoritative Position과 effective free ETH, fresh symbol filter를
+  확인한 정확한 수량만 recovery SELL한다. 다른 자산·기존 보유분·다른 run의 Position은 건드리지 않는다.
+- 마지막 fresh runtime에서 Position `0`, pending/UNKNOWN `0`, matching open order `0`, durable
+  History/Performance와 exchange recent order/fill 일치, duplicate order/trade `0`을 확인한다.
+- 정규화된 trace와 digest에는 실제 주문 수, client/exchange order ID, fill·Trade 대응과 final
+  exposure를 포함하되 secret은 제외한다.
+
+Response-loss/5xx 같은 추가 actual fault 주문, 두 번째 신규 BUY, symbol/cap 확대, 기존 balance 매도나
+설명되지 않은 상태 정리가 필요하면 자동으로 계속하지 않는다. 필요한 주문 수와 최대 노출을 제시하고
+사용자에게 별도 승인을 요청한다.
+
+#### 16.13.7 4단계 — Visual `16/16` 마감
+
+Actual Testnet 증거를 닫은 뒤 P13-06의 남은 visual을 다음 공통 원인 순서로 수정한다.
+
+1. Dashboard/chart `01`, `02`, `03`, `13`: fixture에서 Lightweight Charts가 기준 고정 SVG
+   market layer를 숨기고 별도 autoscale canvas를 표시하는 경계를 먼저 조사한다. Candle/EMA/BB의
+   세로 투영을 기준축과 맞추되 production chart 동작을 훼손하지 않는다.
+2. Trade-history 공통 base `04`: row surface, filter 간격, table scrollbar/fade, header/summary token을
+   먼저 맞춰 같은 배경을 쓰는 CSV 화면의 공통 오차를 줄인다.
+3. CSV `16`→`09`→`08`→`10`: dialog/date control/calendar surface·outline·text/nav geometry를
+   증거 기반으로 수정한다. Calendar의 7-column ARIA 구조를 보존한다.
+4. 임계값 근접 `14`→`12`→`15`: empty-state 세로 위치와 공통 modal/backdrop/text/status icon의
+   최소 차이만 수정한다.
+5. 이미 PASS인 `05`, `06`, `07`, `11`은 모든 변경에서 회귀 보호한다.
+
+Baseline PNG, `baseline_manifest.json`, `comparison_policy.json`, threshold `0.980000`, symmetric
+`gblur`/`yuv444p`, `automatic_baseline_update=false`는 변경하지 않는다. Baseline을 current로 복사·변환,
+reference overlay, 실패 frame 숨기기와 정적/jsdom capture의 증거 승격도 금지한다.
+
+매 변경 묶음마다 UI test/typecheck/build와 keyboard/focus/reduced-motion/ARIA를 확인한다. 최종 code가
+고정된 뒤 실제 Storybook browser에서만 16개 모두를 viewport `1440×1024`, DPR `1`, explicit clip
+`0,0,1440,1024`, JPEG/JFIF로 fresh capture한다. 그 뒤에만 current 16개와
+`current_capture_manifest.json`의 capture 시각·SHA-256을 함께 갱신하고 다음 공식 gate를 실행한다.
+
+```sh
+cd UI
+npm test
+npm run typecheck
+npm run build
+cd ..
+PYTHONPATH=. backend/.venv/bin/python scripts/check_phase13_visual_regression.py
+PYTHONPATH=. backend/.venv/bin/python -m unittest \
+  backend.tests.unit.scripts.test_phase13_visual_baselines
+```
+
+완료 증거는 SSIM `16/16 >= 0.980000`, manifest/hash/format/dimension 일치와 actual-browser addon-a11y
+`16/16 Violations 0`을 **동시에** 만족해야 한다.
+
+#### 16.13.8 5단계 — Local-only supply와 current release provenance
+
+외부 OSV 금지를 유지하면서 다음 미완료 항목을 닫는다.
+
+1. 사용자가 out-of-band로 제공했거나 이미 로컬 cache에 존재하는 DB만 사용해 아래 wrapper를
+   실행한다. Cache가 없으면 exit `127`과 `NO_GO`를 정직하게 유지하며 외부에서 자동 다운로드하지 않는다.
+
+   ```sh
+   python3 scripts/run_phase13_offline_osv.py vulnerability
+   python3 scripts/run_phase13_offline_osv.py license
+   ```
+
+2. Local package cache/source의 LICENSE/COPYING/NOTICE/METADATA를 exact coordinate와 hash로 결속해
+   third-party `866`개 모두의 license text·attribution·notice 요구를 검증한다. 현재 declaration
+   `494`와 `NOASSERTION` `372`를 출발점으로 사용하되 license를 이름이나 유사 package로 추측하지 않는다.
+   PyInstaller/hooks, non-standard license와 GPL 계열은 별도 수동 검토 대상으로 남긴다.
+3. Advisory마다 exact version, current 여부, reachability, remediation/upgrade 또는 명시적
+   accepted-risk 근거를 기록한다. 과거 Phase 12 scan이나 historical `18 findings/5 reachable`을
+   current PASS로 승격하지 않는다.
+4. `phase13_supply_chain_evidence.json`의 final notice와 raw offline scan을 완성한다. 기존 SBOM
+   `868`과 inventory는 current lockfile이 바뀌었으면 다시 생성하고 raw bytes/hash를 재결속한다.
+5. Release candidate 직전에 source를 freeze한다. 사용자 승인 commit 또는 재현 가능한 canonical
+   source-tree digest 중 하나를 확정하고, 같은 source에서 만든 current Phase 13 app content-tree,
+   DMG SHA-256과 Python/npm/Cargo 세 lockfile hash를 결속한다. Phase 12 historical app/DMG digest를
+   current Phase 13 evidence로 승격하지 않는다. 개인용 범위에 Developer ID/notarization을 다시
+   필수 조건으로 추가하지 않는다.
+6. 현재 `scripts/phase13_readiness.py`, `scripts/check_phase13_supply_chain_evidence.py`와
+   `scripts/phase13_local_supply_artifacts.py`는 의도적으로 `NO_GO`만 허용한다. JSON status만 바꾸지
+   말고 evidence schema, producer, checker, `check_all.sh`와 unit test를 함께 version-up해
+   **완전한 증거일 때만** positive path가 열리고 누락·hash drift·historical 재사용은 fail closed하게 한다.
+
+Local DB 또는 법적 검토 근거를 구할 수 없으면 이 단계는 `NO_GO`로 남긴다. 이를 우회해 Phase 13을
+완료 처리하지 않는다.
+
+#### 16.13.9 6단계 — 동일 source 증거 결속과 최종 판정
+
+Actual Testnet trace, visual current manifest/16 captures, supply 결과, source/세 lockfile/app/DMG가
+동일한 canonical source provenance를 가리키는지 byte/hash로 검증한다. 증거 생성 뒤 source나 lockfile이
+변경되면 영향받은 artifact와 검증을 다시 생성한다.
+
+`scripts/check_all.sh`는 항상 Testnet credential과 모든 주문 opt-in을 제거한 상태로 실행해야 한다.
+Actual 주문을 재실행하는 대신 보존된 secret-free Testnet trace의 schema/hash/provenance와 final
+exposure를 검증하게 한다. 24시간 soak를 실행 목록에 넣지 않는다.
+
+다음 항목이 모두 충족될 때만 Phase 13과 §15/§16의 해당 checklist를 `[x]`로 바꾼다.
+
+- public-path actual Testnet trace와 final Position/pending/open order `0`
+- visual SSIM `16/16`과 actual-browser axe `16/16 Violations 0`
+- current local-only advisory/license/final notice와 source-bound Phase 13 app/DMG
+- Communication `126/126`, secret scan과 모든 기능·fault/replay regression PASS
+- 주문 없는 `/bin/sh scripts/check_all.sh` 최종 exit `0`
+- `Design/Architecture/Phase_13_Live_Readiness_Report.md`에 정확한 command, pass/skip 수,
+  artifact digest, Testnet 주문 수·ID 대응과 final exposure 기록
+
+Phase 13을 완료해도 live release checklist와 live mode는 `[ ]`/disabled로 유지한다. Live endpoint와
+live 주문은 별도의 명시적 사용자 승인 이후에만 다음 작업으로 만들 수 있다.
+
+#### 16.13.10 즉시 중단하고 fail closed할 조건
+
+- Testnet symbol, endpoint, cap, opt-in 중 하나라도 승인 범위와 다름
+- account/Position/pending/open order/baseline history가 설명되지 않거나 stream이 READY가 아님
+- Actual signal이 발생하지 않음; private seam이나 threshold patch로 우회 금지
+- Submit 결과가 UNKNOWN이거나 persistence/journal/history가 불명확함; 새 order ID 재제출 금지
+- Recovery SELL 대상이 이번 run의 exact Position인지 증명할 수 없음
+- 외부 OSV/network 전송, remote DB download 또는 dependency metadata 업로드가 필요함
+- License/notice를 local exact source로 증명할 수 없음
+- Evidence가 서로 다른 source revision/lockfile/artifact를 가리키거나 secret을 포함함
+- Baseline/threshold 변경 없이는 visual을 통과시킬 수 없음
+
+중단 시에는 상태를 삭제·축소하지 말고 blocker, 실행하지 않은 mutation, 재개에 필요한 정확한 입력이나
+사용자 승인을 readiness report에 기록한다.
+
+#### 16.13.11 다음 세션에 그대로 사용할 요청문
+
+```text
+/Users/oscar/Desktop/Binance_Auto/INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §1과 전체 문서,
+특히 §16.10~16.13을 모두 읽고 Phase 13의 가장 앞선 미완료 P13-04부터 이어서 작업하라.
+Communication Diagram, Lower_bb 명세, ADR-002/003/005/006과 CODING_CONVENTIONS.md 전체를 먼저 읽고,
+블록 주석 및 문장 주석까지 convention을 지켜라. 기존 dirty working tree와 [x] 증거를 보존하라.
+
+먼저 주문 없이 baseline을 확인하고, Testnet config의 100 USDT absolute ceiling, 전용 public-Case2
+opt-in, private Action seam 없는 actual harness와 secret-free trace/negative test를 구현하라.
+그 뒤 read-only preflight가 전부 통과한 경우에만 기존 승인 범위인 Spot Testnet ETHUSDT의 신규 BUY
+최대 100 USDT와 해당 run의 정확한 Position recovery SELL로 단일 targeted public Case 2를 실행하라.
+Broad discovery/check_all에서 주문을 실행하거나 live endpoint/order, 24시간 soak를 실행하지 마라.
+
+이어 visual을 §16.13.7 순서로 실제 UI에서 수정해 SSIM 16/16과 actual-browser axe 16/16을 만들고,
+외부 OSV 전송 없이 local-only supply/license/final notice와 current Phase 13 artifact/source binding을
+§16.13.8대로 마감하라. 마지막에는 동일 source provenance에 모든 증거를 결속하고 주문 없는
+scripts/check_all.sh exit 0과 readiness report를 확인한 뒤에만 Phase 13을 완료 처리하라.
+```
+
+### 16.14 2026-08-31 구현 결과와 다음 세션 실행 지침 — 최신 authoritative handoff
+
+이 subsection은 2026-08-31 작업 결과를 반영한 **현재 유일한 재개 기준**이다. §16.10의 남은
+순서를 구체화하며, §16.12의 확정 수식·사용자 결정은 보존하고 §16.13의 구현 전 상태·수치·요청문보다
+우선한다. Phase 13 master와 live는 완료되지 않았으므로 새 Phase로 넘어가지 않는다.
+
+#### 16.14.1 재개 시점의 정확한 상태
+
+| 항목 | 현재 사실 | 다음 판정 |
+|---|---|---|
+| Source | HEAD `aca6f1262e934fddc94c93b4f42e41ef8f4dd604` 위 대규모 dirty working tree | 기존 변경을 reset/checkout/clean/자동 commit하지 않는다. Release 전 canonical source provenance는 별도 필요 |
+| P13-01~03, P13-05 | local 완료 | 기존 `[x]`와 회귀 증거를 보존하고 관련 변경 때만 다시 연다 |
+| P13-04 local/harness | public Case 2 local `9/9`, production Spot REST memory-HTTP `1/1`; actual harness·trace·negative test 구현 완료 | Local/harness PASS를 actual exchange PASS로 승격하지 않는다 |
+| 이번 외부 동작 | Keychain credential 읽기 `0`, signed Testnet request `0`, Testnet 주문 `0`, live 주문 `0` | 아래 세 범위의 명시적 승인 전 외부 동작 금지 |
+| Actual Phase 13 Testnet | current signed preflight와 public Case 2 미실행 | Phase 13의 가장 앞선 blocker |
+| 기능 회귀 | Backend `901` tests / Testnet `8` safe skip, scripts `169/169`, UI `373/373`, Rust `40/40`; Communication `126/126` | `PYTHONWARNINGS=error`, credential·cap·세 opt-in 제거 상태의 최종 측정 |
+| Actual target 집중 | helper와 actual target 합계 16개 중 helper 15 PASS·actual 1 safe skip, trace contract `25/25`, 핵심 Controller/REST/bootstrap/architecture 묶음 139 PASS·actual 1 skip | Credential·order 없이 implementation만 검증한 결과 |
+| Visual | repository gate `0.914102~0.981147`, fresh 실제 browser 진단 `0.915904~0.981311`; 둘 다 `4/16` PASS·`12/16` FAIL. Actual-browser axe `16/16 Violations 0` | 실패 fresh capture를 repository manifest로 승격하지 않는다. UI를 수정해 SSIM `16/16` 필요 |
+| Supply | exact lockfile/SBOM `868`; third-party `866` 중 local declaration `494`, `NOASSERTION` `372`; offline vulnerability/license wrapper 각각 exit `127` | Local DB·완전한 license text/attribution/final notice·current Phase 13 app/DMG/source binding이 없어 `NO_GO` |
+| Aggregate | 주문 없는 `/bin/sh scripts/check_all.sh` 최종 exit `1`; 기능·Communication·secret은 PASS, visual·supply·readiness는 BLOCKED | 모든 in-scope gate에서 exit `0`이 될 때까지 Phase 13 `[ ]` 유지 |
+| Live | endpoint·credential·주문 경로 disabled | Phase 13 완료와도 별개인 명시적 live 승인 전 계속 disabled |
+
+#### 16.14.2 이번 작업에서 완료한 P13-04 안전 경계
+
+- [x] `BINANCE_RUN_TESTNET=1`, `BINANCE_RUN_TESTNET_ORDERS=1`,
+  `BINANCE_RUN_PHASE13_PUBLIC_CASE2=1`의 exact 세 opt-in과 finite `0 < cap <= 100`을 모두 요구한다.
+  Broad discovery와 `check_all.sh`는 credential, cap과 세 실행 flag를 제거하며 Phase 13 flag가 켜지면
+  legacy lifecycle/cold-restart 주문 suite를 상호 배타적으로 skip한다.
+- [x] 사용자 확정 `RiskPolicy`의 세 configured cap은 모두 `None`으로 유지한다. Phase 13 Testnet
+  신규 BUY의 `100 USDT`는 이 policy를 덮는 값이 아니라 별도의 outer execution ceiling이다.
+  Fresh `exchangeInfo` filter 뒤 final quantity와 immutable decision price의 곱을 configured cap과
+  absolute ceiling 모두에 대조하고 journal/POST 전에 실패시킨다.
+- [x] Controller의 Phase 13 intent budget은 `1`, thread-safe permission proxy는 서로 다른 ID의
+  exact `ETHUSDT CASE_C BUY 1회 -> STOP SELL 1회`만 허용한다. Permit은 delegate 전에 소비하고
+  예외/UNKNOWN에서도 복원하지 않으며, 두 번째 permit 뒤 모든 submit을 닫는다. Cancel은 모두
+  delegate 전에 거부하고 이 target의 주문 timestamp 오류에도 wire POST를 재전송하지 않는다.
+- [x] REST transport는 모든 3xx를 실패로 처리하고 redirect를 따라가지 않는다. Cross-origin fake
+  서버 test는 redirect target의 request, API key header와 body가 모두 0건임을 검증한다.
+- [x] Production `MarketDataController -> TradingController` observer가 실제 `1L.1` Kline,
+  `1L.2` evaluation과 effect 직전 `1L.3 SubmitOrder`를 same evaluation/version으로 기록한다.
+  Bounded retention은 evaluation 단위로 제거하고 chain이 없거나 eviction 경합이 있으면 주문 전에
+  fail closed한다.
+- [x] BUY/SELL order trace는 고정 prefix, 최대 네 same-ID query branch, fill 적용과 durable suffix의
+  exact grammar를 사용한다. Exchange order ID는 관찰 뒤 `None`으로 후퇴할 수 없고 terminal
+  fill·durable suffix는 terminal result ID와 일치해야 한다. 연속 entry의 Context
+  `version_before`는 직전 `version_after`보다 작을 수 없다.
+- [x] Durable BUY 뒤 예외에서는 BUY 1건·SELL 0건, pending/UNKNOWN/reconciliation 0건,
+  authoritative Position==BUY fill, effective free ETH>=Position과 account wait 뒤 동일 state를 다시
+  증명한 경우에만 public STOP recovery를 한 번 수행한다. 모호하거나 바뀐 상태에서는 새 SELL을
+  만들지 않는다. 이후 모든 경로에서 submit·scheduler를 닫고 runtime close와 fresh read-only
+  verification을 수행하며 stable typed reason의 sealed `FAILED`를 남기고 원 예외를 bare re-raise한다.
+  Guard BUY/SELL client ID를 durable Trade와 결속하고 `SUCCESS/NOT_REQUIRED`는 first/fresh zero-state에
+  교차 검증하며, fresh 증거가 불완전하면 각각 `FAILED/SKIPPED`로 낮춘다.
+- [x] Runtime/client 생성 전 artifact root의 owner-only regular lockfile에 nonblocking exclusive process
+  lease를 잡고 parent/leaf symlink·device/inode race를 재검증한다. 이 lease는 **동일 workspace의 이
+  exact target만** 막으므로 다른 Testnet 자동화, legacy target, 직접 client와 동일 account의 수동
+  주문은 절차적으로 모두 중지해야 한다. Hardlink leaf는 mode 변경 전에 거부해 unrelated target을
+  변경하지 않는다.
+- [x] Success/failure artifact는 0600 same-directory `O_EXCL|O_NOFOLLOW` temp inode, file fsync,
+  hard-link no-clobber publish, directory fsync와 최종 inode/mode/bytes 재검증으로 게시한다. Visual과
+  supply reader도 parent dirfd `O_NOFOLLOW`, bounded regular-file read와 post-read identity 검증을
+  사용한다. App content-tree digest는 정렬된 FD-relative DFS와 64 MiB/file, 512 MiB total,
+  10,000 entries 한계를 적용한다.
+- [x] 구현·테스트의 class/function docstring뿐 아니라 각 조건·동기화·I/O 불변식에 한국어 블록 주석과
+  문장 주석을 추가하고 `CODING_CONVENTIONS.md` 기준 정적 감사를 통과했다.
+
+#### 16.14.3 현재 blocker와 정확히 필요한 사용자 승인
+
+가장 앞선 blocker는 코드가 아니라 현재 Testnet credential과 mutation 권한이다. 2026-08-31에는
+승인 없이 credential을 꺼내거나 network에 전송하지 않았고 주문도 실행하지 않았다. 다음 세 범위를
+사용자가 **명시적으로 모두 승인한 뒤에만** §16.14.4를 실행한다.
+
+1. macOS Keychain service `com.binance-auto.trader.testnet`에서 Testnet API key와 secret을 한 backend
+   child의 memory로만 읽기. 값·길이·부분문자열을 stdout, command argument, artifact와 예외에 쓰지 않는다.
+2. 그 credential을 코드에 고정된 Binance Spot Testnet HTTPS/WebSocket endpoint에만 signed
+   read-only preflight 용도로 전송하기. Live/base-URL 환경은 무시하고 redirect는 따르지 않는다.
+3. Preflight가 전부 통과한 같은 source에서 `ETHUSDT` 신규 BUY decision notional 최대 `100 USDT`
+   한 번과, 그 run이 만든 정확한 authoritative Position의 STOP recovery SELL 한 번만 허용하기.
+
+세 번째 승인은 실제 주문이 항상 두 건 발생한다는 뜻이 아니다. Natural Case C signal이 없으면
+주문 `0`건의 `NO_SIGNAL`로 종료하고, BUY 전 불명확성은 `BLOCKED`, BUY 뒤 모호성/UNKNOWN은 새
+주문 없이 `FAILED`와 관찰 가능한 exposure로 남긴다. Response-loss/5xx 등 추가 actual fault 주문,
+두 번째 BUY, 다른 symbol/cap, 기존 balance 정리와 live 주문은 이 승인에 포함하지 않는다.
+
+Binance 동작은 추측하지 않고 2026-08-31 확인한 공식
+[Spot Test Network REST API](https://developers.binance.com/en/docs/products/spot/testnet/rest-api),
+[Spot trading endpoints](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/trade),
+[symbol filters](https://developers.binance.com/en/docs/products/spot/filters),
+[User Data Stream](https://developers.binance.com/en/docs/products/spot/user-data-stream),
+[Testnet WebSocket API](https://developers.binance.com/en/docs/products/spot/testnet/web-socket-api)와
+[Testnet WebSocket streams](https://developers.binance.com/en/docs/products/spot/testnet/web-socket-streams)를
+다시 대조한다. 계약이 달라졌으면 fixture/ADR/code/test를 먼저 갱신하고 주문을 중단한다.
+
+#### 16.14.4 승인 후 exact 실행 순서
+
+1. 이 문서 전체와 §1·§16.14, Communication Case 2 `1L.1`~`1L.3`·`1`~`14`, Lower BB 명세,
+   ADR-002/003/005/006과 `CODING_CONVENTIONS.md` 전체를 다시 읽는다. `git status --short`와 HEAD를
+   기록하되 기존 dirty 변경을 정리하지 않는다.
+2. Keychain credential을 stdout/argv/file에 노출하지 않는 기존 secure child injection으로만 읽는다.
+   `BINANCE_RUN_TESTNET=1`, `BINANCE_RUN_TESTNET_ORDERS=0`,
+   `BINANCE_RUN_PHASE13_PUBLIC_CASE2=0`으로 아래 current signed read-only target만 실행한다.
+
+   ```sh
+   cd backend
+   PYTHONWARNINGS=error PYTHONPATH=src .venv/bin/python -m unittest -v \
+     tests.testnet.test_binance_testnet_read_only
+   ```
+
+3. 고정 Testnet origin, account `canTrade`, commission, fresh `ETHUSDT` `LOT_SIZE`/
+   `MARKET_LOT_SIZE`/`NOTIONAL`, balances, open/recent orders, signed account stream과 public Kline stream
+   READY를 확인한다. 과거 retained `6/6`은 current 증거로 재사용하지 않는다.
+4. 이전 `bat-` order가 있을 때만 non-empty absolute verified-closed history를
+   `BINANCE_TESTNET_BASELINE_HISTORY_PATH`로 전달한다. Clean account에서는 이 환경변수를 아예
+   생략한다. Fresh Position/pending/UNKNOWN/run-owned open order가 모두 0이고 balance/order가 전부
+   설명될 때만 진행한다.
+5. Phase 9 lifecycle/cold-restart, 다른 Testnet automation/process와 동일 account의 수동 주문이 모두
+   중지됐음을 확인한다. 같은 source에서 exact target 하나만 직렬 실행한다.
+
+   ```sh
+   cd backend
+   BINANCE_RUN_TESTNET=1 BINANCE_RUN_TESTNET_ORDERS=1 \
+     BINANCE_RUN_PHASE13_PUBLIC_CASE2=1 \
+     BINANCE_TESTNET_MAX_NOTIONAL=100 \
+     PYTHONWARNINGS=error PYTHONPATH=src .venv/bin/python -m unittest -v \
+     tests.testnet.test_phase13_public_market_case2
+   ```
+
+6. SUCCESS는 public market source, exact BUY→STOP SELL 두 attempt/result/order trace, two durable
+   Trades, History/Performance/UI publication, fresh Position/pending/UNKNOWN/matching open order 0,
+   duplicate order/trade 0과 sealed digest가 모두 일치한 경우뿐이다. `NO_SIGNAL`, `BLOCKED`와
+   `FAILED`는 PASS로 바꾸지 않는다.
+7. Actual P13-04를 닫은 뒤에만 §16.13.7의 순서로 UI를 수정하고 fresh actual-browser JPEG 16개,
+   SSIM `16/16 >= 0.980000`과 addon-a11y `16/16 Violations 0`을 함께 만든다. Baseline, threshold,
+   comparison policy를 완화하거나 실패 capture를 승격하지 않는다.
+8. 그 뒤 §16.13.8대로 외부 OSV 전송 없이 local cached DB와 exact local package source만 사용해
+   current advisory, third-party 866개 license text/attribution, final notice와 current Phase 13
+   app/DMG/source provenance를 결속한다. Cache/법적 근거가 없으면 exit `127`/`NO_GO`를 유지한다.
+9. 모든 artifact가 같은 canonical source와 lockfile을 가리키면 credential·cap·세 opt-in을 제거한
+   `/bin/sh scripts/check_all.sh`를 실행한다. Backend/UI/Rust/Communication/secret/visual/supply/
+   readiness가 모두 PASS하고 aggregate exit `0`일 때만 Phase 13 master를 `[x]`로 바꾼다. Live는
+   별도 사용자 승인 전 `[ ]`/disabled를 유지한다.
+
+#### 16.14.5 즉시 중단하고 보존할 조건
+
+- 승인 세 범위 중 하나가 없거나 Testnet symbol, endpoint, cap, opt-in이 exact 범위와 다름
+- 다른 Testnet automation/legacy suite/direct client 또는 동일 account 수동 주문을 배제할 수 없음
+- Account/commission/filter/stream/baseline/Position/pending/UNKNOWN/open order가 설명되지 않음
+- Natural signal이 없거나 private Action, threshold patch, 직접 상태 주입 없이는 진행할 수 없음
+- Submit/SELL 결과가 UNKNOWN이거나 persistence, History, trade identity 또는 recovery 대상이 모호함
+- Process lease, trace grammar, artifact fsync/no-clobber, secret canary 또는 fresh zero-state 검증 실패
+- 외부 OSV/network 전송, remote DB download나 dependency metadata upload가 필요함
+- Local exact source로 license/notice를 증명할 수 없거나 source/lockfile/app/DMG provenance가 불일치
+- Visual baseline/threshold를 바꾸거나 capture를 숨겨야만 SSIM을 통과할 수 있음
+
+중단 시 artifact/history/pending/trace를 삭제하거나 결과를 축소하지 않는다. 실행한 signed request와
+mutation 수, known/unknown exposure, blocker, 필요한 정확한 승인·입력을 readiness report와 이 절에
+기록한다. 같은 ID reconciliation 근거 없이 새 BUY/SELL ID를 만들지 않는다.
+
+#### 16.14.6 다음 세션에 그대로 사용할 요청문
+
+```text
+/Users/oscar/Desktop/Binance_Auto/INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §1과 전체 문서,
+특히 최신 authoritative handoff인 §16.14를 먼저 읽고 Phase 13 P13-04부터 이어서 작업하라.
+Communication Diagram Case 2, Lower_bb 명세, ADR-002/003/005/006과 CODING_CONVENTIONS.md 전체를
+읽고 블록 주석 및 문장 주석까지 정확히 지켜라. 기존 dirty working tree와 [x] 증거를 보존하라.
+
+먼저 사용자에게 §16.14.3의 세 범위, 즉 Keychain Testnet credential의 memory-only 조회,
+고정 Binance Spot Testnet endpoint로의 signed read-only 전송, 그리고 preflight 통과 시 ETHUSDT
+신규 BUY 최대 100 USDT 1회와 같은 run Position의 STOP recovery SELL 1회를 명시적으로 승인받아라.
+승인 전에는 credential, signed request와 주문을 실행하지 말고 P13-04 blocker를 정직하게 유지하라.
+
+승인 후 §16.14.4를 순서대로 실행하라. 다른 Testnet 자동화와 account activity를 중지하고 exact
+read-only suite 뒤 단일 public Case 2 target만 직렬 실행하라. NO_SIGNAL/BLOCKED/UNKNOWN/FAILED를
+성공으로 승격하거나 추가 fault 주문을 자동 실행하지 마라. Actual 증거가 완결된 뒤에만 visual
+16/16, local-only supply/license/final notice와 current source-bound app/DMG를 마감하라. 마지막
+no-order scripts/check_all.sh exit 0 전에는 Phase 13을 완료하지 말고, 별도 live 승인 전 live를
+계속 disabled로 유지하라.
+```

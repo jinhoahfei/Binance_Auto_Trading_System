@@ -24,6 +24,14 @@ cold-restart 복구 검증을 완료했습니다. 기본 실행은 fail-closed�
   값을 source, fixture, URL, UI/renderer, `localStorage`, 일반 log 또는 shell 명령
   예시에 넣지 마십시오.
 
+## 사용 권한과 배포 정책
+
+이 저장소와 자체 제작 artifact는 비공개·개인용 proprietary software입니다. 다른 사람에게
+사용·복제·수정·재배포 권한을 부여하지 않으며, Python의 `Private :: Do Not Upload`, npm의
+`private: true`, Cargo의 `publish = false`로 각 공개 registry의 우발적 배포를 차단합니다.
+이 정책은 포함된 제3자 dependency의 각 라이선스와 notice 의무를 변경하거나 제거하지 않습니다.
+자세한 범위는 `LICENSE`를 따릅니다.
+
 ## Backend 설치와 기본 검증
 
 Python 3.11 이상이 필요합니다.
@@ -39,6 +47,7 @@ Testnet flag를 명시적으로 끈 상태에서 전체 fake/unit/integration su
 ```bash
 cd backend
 BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 \
+  BINANCE_RUN_PHASE13_PUBLIC_CASE2=0 \
   PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
@@ -53,7 +62,8 @@ BINANCE_RUN_TESTNET=0 BINANCE_RUN_TESTNET_ORDERS=0 \
 | `BINANCE_TESTNET_API_KEY` | Binance Spot Testnet 전용 API key |
 | `BINANCE_TESTNET_API_SECRET` | Binance Spot Testnet 전용 API secret |
 | `BINANCE_RUN_TESTNET_ORDERS` | `1`일 때만 Testnet 주문 mutation을 추가 허용 |
-| `BINANCE_TESTNET_MAX_NOTIONAL` | 주문 opt-in 시 필수인 decision-price 기준 양수 BUY quote 진입 상한 |
+| `BINANCE_RUN_PHASE13_PUBLIC_CASE2` | `1`일 때만 Phase 13 public market Case 2 전용 target을 추가 허용 |
+| `BINANCE_TESTNET_MAX_NOTIONAL` | 주문 opt-in 시 필수인 decision-price 기준 `0 < cap <= 100 USDT` BUY quote 진입 상한 |
 | `BINANCE_TESTNET_BASELINE_HISTORY_PATH` | 같은 Testnet account의 이전 완료 주문이 있을 때만 사용하는 absolute verified-closed canonical history 경로 |
 
 ### Read-only 검증
@@ -66,6 +76,7 @@ normalized contract를 실제 Testnet에서 확인합니다. 주문 mutation은 
 ```bash
 cd backend
 BINANCE_RUN_TESTNET=1 BINANCE_RUN_TESTNET_ORDERS=0 \
+  BINANCE_RUN_PHASE13_PUBLIC_CASE2=0 \
   PYTHONPATH=src python3 -m unittest -v \
   tests.testnet.test_binance_testnet_read_only
 ```
@@ -80,6 +91,7 @@ gate를 여는 테스트 전용 literal이며 실제 credential이 아닙니다.
 ```bash
 cd backend
 BINANCE_RUN_TESTNET=1 BINANCE_RUN_TESTNET_ORDERS=0 \
+  BINANCE_RUN_PHASE13_PUBLIC_CASE2=0 \
   BINANCE_TESTNET_API_KEY=local-fixture-key \
   BINANCE_TESTNET_API_SECRET=local-fixture-secret \
   PYTHONPATH=src python3 -m unittest -v \
@@ -98,6 +110,7 @@ Testnet 시세를 다시 확인해야 합니다. 가격 상승 뒤 STOP/recovery
 ```bash
 cd backend
 BINANCE_RUN_TESTNET=1 BINANCE_RUN_TESTNET_ORDERS=1 \
+  BINANCE_RUN_PHASE13_PUBLIC_CASE2=0 \
   BINANCE_TESTNET_MAX_NOTIONAL="$PHASE9_APPROVED_MAX_NOTIONAL" \
   PYTHONPATH=src python3 -m unittest -v \
   tests.testnet.test_binance_testnet_order_lifecycle
@@ -128,13 +141,69 @@ suite를 별도로 실행합니다. 두 suite를 병렬 실행하지 마십시�
 ```bash
 cd backend
 BINANCE_RUN_TESTNET=1 BINANCE_RUN_TESTNET_ORDERS=1 \
+  BINANCE_RUN_PHASE13_PUBLIC_CASE2=0 \
   BINANCE_TESTNET_MAX_NOTIONAL="$PHASE9_APPROVED_MAX_NOTIONAL" \
   PYTHONPATH=src python3 -m unittest -v \
   tests.testnet.test_binance_testnet_cold_restart
 ```
 
 `PHASE9_APPROVED_MAX_NOTIONAL`은 임의 기본값이 아니라 사용자가 숫자로 승인한 양수 USDT
-BUY 진입 cap을 현재 shell session에 보존하는 예시 변수입니다.
+BUY 진입 cap을 현재 shell session에 보존하는 예시 변수입니다. Production Testnet bootstrap은
+Phase 9 historical target에도 절대 ceiling을 적용하므로 이 값은 `100`을 넘을 수 없습니다.
+
+### Phase 13 public market Case 2
+
+Phase 13 actual evidence는 위 Phase 9 private action seam을 재사용하지 않습니다. 주문 없는
+전체 backend와 read-only Testnet 검증이 통과하고 fresh runtime의 Position, pending/UNKNOWN,
+app-owned open order가 모두 `0`인 경우에만 아래 **단일 target 하나**를 직렬 실행합니다.
+Test discovery 전체나 다른 lifecycle/cold-restart target과 함께 실행하지 마십시오.
+
+```bash
+cd backend
+BINANCE_RUN_TESTNET=1 BINANCE_RUN_TESTNET_ORDERS=1 \
+  BINANCE_RUN_PHASE13_PUBLIC_CASE2=1 \
+  BINANCE_TESTNET_MAX_NOTIONAL=100 \
+  PYTHONPATH=src python3 -m unittest -v \
+  tests.testnet.test_phase13_public_market_case2
+```
+
+같은 Testnet account의 이전 `bat-` 주문이 recent order에 남아 있을 때만, 위 명령에
+`BINANCE_TESTNET_BASELINE_HISTORY_PATH="$VERIFIED_CLOSED_HISTORY_PATH"`를 추가합니다.
+변수는 non-empty absolute verified-closed history를 가리켜야 하며, clean account에서는
+환경 변수 자체를 생략해야 합니다.
+
+이 target은 public Kline부터 production strategy/order path를 관찰하며 signal threshold를
+완화하거나 private Action을 호출하지 않습니다. 자연 Case 2 signal이 없으면 신규 주문 `0`을
+재확인하고 secret-free `NO_SIGNAL` trace를 보존한 뒤 non-zero로 종료합니다. BUY가 체결된 경우에만
+그 run이 만든 authoritative Position의 exact STOP/recovery SELL을 허용하고, 마지막 fresh read-only
+runtime에서 Position, pending/UNKNOWN과 matching open order가 모두 `0`인지 다시 검증합니다.
+Trace에는 normalized order/fill/Trade/UI identity만 기록하며 credential, signature, header, raw
+request와 local session token은 기록하지 않습니다.
+
+전용 flag가 `1`이면 legacy lifecycle/cold-restart 주문 suite는 상호 배타적으로 비활성화됩니다.
+Production Controller는 intent당 제출 예산 `1`, thread-safe permission proxy는 순서가 고정된
+`ETHUSDT CASE_C BUY 1회 → STOP SELL 1회`, REST adapter는 주문별 wire POST 1회만 허용합니다.
+동일 artifact root의 owner-only process lease를 runtime/client 생성 전에 획득하므로 같은 target의
+병렬 process는 network 전에 차단됩니다. 다만 이 lease는 다른 Testnet 도구나 외부 account client를
+통제하지 않으므로 실행 중에는 Phase 9 target, 다른 자동화와 같은 account의 수동 주문을 모두
+중지해야 합니다. Preexisting hardlink나 symlink leaf는 mode 변경이나 network 전에 거부합니다.
+
+실패가 durable BUY 뒤 발생하면 제출 차단 전에 BUY 1건, pending/UNKNOWN 0건, authoritative
+Position과 effective free ETH가 모두 정확히 증명된 경우에만 public STOP recovery를 한 번
+완결합니다. 상태가 모호하거나 SELL permit이 이미 소비됐으면 새 SELL을 만들지 않습니다. 그 뒤
+모든 경로에서 후속 제출과 scheduler를 닫고, fresh read-only 검증에서 관찰하지 못한 값은
+`null`/`INCOMPLETE`로 보존한 sealed `FAILED` evidence를 남깁니다. 모든 actual artifact는 owner-only
+임시 파일을 같은 directory에 fsync한 뒤 기존 destination을 덮지 않는 방식으로 원자 게시합니다.
+주문 POST는 HTTP timestamp 오류에서도 재전송하지 않으며, 3xx 응답은 redirect를 따라가지 않고
+credential/header/body를 다른 origin에 전달하지 않습니다.
+
+복구 `SUCCESS/NOT_REQUIRED`는 guard와 durable Trade의 BUY/SELL client ID, first runtime과 모든
+필수 값이 실제로 관찰된 fresh runtime의 zero exposure가 모두 일치할 때만 기록합니다. Fresh 확인이
+불완전하면 각각 `FAILED/SKIPPED`로 낮춰 성공을 합성하지 않습니다.
+
+2026-08-31 작업에서는 위 target 구현과 주문 없는 회귀 검증만 수행했습니다. Keychain credential
+읽기, signed Testnet preflight와 Phase 13 Testnet 주문은 각각 `0`건이며, 세 동작은 사용자의 명시적
+승인을 받은 뒤에만 실행합니다.
 
 ## Testnet reset과 복구 주의사항
 
@@ -183,9 +252,10 @@ signed WebSocket subscription의 비정상 ACK는 신뢰하지 않는 응답입�
 현재 repository에서는 production adapter와 로컬 검증을 완료했고 2026-08-24 사용자
 Testnet credential로 authenticated read-only와 10 USDT cap actual BUY/force-sell,
 process 종료 뒤 recovered-position 전량 SELL 및 fresh Position 0 replay를 통과했습니다.
-따라서 Phase 9는 완료이며, 다음 가장 앞선 미완료 범위는 Phase 12의 packaged
-credential/clean-machine release smoke입니다.
+따라서 Phase 9는 완료입니다. 현재 가장 앞선 미완료 범위는 Phase 13이며, actual public
+Testnet Case 2, visual SSIM, current local-only supply-chain evidence와 release provenance가
+모두 닫히기 전까지 전체 판정은 `NO_GO`입니다.
 
 구현 범위와 실제 검증 상태는
-[통합 시스템 구현 로드맵](./INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md)의 Phase 9에
+[통합 시스템 구현 로드맵](./INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md)의 Phase 9와 §16에
 기록되어 있습니다.

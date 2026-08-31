@@ -4,9 +4,13 @@ from .api_gateway import (
     APIGateway,
     BinanceRESTClient,
     CommissionDiscountPolicy,
+    Phase13OrderSubmissionAttempt,
+    Phase13OrderSubmissionGuardSnapshot,
 )
 from .mappers import (
     BinancePayloadError,
+    OrderPreparationFilterEvidence,
+    OrderSubmissionAttemptEvidence,
     SymbolFilterError,
     SymbolTradingRules,
 )
@@ -32,6 +36,10 @@ __all__ = [
     "BinanceWebSocketClient",
     "CommissionDiscountPolicy",
     "KlineBufferStateError",
+    "OrderPreparationFilterEvidence",
+    "OrderSubmissionAttemptEvidence",
+    "Phase13OrderSubmissionAttempt",
+    "Phase13OrderSubmissionGuardSnapshot",
     "Subscription",
     "SymbolFilterError",
     "SymbolTradingRules",

@@ -443,6 +443,31 @@ class SpotWebSocketClientTests(unittest.TestCase):
         subscription.close()
         self.assertEqual(disconnects, [])
 
+    def test_public_kline_disconnect_notifies_once_after_start(self) -> None:
+        """
+        함수 이름: test_public_kline_disconnect_notifies_once_after_start()
+        기능: Communication 1.1.1의 production client가 공개 Kline disconnect를 한 번만 알리는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        factory = _ScriptedSocketFactory()
+        disconnects: list[str] = []
+        client = self._create_client(factory)
+
+        # 정상 startup 뒤 on_error와 on_close가 연속 호출되는 실제 transport 종료 순서를 재현한다.
+        subscription = client.subscribe_all_kline_streams(
+            symbol="ETHUSDT",
+            intervals=("1m", "30m", "4h", "1d"),
+            on_message=lambda _payload: None,
+            on_disconnect=lambda: disconnects.append("disconnected"),
+        )
+        factory.sockets[0].fail_and_close()
+
+        self.assertEqual(disconnects, ["disconnected"])
+        subscription.close()
+        self.assertEqual(disconnects, ["disconnected"])  # owner close도 알림을 중복하지 않는다.
+
     def test_account_stream_sends_current_hmac_signature_subscription(
         self,
     ) -> None:

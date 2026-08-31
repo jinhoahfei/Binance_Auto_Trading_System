@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from decimal import Decimal
 import unittest
+from unittest.mock import PropertyMock, patch
 
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
 from binance_auto_trader.adapters.binance.websocket_gateway import (
@@ -32,8 +33,10 @@ from binance_auto_trader.domain.trading.action_requests import (
     ResetCaseBContext,
     ResetCaseCContext,
     ScheduleReevaluation,
+    patch as runtime_patch,
 )
 from binance_auto_trader.domain.trading.context import (
+    MarketEvaluationSnapshot,
     PendingOrderSnapshot,
     PositionSnapshot,
     TradingContext,
@@ -53,6 +56,7 @@ from binance_auto_trader.domain.trading.states import (
     OrderSide,
     RootState,
     StrategyType,
+    TradingPhase,
 )
 
 from tests.integration.test_account_stream_flow import (
@@ -202,6 +206,7 @@ def _create_ready_controller(
     *,
     command_enabled: bool = True,
     context: TradingContext | None = None,
+    market_stream_recovery_enabled: bool = False,
 ) -> tuple[
     TradingController,
     RegimeController,
@@ -212,6 +217,7 @@ def _create_ready_controller(
     기능: ready market·account·stream과 선택 Controller를 한 통합 fixture로 만든다.
     인자: command_enabled -> fake mode command gate 허용 여부
         context -> 주입할 mutable TradingContext 또는 None
+        market_stream_recovery_enabled -> Kline live full-resync gate 활성 여부
     반환값: TradingController, RegimeController와 제어 가능한 WS client tuple
     작성 날짜: 2026/08/21
     """
@@ -230,6 +236,7 @@ def _create_ready_controller(
         _ready_market_snapshot(),
         command_gate=command_enabled,
         context=context,
+        market_stream_recovery_enabled=market_stream_recovery_enabled,
         clock=lambda: MARKET_UPDATED_AT,
     )
     # account bootstrap을 완료한 뒤 같은 market과 Controller를 RegimeController에 연결한다.
@@ -248,6 +255,344 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
     기능: REGIME 선택, start Guard, 멱등성과 active 변경 금지를 검증한다.
     작성 날짜: 2026/08/21
     """
+
+    def test_market_observation_updates_context_and_opens_lower_event(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_market_observation_updates_context_and_opens_lower_event()
+        기능: same-version 외부 시장 평가가 private Action 없이 G-02 production path를 시작하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # 지원 REGIME을 선택·시작해 public market observation이 허용되는 session을 준비한다.
+        controller, regime_controller, _ = _create_ready_controller()
+        selection = regime_controller.set_regime_type(
+            RegimeType.TYPE_0,
+            command_id="select-market-observation",
+            expected_version=0,
+        )
+        controller.start_trading(
+            command_id="start-market-observation",
+            expected_version=selection.version,
+        )
+        market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("90"),
+            lower_band=Decimal("100"),
+            upper_band=Decimal("120"),
+            realtime_pct_b=Decimal("-0.5"),
+            current_30m_candle_id="ETHUSDT:30m:2026-08-24T00:00:00Z",
+            current_30m_low=Decimal("89"),
+            current_30m_high=Decimal("101"),
+            touch_candle_bbw=Decimal("0.01"),
+        )
+
+        # MarketSnapshot provenance와 stable source ID를 전달해 최초 lower touch를 enqueue한다.
+        enqueued = controller.observe_market_evaluation(
+            market,
+            source_event_id="ws-kline-30m-1724457600000",
+            market_version=controller._market_snapshot.version,
+        )
+        duplicate = controller.observe_market_evaluation(
+            market,
+            source_event_id="ws-kline-30m-1724457600000",
+            market_version=controller._market_snapshot.version,
+        )
+
+        # 같은 source 재전달은 dedup되고 첫 event만 G-02를 거쳐 lower scope를 연다.
+        self.assertIsNotNone(enqueued)
+        self.assertIs(enqueued.event_type, TradingEventType.LOWER_BAND_TOUCHED)
+        self.assertEqual(market, enqueued.market_evaluation)
+        self.assertNotEqual(
+            market,
+            controller.context.market,
+        )  # Queue claim 전에는 뒤 Kline이 첫 event의 Context를 덮지 못하도록 mutation을 보류한다.
+        self.assertIsNone(duplicate)
+        result = asyncio.run(controller.process_next_event())
+        self.assertEqual(("G-02", "O-01", "C-01", "B-01"), result.transition_ids)
+        self.assertEqual(market, controller.context.market)
+        self.assertIsNotNone(controller.context.runtime.lower_event_id)
+
+    def test_back_to_back_market_observations_preserve_queue_provenance(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_back_to_back_market_observations_preserve_queue_provenance()
+        기능: 처리 전 연속 시장 평가가 각 source version의 Context와 분류를 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # RUNNING session과 실제 처리 event를 별도로 기록할 observer를 준비한다.
+        controller, regime_controller, _ = _create_ready_controller()
+        selection = regime_controller.set_regime_type(
+            RegimeType.TYPE_0,
+            command_id="select-market-queue-provenance",
+            expected_version=0,
+        )
+        controller.start_trading(
+            command_id="start-market-queue-provenance",
+            expected_version=selection.version,
+        )
+        event_processor = controller._event_processor
+        self.assertIsNotNone(event_processor)
+        if event_processor is None:
+            raise AssertionError("running session requires an event processor")
+        original_observer = event_processor._event_processing_observer
+        processed_events: list[TradingEvent] = []
+
+        def record_processing_event(event: TradingEvent | None) -> None:
+            """
+            함수 이름: record_processing_event()
+            기능: processor가 실제로 준비한 event를 기록하고 production trace observer를 유지한다.
+            인자: event -> 처리 중인 TradingEvent 또는 microstep 종료 None
+            반환값: 없음
+            작성 날짜: 2026/08/29
+            """
+            # 준비된 event만 회귀 검증용으로 보존하고 기존 trace lifecycle을 그대로 호출한다.
+            if event is not None:
+                processed_events.append(event)
+            if original_observer is not None:
+                original_observer(event)
+
+        event_processor._event_processing_observer = record_processing_event
+
+        # 첫 version은 밴드 내부, 둘째 version은 하단 접촉으로 서로 다른 분류를 만든다.
+        first_market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("110"),
+            lower_band=Decimal("100"),
+            upper_band=Decimal("120"),
+            realtime_pct_b=Decimal("0.5"),
+            current_30m_candle_id="ETHUSDT:30m:2026-08-29T00:00:00Z",
+            current_30m_low=Decimal("105"),
+            current_30m_high=Decimal("115"),
+        )
+        second_market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("90"),
+            lower_band=Decimal("100"),
+            upper_band=Decimal("120"),
+            realtime_pct_b=Decimal("-0.5"),
+            current_30m_candle_id="ETHUSDT:30m:2026-08-29T00:00:00Z",
+            current_30m_low=Decimal("89"),
+            current_30m_high=Decimal("115"),
+            touch_candle_bbw=Decimal("0.01"),
+        )
+
+        # Authoritative snapshot을 한 version씩 전진하며 두 평가를 처리 전에 FIFO queue에 적재한다.
+        controller._market_snapshot.update(
+            controller._market_snapshot.klines_by_interval
+        )
+        first_market_version = controller._market_snapshot.version
+        first_enqueued = controller.observe_market_evaluation(
+            first_market,
+            source_event_id="ws-kline-first-market-evaluation",
+            market_version=first_market_version,
+        )
+        controller._market_snapshot.update(
+            controller._market_snapshot.klines_by_interval
+        )
+        second_market_version = controller._market_snapshot.version
+        second_enqueued = controller.observe_market_evaluation(
+            second_market,
+            source_event_id="ws-kline-second-market-evaluation",
+            market_version=second_market_version,
+        )
+
+        # Queue claim 전 Context는 두 평가 중 어느 것으로도 앞서 갱신되지 않아야 한다.
+        self.assertIsNotNone(first_enqueued)
+        self.assertIsNotNone(second_enqueued)
+        self.assertEqual(first_market_version + 1, second_market_version)
+        self.assertNotEqual(first_market, controller.context.market)
+        self.assertNotEqual(second_market, controller.context.market)
+
+        # 첫 process는 뒤 version이 아닌 첫 평가로 Context와 MARKET_DATA_UPDATED를 준비한다.
+        first_result = asyncio.run(controller.process_next_event())
+        self.assertIsNotNone(first_result)
+        self.assertEqual((), first_result.transition_ids)
+        self.assertEqual(first_market, controller.context.market)
+        self.assertEqual(1, len(processed_events))
+        self.assertIs(
+            processed_events[0].event_type,
+            TradingEventType.MARKET_DATA_UPDATED,
+        )
+        self.assertEqual(first_market, processed_events[0].market_evaluation)
+        self.assertEqual(
+            first_market_version,
+            processed_events[0].market_version,
+        )
+
+        # 둘째 process는 둘째 평가로 Context를 전진하고 하단 접촉을 실제 분류한다.
+        second_result = asyncio.run(controller.process_next_event())
+        self.assertIsNotNone(second_result)
+        self.assertEqual(second_market, controller.context.market)
+        self.assertEqual(2, len(processed_events))
+        self.assertIs(
+            processed_events[1].event_type,
+            TradingEventType.LOWER_BAND_TOUCHED,
+        )
+        self.assertEqual(second_market, processed_events[1].market_evaluation)
+        self.assertEqual(
+            second_market_version,
+            processed_events[1].market_version,
+        )
+        self.assertEqual(
+            ("G-02", "O-01", "C-01", "B-01"),
+            second_result.transition_ids,
+        )
+        self.assertIsNone(
+            controller.context.pending_order
+        )  # 공개 시장 분류 검증은 어떤 주문 제출도 생성하지 않는다.
+
+    def test_market_resync_does_not_auto_resume_after_pending_order_finishes(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_market_resync_does_not_auto_resume_after_pending_order_finishes()
+        기능: 시장 full-resync 뒤 same-order terminal IDLE patch가 중단 session을 재개하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        # Market gate를 활성화한 RUNNING session에 미해결 BUY identity를 먼저 보존한다.
+        controller, regime_controller, _ = _create_ready_controller(
+            market_stream_recovery_enabled=True,
+        )
+        selection = regime_controller.set_regime_type(
+            RegimeType.TYPE_0,
+            command_id="select-market-disconnect",
+            expected_version=0,
+        )
+        controller.start_trading(
+            command_id="start-market-disconnect",
+            expected_version=selection.version,
+        )
+        pending_order = PendingOrderSnapshot(
+            order_id="pending-market-disconnect",
+            strategy=StrategyType.CASE_B,
+            side=OrderSide.BUY,
+            attempt_kind=OrderAttemptKind.INITIAL,
+        )
+        controller.update_pending_order_snapshot(pending_order)
+        controller.mark_market_stream_reconciliation_required(
+            "kline_stream_disconnected"
+        )
+
+        # 새 시장 세대가 준비돼도 market blocker만 해제하고 session과 pending provenance는 유지한다.
+        with patch.object(
+            WebSocketGateway,
+            "kline_live_ready",
+            new_callable=PropertyMock,
+            return_value=True,
+        ):
+            controller.complete_market_stream_reconciliation(
+                controller._market_snapshot.version
+            )
+
+            # 같은 주문의 terminal 처리와 동일하게 pending을 비우고 phase를 IDLE로 바꾼다.
+            controller._context.update_pending_order(None)
+            controller._context.apply_runtime_patch(
+                runtime_patch(trading_phase=TradingPhase.IDLE)
+            )
+            active_stm = controller._active_stm
+            self.assertIsNotNone(active_stm)
+            controller._synchronize_status_from_context(active_stm)
+
+            # 시장 source는 복구됐어도 중단된 session provenance는 operator 재조정 전까지 남는다.
+            self.assertFalse(
+                controller.market_stream_reconciliation_required
+            )
+            self.assertFalse(controller.command_enabled)
+            self.assertTrue(controller.reconciliation_required)
+
+        self.assertIs(
+            controller.status,
+            TradingSessionStatus.RECONCILIATION_REQUIRED,
+        )
+        self.assertIsNone(controller.context.pending_order)
+
+    def test_market_observation_rejects_stale_market_version(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_market_observation_rejects_stale_market_version()
+        기능: MarketSnapshot과 다른 version의 평가가 Context나 queue를 변경하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        # RUNNING session과 변경 전 Context version을 준비한다.
+        controller, regime_controller, _ = _create_ready_controller()
+        selection = regime_controller.set_regime_type(
+            RegimeType.TYPE_0,
+            command_id="select-stale-market",
+            expected_version=0,
+        )
+        controller.start_trading(
+            command_id="start-stale-market",
+            expected_version=selection.version,
+        )
+        context_version_before = controller.context.version
+
+        # 현재보다 앞선 임의 version도 same-version provenance 위반으로 fail closed한다.
+        with self.assertRaises(ValueError):
+            controller.observe_market_evaluation(
+                MarketEvaluationSnapshot(
+                    realtime_price=Decimal("110"),
+                    lower_band=Decimal("100"),
+                    upper_band=Decimal("120"),
+                ),
+                source_event_id="stale-market-evaluation",
+                market_version=controller._market_snapshot.version + 1,
+            )
+
+        self.assertEqual(context_version_before, controller.context.version)
+        self.assertEqual(0, len(controller._event_queue))
+
+    def test_market_observation_rejects_non_positive_price_without_fallback(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_market_observation_rejects_non_positive_price_without_fallback()
+        기능: 잘못된 public 평가 가격이 queue나 4시간봉 fallback 주문 경계에 도달하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # RUNNING session과 변경 전 Context를 준비해 public 입력 거부의 원자성을 관찰한다.
+        controller, regime_controller, _ = _create_ready_controller()
+        selection = regime_controller.set_regime_type(
+            RegimeType.TYPE_0,
+            command_id="select-invalid-public-price",
+            expected_version=0,
+        )
+        controller.start_trading(
+            command_id="start-invalid-public-price",
+            expected_version=selection.version,
+        )
+        context_before = controller.context
+
+        # Public evaluation의 0 가격은 ready 4시간봉 가격으로 대체하지 않고 입구에서 fail closed한다.
+        with self.assertRaisesRegex(
+            ValueError,
+            "market realtime_price must be a positive finite Decimal",
+        ):
+            controller.observe_market_evaluation(
+                MarketEvaluationSnapshot(
+                    realtime_price=Decimal("0"),
+                    lower_band=Decimal("90"),
+                    upper_band=Decimal("110"),
+                    current_30m_candle_id=(
+                        "ETHUSDT:30m:2026-08-29T00:00:00Z"
+                    ),
+                ),
+                source_event_id="invalid-public-market-price",
+                market_version=controller._market_snapshot.version,
+            )
+
+        self.assertEqual(context_before, controller.context)
+        self.assertEqual(0, len(controller._event_queue))
+        self.assertEqual(0, controller._latest_market_evaluation_version)
 
     def test_supported_selection_starts_exactly_once_and_rejects_active_swap(
         self,

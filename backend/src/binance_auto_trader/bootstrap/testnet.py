@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, localcontext
 import os
+from threading import RLock
 
 from binance_auto_trader.adapters.binance.api_gateway import (
     APIGateway,
     DEFAULT_KLINE_LIMIT,
+    Phase13OrderSubmissionAttempt,
+    Phase13OrderSubmissionGuardSnapshot,
+)
+from binance_auto_trader.adapters.binance.mappers import (
+    OrderPreparationFilterEvidence,
+    OrderSubmissionAttemptEvidence,
+    SymbolTradingRules,
 )
 from binance_auto_trader.application import TradingController
 from binance_auto_trader.bootstrap.application import (
@@ -20,9 +28,17 @@ from binance_auto_trader.bootstrap.application import (
     create_application_runtime,
 )
 from binance_auto_trader.domain.history import Performance, Trade
-from binance_auto_trader.domain.trading import Account
+from binance_auto_trader.domain.trading import (
+    Account,
+    RiskPolicy,
+    RiskPolicyUnavailable,
+)
 from binance_auto_trader.domain.trading.order import Order, OrderResult
-from binance_auto_trader.domain.trading.states import OrderSide
+from binance_auto_trader.domain.trading.states import (
+    ExitReason,
+    OrderSide,
+    StrategyType,
+)
 
 
 BINANCE_RUN_TESTNET_ENV = "BINANCE_RUN_TESTNET"
@@ -30,6 +46,8 @@ BINANCE_TESTNET_API_KEY_ENV = "BINANCE_TESTNET_API_KEY"
 BINANCE_TESTNET_API_SECRET_ENV = "BINANCE_TESTNET_API_SECRET"
 BINANCE_RUN_TESTNET_ORDERS_ENV = "BINANCE_RUN_TESTNET_ORDERS"
 BINANCE_TESTNET_MAX_NOTIONAL_ENV = "BINANCE_TESTNET_MAX_NOTIONAL"
+BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV = "BINANCE_RUN_PHASE13_PUBLIC_CASE2"
+BINANCE_TESTNET_ABSOLUTE_MAX_NOTIONAL = Decimal("100")
 BINANCE_SPOT_TESTNET_REST_ORIGIN = "https://testnet.binance.vision"
 BINANCE_SPOT_TESTNET_STREAM_ORIGIN = "wss://stream.testnet.binance.vision"
 BINANCE_SPOT_TESTNET_WEBSOCKET_API_URL = (
@@ -55,16 +73,37 @@ class _TestnetOrderPermissionRESTClient:
     작성 날짜: 2026/08/22
     """
 
-    __slots__ = ("_allow_orders", "_delegate")
+    __slots__ = (
+        "_allow_orders",
+        "_clock",
+        "_delegate",
+        "_maximum_order_notional",
+        "_phase13_attempts",
+        "_phase13_guard_lock",
+        "_phase13_public_case2",
+        "_phase13_submission_in_progress",
+        "_phase13_submissions_blocked",
+    )
 
-    def __init__(self, delegate: object, *, allow_orders: bool) -> None:
+    def __init__(
+        self,
+        delegate: object,
+        *,
+        allow_orders: bool,
+        maximum_order_notional: Decimal | None,
+        phase13_public_case2: bool = False,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         """
         함수 이름: __init__()
         기능: 고정 testnet REST client와 검증된 주문 권한을 보존한다.
         인자: delegate -> 실제 read/order REST operation을 가진 testnet client
             allow_orders -> 환경 이중 opt-in 완료 여부
+            maximum_order_notional -> 주문 권한에 결속된 quote cap 또는 read-only None
+            phase13_public_case2 -> 전용 BUY 1회와 STOP SELL 1회 guard 활성 여부
+            clock -> secret-free logical submit UTC 시각 provider 또는 None
         반환값: 없음
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/08/31
         """
         # delegate가 최소 read operation을 가져야 runtime Gateway 조립이 의미를 갖는다.
         if delegate is None or not any(
@@ -74,8 +113,44 @@ class _TestnetOrderPermissionRESTClient:
             raise TypeError("delegate must provide a Binance REST operation")
         if type(allow_orders) is not bool:
             raise TypeError("allow_orders must be a bool")
+        if type(phase13_public_case2) is not bool:
+            raise TypeError("phase13_public_case2 must be a bool")
+        if phase13_public_case2 and not allow_orders:
+            raise TestnetConfigurationError(
+                "Phase 13 submission guard requires enabled testnet orders"
+            )
+        selected_clock = (
+            (lambda: datetime.now(timezone.utc))
+            if clock is None
+            else clock
+        )
+        if not callable(selected_clock):
+            raise TypeError("clock must be callable or None")
+        if allow_orders and (
+            not isinstance(maximum_order_notional, Decimal)
+            or not maximum_order_notional.is_finite()
+            or maximum_order_notional <= Decimal("0")
+            or maximum_order_notional
+            > BINANCE_TESTNET_ABSOLUTE_MAX_NOTIONAL
+        ):
+            raise TestnetConfigurationError(
+                "enabled testnet orders require a finite cap no greater than 100"
+            )
+        if not allow_orders and maximum_order_notional is not None:
+            raise TestnetConfigurationError(
+                "read-only testnet configuration must not carry an order cap"
+            )
         self._delegate = delegate
+        self._maximum_order_notional = maximum_order_notional
         self._allow_orders = allow_orders  # upward 권한 변경 operation은 제공하지 않는다.
+
+        # Phase 13 전용 clock, lock과 permit state는 legacy proxy 동작과 분리해 초기화한다.
+        self._clock = selected_clock
+        self._phase13_public_case2 = phase13_public_case2
+        self._phase13_guard_lock = RLock()
+        self._phase13_attempts: list[Phase13OrderSubmissionAttempt] = []
+        self._phase13_submission_in_progress = False
+        self._phase13_submissions_blocked = False
 
     def __repr__(self) -> str:
         """
@@ -143,6 +218,119 @@ class _TestnetOrderPermissionRESTClient:
 
         return get_account_commission(symbol=symbol)  # Raw 응답은 APIGateway만 정규화한다.
 
+    def fetch_symbol_trading_rules(
+        self,
+        *,
+        symbol: str,
+    ) -> SymbolTradingRules:
+        """
+        함수 이름: fetch_symbol_trading_rules()
+        기능: 주문 권한과 무관하게 최신 public Spot symbol rule 조회를 delegate에 전달한다.
+        인자: symbol -> 조회할 canonical Spot symbol
+        반환값: delegate가 새 exchangeInfo로 해석한 SymbolTradingRules
+        작성 날짜: 2026/08/31
+        """
+        fetch_symbol_trading_rules = getattr(
+            self._delegate,
+            "fetch_symbol_trading_rules",
+            None,
+        )
+        if not callable(fetch_symbol_trading_rules):
+            raise TypeError(
+                "delegate must provide fetch_symbol_trading_rules"
+            )
+
+        # Public GET은 mutation gate를 거치지 않지만 raw private state를 대신 노출하지 않는다.
+        rules = fetch_symbol_trading_rules(symbol=symbol)
+        if type(rules) is not SymbolTradingRules:
+            raise TypeError(
+                "fetch_symbol_trading_rules must return SymbolTradingRules"
+            )
+
+        return rules
+
+    def get_order_preparation_filter_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> OrderPreparationFilterEvidence | None:
+        """
+        함수 이름: get_order_preparation_filter_evidence()
+        기능: 이미 성공한 prepare의 public filter provenance를 mutation 권한 없이 전달한다.
+        인자: client_order_id -> 준비된 application Order identity
+        반환값: immutable filter evidence 또는 해당 prepare가 없으면 None
+        작성 날짜: 2026/08/31
+        """
+        if (
+            not isinstance(client_order_id, str)
+            or not client_order_id
+            or client_order_id != client_order_id.strip()
+        ):
+            raise ValueError("client_order_id must be non-empty canonical text")
+        get_filter_evidence = getattr(
+            self._delegate,
+            "get_order_preparation_filter_evidence",
+            None,
+        )
+        if not callable(get_filter_evidence):
+            raise TypeError(
+                "delegate must provide get_order_preparation_filter_evidence"
+            )
+
+        # 과거 prepare 증거 조회는 POST 권한을 열지 않으며 raw client cache도 반환하지 않는다.
+        evidence = get_filter_evidence(client_order_id=client_order_id)
+        if evidence is None:
+            return None
+        if type(evidence) is not OrderPreparationFilterEvidence:
+            raise TypeError(
+                "filter evidence must be an OrderPreparationFilterEvidence"
+            )
+        if evidence.client_order_id != client_order_id:
+            raise ValueError("filter evidence does not match requested order")
+
+        return evidence
+
+    def get_order_submission_attempt_evidence(
+        self,
+        *,
+        client_order_id: str,
+    ) -> OrderSubmissionAttemptEvidence | None:
+        """
+        함수 이름: get_order_submission_attempt_evidence()
+        기능: 이미 시작한 REST submission의 safe timestamp evidence를 mutation 권한 없이 전달한다.
+        인자: client_order_id -> 제출을 시작한 application Order identity
+        반환값: immutable submission evidence 또는 POST 시작 전이면 None
+        작성 날짜: 2026/08/31
+        """
+        if (
+            not isinstance(client_order_id, str)
+            or not client_order_id
+            or client_order_id != client_order_id.strip()
+        ):
+            raise ValueError("client_order_id must be non-empty canonical text")
+        get_submission_evidence = getattr(
+            self._delegate,
+            "get_order_submission_attempt_evidence",
+            None,
+        )
+        if not callable(get_submission_evidence):
+            raise TypeError(
+                "delegate must provide get_order_submission_attempt_evidence"
+            )
+
+        # 주문 권한은 새로운 POST에만 적용하고 완료된 submission의 safe provenance 조회는 read-only다.
+        evidence = get_submission_evidence(client_order_id=client_order_id)
+        if evidence is None:
+            return None
+        if type(evidence) is not OrderSubmissionAttemptEvidence:
+            raise TypeError(
+                "submission evidence must be an OrderSubmissionAttemptEvidence"
+            )
+        if evidence.client_order_id != client_order_id:
+            raise ValueError("submission evidence does not match requested order")
+
+        return evidence
+
     def query_order_result(self, *, order: Order) -> OrderResult:
         """
         함수 이름: query_order_result()
@@ -202,18 +390,177 @@ class _TestnetOrderPermissionRESTClient:
                 "testnet order operation requires the separate order opt-in"
             )  # delegate method를 찾기 전에 막아 network side effect를 만들지 않는다.
 
+    def block_phase13_order_submissions(self) -> None:
+        """
+        함수 이름: block_phase13_order_submissions()
+        기능: Phase 13 failure finalizer가 모든 후속 logical submit permit을 원자 폐쇄한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        if not self._phase13_public_case2:
+            raise TestnetConfigurationError(
+                "Phase 13 submission blocking requires its dedicated opt-in"
+            )
+
+        # 이미 시작한 delegate 호출은 취소하지 않되 이 lock 이후 새 호출은 하나도 승인하지 않는다.
+        with self._phase13_guard_lock:
+            self._phase13_submissions_blocked = True
+
+    def get_phase13_order_submission_guard_snapshot(
+        self,
+    ) -> Phase13OrderSubmissionGuardSnapshot:
+        """
+        함수 이름: get_phase13_order_submission_guard_snapshot()
+        기능: Phase 13 mutation 시작·차단과 permit을 소비한 최소 주문 identity를 반환한다.
+        인자: 없음
+        반환값: credential과 raw parameter가 없는 frozen guard snapshot
+        작성 날짜: 2026/08/31
+        """
+        if not self._phase13_public_case2:
+            raise TestnetConfigurationError(
+                "Phase 13 submission snapshot requires its dedicated opt-in"
+            )
+
+        # Mutable 내부 목록을 lock 아래 tuple로 복제해 다른 thread의 submit과 혼합되지 않게 한다.
+        with self._phase13_guard_lock:
+            attempts = tuple(self._phase13_attempts)
+            submissions_blocked = self._phase13_submissions_blocked
+
+        return Phase13OrderSubmissionGuardSnapshot(
+            mutation_started=bool(attempts),
+            submissions_blocked=submissions_blocked,
+            attempts=attempts,
+        )
+
+    def _begin_phase13_order_submission(self, order: Order) -> bool:
+        """
+        함수 이름: _begin_phase13_order_submission()
+        기능: exact BUY→STOP SELL shape를 검증하고 한 logical submit permit을 원자 소비한다.
+        인자: order -> delegate 호출 직전의 durable canonical Order
+        반환값: Phase 13 guard가 활성화되어 permit을 소비했으면 True
+        작성 날짜: 2026/08/31
+        """
+        if not self._phase13_public_case2:
+            return False  # Legacy Phase 9 Testnet은 기존 다섯 attempt 정책을 그대로 사용한다.
+
+        # Shape와 순서는 하나의 lock에서 읽고 써 concurrent submit이 같은 permit을 공유하지 못하게 한다.
+        with self._phase13_guard_lock:
+            if self._phase13_submissions_blocked:
+                raise TestnetConfigurationError(
+                    "Phase 13 order submissions are permanently blocked"
+                )
+            if self._phase13_submission_in_progress:
+                raise TestnetConfigurationError(
+                    "Phase 13 permits only one in-progress order submission"
+                )
+
+            attempt_index = len(self._phase13_attempts)
+            if attempt_index >= 2:
+                self._phase13_submissions_blocked = True
+                raise TestnetConfigurationError(
+                    "Phase 13 permits exactly one BUY and one STOP SELL"
+                )
+            expected_side = (
+                OrderSide.BUY if attempt_index == 0 else OrderSide.SELL
+            )
+            expected_exit_reason = (
+                None if attempt_index == 0 else ExitReason.STOP
+            )
+            if (
+                order.symbol != "ETHUSDT"
+                or order.strategy is not StrategyType.CASE_C
+                or order.submission_attempt != 0
+                or order.side is not expected_side
+                or order.exit_reason is not expected_exit_reason
+            ):
+                raise TestnetConfigurationError(
+                    "Phase 13 requires ETHUSDT CASE_C initial BUY then STOP SELL"
+                )
+            if any(
+                attempt.client_order_id == order.client_order_id
+                for attempt in self._phase13_attempts
+            ):
+                raise TestnetConfigurationError(
+                    "Phase 13 submissions require distinct client order IDs"
+                )
+
+            # Permit 소비 시각은 delegate 호출 시작보다 늦지 않은 aware UTC 값으로만 기록한다.
+            attempted_at = self._clock()
+            if (
+                not isinstance(attempted_at, datetime)
+                or attempted_at.tzinfo is None
+                or attempted_at.utcoffset() is None
+                or attempted_at.utcoffset() != timedelta(0)
+            ):
+                raise ValueError("clock must return a timezone-aware UTC datetime")
+            self._phase13_attempts.append(
+                Phase13OrderSubmissionAttempt(
+                    symbol=order.symbol,
+                    side=order.side,
+                    order_type="MARKET",
+                    intent_id=order.intent_id,
+                    submission_attempt=order.submission_attempt,
+                    attempted_at=attempted_at,
+                    client_order_id=order.client_order_id,
+                )
+            )
+            self._phase13_submission_in_progress = True
+            if len(self._phase13_attempts) == 2:
+                self._phase13_submissions_blocked = True
+
+        return True  # Delegate 실패나 UNKNOWN이어도 이미 소비한 permit은 되돌리지 않는다.
+
+    def _finish_phase13_order_submission(self, guard_consumed: bool) -> None:
+        """
+        함수 이름: _finish_phase13_order_submission()
+        기능: delegate 호출 종료 뒤 in-progress latch만 해제하고 소비 permit은 유지한다.
+        인자: guard_consumed -> 이번 호출이 Phase 13 permit을 소비했는지 여부
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        if not guard_consumed:
+            return  # Legacy 제출에는 Phase 13 lock 상태가 존재하지 않는다.
+
+        # 차단 latch와 attempt 기록은 보존하고 동시 호출 방지 표식만 정리한다.
+        with self._phase13_guard_lock:
+            self._phase13_submission_in_progress = False
+
     def prepare_order(self, *, order: Order) -> Order:
         """
         함수 이름: prepare_order()
         기능: 주문 권한 확인 후 testnet symbol filter 준비를 delegate에 전달한다.
         인자: order -> filter 전 canonical Order
         반환값: filter와 notional cap을 통과한 Order
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/08/31
         """
         self._require_order_permission()
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
         prepare_order = getattr(self._delegate, "prepare_order", None)
         if not callable(prepare_order):
             raise TypeError("delegate must provide prepare_order")
+
+        # Filter adapter가 mutable Order를 돌려주더라도 evaluation 가격과 intent provenance를 원본으로 고정한다.
+        immutable_provenance_fields = (
+            "intent_id",
+            "client_order_id",
+            "submission_attempt",
+            "symbol",
+            "side",
+            "strategy",
+            "regime_type",
+            "requested_quantity",
+            "market_price_at_decision",
+            "risk_policy_version",
+            "exit_reason",
+            "exit_pct_b_at_intent",
+        )
+        immutable_provenance = tuple(
+            getattr(order, field_name)
+            for field_name in immutable_provenance_fields
+        )
+        decision_price = order.market_price_at_decision  # cap 계산은 이후 mutable 객체가 아닌 event claim을 쓴다.
 
         # 공식 signed commission 설정을 매 attempt 전에 확인해 제3 자산 fill을 주문 전에 막는다.
         commission_policy = APIGateway(
@@ -238,7 +585,56 @@ class _TestnetOrderPermissionRESTClient:
                 "testnet MARKET BUY commission can create unsupported base-asset dust"
             )
 
-        return prepare_order(order=order)  # 실제 client가 일반 cap과 STOP cleanup 예외를 적용한다.
+        prepared_order = prepare_order(order=order)
+        if not isinstance(prepared_order, Order):
+            raise TypeError("prepare_order must return an Order")
+        if any(
+            getattr(prepared_order, field_name) != original_value
+            for field_name, original_value in zip(
+                immutable_provenance_fields,
+                immutable_provenance,
+                strict=True,
+            )
+        ):
+            raise TestnetConfigurationError(
+                "prepared testnet order changed immutable decision provenance"
+            )
+
+        # STOP/recovery SELL은 이번 run의 authoritative Position을 닫는 경로이므로 BUY cap에서만 제외한다.
+        if (
+            prepared_order.side is OrderSide.SELL
+            and prepared_order.exit_reason is ExitReason.STOP
+        ):
+            return prepared_order
+
+        final_quantity = prepared_order.submitted_quantity
+        if (
+            not isinstance(final_quantity, Decimal)
+            or not final_quantity.is_finite()
+            or final_quantity <= Decimal("0")
+        ):
+            raise TestnetConfigurationError(
+                "prepared testnet order requires a positive finite quantity"
+            )
+
+        # Decimal128 정밀도로 filter 후 최종 notional을 설정 cap과 절대 100 USDT 모두에 대조한다.
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            final_notional = final_quantity * decision_price
+        configured_cap = self._maximum_order_notional
+        if configured_cap is None:
+            raise TestnetConfigurationError(
+                "enabled testnet orders require a configured notional cap"
+            )
+        if (
+            final_notional > configured_cap
+            or final_notional > BINANCE_TESTNET_ABSOLUTE_MAX_NOTIONAL
+        ):
+            raise TestnetConfigurationError(
+                "prepared testnet order exceeds the configured or absolute cap"
+            )
+
+        return prepared_order  # journal 이전 마지막 bootstrap 경계가 final 수량과 immutable 가격을 결속한다.
 
     def submit_order(self, *, order: Order) -> OrderResult:
         """
@@ -249,11 +645,18 @@ class _TestnetOrderPermissionRESTClient:
         작성 날짜: 2026/08/22
         """
         self._require_order_permission()
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
         submit_order = getattr(self._delegate, "submit_order", None)
         if not callable(submit_order):
             raise TypeError("delegate must provide submit_order")
 
-        return submit_order(order=order)  # proxy는 timeout 재제출이나 결과 변환을 추가하지 않는다.
+        # Phase 13 permit은 실제 delegate 진입 직전에 소비하고 예외에서도 in-progress latch만 해제한다.
+        guard_consumed = self._begin_phase13_order_submission(order)
+        try:
+            return submit_order(order=order)
+        finally:
+            self._finish_phase13_order_submission(guard_consumed)
 
     def cancel_order(self, *, order: Order) -> OrderResult:
         """
@@ -264,6 +667,10 @@ class _TestnetOrderPermissionRESTClient:
         작성 날짜: 2026/08/22
         """
         self._require_order_permission()
+        if self._phase13_public_case2:
+            raise TestnetConfigurationError(
+                "Phase 13 public Case 2 does not permit order cancellation"
+            )  # 전용 target의 유일한 mutation은 최초 BUY와 exact STOP SELL 제출이다.
         cancel_order = getattr(self._delegate, "cancel_order", None)
         if not callable(cancel_order):
             raise TypeError("delegate must provide cancel_order")
@@ -282,6 +689,7 @@ class TestnetConfiguration:
     api_key: str = field(repr=False)
     api_secret: str = field(repr=False)
     allow_testnet_orders: bool
+    allow_phase13_public_case2: bool
     max_notional: Decimal | None
 
     def __repr__(self) -> str:
@@ -297,6 +705,8 @@ class TestnetConfiguration:
             "TestnetConfiguration("
             "api_key=<redacted>, api_secret=<redacted>, "
             f"allow_testnet_orders={self.allow_testnet_orders!r}, "
+            "allow_phase13_public_case2="
+            f"{self.allow_phase13_public_case2!r}, "
             f"max_notional={self.max_notional!r})"
         )  # 주문 gate와 공개 가능한 cap만 운영 진단에 남긴다.
 
@@ -332,14 +742,18 @@ def _read_positive_max_notional(
 ) -> Decimal:
     """
     함수 이름: _read_positive_max_notional()
-    기능: 주문 opt-in에 필수인 유한 양수 quote notional 상한을 Decimal로 읽는다.
+    기능: 주문 opt-in에 필수인 100 USDT 이하 유한 양수 quote notional 상한을 Decimal로 읽는다.
     인자: environment -> 읽기 전용 backend 환경 mapping
-    반환값: 양수 Decimal 상한
-    작성 날짜: 2026/08/22
+    반환값: 0 초과 100 이하 Decimal 상한
+    작성 날짜: 2026/08/31
     """
     # 금융 상한은 JSON number나 float 변환 없이 환경 문자열에서 바로 Decimal로 만든다.
     raw_max_notional = environment.get(BINANCE_TESTNET_MAX_NOTIONAL_ENV)
-    if not isinstance(raw_max_notional, str) or not raw_max_notional:
+    if (
+        not isinstance(raw_max_notional, str)
+        or not raw_max_notional
+        or raw_max_notional != raw_max_notional.strip()
+    ):
         raise TestnetConfigurationError(
             f"{BINANCE_TESTNET_MAX_NOTIONAL_ENV} is required when orders are enabled"
         )
@@ -349,9 +763,13 @@ def _read_positive_max_notional(
         raise TestnetConfigurationError(
             f"{BINANCE_TESTNET_MAX_NOTIONAL_ENV} must be a positive decimal"
         ) from None
-    if not max_notional.is_finite() or max_notional <= Decimal("0"):
+    if (
+        not max_notional.is_finite()
+        or max_notional <= Decimal("0")
+        or max_notional > BINANCE_TESTNET_ABSOLUTE_MAX_NOTIONAL
+    ):
         raise TestnetConfigurationError(
-            f"{BINANCE_TESTNET_MAX_NOTIONAL_ENV} must be a positive decimal"
+            f"{BINANCE_TESTNET_MAX_NOTIONAL_ENV} must be greater than 0 and no greater than 100"
         )
 
     return max_notional  # Caller는 BUY 진입과 일반 주문 cap에 쓰고 STOP cleanup만 예외로 둔다.
@@ -388,6 +806,11 @@ def load_testnet_configuration(
     allow_testnet_orders = (
         selected_environment.get(BINANCE_RUN_TESTNET_ORDERS_ENV) == "1"
     )
+    allow_phase13_public_case2 = (
+        allow_testnet_orders
+        and selected_environment.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV)
+        == "1"
+    )  # 세 번째 flag만 켠 read-only runtime이 Phase 13 mutation mode로 승격되지 않게 한다.
     max_notional = (
         _read_positive_max_notional(selected_environment)
         if allow_testnet_orders
@@ -398,6 +821,7 @@ def load_testnet_configuration(
         api_key=api_key,
         api_secret=api_secret,
         allow_testnet_orders=allow_testnet_orders,
+        allow_phase13_public_case2=allow_phase13_public_case2,
         max_notional=max_notional,
     )  # 알 수 없는 order flag 값은 권한 없는 read-only 상태로 수렴한다.
 
@@ -424,6 +848,27 @@ def require_testnet_order_permission(
         )
 
     return configuration.max_notional  # loader가 finite 양수 검증을 이미 완료했다.
+
+
+def require_phase13_public_case2_permission(
+    configuration: TestnetConfiguration,
+) -> Decimal:
+    """
+    함수 이름: require_phase13_public_case2_permission()
+    기능: 세 번째 전용 opt-in과 기존 주문 gate를 함께 확인해 public Case 2 cap을 반환한다.
+    인자: configuration -> load_testnet_configuration() 결과
+    반환값: 100 USDT 절대 상한 안의 승인된 Decimal cap
+    작성 날짜: 2026/08/31
+    """
+    # Broad Testnet order suite와 구분된 exact flag가 없으면 public-path actual target을 실행하지 않는다.
+    if not isinstance(configuration, TestnetConfiguration):
+        raise TypeError("configuration must be a TestnetConfiguration")
+    if not configuration.allow_phase13_public_case2:
+        raise TestnetConfigurationError(
+            "Phase 13 public Case 2 requires its dedicated opt-in"
+        )
+
+    return require_testnet_order_permission(configuration)  # 기존 이중 gate와 cap 검증도 우회하지 않는다.
 
 
 def _load_testnet_client_types() -> tuple[type[object], type[object]]:
@@ -458,7 +903,9 @@ def create_testnet_application_runtime(
     *,
     history_path: str | os.PathLike[str],
     environment: Mapping[str, str] | None = None,
+    risk_policy_state: RiskPolicy | RiskPolicyUnavailable | None = None,
     clock: Callable[[], datetime] | None = None,
+    monotonic_clock: Callable[[], int] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
 ) -> ApplicationRuntime:
     """
@@ -469,7 +916,9 @@ def create_testnet_application_runtime(
         trading_session_update_observer -> event cycle 뒤 session snapshot을 게시할 observer
         history_path -> test run별 local JSONL history 경로
         environment -> 주입 환경 mapping 또는 실제 os.environ이면 None
+        risk_policy_state -> 승인값이 없으면 None인 versioned Testnet 위험 정책 상태
         clock -> runtime 전체가 공유할 optional UTC clock
+        monotonic_clock -> 30분 연속 조건 전용 optional nanosecond monotonic clock
         kline_limit -> interval별 REST 초기 조회 개수
     반환값: live endpoint와 분리된 ApplicationRuntime
     작성 날짜: 2026/08/22
@@ -489,15 +938,30 @@ def create_testnet_application_runtime(
         trading_session_update_observer
     ):
         raise TypeError("trading_session_update_observer must be callable")
+    if monotonic_clock is not None and not callable(monotonic_clock):
+        raise TypeError("monotonic_clock must be callable or None")
+    if risk_policy_state is not None and not isinstance(
+        risk_policy_state,
+        (RiskPolicy, RiskPolicyUnavailable),
+    ):
+        raise TypeError(
+            "risk_policy_state must be a RiskPolicy, "
+            "RiskPolicyUnavailable, or None"
+        )
 
     # 모든 설정을 client 생성 전에 검증해 잘못된 opt-in에서 객체나 network가 만들어지지 않게 한다.
     configuration = load_testnet_configuration(environment)
     rest_client_type, web_socket_client_type = _load_testnet_client_types()
-    rest_client = rest_client_type(
-        api_key=configuration.api_key,
-        secret_key=configuration.api_secret,
-        maximum_order_notional=configuration.max_notional,
-    )
+    rest_client_arguments: dict[str, object] = {
+        "api_key": configuration.api_key,
+        "secret_key": configuration.api_secret,
+        "maximum_order_notional": configuration.max_notional,
+    }
+    if configuration.allow_phase13_public_case2:
+        rest_client_arguments[
+            "allow_order_timestamp_retry"
+        ] = False  # 한 logical Phase 13 주문은 -1021에서도 추가 HTTP POST permit을 얻지 못한다.
+    rest_client = rest_client_type(**rest_client_arguments)
     web_socket_client = web_socket_client_type(
         api_key=configuration.api_key,
         api_secret=configuration.api_secret,
@@ -506,6 +970,9 @@ def create_testnet_application_runtime(
     permission_checked_rest_client = _TestnetOrderPermissionRESTClient(
         rest_client,
         allow_orders=configuration.allow_testnet_orders,
+        maximum_order_notional=configuration.max_notional,
+        phase13_public_case2=configuration.allow_phase13_public_case2,
+        clock=clock,
     )
 
     return create_application_runtime(
@@ -515,6 +982,10 @@ def create_testnet_application_runtime(
         execution_mode="testnet",
         allow_testnet_orders=configuration.allow_testnet_orders,
         testnet_maximum_order_notional=configuration.max_notional,
+        maximum_order_submissions_per_intent=(
+            1 if configuration.allow_phase13_public_case2 else 5
+        ),
+        risk_policy_state=risk_policy_state,
         _testnet_order_capability=(
             _TESTNET_ORDER_CAPABILITY
             if configuration.allow_testnet_orders
@@ -524,5 +995,6 @@ def create_testnet_application_runtime(
         trade_history_update_observer=trade_history_update_observer,
         trading_session_update_observer=trading_session_update_observer,
         clock=clock,
+        monotonic_clock=monotonic_clock,
         kline_limit=kline_limit,
     )  # live mode와 base URL 환경변수를 전달할 surface를 의도적으로 제공하지 않는다.

@@ -23,6 +23,7 @@ from binance_auto_trader.transport import (
 )
 
 from tests.unit.transport.test_contracts import _create_ready_runtime
+from tests.unit.transport.test_trading_route import _ManualKillController
 
 
 TEST_ORIGIN = "http://127.0.0.1:5173"
@@ -38,7 +39,7 @@ def _encode_csv_export_body(file_name: str) -> str:
     """
     # 실제 command parser가 요구하는 여섯 option field와 schema version을 모두 제공한다.
     request_payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "directory": "/tmp",
         "file_name": file_name,
         "period": "custom",
@@ -452,7 +453,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":2,"schema_version":2}',
+            body='{"schema_version":3,"schema_version":3}',
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
@@ -461,7 +462,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":2,"value":NaN}',
+            body='{"schema_version":3,"value":NaN}',
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
@@ -488,7 +489,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             self.token,
             "POST",
             "/v1/trading/start",
-            body='{"schema_version":2}',
+            body='{"schema_version":3}',
             request_id=str(uuid4()),
             idempotency_key=str(uuid4()),
         )
@@ -562,6 +563,69 @@ class LoopbackHttpServerTests(unittest.TestCase):
         self.assertEqual(
             conflict_payload["error"]["code"],
             "IDEMPOTENCY_CONFLICT",
+        )
+
+    def test_manual_kill_http_distinguishes_accepted_cleanup_from_complete(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_http_distinguishes_accepted_cleanup_from_complete()
+        기능: actual loopback PATCH가 cleanup false에는 202, true에는 200과 같은 body bool을 반환하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # READY runtime의 account aggregate를 보존하면서 cleanup 상태를 제어하는 route owner를 주입한다.
+        original_controller = self.runtime.trading_controller
+        manual_kill_controller = _ManualKillController(
+            cleanup_complete=False
+        )
+        manual_kill_controller.account = original_controller.account
+        self.runtime.trading_controller = manual_kill_controller
+        self.runtime.ready = True
+        self.runtime.state.status = "READY"
+
+        # Durable activation receipt만 완료된 첫 PATCH는 authoritative false와 HTTP 202를 반환한다.
+        accepted_status, accepted_payload, _ = _request_json(
+            self.server,
+            self.token,
+            "PATCH",
+            "/v1/trading/manual-kill",
+            body=json.dumps(
+                {
+                    "schema_version": 3,
+                    "active": True,
+                    "expected_version": 0,
+                }
+            ),
+            request_id=str(uuid4()),
+            idempotency_key=str(uuid4()),
+        )
+        self.assertEqual(202, accepted_status)
+        self.assertFalse(
+            accepted_payload["data"]["manual_kill_cleanup_complete"]
+        )
+
+        # Cleanup 완료를 재현한 해제 PATCH는 같은 필드를 True로 게시하고 HTTP 200을 반환한다.
+        manual_kill_controller.cleanup_complete = True
+        complete_status, complete_payload, _ = _request_json(
+            self.server,
+            self.token,
+            "PATCH",
+            "/v1/trading/manual-kill",
+            body=json.dumps(
+                {
+                    "schema_version": 3,
+                    "active": False,
+                    "expected_version": 1,
+                }
+            ),
+            request_id=str(uuid4()),
+            idempotency_key=str(uuid4()),
+        )
+        self.assertEqual(200, complete_status)
+        self.assertTrue(
+            complete_payload["data"]["manual_kill_cleanup_complete"]
         )
 
     def test_concurrent_same_key_executes_route_once(self) -> None:

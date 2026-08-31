@@ -159,7 +159,7 @@ if realtime_pct_b >= 0.60 for 5 seconds and realtime_ema_slope > 0.08 for 5 seco
 
 주의:
 
-- trend hold 판단의 `%B`와 `ema_slope`는 모두 실시간 기준이다.
+- trend hold 판단의 `%B`와 `realtime_ema_slope`는 모두 실시간 기준이다.
 - `realtime_ema_slope`는 현재가를 임시 close로 넣어 계산한다.
 - trend hold는 익절 이후 확장 상태이며 신규 매수 조건이 아니다.
 

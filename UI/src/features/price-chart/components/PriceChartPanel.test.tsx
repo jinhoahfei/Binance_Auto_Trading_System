@@ -51,6 +51,29 @@ describe('PriceChartPanel', () => {
         });
     });
 
+    it('fixture는 차트 보조지표와 팝오버의 정적 OFF 표현을 독립적으로 유지한다', () => {
+        const { container } = render(
+            <PriceChartPanel
+                {...CHART_DATA}
+                indicatorSettings={{ ema9: true, bollingerBand: true, volume: false }}
+                indicatorSettingsOpen
+                presentationMode="fixture"
+            />,
+        );
+
+        // Figma 기준은 보조지표 선을 표시하면서도 팝오버 toggle 세 개를 모두 OFF로 고정한다.
+        expect(container.querySelector('[data-indicator="ema9"]')).toBeInTheDocument();
+        expect(container.querySelector('[data-indicator="bollinger-band"]')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'EMA9 표시하기' })).toHaveAttribute(
+            'aria-pressed',
+            'false',
+        );
+        expect(screen.getByRole('button', { name: '볼린저밴드 표시하기' })).toHaveAttribute(
+            'aria-pressed',
+            'false',
+        );
+    });
+
     it('지표 팝오버 바깥을 누르면 닫기 intent를 전달한다', () => {
         const handle_intent = vi.fn();
 

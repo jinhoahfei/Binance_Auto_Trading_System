@@ -1,12 +1,15 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "binance-auto-trader-backend"
 version = "0.1.0"
 description = "Integrated RegimeSTM and TradingSTM backend for Binance Auto"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE.txt"]
 requires-python = ">=3.11"
+classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "websocket-client>=1.8,<2",
 ]

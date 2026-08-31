@@ -221,7 +221,7 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
             _send_json_text(
                 client_socket,
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "type": "AUTHENTICATE",
                     "token": self.token,
                     "after_sequence": 0,
@@ -266,7 +266,7 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
             _send_json_text(
                 client_socket,
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "type": "AUTHENTICATE",
                     "token": self.token,
                     "after_sequence": 0,
@@ -293,7 +293,7 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
             _send_json_text(
                 client_socket,
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "type": "AUTHENTICATE",
                     "token": self.token,
                     "after_sequence": 2,
@@ -323,7 +323,7 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
         self.event_stream.publish("ACCOUNT_UPDATED", {"version": 1})
         invalid_authentication_texts = (
             (
-                '{"schema_version":2,"schema_version":2,'
+                '{"schema_version":3,"schema_version":3,'
                 f'"type":"AUTHENTICATE","token":"{self.token}",'
                 '"after_sequence":0}'
             ),
@@ -398,7 +398,7 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
         """
         authentication_payload = json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "type": "AUTHENTICATE",
                 "token": self.token,
                 "after_sequence": 0,

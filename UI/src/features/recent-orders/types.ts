@@ -1,8 +1,18 @@
+import type {
+    BackendDailyLossScope,
+    BackendDecimalString,
+    BackendManualKillBehavior,
+    BackendRiskBudgetSnapshot,
+    BackendRiskPolicyAvailability,
+} from '../../shared/contracts';
+
 export type TraderPanelTab = 'recent' | 'realtime';
 
 export type OrderSide = 'buy' | 'sell';
 
 export type MetricTone = 'positive' | 'negative' | 'neutral';
+
+export type TraderPanelRiskPolicyAvailability = BackendRiskPolicyAvailability;
 
 export type TraderPanelIntent =
     | { readonly type: 'TRADER_TAB_REQUESTED'; readonly tab: TraderPanelTab }
@@ -32,8 +42,25 @@ export interface RealtimeIndicatorGroupViewModel {
 
 export interface TraderPanelProps {
     readonly activeTab: TraderPanelTab;
+    readonly configured_risk_policy_version?: number | null | undefined;
+    readonly max_order_notional?: BackendDecimalString | null | undefined;
+    readonly max_position_notional?: BackendDecimalString | null | undefined;
+    readonly max_daily_loss?: BackendDecimalString | null | undefined;
+    readonly daily_loss_scope?: BackendDailyLossScope | null | undefined;
+    readonly manual_kill_behavior?: BackendManualKillBehavior | null | undefined;
     readonly indicatorGroups: ReadonlyArray<RealtimeIndicatorGroupViewModel>;
+    readonly last_risk_decision_allowed?: boolean | null | undefined;
+    readonly last_risk_budget?: BackendRiskBudgetSnapshot | null | undefined;
+    readonly manual_kill_active?: boolean | undefined;
+    readonly manual_kill_cleanup_complete?: boolean | undefined;
+    readonly manual_kill_activation_behavior?:
+        BackendManualKillBehavior | null | undefined;
+    readonly manual_kill_activation_policy_version?: number | null | undefined;
     readonly onIntent?: ((intent: TraderPanelIntent) => void) | undefined;
     readonly orders: ReadonlyArray<RecentOrderViewModel>;
+    readonly process_ownership_ambiguous?: boolean | undefined;
     readonly residenceTime?: string | undefined;
+    readonly risk_block_reason?: string | null | undefined;
+    readonly risk_policy_availability?: TraderPanelRiskPolicyAvailability | undefined;
+    readonly session_risk_policy_version?: number | null | undefined;
 }

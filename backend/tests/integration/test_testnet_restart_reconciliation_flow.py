@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, RLock
@@ -51,10 +52,18 @@ from binance_auto_trader.domain.trading.order import (
     OrderResultFailureKind,
     OrderStatus,
     PendingOrderRecoveryLifecycle,
+    PendingOrderSubmissionProvenance,
 )
 from binance_auto_trader.domain.trading.position import (
     LegacyFeeAccountingMigrationRequiredError,
     Position,
+)
+from binance_auto_trader.domain.trading.risk import (
+    DailyLossScope,
+    ManualKillBehavior,
+    ManualKillControlState,
+    RiskPolicy,
+    RiskPolicyUnavailable,
 )
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
@@ -81,6 +90,7 @@ from tests.integration.test_order_reconciliation_flow import (
     _create_started_controller,
     _submit_case_b_buy,
 )
+from tests.integration.phase13_risk_fixture import create_test_risk_policy
 from tests.unit.history.factories import make_order_execution, make_trade
 
 
@@ -91,12 +101,16 @@ def _make_pending_order(
     *,
     intent_id: str = "restart-buy-intent",
     client_order_id: str = "bat-restart-buy-1",
+    submission_attempt: int = 1,
+    risk_policy_version: int | None = None,
 ) -> Order:
     """
     함수 이름: _make_pending_order()
     기능: crash 직전 sidecar에 남은 testnet BUY 주문 metadata를 만든다.
     인자: intent_id -> 재시작 뒤에도 보존할 application intent ID
         client_order_id -> session과 제출 시도를 포함한 Binance client order ID
+        submission_attempt -> journal에 보존할 0 이상 제출 시도
+        risk_policy_version -> 제출 판단에 사용한 policy version 또는 legacy None
     반환값: 제출 전 canonical Order
     작성 날짜: 2026/08/22
     """
@@ -104,7 +118,7 @@ def _make_pending_order(
     return Order(
         intent_id=intent_id,
         client_order_id=client_order_id,
-        submission_attempt=1,
+        submission_attempt=submission_attempt,
         symbol="ETHUSDT",
         side=OrderSide.BUY,
         strategy=StrategyType.CASE_B,
@@ -112,6 +126,7 @@ def _make_pending_order(
         requested_quantity=Decimal("0.25000000"),
         submitted_quantity=Decimal("0.25000000"),
         market_price_at_decision=Decimal("2500.00"),
+        risk_policy_version=risk_policy_version,
     )
 
 
@@ -423,6 +438,139 @@ class _FilledSubmissionTestnetRESTClient(
         return self.result  # 재접속 recent와 query가 동일 누적 fill을 재현한다.
 
 
+class _ManualKillRestartRESTClient(_FilledSubmissionTestnetRESTClient):
+    """
+    클래스 이름: _ManualKillRestartRESTClient
+    기능: durable kill 재시작의 active BUY 취소·partial 복원·잔여 SELL 순서를 재현한다.
+    작성 날짜: 2026/08/29
+    """
+
+    def __init__(
+        self,
+        pending_order: Order,
+        *,
+        cancel_stays_active: bool = False,
+    ) -> None:
+        """
+        함수 이름: __init__()
+        기능: 같은 pending identity의 NEW와 cancel-race CANCELED partial 결과를 준비한다.
+        인자: pending_order -> crash 전에 SUBMITTED로 fsync된 app-owned BUY
+            cancel_stays_active -> cancel 뒤 bounded query도 NEW를 유지할지 여부
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        if not isinstance(pending_order, Order):
+            raise TypeError("pending_order must be an Order")
+        if type(cancel_stays_active) is not bool:
+            raise TypeError("cancel_stays_active must be a bool")
+
+        self.pending_order = pending_order
+        self.cancel_stays_active = cancel_stays_active
+        self.active_result = OrderResult(
+            symbol=pending_order.symbol,
+            client_order_id=pending_order.client_order_id,
+            exchange_order_id="95001",
+            status=OrderStatus.NEW,
+            processed_at=FIXED_TIME,
+        )
+        partial_fill = Fill(
+            exchange_order_id="95001",
+            trade_id="55001",
+            quantity=Decimal("0.12500000"),
+            price=Decimal("2500.00"),
+            fee_amount=Decimal("0"),
+            fee_asset="USDT",
+            fee_quote_amount=Decimal("0"),
+            executed_at=FIXED_TIME,
+        )
+        self.canceled_result = OrderResult(
+            symbol=pending_order.symbol,
+            client_order_id=pending_order.client_order_id,
+            exchange_order_id=partial_fill.exchange_order_id,
+            status=OrderStatus.CANCELED,
+            processed_at=FIXED_TIME,
+            fills=(partial_fill,),
+        )
+        super().__init__(
+            startup_result=self.active_result,
+            submission_exchange_order_id="95002",
+            submission_trade_id="55002",
+        )
+        self.cancel_completed = False
+        self.operation_trace: list[str] = []
+        self.submitted_orders: list[Order] = []
+
+    def list_open_order_results(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_open_order_results()
+        기능: 개별 cancel 전에는 원 BUY만, 이후에는 빈 app open-order 집합을 반환한다.
+        인자: symbol -> 조회한 Spot symbol
+        반환값: 현재 authoritative open OrderResult tuple
+        작성 날짜: 2026/08/29
+        """
+        if symbol != self.pending_order.symbol:
+            raise AssertionError("unexpected manual-kill startup symbol")
+
+        if self.cancel_completed and not self.cancel_stays_active:
+            return ()
+        return (self.active_result,)
+
+    def query_order_result(self, *, order: Order) -> OrderResult:
+        """
+        함수 이름: query_order_result()
+        기능: cancel 전 NEW와 cancel 뒤 terminal partial을 같은 client ID 조회로 반환한다.
+        인자: order -> durable journal에서 복원한 원 BUY
+        반환값: 현재 authoritative same-ID OrderResult
+        작성 날짜: 2026/08/29
+        """
+        if order.client_order_id != self.pending_order.client_order_id:
+            raise AssertionError("manual-kill query changed the pending identity")
+
+        self.query_client_order_ids.append(order.client_order_id)
+        self.operation_trace.append("query:BUY")
+        return (
+            self.canceled_result
+            if self.cancel_completed and not self.cancel_stays_active
+            else self.active_result
+        )
+
+    def cancel_order(self, *, order: Order) -> OrderResult:
+        """
+        함수 이름: cancel_order()
+        기능: journal로 설명되는 원 BUY 하나만 취소하고 terminal 응답을 후속 조회와 분리한다.
+        인자: order -> 취소할 durable app-owned BUY
+        반환값: 같은 identity의 CANCELED partial 응답
+        작성 날짜: 2026/08/29
+        """
+        if order.client_order_id != self.pending_order.client_order_id:
+            raise AssertionError("manual-kill canceled a foreign order")
+        if self.cancel_completed:
+            raise AssertionError("manual-kill cancel must be idempotently queried")
+
+        self.operation_trace.append("cancel:BUY")
+        self.cancel_completed = True
+        return self.canceled_result  # Controller는 이 응답만 믿지 않고 같은 ID를 다시 조회해야 한다.
+
+    def submit_order(self, *, order: Order) -> OrderResult:
+        """
+        함수 이름: submit_order()
+        기능: startup은 신규 BUY 없이 복원된 partial 수량과 같은 recovery SELL 하나만 체결한다.
+        인자: order -> Controller가 pending fsync 뒤 만든 recovery SELL
+        반환값: submitted 수량 전체의 terminal FILLED 결과
+        작성 날짜: 2026/08/29
+        """
+        if order.side is not OrderSide.SELL:
+            raise AssertionError("manual-kill restart must not submit a new BUY")
+
+        self.operation_trace.append("submit:SELL")
+        self.submitted_orders.append(order)
+        return super().submit_order(order=order)
+
+
 def _create_recovery_controller(
     history_path: Path,
     client: RestartReconciliationRESTClient,
@@ -433,6 +581,7 @@ def _create_recovery_controller(
     event_runtime_notifier: Callable[[], object] | None = None,
     application_lock: RLock | None = None,
     maximum_order_notional: Decimal | None = None,
+    risk_policy_state: RiskPolicy | RiskPolicyUnavailable | None = None,
 ) -> tuple[TradingController, TradeHistoryController, Position]:
     """
     함수 이름: _create_recovery_controller()
@@ -445,6 +594,7 @@ def _create_recovery_controller(
         event_runtime_notifier -> queue와 retry schedule wake를 받을 optional callback
         application_lock -> production worker와 공유할 optional application RLock
         maximum_order_notional -> 신규 BUY에만 적용할 optional quote 진입 상한
+        risk_policy_state -> 복구와 신규 BUY에 사용할 explicit 위험 정책 또는 None
     반환값: Controller, history Controller와 mutable Position tuple
     작성 날짜: 2026/08/22
     """
@@ -473,6 +623,11 @@ def _create_recovery_controller(
         position=position,
         trade_history_controller=history_controller,
         pending_order_recovery_enabled=True,
+        risk_policy_state=(
+            create_test_risk_policy()
+            if risk_policy_state is None
+            else risk_policy_state
+        ),
         order_retry_waiter=order_retry_waiter,
         event_runtime_notifier=event_runtime_notifier,
         clock=lambda: FIXED_TIME,
@@ -490,6 +645,686 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
     기능: crash recovery와 다음 process restart의 주문·Position·history 멱등성을 검증한다.
     작성 날짜: 2026/08/22
     """
+
+    def test_runtime_fill_fsyncs_full_lifecycle_and_policy_version(self) -> None:
+        """
+        함수 이름: test_runtime_fill_fsyncs_full_lifecycle_and_policy_version()
+        기능: 정상 BUY가 policy provenance와 PREPARED→SUBMITTED→TERMINAL→HISTORY_COMMITTED를 남기는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            client = _FilledSubmissionTestnetRESTClient()
+            controller, history_controller, _ = _create_recovery_controller(
+                history_path,
+                client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            controller.reconcile_startup_state()
+            selected_stm = controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-lifecycle",
+                expected_version=0,
+            )
+            controller.start_trading(
+                command_id="start-lifecycle",
+                expected_version=selection.version,
+            )
+            intent_id = "phase13-full-lifecycle-intent"
+
+            # Production executor는 하나의 client ID로 주문·Position·history를 완료한다.
+            outcomes = _submit_case_b_buy(
+                controller,
+                intent_id=intent_id,
+            )
+            self.assertEqual(len(outcomes), 1)
+            repository = history_controller._repository
+            journal_events = tuple(
+                json.loads(line)
+                for line in repository.pending_order_storage_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            )
+            self.assertEqual(
+                tuple(event["operation"] for event in journal_events),
+                (
+                    "UPSERT",
+                    "TRANSITION",
+                    "TRANSITION",
+                    "TRANSITION",
+                    "REMOVE",
+                ),
+            )
+            self.assertEqual(
+                tuple(
+                    event.get("lifecycle")
+                    for event in journal_events[:-1]
+                ),
+                (
+                    "PREPARED",
+                    "SUBMITTED",
+                    "TERMINAL",
+                    "HISTORY_COMMITTED",
+                ),
+            )
+            self.assertEqual(
+                journal_events[0]["order"]["risk_policy_version"],
+                create_test_risk_policy().version,
+            )
+            self.assertEqual(
+                history_controller.get_pending_order_submission_counts(),
+                ((intent_id, 1),),
+            )
+
+    def test_restart_preserves_exhausted_intent_budget(self) -> None:
+        """
+        함수 이름: test_restart_preserves_exhausted_intent_budget()
+        기능: REMOVE된 다섯 attempt 후 fresh Controller가 같은 intent를 제출하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        intent_id = "phase13-exhausted-intent"
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            repository = TradeHistoryRepository(history_path)
+
+            # 확정 zero-fill 거부로 active lock을 해제하되 다섯 제출 예산은 event log에 남긴다.
+            for submission_attempt in range(5):
+                order = _make_pending_order(
+                    intent_id=intent_id,
+                    client_order_id=(
+                        f"bat-phase13-budget-{submission_attempt}"
+                    ),
+                    submission_attempt=submission_attempt,
+                    risk_policy_version=(
+                        create_test_risk_policy().version
+                    ),
+                )
+                repository.save_pending_order(order)
+                repository.mark_pending_order_submission_rejected(
+                    order.client_order_id
+                )
+                repository.delete_pending_order(order.client_order_id)
+
+            clock = MutableUtcClock()
+            client = _SubmissionRejectingTestnetRESTClient(clock)
+            controller, history_controller, _ = _create_recovery_controller(
+                history_path,
+                client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            controller.reconcile_startup_state()
+            selected_stm = controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-exhausted-budget",
+                expected_version=0,
+            )
+            controller.start_trading(
+                command_id="start-exhausted-budget",
+                expected_version=selection.version,
+            )
+
+            # Start도 durable count를 지우지 않으므로 여섯 번째 REST POST는 없다.
+            self.assertEqual(
+                _submit_case_b_buy(controller, intent_id=intent_id),
+                (),
+            )
+            self.assertEqual(len(client.submitted_orders), 0)
+            self.assertEqual(
+                history_controller.get_pending_order_submission_counts(),
+                ((intent_id, 5),),
+            )
+
+    def test_submitted_lifecycle_fsync_failure_blocks_rest_post(self) -> None:
+        """
+        함수 이름: test_submitted_lifecycle_fsync_failure_blocks_rest_post()
+        기능: PREPARED 후 SUBMITTED fsync 실패가 REST mutation 전 gate를 잠그는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            client = _FilledSubmissionTestnetRESTClient()
+            controller, history_controller, _ = _create_recovery_controller(
+                history_path,
+                client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            controller.reconcile_startup_state()
+            selected_stm = controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-submitted-fsync-fault",
+                expected_version=0,
+            )
+            controller.start_trading(
+                command_id="start-submitted-fsync-fault",
+                expected_version=selection.version,
+            )
+            repository = history_controller._repository
+            original_transition = (
+                TradeHistoryRepository.transition_pending_order_lifecycle
+            )
+
+            def fail_submitted_transition(
+                selected_repository: TradeHistoryRepository,
+                client_order_id: str,
+                lifecycle: PendingOrderRecoveryLifecycle,
+            ) -> None:
+                """
+                함수 이름: fail_submitted_transition()
+                기능: SUBMITTED fsync 경계만 실패시키고 나머지 transition은 concrete repository에 위임한다.
+                인자: selected_repository -> transition 호출을 받은 concrete repository
+                    client_order_id -> pending application order ID
+                    lifecycle -> Controller가 기록하려는 lifecycle
+                반환값: 없음
+                작성 날짜: 2026/08/25
+                """
+                # 목표 SUBMITTED 전이만 실패시키고 이후 lifecycle은 원래 구현으로 전달한다.
+                if lifecycle is PendingOrderRecoveryLifecycle.SUBMITTED:
+                    raise OSError("controlled SUBMITTED fsync failure")
+                original_transition(
+                    selected_repository,
+                    client_order_id,
+                    lifecycle,
+                )
+
+            # SUBMITTED durable 증거 없이 Gateway POST를 호출하지 않는다.
+            with mock_patch.object(
+                TradeHistoryRepository,
+                "transition_pending_order_lifecycle",
+                autospec=True,
+                side_effect=fail_submitted_transition,
+            ):
+                self.assertEqual(
+                    _submit_case_b_buy(
+                        controller,
+                        intent_id="submitted-fsync-fault-intent",
+                    ),
+                    (),
+                )
+            self.assertEqual(client.submit_count, 0)
+            self.assertFalse(controller.command_enabled)
+            recovery_records = (
+                history_controller.get_pending_order_recovery_records()
+            )
+            self.assertEqual(len(recovery_records), 1)
+            self.assertIs(
+                recovery_records[0].lifecycle,
+                PendingOrderRecoveryLifecycle.PREPARED,
+            )
+
+    def test_unknown_and_partial_keep_same_identity_and_apply_one_delta(self) -> None:
+        """
+        함수 이름: test_unknown_and_partial_keep_same_identity_and_apply_one_delta()
+        기능: UNKNOWN은 재제출 없이 같은 ID를 조회하고 partial 중복은 Position delta를 한 번만 반영하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        with TemporaryDirectory() as temporary_directory:
+            unknown_history_path = (
+                Path(temporary_directory) / "unknown-trades.jsonl"
+            )
+            unknown_clock = MutableUtcClock()
+            unknown_client = _SubmissionRejectingTestnetRESTClient(
+                unknown_clock
+            )
+            unknown_client.submit_steps = [_OrderResponseKind.UNKNOWN]
+            unknown_client.query_steps = [_OrderResponseKind.NEW]
+            unknown_controller, unknown_history, _ = (
+                _create_recovery_controller(
+                    unknown_history_path,
+                    unknown_client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            unknown_controller.reconcile_startup_state()
+            selected_stm = unknown_controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = unknown_controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-unknown-lifecycle",
+                expected_version=0,
+            )
+            unknown_controller.start_trading(
+                command_id="start-unknown-lifecycle",
+                expected_version=selection.version,
+            )
+            unknown_intent_id = "phase13-unknown-intent"
+
+            # Timeout을 실패로 단정하지 않고 UNKNOWN journal과 같은 client identity를 유지한다.
+            self.assertEqual(
+                _submit_case_b_buy(
+                    unknown_controller,
+                    intent_id=unknown_intent_id,
+                ),
+                (),
+            )
+            self.assertEqual(
+                _submit_case_b_buy(
+                    unknown_controller,
+                    intent_id=unknown_intent_id,
+                ),
+                (),
+            )
+            self.assertEqual(len(unknown_client.submitted_orders), 1)
+            self.assertIs(
+                unknown_history.get_pending_order_recovery_records()[0].lifecycle,
+                PendingOrderRecoveryLifecycle.UNKNOWN,
+            )
+
+            # Same-ID query가 NEW를 확인해도 새 제출 없이 memory만 전진하고 durable UNKNOWN은 보수적으로 유지한다.
+            unknown_query_time = FIXED_TIME + timedelta(seconds=1)
+            unknown_clock.set(unknown_query_time)
+            self.assertEqual(
+                unknown_controller.trigger_order_reconciliation(
+                    occurred_at=unknown_query_time,
+                ),
+                (),
+            )
+            self.assertEqual(len(unknown_client.submitted_orders), 1)
+            self.assertEqual(len(unknown_client.queried_orders), 1)
+            self.assertIs(
+                unknown_client.submitted_orders[0].status,
+                OrderStatus.NEW,
+            )
+            self.assertIs(
+                unknown_history.get_pending_order_recovery_records()[0].lifecycle,
+                PendingOrderRecoveryLifecycle.UNKNOWN,
+            )
+            self.assertIs(
+                unknown_controller.status,
+                TradingSessionStatus.RUNNING,
+            )
+
+            partial_history_path = (
+                Path(temporary_directory) / "partial-trades.jsonl"
+            )
+            partial_clock = MutableUtcClock()
+            partial_client = _SubmissionRejectingTestnetRESTClient(
+                partial_clock
+            )
+            partial_client.submit_steps = [_OrderResponseKind.NEW]
+            partial_controller, partial_history, partial_position = (
+                _create_recovery_controller(
+                    partial_history_path,
+                    partial_client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            partial_controller.reconcile_startup_state()
+            partial_stm = partial_controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            partial_selection = partial_controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                partial_stm,
+                command_id="select-partial-lifecycle",
+                expected_version=0,
+            )
+            partial_controller.start_trading(
+                command_id="start-partial-lifecycle",
+                expected_version=partial_selection.version,
+            )
+            _submit_case_b_buy(
+                partial_controller,
+                intent_id="phase13-partial-intent",
+            )
+            submitted_order = partial_client.submitted_orders[0]
+            exchange_order_id = submitted_order.exchange_order_id
+            if exchange_order_id is None:
+                raise AssertionError("NEW response must publish exchange ID")
+            partial_fill = Fill(
+                exchange_order_id=exchange_order_id,
+                trade_id="phase13-partial-fill",
+                quantity=submitted_order.submitted_quantity / Decimal("2"),
+                price=submitted_order.market_price_at_decision,
+                fee_amount=Decimal("0"),
+                fee_asset="USDT",
+                fee_quote_amount=Decimal("0"),
+                executed_at=FIXED_TIME,
+            )
+            partial_result = OrderResult(
+                symbol=submitted_order.symbol,
+                client_order_id=submitted_order.client_order_id,
+                exchange_order_id=exchange_order_id,
+                status=OrderStatus.PARTIALLY_FILLED,
+                processed_at=FIXED_TIME,
+                fills=(partial_fill,),
+            )
+
+            # 동일 executionReport를 두 번 적용해도 fill key가 중복 Position delta를 차단한다.
+            self.assertTrue(
+                partial_controller.observe_order_result(partial_result)
+            )
+            position_after_first_partial = partial_position.quantity
+            self.assertTrue(
+                partial_controller.observe_order_result(partial_result)
+            )
+            self.assertEqual(
+                partial_position.quantity,
+                position_after_first_partial,
+            )
+            self.assertEqual(
+                position_after_first_partial,
+                partial_fill.quantity,
+            )
+            self.assertIs(
+                partial_history.get_pending_order_recovery_records()[0].lifecycle,
+                PendingOrderRecoveryLifecycle.PARTIAL,
+            )
+            self.assertEqual(partial_history.trade_history.trades, ())
+
+    def test_history_lifecycle_failure_keeps_gate_until_same_id_reconnect(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_history_lifecycle_failure_keeps_gate_until_same_id_reconnect()
+        기능: history fsync 후 lifecycle 실패가 exact same-ID reconnect 전까지 중복 Trade·주문을 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            client = _FilledSubmissionTestnetRESTClient()
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+            controller.reconcile_startup_state()
+            selected_stm = controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-history-lifecycle-fault",
+                expected_version=0,
+            )
+            controller.start_trading(
+                command_id="start-history-lifecycle-fault",
+                expected_version=selection.version,
+            )
+            repository = history_controller._repository
+            original_transition = (
+                TradeHistoryRepository.transition_pending_order_lifecycle
+            )
+            history_fault_pending = True
+
+            def fail_history_transition_once(
+                selected_repository: TradeHistoryRepository,
+                client_order_id: str,
+                lifecycle: PendingOrderRecoveryLifecycle,
+            ) -> None:
+                """
+                함수 이름: fail_history_transition_once()
+                기능: 첫 HISTORY_COMMITTED transition만 실패시켜 append·journal 사이 crash를 재현한다.
+                인자: selected_repository -> transition 호출을 받은 concrete repository
+                    client_order_id -> pending application order ID
+                    lifecycle -> Controller가 기록하려는 lifecycle
+                반환값: 없음
+                작성 날짜: 2026/08/25
+                """
+                nonlocal history_fault_pending
+
+                # 최초 HISTORY_COMMITTED만 실패시켜 재시도의 내구 경계를 결정적으로 관찰한다.
+                if (
+                    history_fault_pending
+                    and lifecycle
+                    is PendingOrderRecoveryLifecycle.HISTORY_COMMITTED
+                ):
+                    history_fault_pending = False
+                    raise OSError("controlled history lifecycle failure")
+                original_transition(
+                    selected_repository,
+                    client_order_id,
+                    lifecycle,
+                )
+
+            # Position·Trade는 한 번 반영되지만 outcome과 REMOVE는 lifecycle commit 전에 중단된다.
+            with mock_patch.object(
+                TradeHistoryRepository,
+                "transition_pending_order_lifecycle",
+                autospec=True,
+                side_effect=fail_history_transition_once,
+            ):
+                self.assertEqual(
+                    _submit_case_b_buy(
+                        controller,
+                        intent_id="history-lifecycle-fault-intent",
+                    ),
+                    (),
+                )
+            filled_quantity = position.quantity
+            self.assertGreater(filled_quantity, Decimal("0"))
+            self.assertEqual(len(history_controller.trade_history.trades), 1)
+            self.assertFalse(controller.command_enabled)
+            self.assertIs(
+                history_controller.get_pending_order_recovery_records()[0].lifecycle,
+                PendingOrderRecoveryLifecycle.TERMINAL,
+            )
+
+            # 재연결은 새 submit 없이 같은 client ID를 조회한 뒤 history transition·REMOVE만 완료한다.
+            controller.reconnect_account_stream_after_reconciliation()
+            self.assertEqual(client.submit_count, 1)
+            self.assertEqual(len(client.query_client_order_ids), 1)
+            self.assertEqual(position.quantity, filled_quantity)
+            self.assertEqual(len(history_controller.trade_history.trades), 1)
+            self.assertEqual(
+                history_controller.get_pending_order_recovery_records(),
+                (),
+            )
+            self.assertTrue(controller.command_enabled)
+
+    def test_active_kill_restart_cancels_partial_then_liquidates_without_run(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_active_kill_restart_cancels_partial_then_liquidates_without_run()
+        기능: kill receipt 직후 crash가 same-ID BUY 취소·partial 복원·정확한 recovery SELL로 재개되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            pending_order = _make_pending_order(
+                intent_id="manual-kill-restart-buy",
+                client_order_id="bat-manual-kill-restart-buy-1",
+                risk_policy_version=1,
+            )
+            repository = TradeHistoryRepository(history_path)
+            repository.save_pending_order(pending_order)
+            repository.transition_pending_order_lifecycle(
+                pending_order.client_order_id,
+                PendingOrderRecoveryLifecycle.SUBMITTED,
+            )
+            repository.save_manual_kill_control_state(
+                ManualKillControlState(
+                    active=True,
+                    version=1,
+                    command_id="activate-before-cleanup-crash",
+                    expected_version=0,
+                    behavior=ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+                    policy_version=1,
+                )
+            )
+            policy = RiskPolicy(
+                version=1,
+                max_order_notional=None,
+                max_position_notional=None,
+                max_daily_loss=None,
+                daily_loss_scope=DailyLossScope.REALIZED_ONLY,
+                manual_kill_behavior=(
+                    ManualKillBehavior.CANCEL_AND_LIQUIDATE
+                ),
+            )
+            client = _ManualKillRestartRESTClient(pending_order)
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                    risk_policy_state=policy,
+                )
+            )
+
+            # Startup은 active BUY를 같은 ID로 조회·개별 취소·재조회하고 partial만 Position에 복원한다.
+            controller.reconcile_startup_state()
+            recovered_quantity = client.canceled_result.fills[0].quantity
+            self.assertEqual(recovered_quantity, position.quantity)
+            self.assertEqual(0, client.submit_count)
+            self.assertEqual(
+                (OrderSide.BUY,),
+                tuple(
+                    trade.side
+                    for trade in history_controller.trade_history.trades
+                ),
+            )
+            self.assertEqual(
+                ["query:BUY", "cancel:BUY", "query:BUY"],
+                client.operation_trace,
+            )
+
+            # Lifecycle resume은 전략 run 없이 stable recovery identity로 복원 수량만 한 번 SELL한다.
+            self.assertTrue(controller.resume_manual_kill_cleanup())
+            self.assertEqual(1, client.submit_count)
+            self.assertEqual(1, len(client.submitted_orders))
+            recovery_sell = client.submitted_orders[0]
+            self.assertIs(recovery_sell.side, OrderSide.SELL)
+            self.assertEqual(
+                recovered_quantity,
+                recovery_sell.submitted_quantity,
+            )
+            self.assertEqual(Decimal("0"), position.quantity)
+            self.assertTrue(controller.manual_kill_cleanup_complete)
+            self.assertFalse(controller.command_enabled)
+            self.assertEqual(
+                [
+                    "query:BUY",
+                    "cancel:BUY",
+                    "query:BUY",
+                    "submit:SELL",
+                ],
+                client.operation_trace,
+            )
+
+            # Terminal force outcome만 소비하면 복구 전용 STM이 끝나며 exact resume은 POST를 늘리지 않는다.
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertTrue(controller.resume_manual_kill_cleanup())
+            self.assertEqual(1, client.submit_count)
+            self.assertEqual(
+                (OrderSide.BUY, OrderSide.SELL),
+                tuple(
+                    trade.side
+                    for trade in history_controller.trade_history.trades
+                ),
+            )
+            self.assertEqual(
+                (),
+                history_controller.get_pending_order_recovery_records(),
+            )
+
+    def test_active_kill_restart_never_liquidates_while_cancel_is_active(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_active_kill_restart_never_liquidates_while_cancel_is_active()
+        기능: cancel 뒤 same-ID가 계속 active이면 startup과 recovery SELL을 모두 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            pending_order = _make_pending_order(
+                intent_id="manual-kill-active-after-cancel",
+                client_order_id="bat-manual-kill-active-after-cancel-1",
+                risk_policy_version=1,
+            )
+            repository = TradeHistoryRepository(history_path)
+            repository.save_pending_order(pending_order)
+            repository.transition_pending_order_lifecycle(
+                pending_order.client_order_id,
+                PendingOrderRecoveryLifecycle.SUBMITTED,
+            )
+            repository.save_manual_kill_control_state(
+                ManualKillControlState(
+                    active=True,
+                    version=1,
+                    command_id="activate-before-nonterminal-cancel",
+                    expected_version=0,
+                    behavior=ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+                    policy_version=1,
+                )
+            )
+            client = _ManualKillRestartRESTClient(
+                pending_order,
+                cancel_stays_active=True,
+            )
+            controller, history_controller, position = (
+                _create_recovery_controller(
+                    history_path,
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+            )
+
+            # Binance cancel 응답과 네 번의 후속 조회가 terminal을 증명하지 못하면 startup은 READY가 아니다.
+            with self.assertRaises(StartupOrderReconciliationError):
+                controller.reconcile_startup_state()
+
+            self.assertEqual(0, client.submit_count)
+            self.assertEqual(Decimal("0"), position.quantity)
+            self.assertFalse(controller.startup_reconciliation_complete)
+            self.assertFalse(controller.manual_kill_cleanup_complete)
+            self.assertFalse(controller.command_enabled)
+            self.assertEqual(
+                1,
+                len(history_controller.get_pending_order_recovery_records()),
+            )
+            self.assertEqual(
+                [
+                    "query:BUY",
+                    "cancel:BUY",
+                    "query:BUY",
+                    "query:BUY",
+                    "query:BUY",
+                    "query:BUY",
+                ],
+                client.operation_trace,
+            )  # Cancel 호출은 한 번뿐이고 나머지는 모두 동일 원 주문의 권위 조회다.
 
     def test_recovered_position_is_liquidated_without_strategy_resume_or_duplicate_submit(
         self,
@@ -1701,15 +2536,15 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             self.assertEqual(second_position.quantity, Decimal("0.25000000"))
             self.assertEqual(len(second_history.trade_history.trades), 1)
 
-    def test_prepared_journal_absence_remains_locked_after_four_observations(
+    def test_v3_prepared_absence_clears_lock_and_preserves_attempt_audit(
         self,
     ) -> None:
         """
-        함수 이름: test_prepared_journal_absence_remains_locked_after_four_observations()
-        기능: PREPARED 주문은 네 번의 typed 부재 뒤에도 미제출로 추측하지 않는지 검증한다.
+        함수 이름: test_v3_prepared_absence_clears_lock_and_preserves_attempt_audit()
+        기능: v3 PREPARED를 bounded 부재 뒤 정리하고 attempt·audit과 신규 주문 gate를 복구한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/23
+        작성 날짜: 2026/08/29
         """
         order = _make_pending_order()
         absent_result = OrderResult(
@@ -1726,6 +2561,13 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             history_path = Path(temporary_directory) / "trades.jsonl"
             repository = TradeHistoryRepository(history_path)
             repository.save_pending_order(order)
+            prepared_record = (
+                repository.get_pending_order_recovery_records()[0]
+            )
+            self.assertIs(
+                prepared_record.submission_provenance,
+                PendingOrderSubmissionProvenance.SUBMITTED_FSYNC_PRECEDES_REST_POST,
+            )
             client = RestartReconciliationRESTClient(absent_result)
             client.include_recent_result = False
             observed_delays: list[timedelta] = []
@@ -1733,15 +2575,14 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
                 _create_recovery_controller(
                     history_path,
                     client,
+                    command_gate=True,
                     order_retry_waiter=observed_delays.append,
                 )
             )
+            self.assertFalse(controller.command_enabled)
 
-            with self.assertRaisesRegex(
-                StartupOrderReconciliationError,
-                "same-order startup query remained not visible",
-            ):
-                controller.reconcile_startup_state()
+            # V4 writer는 SUBMITTED fsync 전에 POST를 시작할 수 없으므로 네 번의 exact 부재로 정리한다.
+            controller.reconcile_startup_state()
 
             self.assertEqual(
                 observed_delays,
@@ -1757,10 +2598,123 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
                 [order.client_order_id] * 4,
             )
             self.assertEqual(client.submit_count, 0)
-            self.assertEqual(repository.get_pending_orders(), (order,))
+            self.assertEqual(repository.get_pending_orders(), ())
             self.assertEqual(history_controller.trade_history.trades, ())
             self.assertEqual(position.quantity, Decimal("0"))
-            self.assertFalse(controller.startup_reconciliation_complete)
+            self.assertTrue(controller.startup_reconciliation_complete)
+            self.assertTrue(controller.command_enabled)
+
+            # REMOVE는 active lock만 풀고 최초 UPSERT의 schema·attempt audit를 append-only로 남긴다.
+            journal_events = tuple(
+                json.loads(line)
+                for line in repository.pending_order_storage_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            )
+            self.assertEqual(
+                tuple(event["operation"] for event in journal_events),
+                ("UPSERT", "REMOVE"),
+            )
+            self.assertEqual(journal_events[0]["schema_version"], 4)
+            self.assertEqual(journal_events[0]["lifecycle"], "PREPARED")
+            self.assertEqual(
+                journal_events[0]["order"]["submission_attempt"],
+                order.submission_attempt,
+            )
+            self.assertEqual(
+                TradeHistoryRepository(
+                    history_path
+                ).get_pending_order_submission_counts(),
+                ((order.intent_id, order.submission_attempt + 1),),
+            )
+
+    def test_legacy_prepared_absence_remains_fail_closed(self) -> None:
+        """
+        함수 이름: test_legacy_prepared_absence_remains_fail_closed()
+        기능: v1·v2 PREPARED는 bounded 부재만으로 POST 미시작을 추측하지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # 두 legacy schema를 각각 독립 journal과 Controller process로 재시작한다.
+        for schema_version in (1, 2):
+            with self.subTest(schema_version=schema_version):
+                order = _make_pending_order()
+                absent_result = OrderResult(
+                    symbol=order.symbol,
+                    client_order_id=order.client_order_id,
+                    status=OrderStatus.UNKNOWN,
+                    processed_at=FIXED_TIME,
+                    failure_reason="SCRIPTED_ORDER_NOT_VISIBLE",
+                    failure_kind=OrderResultFailureKind.ORDER_NOT_VISIBLE,
+                )
+
+                # 과거 schema에는 SUBMITTED fsync-before-POST 계약이 없어 PREPARED가 모호하다.
+                with TemporaryDirectory() as temporary_directory:
+                    history_path = Path(temporary_directory) / "trades.jsonl"
+                    repository = TradeHistoryRepository(history_path)
+                    repository.save_pending_order(order)
+                    sidecar_path = repository.pending_order_storage_path
+                    legacy_event = json.loads(
+                        sidecar_path.read_text(encoding="utf-8")
+                    )
+                    legacy_event["schema_version"] = schema_version
+                    del legacy_event["order"]["risk_policy_version"]
+                    del legacy_event["order"]["exit_pct_b_at_intent"]
+                    if schema_version == 1:
+                        del legacy_event[
+                            "lifecycle"
+                        ]  # V1 envelope은 lifecycle field를 지원하지 않는다.
+                    sidecar_path.write_text(
+                        json.dumps(
+                            legacy_event,
+                            separators=(",", ":"),
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    legacy_journal = sidecar_path.read_bytes()
+                    replayed_record = TradeHistoryRepository(
+                        history_path
+                    ).get_pending_order_recovery_records()[0]
+                    self.assertIs(
+                        replayed_record.submission_provenance,
+                        PendingOrderSubmissionProvenance.LEGACY_PREPARED_AMBIGUOUS,
+                    )
+                    client = RestartReconciliationRESTClient(absent_result)
+                    client.include_recent_result = False
+                    observed_delays: list[timedelta] = []
+                    controller, _, _ = _create_recovery_controller(
+                        history_path,
+                        client,
+                        command_gate=True,
+                        order_retry_waiter=observed_delays.append,
+                    )
+
+                    with self.assertRaisesRegex(
+                        StartupOrderReconciliationError,
+                        "same-order startup query remained not visible",
+                    ):
+                        controller.reconcile_startup_state()
+
+                    self.assertEqual(
+                        observed_delays,
+                        [
+                            timedelta(seconds=1),
+                            timedelta(seconds=2),
+                            timedelta(seconds=4),
+                            timedelta(seconds=8),
+                        ],
+                    )
+                    self.assertEqual(
+                        client.query_client_order_ids,
+                        [order.client_order_id] * 4,
+                    )
+                    self.assertEqual(client.submit_count, 0)
+                    self.assertEqual(sidecar_path.read_bytes(), legacy_journal)
+                    self.assertEqual(repository.get_pending_orders(), (order,))
+                    self.assertFalse(controller.startup_reconciliation_complete)
+                    self.assertFalse(controller.command_enabled)
 
     def test_durable_submission_rejection_survives_crash_and_clears_after_absence(
         self,
@@ -1967,6 +2921,94 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             )
             self.assertEqual(len(history_controller.trade_history.trades), 1)
             self.assertTrue(controller.command_enabled)
+
+    def test_reconnect_keeps_gate_closed_when_remove_wrote_then_raised(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_reconnect_keeps_gate_closed_when_remove_wrote_then_raised()
+        기능: durable REMOVE 후 호출 실패가 pending identity를 남겨 둔 채 command gate를 열지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        client = _FilledSubmissionTestnetRESTClient()
+
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            controller, history_controller, _ = _create_recovery_controller(
+                history_path,
+                client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            controller.reconcile_startup_state()
+            selected_stm = controller.fetch_selected_trading_logic(
+                RegimeType.TYPE_0
+            )
+            selection = controller.commit_regime_selection(
+                RegimeType.TYPE_0,
+                selected_stm,
+                command_id="select-before-uncertain-remove",
+                expected_version=0,
+            )
+            controller.start_trading(
+                command_id="start-before-uncertain-remove",
+                expected_version=selection.version,
+            )
+            repository = history_controller._repository
+            original_delete_pending_order = repository.delete_pending_order
+
+            def remove_then_raise(
+                selected_repository: TradeHistoryRepository,
+                client_order_id: str,
+            ) -> None:
+                """
+                함수 이름: remove_then_raise()
+                기능: REMOVE를 내구 기록한 뒤 호출자에게는 결과 불명 예외를 반환한다.
+                인자: selected_repository -> patch가 전달한 concrete repository
+                    client_order_id -> 제거할 runtime client order ID
+                반환값: 없음
+                작성 날짜: 2026/08/25
+                """
+                if selected_repository is not repository:
+                    raise AssertionError("unexpected pending repository")
+
+                # File에 REMOVE가 남은 직후 process가 성공 반환을 관찰하지 못한 경계를 만든다.
+                original_delete_pending_order(client_order_id)
+                raise OSError("controlled exception after durable REMOVE")
+
+            # Trade·HISTORY_COMMITTED·REMOVE는 durable하지만 terminal outcome publication은 보류된다.
+            with mock_patch.object(
+                TradeHistoryRepository,
+                "delete_pending_order",
+                autospec=True,
+                side_effect=remove_then_raise,
+            ):
+                outcomes = _submit_case_b_buy(
+                    controller,
+                    intent_id="uncertain-remove-buy-intent",
+                )
+            self.assertEqual(outcomes, ())
+            self.assertFalse(controller.command_enabled)
+            self.assertEqual(
+                repository.get_pending_order_recovery_records(),
+                (),
+            )
+            self.assertIsNotNone(controller.context.runtime.pending_order_id)
+
+            # Explicit terminal completion replay가 없으면 reconnect는 불명 marker를 보존하고 gate를 유지한다.
+            controller.mark_account_stream_reconciliation_required(
+                "injected_after_uncertain_pending_remove"
+            )
+            subscription = (
+                controller.reconnect_account_stream_after_reconciliation()
+            )
+
+            self.assertIsNotNone(subscription)
+            self.assertFalse(controller.command_enabled)
+            self.assertIsNotNone(controller.context.runtime.pending_order_id)
+            self.assertEqual(asyncio.run(controller.drain_events()), ())
 
     def test_reconnect_terminal_fill_order_id_collision_keeps_gate_closed(
         self,
@@ -2206,6 +3248,9 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             history_path = Path(temporary_directory) / "trades.jsonl"
             repository = TradeHistoryRepository(history_path)
             repository.save_pending_order(order)
+            pending_journal_snapshot = (
+                repository.pending_order_storage_path.read_bytes()
+            )  # REMOVE 전 durable bytes를 보존해 process crash disk 관점을 재현한다.
             first_controller, _, _ = _create_recovery_controller(
                 history_path,
                 RestartReconciliationRESTClient(result),
@@ -2213,9 +3258,11 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             )
             first_controller.reconcile_startup_state()
 
-            # 직전 process가 history fsync 뒤 sidecar REMOVE에서 멈춘 상태만 다시 만든다.
+            # 직전 process가 history fsync 뒤 sidecar REMOVE에서 멈춘 disk snapshot을 다시 만든다.
             crash_repository = TradeHistoryRepository(history_path)
-            crash_repository.save_pending_order(_make_pending_order())
+            crash_repository.pending_order_storage_path.write_bytes(
+                pending_journal_snapshot
+            )
             second_client = RestartReconciliationRESTClient(result)
             second_controller, second_history, second_position = (
                 _create_recovery_controller(
@@ -2252,6 +3299,9 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             history_path = Path(temporary_directory) / "trades.jsonl"
             repository = TradeHistoryRepository(history_path)
             repository.save_pending_order(order)
+            pending_journal_snapshot = (
+                repository.pending_order_storage_path.read_bytes()
+            )  # 동일 client identity의 중복 UPSERT 없이 stale REMOVE crash만 재현한다.
             first_controller, _, _ = _create_recovery_controller(
                 history_path,
                 RestartReconciliationRESTClient(original_result),
@@ -2259,9 +3309,11 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             )
             first_controller.reconcile_startup_state()
 
-            # 같은 client ID를 재사용했지만 exchange identity가 다른 충돌을 명시적으로 주입한다.
+            # 직전 REMOVE가 남지 않은 disk처럼 stale journal을 복원한 뒤 다른 exchange identity를 주입한다.
             crash_repository = TradeHistoryRepository(history_path)
-            crash_repository.save_pending_order(_make_pending_order())
+            crash_repository.pending_order_storage_path.write_bytes(
+                pending_journal_snapshot
+            )
             conflicting_result = _make_filled_result(
                 _make_pending_order(),
                 exchange_order_id="91002",

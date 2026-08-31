@@ -10,31 +10,43 @@ from enum import Enum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch as mock_patch
 
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
 from binance_auto_trader.adapters.binance.websocket_gateway import (
     WebSocketGateway,
 )
-from binance_auto_trader.adapters.persistence import TradeHistoryRepository
+from binance_auto_trader.adapters.persistence import (
+    ManualKillControlJournalCorruptedError,
+    TradeHistoryRepository,
+)
 from binance_auto_trader.application.regime_controller import RegimeController
 from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
 from binance_auto_trader.application.trading_controller import (
     TradingController,
+    TradingSessionError,
+    TradingSessionFailureCode,
     TradingSessionStatus,
 )
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.regime import RegimeSTM
 from binance_auto_trader.domain.trading import (
     Account,
+    DailyLossScope,
     Fill,
+    ManualKillBehavior,
+    ManualKillControlState,
     Order,
     OrderAttemptKind,
     OrderResult,
     OrderSide,
     OrderStatus,
     Position,
+    RiskBlockReason,
+    RiskPolicy,
+    RiskPolicyUnavailable,
     StrategyType,
     SubmitOrder,
     TradingContext,
@@ -52,6 +64,7 @@ from tests.integration.test_account_stream_flow import (
     SynchronousAccountWebSocketClient,
     _ready_market_snapshot,
 )
+from tests.integration.phase13_risk_fixture import create_test_risk_policy
 
 
 class FakeOrderScenario(str, Enum):
@@ -328,6 +341,32 @@ def _create_buy_flow_fixture(
     반환값: 실행 준비된 BuyFlowFixture
     작성 날짜: 2026/08/22
     """
+    return _create_buy_flow_fixture_with_risk_state(
+        temporary_directory,
+        scenario,
+        create_test_risk_policy(),
+    )  # 기존 fake 성공 scenario는 production 기본값과 분리된 명시적 테스트 정책만 사용한다.
+
+
+def _create_buy_flow_fixture_with_risk_state(
+    temporary_directory: str,
+    scenario: FakeOrderScenario,
+    risk_policy_state: RiskPolicy | RiskPolicyUnavailable,
+) -> BuyFlowFixture:
+    """
+    함수 이름: _create_buy_flow_fixture_with_risk_state()
+    기능: 지정한 configured 또는 unavailable 위험 정책으로 BUY 통합 fixture를 조립한다.
+    인자: temporary_directory -> JSONL repository를 둘 임시 디렉터리
+        scenario -> fake 주문 상태 진행
+        risk_policy_state -> start 시점에 session이 고정할 위험 정책 상태
+    반환값: 실행 준비된 BuyFlowFixture
+    작성 날짜: 2026/08/25
+    """
+    if not isinstance(risk_policy_state, (RiskPolicy, RiskPolicyUnavailable)):
+        raise TypeError(
+            "risk_policy_state must be a RiskPolicy or RiskPolicyUnavailable"
+        )
+
     # 계좌와 주문 양쪽 fake REST가 공유할 결정론적 clock을 먼저 준비한다.
     clock = MutableUtcClock(MARKET_UPDATED_AT)
     rest_client = FakeOrderRESTClient(scenario, clock)
@@ -359,6 +398,7 @@ def _create_buy_flow_fixture(
         context=context,
         position=position,
         trade_history_controller=history_controller,
+        risk_policy_state=risk_policy_state,
         clock=clock,
     )
 
@@ -447,6 +487,36 @@ class BuySellFlowIntegrationTests(unittest.TestCase):
     작성 날짜: 2026/08/22
     """
 
+    def test_legacy_direct_order_without_evaluation_uses_four_hour_fallback(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_legacy_direct_order_without_evaluation_uses_four_hour_fallback()
+        기능: evaluation이 없는 legacy direct 주문만 4시간 MarketSnapshot 가격을 쓰는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+
+            # Legacy fixture는 public market evaluation을 claim하지 않아 Context 가격이 초기값 0이다.
+            self.assertEqual(
+                Decimal("0"),
+                fixture.controller.context.market.realtime_price,
+            )
+            _execute_case_b_buy(fixture, "intent-legacy-price-fallback")
+
+            # 이 경로에서만 ready 4시간봉 종가가 Order의 decision price를 보완한다.
+            self.assertEqual(1, len(fixture.rest_client.submitted_orders))
+            self.assertEqual(
+                CURRENT_ETH_PRICE,
+                fixture.rest_client.submitted_orders[0].market_price_at_decision,
+            )
+
     def test_immediate_buy_filled_updates_all_phase8_outputs_and_trace(
         self,
     ) -> None:
@@ -530,6 +600,7 @@ class BuySellFlowIntegrationTests(unittest.TestCase):
                 "2",
                 "3",
                 "4",
+                "5.1",
                 "5",
                 "6",
                 "6.1",
@@ -730,6 +801,492 @@ class BuySellFlowIntegrationTests(unittest.TestCase):
             self.assertEqual(3, trace_ids.count("12"))
             self.assertEqual(1, trace_ids.count("13"))
             self.assertEqual(1, trace_ids.count("13.5.1"))
+
+    def test_unavailable_risk_policy_blocks_before_journal_and_rest(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_unavailable_risk_policy_blocks_before_journal_and_rest()
+        기능: 미설정 정책이 BUY를 typed 사유로 차단하고 제출 예산·REST·history를 소비하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_buy_flow_fixture_with_risk_state(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+                RiskPolicyUnavailable(),
+            )
+
+            # 첫 BUY는 filter 뒤 5.1 gate에서 멈추고 typed STM feedback만 생성한다.
+            outcomes = _execute_case_b_buy(
+                fixture,
+                "intent-unavailable-policy",
+            )
+            self.assertEqual(1, len(outcomes))
+            self.assertIs(
+                outcomes[0].event_type,
+                TradingEventType.BUY_RISK_BLOCKED,
+            )
+            self.assertEqual(
+                RiskBlockReason.RISK_POLICY_UNAVAILABLE,
+                outcomes[0].payload.reason,
+            )
+
+            # PREPARED journal, REST mutation, 조회와 durable Trade는 모두 위험 판정 뒤 경계다.
+            self.assertEqual([], fixture.rest_client.submitted_orders)
+            self.assertEqual([], fixture.rest_client.queried_orders)
+            self.assertEqual((), fixture.history_controller.trade_history.trades)
+            self.assertEqual(0, fixture.controller.pending_order_query_count)
+            self.assertIsNotNone(fixture.controller.last_risk_decision)
+            self.assertEqual(
+                RiskBlockReason.RISK_POLICY_UNAVAILABLE,
+                fixture.controller.last_risk_decision.block_reason,
+            )
+            trace_ids = tuple(
+                entry.message_id
+                for entry in fixture.controller.order_execution_trace
+            )
+            self.assertEqual(("1", "2", "3", "4", "5.1"), trace_ids)
+
+    def test_manual_kill_blocks_buy_without_consuming_submission_attempt(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_blocks_buy_without_consuming_submission_attempt()
+        기능: manual kill 동안 같은 BUY identity를 REST 전 차단하고 해제 뒤 attempt 0으로 제출하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+            activated = fixture.controller.set_manual_kill(
+                True,
+                command_id="activate-manual-kill",
+                expected_version=0,
+            )
+            self.assertEqual(1, activated.risk_control_version)
+            self.assertEqual(
+                ManualKillControlState(
+                    active=True,
+                    version=1,
+                    command_id="activate-manual-kill",
+                    expected_version=0,
+                    behavior=ManualKillBehavior.BLOCK_NEW_ORDERS,
+                    policy_version=1,
+                ),
+                fixture.repository.get_manual_kill_control_state(),
+            )  # HTTP 성공으로 게시할 activation은 먼저 durable journal에 존재해야 한다.
+
+            # 동일 command는 최초 결과를 재생하고 다른 command의 stale version은 상태를 바꾸지 못한다.
+            replayed_activation = fixture.controller.set_manual_kill(
+                True,
+                command_id="activate-manual-kill",
+                expected_version=0,
+            )
+            self.assertIs(activated, replayed_activation)
+            with self.assertRaises(TradingSessionError) as stale_context:
+                fixture.controller.set_manual_kill(
+                    False,
+                    command_id="stale-manual-kill",
+                    expected_version=0,
+                )
+            self.assertIs(
+                stale_context.exception.code,
+                TradingSessionFailureCode.STALE_RISK_CONTROL_VERSION,
+            )
+
+            # 차단 결과의 client ID는 제출되지 않은 attempt 0 identity를 보존한다.
+            blocked_outcomes = _execute_case_b_buy(
+                fixture,
+                "intent-manual-kill",
+            )
+            self.assertEqual(1, len(blocked_outcomes))
+            self.assertEqual(
+                RiskBlockReason.MANUAL_KILL_SWITCH_ACTIVE,
+                blocked_outcomes[0].payload.reason,
+            )
+            self.assertEqual([], fixture.rest_client.submitted_orders)
+
+            # BLOCK_NEW_ORDERS 정책의 kill 해제 뒤 같은 intent는 새 attempt가 아니라 원 identity로 제출된다.
+            deactivated = fixture.controller.set_manual_kill(
+                False,
+                command_id="deactivate-manual-kill",
+                expected_version=activated.risk_control_version,
+            )
+            self.assertEqual(2, deactivated.risk_control_version)
+            self.assertEqual(
+                ManualKillControlState(
+                    active=False,
+                    version=2,
+                    command_id="deactivate-manual-kill",
+                    expected_version=1,
+                    behavior=ManualKillBehavior.BLOCK_NEW_ORDERS,
+                    policy_version=1,
+                ),
+                fixture.repository.get_manual_kill_control_state(),
+            )  # 해제도 같은 optimistic version과 함께 fsync된 뒤에만 BUY를 허용한다.
+            allowed_outcomes = _execute_case_b_buy(
+                fixture,
+                "intent-manual-kill",
+            )
+            self.assertEqual(1, len(allowed_outcomes))
+            self.assertEqual(1, len(fixture.rest_client.submitted_orders))
+            submitted_order = fixture.rest_client.submitted_orders[0]
+            self.assertEqual(0, submitted_order.submission_attempt)
+            self.assertEqual(
+                blocked_outcomes[0].order_id,
+                submitted_order.client_order_id,
+            )
+
+    def test_manual_kill_activation_and_release_survive_process_restart(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_activation_and_release_survive_process_restart()
+        기능: manual kill 활성·해제와 control version이 새 Controller에서도 fail-closed로 복원되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            first_fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+            first_fixture.controller.set_manual_kill(
+                True,
+                command_id="activate-before-restart",
+                expected_version=0,
+            )
+
+            # 같은 storage를 쓰는 fresh Controller는 operator command 없이 active/version 1부터 시작한다.
+            restarted_fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+            restarted_snapshot = restarted_fixture.controller.snapshot_session()
+            self.assertTrue(restarted_snapshot.manual_kill_active)
+            self.assertEqual(1, restarted_snapshot.risk_control_version)
+            replayed_activation = restarted_fixture.controller.set_manual_kill(
+                True,
+                command_id="activate-before-restart",
+                expected_version=0,
+            )
+            self.assertTrue(replayed_activation.active)
+            self.assertEqual(1, replayed_activation.risk_control_version)
+            self.assertEqual(
+                1,
+                len(
+                    restarted_fixture.repository.manual_kill_control_storage_path
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                ),
+            )  # Response-loss retry는 새 toggle이나 journal line을 만들지 않는다.
+            blocked_outcomes = _execute_case_b_buy(
+                restarted_fixture,
+                "intent-restarted-manual-kill",
+            )
+            self.assertEqual(
+                RiskBlockReason.MANUAL_KILL_SWITCH_ACTIVE,
+                blocked_outcomes[0].payload.reason,
+            )
+            self.assertEqual([], restarted_fixture.rest_client.submitted_orders)
+
+            # Version 1을 관측한 명시적 해제만 version 2를 fsync하고 다음 process에도 유지된다.
+            restarted_fixture.controller.set_manual_kill(
+                False,
+                command_id="release-after-restart",
+                expected_version=1,
+            )
+            released_fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+            released_snapshot = released_fixture.controller.snapshot_session()
+            self.assertFalse(released_snapshot.manual_kill_active)
+            self.assertEqual(2, released_snapshot.risk_control_version)
+
+    def test_manual_kill_restart_preserves_noop_and_previous_command_ids(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_restart_preserves_noop_and_previous_command_ids()
+        기능: restart가 최근 toggle/no-op receipt를 모두 복원해 기존 ID의 다른 payload를 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+            activation = fixture.controller.set_manual_kill(
+                True,
+                command_id="activation-a",
+                expected_version=0,
+            )
+            confirmed_active = fixture.controller.set_manual_kill(
+                True,
+                command_id="noop-x",
+                expected_version=1,
+            )
+            fixture.controller.set_manual_kill(
+                False,
+                command_id="release-b",
+                expected_version=1,
+            )
+            fixture.controller.set_manual_kill(
+                True,
+                command_id="activation-c",
+                expected_version=2,
+            )
+            journal_path = fixture.repository.manual_kill_control_storage_path
+            journal_before_restart_replays = journal_path.read_bytes()
+
+            # Fresh Controller는 마지막 상태뿐 아니라 이전 no-op/toggle command receipt도 복원한다.
+            restarted_fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+            replayed_activation = restarted_fixture.controller.set_manual_kill(
+                True,
+                command_id="activation-a",
+                expected_version=0,
+            )
+            replayed_noop = restarted_fixture.controller.set_manual_kill(
+                True,
+                command_id="noop-x",
+                expected_version=1,
+            )
+            self.assertEqual(activation, replayed_activation)
+            self.assertEqual(confirmed_active, replayed_noop)
+
+            # 과거 ID를 현재 version의 해제 payload로 바꿔도 active kill과 journal은 그대로 유지된다.
+            for reused_command_id in ("activation-a", "noop-x"):
+                with self.subTest(reused_command_id=reused_command_id):
+                    with self.assertRaises(TradingSessionError) as context:
+                        restarted_fixture.controller.set_manual_kill(
+                            False,
+                            command_id=reused_command_id,
+                            expected_version=3,
+                        )
+                    self.assertIs(
+                        TradingSessionFailureCode.COMMAND_ID_REUSED,
+                        context.exception.code,
+                    )
+            restarted_snapshot = restarted_fixture.controller.snapshot_session()
+            self.assertTrue(restarted_snapshot.manual_kill_active)
+            self.assertEqual(3, restarted_snapshot.risk_control_version)
+            self.assertEqual(
+                journal_before_restart_replays,
+                journal_path.read_bytes(),
+            )
+            self.assertEqual([], restarted_fixture.rest_client.submitted_orders)
+
+    def test_general_commands_cannot_evict_restored_manual_kill_receipts(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_general_commands_cannot_evict_restored_manual_kill_receipts()
+        기능: restart 뒤 selection/start cache 압력이 durable manual-kill ID 충돌을 지우지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            history_path = Path(temporary_directory) / "trades.jsonl"
+            bootstrap_repository = TradeHistoryRepository(history_path)
+            for command_index in range(2):
+                bootstrap_repository.save_manual_kill_control_state(
+                    ManualKillControlState(
+                        active=False,
+                        version=0,
+                        command_id=f"durable-noop-{command_index}",
+                        expected_version=0,
+                        behavior=ManualKillBehavior.BLOCK_NEW_ORDERS,
+                        policy_version=1,
+                    )
+                )
+            journal_path = (
+                bootstrap_repository.manual_kill_control_storage_path
+            )
+            journal_before_restart = journal_path.read_bytes()
+
+            # 두 칸짜리 일반 cache를 selection/start가 채워도 manual receipt는 전용 cache에 남아야 한다.
+            with mock_patch(
+                "binance_auto_trader.application.trading_controller."
+                "_MAX_COMMAND_RECORDS",
+                2,
+            ):
+                restarted_fixture = _create_buy_flow_fixture(
+                    temporary_directory,
+                    FakeOrderScenario.IMMEDIATE_FILLED,
+                )
+                with self.assertRaises(TradingSessionError) as context:
+                    restarted_fixture.controller.set_manual_kill(
+                        True,
+                        command_id="durable-noop-0",
+                        expected_version=0,
+                    )
+
+            # Deterministic payload 충돌은 저장 불명확성이나 process-wide command lock으로 오분류하지 않는다.
+            self.assertIs(
+                TradingSessionFailureCode.COMMAND_ID_REUSED,
+                context.exception.code,
+            )
+            restarted_snapshot = restarted_fixture.controller.snapshot_session()
+            self.assertFalse(restarted_snapshot.manual_kill_active)
+            self.assertEqual(0, restarted_snapshot.risk_control_version)
+            self.assertFalse(restarted_snapshot.process_ownership_ambiguous)
+            self.assertTrue(restarted_snapshot.command_enabled)
+            self.assertEqual(journal_before_restart, journal_path.read_bytes())
+            self.assertEqual([], restarted_fixture.rest_client.submitted_orders)
+
+    def test_manual_kill_persistence_failure_keeps_current_process_closed(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_persistence_failure_keeps_current_process_closed()
+        기능: activation fsync 실패가 volatile inactive 상태나 신규 BUY 허용으로 완화되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+
+            # Durable owner 실패를 주입해 command 오류 뒤에도 kill과 reconciliation blocker를 확인한다.
+            with mock_patch.object(
+                TradeHistoryController,
+                "save_manual_kill_control_state",
+                side_effect=OSError("injected-control-fsync-failure"),
+            ):
+                with self.assertRaises(OSError):
+                    fixture.controller.set_manual_kill(
+                        True,
+                        command_id="failed-manual-kill-persistence",
+                        expected_version=0,
+                    )
+            snapshot = fixture.controller.snapshot_session()
+            self.assertTrue(snapshot.manual_kill_active)
+            self.assertTrue(snapshot.process_ownership_ambiguous)
+            self.assertFalse(snapshot.command_enabled)
+            self.assertEqual([], fixture.rest_client.submitted_orders)
+
+            # 같은 process는 journal이 기록됐는지 추측해 해제하거나 version을 재사용하지 못한다.
+            with self.assertRaises(RuntimeError):
+                fixture.controller.set_manual_kill(
+                    False,
+                    command_id="release-after-ambiguous-persistence",
+                    expected_version=0,
+                )
+
+    def test_runtime_journal_truncation_cannot_release_manual_kill(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_runtime_journal_truncation_cannot_release_manual_kill()
+        기능: active journal의 실행 중 truncate가 release나 BUY gate 재개로 완화되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_buy_flow_fixture(
+                temporary_directory,
+                FakeOrderScenario.IMMEDIATE_FILLED,
+            )
+            activation = fixture.controller.set_manual_kill(
+                True,
+                command_id="activation-before-runtime-truncate",
+                expected_version=0,
+            )
+            journal_path = fixture.repository.manual_kill_control_storage_path
+            journal_path.write_bytes(b"")
+
+            # Cached active 상태보다 disk가 후퇴하면 release append 전에 typed corruption으로 닫는다.
+            with self.assertRaises(
+                ManualKillControlJournalCorruptedError
+            ):
+                fixture.controller.set_manual_kill(
+                    False,
+                    command_id="release-after-runtime-truncate",
+                    expected_version=activation.risk_control_version,
+                )
+
+            # 현재 process는 active/version을 유지하고 ownership ambiguity로 모든 command를 차단한다.
+            snapshot = fixture.controller.snapshot_session()
+            self.assertTrue(snapshot.manual_kill_active)
+            self.assertEqual(1, snapshot.risk_control_version)
+            self.assertTrue(snapshot.process_ownership_ambiguous)
+            self.assertFalse(snapshot.command_enabled)
+            self.assertEqual(b"", journal_path.read_bytes())
+            self.assertEqual([], fixture.rest_client.submitted_orders)
+
+    def test_pending_unknown_buy_reserves_cumulative_position_budget(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_pending_unknown_buy_reserves_cumulative_position_budget()
+        기능: terminal 전 BUY 미체결 금액이 다음 BUY의 누적 position 예산을 점유하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        policy = RiskPolicy(
+            version=1,
+            max_order_notional=Decimal("60"),
+            max_position_notional=Decimal("75"),
+            max_daily_loss=Decimal("100"),
+            daily_loss_scope=DailyLossScope.REALIZED_AND_UNREALIZED,
+            manual_kill_behavior=ManualKillBehavior.BLOCK_NEW_ORDERS,
+        )
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_buy_flow_fixture_with_risk_state(
+                temporary_directory,
+                FakeOrderScenario.NEW_THEN_FILLED,
+                policy,
+            )
+
+            # 첫 BUY는 NEW 상태로 남아 같은 client identity의 미체결 금액 전체를 예약한다.
+            first_outcomes = _execute_case_b_buy(
+                fixture,
+                "intent-reserved-first",
+            )
+            self.assertEqual((), first_outcomes)
+            self.assertEqual(1, len(fixture.rest_client.submitted_orders))
+
+            # 두 번째 BUY 단건은 60 이하이지만 예약 합계가 75를 넘으므로 REST 전에 차단된다.
+            second_outcomes = _execute_case_b_buy(
+                fixture,
+                "intent-reserved-second",
+            )
+            self.assertEqual(1, len(second_outcomes))
+            self.assertEqual(
+                RiskBlockReason.RISK_POSITION_NOTIONAL_EXCEEDED,
+                second_outcomes[0].payload.reason,
+            )
+            self.assertEqual(1, len(fixture.rest_client.submitted_orders))
+            decision = fixture.controller.last_risk_decision
+            self.assertIsNotNone(decision)
+            self.assertGreater(
+                decision.budget.reserved_buy_notional,
+                Decimal("0"),
+            )
+            self.assertGreater(
+                decision.budget.projected_position_notional,
+                policy.max_position_notional,
+            )
 
 
 if __name__ == "__main__":

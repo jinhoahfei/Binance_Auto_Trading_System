@@ -205,7 +205,7 @@ class _CommandHandler:
         self.command = "POST"
         self.command_key = command_key
         self.request_body = {"schema_version": SCHEMA_VERSION}
-        self.raw_body = b'{"schema_version":2}'
+        self.raw_body = b'{"schema_version":3}'
 
 
 class LoopbackIdempotencyConcurrencyTests(unittest.TestCase):

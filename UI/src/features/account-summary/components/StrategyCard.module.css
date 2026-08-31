@@ -31,11 +31,11 @@
 }
 
 .positive {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }
 
 .negative {
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
 }
 
 .neutral {
@@ -96,7 +96,7 @@
 }
 
 .profit strong {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }
 
 .profit small {

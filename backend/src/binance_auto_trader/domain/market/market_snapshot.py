@@ -127,6 +127,7 @@ class _MarketSnapshotState:
     version: int
     updated_at: datetime | None
     ready: bool
+    update_source_klines: tuple[Kline, ...]
 
 
 class MarketSnapshot:
@@ -175,6 +176,7 @@ class MarketSnapshot:
             version=0,
             updated_at=None,
             ready=False,
+            update_source_klines=(),
         )
 
     @property
@@ -243,14 +245,28 @@ class MarketSnapshot:
         """
         return self._state.ready
 
+    @property
+    def update_source_klines(self) -> tuple[Kline, ...]:
+        """
+        함수 이름: update_source_klines()
+        기능: 현재 version을 만든 WebSocket Kline 원본 또는 full update의 빈 tuple을 반환한다.
+        인자: 없음
+        반환값: 이번 version에 함께 반영된 불변 Kline tuple
+        작성 날짜: 2026/08/29
+        """
+        return self._state.update_source_klines
+
     def update(
         self,
         klines_by_interval: Mapping[Interval, Iterable[Kline]],
+        *,
+        source_klines: Iterable[Kline] | None = None,
     ) -> None:
         """
         함수 이름: update()
         기능: 전체 Kline 입력을 검증하고 dedup·정렬한 뒤 snapshot을 원자적으로 교체한다.
         인자: klines_by_interval -> canonical 주기별 전체 Kline 입력
+            source_klines -> 이번 version을 발생시킨 WebSocket Kline 또는 full update의 None
         반환값: 없음
         작성 날짜: 2026/08/20
         """
@@ -333,6 +349,27 @@ class MarketSnapshot:
             next_klines_by_interval[Interval.FOUR_HOURS],
             next_updated_at,
         )
+
+        # Live provenance는 최종 candidate history에 exact value로 남은 typed Kline만 허용한다.
+        if source_klines is None:
+            normalized_source_klines: tuple[Kline, ...] = ()
+        else:
+            try:
+                normalized_source_klines = tuple(source_klines)
+            except TypeError as error:
+                raise TypeError("source_klines must be iterable") from error
+            if not normalized_source_klines:
+                raise ValueError("source_klines must not be empty when provided")
+            for source_kline in normalized_source_klines:
+                if not isinstance(source_kline, Kline):
+                    raise TypeError("source_klines must contain only Kline")
+                if source_kline not in next_klines_by_interval[
+                    source_kline.interval
+                ]:
+                    raise ValueError(
+                        "every source Kline must be present in the next snapshot"
+                    )
+
         next_current_eth_price = next_klines_by_interval[
             Interval.FOUR_HOURS
         ][-1].close
@@ -343,6 +380,7 @@ class MarketSnapshot:
             version=self._state.version + 1,
             updated_at=next_updated_at,
             ready=True,
+            update_source_klines=normalized_source_klines,
         )
 
         self._state = next_state

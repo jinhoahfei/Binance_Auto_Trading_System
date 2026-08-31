@@ -9,6 +9,13 @@ from types import SimpleNamespace
 import unittest
 
 from binance_auto_trader.domain.common import Interval, RegimeType
+from binance_auto_trader.domain.trading.risk import (
+    DailyLossScope,
+    ManualKillBehavior,
+    RiskBudgetSnapshot,
+    RiskDecision,
+    RiskPolicyAvailability,
+)
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
     OrderSide,
@@ -21,6 +28,7 @@ from binance_auto_trader.transport.contracts import (
     decimal_from_wire,
     datetime_to_wire,
     decimal_to_wire,
+    map_trading_snapshot,
     normalize_json_value,
     ratio_from_wire,
     regime_from_wire,
@@ -123,6 +131,21 @@ def _create_ready_runtime() -> SimpleNamespace:
             scale_out=Decimal("0.5"),
             has_open_position=False,
             command_enabled=False,
+            risk_policy_availability="UNAVAILABLE",
+            configured_risk_policy_version=None,
+            max_order_notional=None,
+            max_position_notional=None,
+            max_daily_loss=None,
+            daily_loss_scope=None,
+            manual_kill_behavior=None,
+            session_risk_policy_version=None,
+            risk_control_version=0,
+            manual_kill_active=False,
+            manual_kill_cleanup_complete=True,
+            manual_kill_activation_behavior=None,
+            manual_kill_activation_policy_version=None,
+            last_risk_decision=None,
+            process_ownership_ambiguous=False,
         ),
     )
 
@@ -255,7 +278,7 @@ class TransportContractTests(unittest.TestCase):
         """
         # 유효한 split command fixture로 exact field와 Decimal 정밀도 보존을 검증한다.
         valid_body = {
-            "schema_version": 2,
+            "schema_version": 3,
             "scale_in": "0.40",
             "scale_out": "0.60",
             "expected_version": 3,
@@ -315,6 +338,39 @@ class TransportContractTests(unittest.TestCase):
         self.assertEqual(snapshot["market"]["current_price"], "4321.5000")
         self.assertEqual(snapshot["regime"]["recommended"], "type2")
         self.assertIsNone(snapshot["regime"]["selected"])
+
+        # 정책 숫자가 없는 초기 runtime은 null 숫자 대신 explicit unavailable 위험 상태를 공개한다.
+        self.assertEqual(
+            snapshot["trading"]["risk_policy_availability"],
+            "UNAVAILABLE",
+        )
+        self.assertIsNone(
+            snapshot["trading"]["configured_risk_policy_version"]
+        )
+        self.assertIsNone(snapshot["trading"]["max_order_notional"])
+        self.assertIsNone(snapshot["trading"]["max_position_notional"])
+        self.assertIsNone(snapshot["trading"]["max_daily_loss"])
+        self.assertIsNone(snapshot["trading"]["daily_loss_scope"])
+        self.assertIsNone(snapshot["trading"]["manual_kill_behavior"])
+        self.assertIsNone(
+            snapshot["trading"]["session_risk_policy_version"]
+        )
+        self.assertEqual(snapshot["trading"]["risk_control_version"], 0)
+        self.assertFalse(snapshot["trading"]["manual_kill_active"])
+        self.assertTrue(
+            snapshot["trading"]["manual_kill_cleanup_complete"]
+        )
+        self.assertIsNone(
+            snapshot["trading"]["manual_kill_activation_behavior"]
+        )
+        self.assertIsNone(
+            snapshot["trading"]["manual_kill_activation_policy_version"]
+        )
+        self.assertIsNone(snapshot["trading"]["last_risk_budget"])
+        self.assertIsNone(snapshot["trading"]["risk_block_reason"])
+        self.assertFalse(
+            snapshot["trading"]["process_ownership_ambiguous"]
+        )
         self.assertEqual(
             snapshot["trading"]["logic_coverage"],
             [
@@ -348,6 +404,171 @@ class TransportContractTests(unittest.TestCase):
         self.assertNotIn("krw", json_text := str(snapshot).lower())
         self.assertNotIn("nan", json_text)
         self.assertNotIn("lower_bb", json_text)
+
+    def test_manual_kill_cleanup_field_is_required_by_snapshot_mapper(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_cleanup_field_is_required_by_snapshot_mapper()
+        기능: cleanup publication 누락을 완료 True로 보정하지 않고 contract 실패로 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        runtime = _create_ready_runtime()
+        session_snapshot = runtime.trading_controller.snapshot_session()
+        delattr(
+            session_snapshot,
+            "manual_kill_cleanup_complete",
+        )  # 구버전·불완전 snapshot이 완료 상태로 승격되는 경계를 재현한다.
+        controller = SimpleNamespace(
+            snapshot_session=lambda: session_snapshot,
+        )
+
+        # 필수 안전 필드 누락은 명시적 AttributeError로 fail closed해야 한다.
+        with self.assertRaisesRegex(
+            AttributeError,
+            "manual_kill_cleanup_complete",
+        ):
+            map_trading_snapshot(controller, _ExecutionMode.DISABLED)
+
+    def test_configured_unbounded_risk_policy_maps_to_explicit_wire_nulls(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_configured_unbounded_risk_policy_maps_to_explicit_wire_nulls()
+        기능: configured policy의 세 무제한 상한과 운영 enum이 unavailable과 다른 wire 값인지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # None 상한이어도 BUY 판정에서 계산한 모든 예산·PnL·version 값은 유지한다.
+        last_risk_decision = RiskDecision(
+            allowed=True,
+            budget=RiskBudgetSnapshot(
+                policy_version=4,
+                market_version=12,
+                account_version=8,
+                context_version=21,
+                current_position_notional=Decimal("125.50"),
+                reserved_buy_notional=Decimal("24.25"),
+                candidate_order_notional=Decimal("50.25"),
+                projected_position_notional=Decimal("200.00"),
+                daily_realized_pnl=Decimal("-12.75"),
+                unrealized_pnl=Decimal("-3.50"),
+                daily_loss=Decimal("12.75"),
+                manual_kill_active=False,
+            ),
+        )
+        session_snapshot = SimpleNamespace(
+            status="not_started",
+            session_id=None,
+            version=0,
+            scale_in=Decimal("0.5"),
+            scale_out=Decimal("0.5"),
+            has_open_position=False,
+            command_enabled=False,
+            risk_policy_availability=RiskPolicyAvailability.CONFIGURED,
+            configured_risk_policy_version=4,
+            max_order_notional=None,
+            max_position_notional=None,
+            max_daily_loss=None,
+            daily_loss_scope=DailyLossScope.REALIZED_ONLY,
+            manual_kill_behavior=ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+            session_risk_policy_version=4,
+            risk_control_version=0,
+            manual_kill_active=False,
+            manual_kill_cleanup_complete=True,
+            manual_kill_activation_behavior=None,
+            manual_kill_activation_policy_version=None,
+            last_risk_decision=last_risk_decision,
+            process_ownership_ambiguous=False,
+        )
+        controller = SimpleNamespace(
+            snapshot_session=lambda: session_snapshot,
+        )
+
+        # normalize_json_object가 null을 보존하고 enum만 stable 문자열로 평탄화해야 한다.
+        trading = map_trading_snapshot(controller, _ExecutionMode.DISABLED)
+
+        self.assertEqual("CONFIGURED", trading["risk_policy_availability"])
+        self.assertEqual(4, trading["configured_risk_policy_version"])
+        self.assertIsNone(trading["max_order_notional"])
+        self.assertIsNone(trading["max_position_notional"])
+        self.assertIsNone(trading["max_daily_loss"])
+        self.assertEqual("REALIZED_ONLY", trading["daily_loss_scope"])
+        self.assertEqual(
+            "CANCEL_AND_LIQUIDATE",
+            trading["manual_kill_behavior"],
+        )
+        self.assertTrue(trading["last_risk_decision_allowed"])
+        self.assertEqual(
+            {
+                "policy_version": 4,
+                "market_version": 12,
+                "account_version": 8,
+                "context_version": 21,
+                "current_position_notional": "125.50",
+                "reserved_buy_notional": "24.25",
+                "candidate_order_notional": "50.25",
+                "projected_position_notional": "200.00",
+                "daily_realized_pnl": "-12.75",
+                "unrealized_pnl": "-3.50",
+                "daily_loss": "12.75",
+                "manual_kill_active": False,
+            },
+            trading["last_risk_budget"],
+        )
+
+    def test_manual_kill_activation_provenance_survives_policy_hot_swap(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_activation_provenance_survives_policy_hot_swap()
+        기능: configured policy와 활성 epoch의 behavior/version을 별도 wire 필드로 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # Configured v5는 신규 주문만 차단하지만 활성 epoch v4는 취소·청산 의무를 유지한다.
+        session_snapshot = SimpleNamespace(
+            status="reconciliation_required",
+            session_id="62c511b2-ea5c-43ac-bc36-e96eb39c85aa",
+            version=8,
+            scale_in=Decimal("0.5"),
+            scale_out=Decimal("0.5"),
+            has_open_position=True,
+            command_enabled=False,
+            risk_policy_availability=RiskPolicyAvailability.CONFIGURED,
+            configured_risk_policy_version=5,
+            max_order_notional=None,
+            max_position_notional=None,
+            max_daily_loss=None,
+            daily_loss_scope=DailyLossScope.REALIZED_ONLY,
+            manual_kill_behavior=ManualKillBehavior.BLOCK_NEW_ORDERS,
+            session_risk_policy_version=4,
+            risk_control_version=1,
+            manual_kill_active=True,
+            manual_kill_cleanup_complete=False,
+            manual_kill_activation_behavior=(
+                ManualKillBehavior.CANCEL_AND_LIQUIDATE
+            ),
+            manual_kill_activation_policy_version=4,
+            last_risk_decision=None,
+            process_ownership_ambiguous=False,
+        )
+        controller = SimpleNamespace(snapshot_session=lambda: session_snapshot)
+
+        trading = map_trading_snapshot(controller, _ExecutionMode.DISABLED)
+
+        self.assertEqual("BLOCK_NEW_ORDERS", trading["manual_kill_behavior"])
+        self.assertEqual(5, trading["configured_risk_policy_version"])
+        self.assertEqual(
+            "CANCEL_AND_LIQUIDATE",
+            trading["manual_kill_activation_behavior"],
+        )
+        self.assertEqual(4, trading["manual_kill_activation_policy_version"])
+        self.assertFalse(trading["manual_kill_cleanup_complete"])
 
     def test_typescript_renderer_is_deterministic_and_matches_checked_in_file(
         self,

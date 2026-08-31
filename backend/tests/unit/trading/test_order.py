@@ -78,6 +78,7 @@ def make_order(
     requested_quantity: Decimal = Decimal("2"),
     submitted_quantity: Decimal = Decimal("1.5"),
     side: OrderSide = OrderSide.BUY,
+    risk_policy_version: int | None = None,
 ) -> Order:
     """
     함수 이름: make_order()
@@ -85,6 +86,7 @@ def make_order(
     인자: requested_quantity -> filter 전 원래 수량
         submitted_quantity -> 실제 제출 수량
         side -> 주문 방향
+        risk_policy_version -> BUY 위험 판단에 사용한 policy version 또는 None
     반환값: 결과 적용 전 mutable Order
     작성 날짜: 2026/08/22
     """
@@ -99,6 +101,7 @@ def make_order(
         requested_quantity=requested_quantity,
         submitted_quantity=submitted_quantity,
         market_price_at_decision=Decimal("111.25"),
+        risk_policy_version=risk_policy_version,
     )
 
 
@@ -141,6 +144,22 @@ class OrderValueTests(unittest.TestCase):
     기능: Fill, OrderResult와 ExecutionSummary의 immutable typed 계약을 검증한다.
     작성 날짜: 2026/08/22
     """
+
+    def test_order_validates_risk_policy_version_exactly(self) -> None:
+        """
+        함수 이름: test_order_validates_risk_policy_version_exactly()
+        기능: durable Order provenance가 1 이상 exact int policy version만 받는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        self.assertEqual(make_order(risk_policy_version=4).risk_policy_version, 4)
+
+        # Bool과 0은 version number로 해석하지 않고 domain 경계에서 거부한다.
+        with self.assertRaises(TypeError):
+            make_order(risk_policy_version=True)
+        with self.assertRaises(ValueError):
+            make_order(risk_policy_version=0)
 
     def test_typed_failure_kind_requires_exact_fill_free_status(self) -> None:
         """
@@ -252,26 +271,25 @@ class OrderValueTests(unittest.TestCase):
                 submitted_quantity=Decimal("1.1"),
             )
 
-    def test_retry_after_accepts_bounded_timedelta_only(self) -> None:
+    def test_retry_after_accepts_non_negative_timedelta_only(self) -> None:
         """
-        함수 이름: test_retry_after_accepts_bounded_timedelta_only()
-        기능: ADR-002 Retry-After가 0초부터 30초까지의 timedelta만 허용하는지 검증한다.
+        함수 이름: test_retry_after_accepts_non_negative_timedelta_only()
+        기능: ADR-002 Retry-After가 공식 대기를 축소하지 않는 non-negative timedelta인지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/22
         """
-        # 경계값은 보존하고 음수·상한 초과·다른 타입은 모두 거부한다.
+        # 30초보다 긴 공식 대기도 그대로 보존하고 음수·다른 타입만 거부한다.
         self.assertEqual(
-            timedelta(seconds=30),
+            timedelta(days=3),
             make_result(
                 OrderStatus.UNKNOWN,
                 exchange_order_id=None,
-                retry_after=timedelta(seconds=30),
+                retry_after=timedelta(days=3),
             ).retry_after,
         )
         for invalid_retry_after in (
             timedelta(microseconds=-1),
-            timedelta(seconds=30, microseconds=1),
             3,
         ):
             with self.subTest(retry_after=invalid_retry_after):

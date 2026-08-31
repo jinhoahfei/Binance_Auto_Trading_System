@@ -384,7 +384,7 @@ class APIGatewayAccountTests(unittest.TestCase):
     def test_fetch_account_snapshot_rejects_malformed_official_fields(self) -> None:
         """
         함수 이름: test_fetch_account_snapshot_rejects_malformed_official_fields()
-        기능: updateTime, balances, asset, free, locked의 잘못된 공식 형식을 거부한다.
+        기능: accountType, canTrade, updateTime과 balance 공식 형식 위반을 거부한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -392,6 +392,14 @@ class APIGatewayAccountTests(unittest.TestCase):
         malformed_payloads: tuple[object, ...] = (
             [],
             {"updateTime": True, "balances": []},
+            {
+                **_official_account_payload(),
+                "canTrade": "true",
+            },
+            {
+                **_official_account_payload(),
+                "canTrade": False,
+            },
             {"updateTime": REST_UPDATED_AT_MILLISECONDS, "balances": {}},
             {
                 "updateTime": REST_UPDATED_AT_MILLISECONDS,

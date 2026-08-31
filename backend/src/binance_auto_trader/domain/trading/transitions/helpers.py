@@ -218,10 +218,17 @@ def create_exit_order_actions(
     반환값: runtime 예약 patch와 SubmitOrder의 순서가 있는 tuple
     작성 날짜: 2026/08/14
     """
-    # 모든 재시도는 최초 청산 의도의 ID를 재사용한다.
+    # 모든 재시도는 최초 청산 의도의 ID와 Case C 매도 판단 %B를 재사용한다.
     intent_id = context.runtime.pending_intent_id or (
         f"{strategy}:SELL:{reason}:{context.runtime.lower_event_id}:{event.sequence_number}"
     )
+    exit_pct_b_at_intent = None
+    if strategy is StrategyType.CASE_C:
+        exit_pct_b_at_intent = (
+            context.market.realtime_pct_b
+            if attempt_kind is OrderAttemptKind.INITIAL
+            else context.runtime.pending_exit_pct_b
+        )
     changes: dict[str, object] = {
         "pending_strategy": strategy,
         "pending_order_side": OrderSide.SELL,
@@ -233,6 +240,7 @@ def create_exit_order_actions(
     # 최초 시도에서만 청산 사유와 복귀 상태를 새로 고정한다.
     if attempt_kind is OrderAttemptKind.INITIAL:
         changes["pending_exit_reason"] = reason
+        changes["pending_exit_pct_b"] = exit_pct_b_at_intent
         changes["pending_return_state"] = return_state
 
     return (
@@ -243,5 +251,6 @@ def create_exit_order_actions(
             attempt_kind=attempt_kind,
             idempotency_key=intent_id,
             exit_reason=reason,
+            exit_pct_b_at_intent=exit_pct_b_at_intent,
         ),
     )

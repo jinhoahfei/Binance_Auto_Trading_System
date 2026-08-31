@@ -216,47 +216,75 @@ class FakeWebSocketGateway:
         self.latest_subscription: FakeSubscription | None = None
         self.requested_symbol: str | None = None
         self.requested_intervals: tuple[Interval, ...] = ()
+        self._live_ready = False
+
+    @property
+    def kline_live_ready(self) -> bool:
+        """
+        함수 이름: kline_live_ready()
+        기능: fake 구독이 live promotion까지 완료됐는지 반환한다.
+        인자: 없음
+        반환값: 현재 fake Kline 세대가 live이면 True
+        작성 날짜: 2026/08/25
+        """
+        return self._live_ready
 
     def start_all_kline_buffering(
         self,
         symbol: str,
         intervals: tuple[Interval, ...],
+        *,
+        reconciliation_required_callback: Callable[[str], object]
+        | None = None,
     ) -> FakeSubscription:
         """
         함수 이름: start_all_kline_buffering()
         기능: REST 조회보다 먼저 fake Kline buffering 구독을 시작한다.
         인자: symbol -> 구독 대상 거래 symbol
             intervals -> 구독 대상 canonical 주기
+            reconciliation_required_callback -> 시장 장애를 받을 optional callback
         반환값: buffer drain과 close에 사용할 fake 구독
         작성 날짜: 2026/08/20
         """
+        previous_subscription = self.latest_subscription
+        if (
+            previous_subscription is not None
+            and not previous_subscription.closed
+        ):
+            previous_subscription.close()
+
         self._operation_trace.append(
             "web_socket_gateway.start_all_kline_buffering"
         )
         self.requested_symbol = symbol
         self.requested_intervals = tuple(intervals)
+        self._live_ready = False
         self.latest_subscription = FakeSubscription(self._operation_trace)
         return self.latest_subscription
 
-    def drain_kline_buffer(
+    def promote_kline_buffer_to_live(
         self,
-        subscription: FakeSubscription,
-    ) -> dict[Interval, tuple[Kline, ...]]:
+        observer: object,
+        subscription: FakeSubscription | None = None,
+    ) -> FakeSubscription:
         """
-        함수 이름: drain_kline_buffer()
-        기능: 현재 구독의 비어 있는 메모리 Kline buffer를 반환한다.
-        인자: subscription -> start가 반환한 fake 구독
-        반환값: 네 주기를 모두 포함한 빈 Kline tuple mapping
-        작성 날짜: 2026/08/20
+        함수 이름: promote_kline_buffer_to_live()
+        기능: 비어 있는 buffer를 같은 fake 구독의 live observer로 승격한다.
+        인자: observer -> production Controller가 전달한 연속 Kline callback
+            subscription -> start가 반환한 현재 fake 구독
+        반환값: 재구독하지 않은 동일한 fake 구독
+        작성 날짜: 2026/08/25
         """
+        if not callable(observer):
+            raise TypeError("observer must be callable")
         if subscription is not self.latest_subscription:
             raise ValueError("subscription must be the active fake handle")
 
-        self._operation_trace.append("web_socket_gateway.drain_kline_buffer")
-        return {
-            interval: ()
-            for interval in SUPPORTED_INTERVALS
-        }
+        self._operation_trace.append(
+            "web_socket_gateway.promote_kline_buffer_to_live"
+        )
+        self._live_ready = True
+        return self.latest_subscription
 
 
 class RecordingRegimeSTM(RegimeSTM):
@@ -652,8 +680,7 @@ class RegimeEvaluationFlowTests(unittest.TestCase):
             [
                 "web_socket_gateway.start_all_kline_buffering",
                 "api_gateway.load_all_klines",
-                "web_socket_gateway.drain_kline_buffer",
-                "subscription.close",
+                "web_socket_gateway.promote_kline_buffer_to_live",
             ],
         )
         self.assertEqual(self.api_gateway.requested_symbol, SYMBOL)
@@ -664,7 +691,7 @@ class RegimeEvaluationFlowTests(unittest.TestCase):
             SUPPORTED_INTERVALS,
         )
         self.assertIsNotNone(self.web_socket_gateway.latest_subscription)
-        self.assertTrue(self.web_socket_gateway.latest_subscription.closed)
+        self.assertFalse(self.web_socket_gateway.latest_subscription.closed)
         self.assertTrue(self.market_snapshot.ready)
         self.assertEqual(self.market_snapshot.version, 1)
 
@@ -759,6 +786,44 @@ class RegimeEvaluationFlowTests(unittest.TestCase):
         self.assertEqual(
             ready_context.source_market_version,
             evaluation_trace.source_market_version,
+        )
+
+    def test_same_candle_full_resync_rebinds_without_duplicate_stm_transition(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_same_candle_full_resync_rebinds_without_duplicate_stm_transition()
+        기능: 동일 4H 확정봉 full-resync가 새 market version을 검증하되 STM 전이를 반복하지 않는지 확인한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        self._initialize_golden_flow()
+        previous_result = self.regime_controller.last_regime_result
+        self.assertIsNotNone(previous_result)
+        previous_trace_count = len(self.regime_controller.evaluation_traces)
+
+        # 같은 REST Kline을 새 WebSocket 세대에서 다시 병합해 duplicate candle 복구를 재현한다.
+        reconciled_snapshot = self.market_data_controller.reconcile_market_stream()
+        reconciled_result = self.regime_controller.last_regime_result
+
+        self.assertIs(reconciled_snapshot, self.market_snapshot)
+        self.assertEqual(self.market_snapshot.version, 2)
+        self.assertTrue(self.market_data_controller.market_available)
+        self.assertIsNotNone(reconciled_result)
+        self.assertEqual(reconciled_result.source_market_version, 2)
+        self.assertEqual(
+            reconciled_result.source_candle_id,
+            previous_result.source_candle_id,
+        )
+        self.assertIs(
+            reconciled_result.recommended_type,
+            previous_result.recommended_type,
+        )
+        self.assertEqual(len(self.regime_stm.calls), 2)
+        self.assertEqual(
+            len(self.regime_controller.evaluation_traces),
+            previous_trace_count,
         )
 
     def test_regime_evaluation_flow_re_evaluates_and_fails_closed(self) -> None:

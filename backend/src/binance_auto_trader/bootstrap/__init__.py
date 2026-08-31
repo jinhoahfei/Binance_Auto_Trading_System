@@ -28,6 +28,7 @@ from .testnet import (
     TestnetConfigurationError,
     create_testnet_application_runtime,
     load_testnet_configuration,
+    require_phase13_public_case2_permission,
     require_testnet_order_permission,
 )
 
@@ -54,6 +55,7 @@ __all__ = [  # wildcard import도 명시된 composition-root API 밖으로 확�
     "load_testnet_configuration",
     "parse_execution_mode",
     "request_application_shutdown",
+    "require_phase13_public_case2_permission",
     "require_testnet_order_permission",
     "start_application",
 ]

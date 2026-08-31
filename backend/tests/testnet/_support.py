@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
 from binance_auto_trader.bootstrap.testnet import (
+    BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV,
     BINANCE_RUN_TESTNET_ENV,
     BINANCE_RUN_TESTNET_ORDERS_ENV,
     BINANCE_TESTNET_API_KEY_ENV,
@@ -36,20 +37,37 @@ _TESTNET_CREDENTIALS_PRESENT = all(
         BINANCE_TESTNET_API_SECRET_ENV,
     )
 )  # 실제 key pair가 하나라도 없으면 모든 testnet test는 collection 단계에서 skip된다.
-READ_ONLY_TESTNET_REQUESTED = (
+_AUTHENTICATED_TESTNET_REQUESTED = (
     os.environ.get(BINANCE_RUN_TESTNET_ENV) == "1"
     and _TESTNET_CREDENTIALS_PRESENT
 )
-ORDER_TESTNET_REQUESTED = (
-    READ_ONLY_TESTNET_REQUESTED
-    and os.environ.get(BINANCE_RUN_TESTNET_ORDERS_ENV) == "1"
+READ_ONLY_TESTNET_REQUESTED = (
+    _AUTHENTICATED_TESTNET_REQUESTED
+    and os.environ.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV) != "1"
 )
+ORDER_TESTNET_REQUESTED = (
+    _AUTHENTICATED_TESTNET_REQUESTED
+    and os.environ.get(BINANCE_RUN_TESTNET_ORDERS_ENV) == "1"
+    and os.environ.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV) != "1"
+)
+PHASE13_PUBLIC_CASE2_REQUESTED = (
+    _AUTHENTICATED_TESTNET_REQUESTED
+    and os.environ.get(BINANCE_RUN_TESTNET_ORDERS_ENV) == "1"
+    and os.environ.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV) == "1"
+)  # Phase 13 전용 flag는 legacy actual-order suite와 상호 배타적인 단일 target을 선택한다.
 READ_ONLY_SKIP_REASON = (
-    f"set {BINANCE_RUN_TESTNET_ENV}=1 with testnet credentials to run"
+    f"set {BINANCE_RUN_TESTNET_ENV}=1 with testnet credentials while leaving "
+    f"{BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV} disabled to run"
 )
 ORDER_SKIP_REASON = (
     f"set {BINANCE_RUN_TESTNET_ENV}=1 and "
-    f"{BINANCE_RUN_TESTNET_ORDERS_ENV}=1 with a max notional to run"
+    f"{BINANCE_RUN_TESTNET_ORDERS_ENV}=1 with a max notional, while leaving "
+    f"{BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV} disabled, to run the legacy order suite"
+)
+PHASE13_PUBLIC_CASE2_SKIP_REASON = (
+    f"set {BINANCE_RUN_TESTNET_ENV}=1, "
+    f"{BINANCE_RUN_TESTNET_ORDERS_ENV}=1 and "
+    f"{BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV}=1 with a max notional to run"
 )
 _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 TESTNET_BASELINE_HISTORY_PATH_ENV = "BINANCE_TESTNET_BASELINE_HISTORY_PATH"

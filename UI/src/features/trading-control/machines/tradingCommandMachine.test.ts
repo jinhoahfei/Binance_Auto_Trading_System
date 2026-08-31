@@ -106,6 +106,105 @@ describe('tradingCommandMachine', () => {
         actor.stop();
     });
 
+    it('Phase 13: configured-unbounded 정책 값을 문자열·null 그대로 actor context에 보존한다', () => {
+        const actor = createActor(create_trading_command_machine(new FakeUiCommandAdapter()));
+
+        actor.start();
+
+        // Explicit null 상한은 unavailable로 축약하지 않고 configured provenance와 함께 동기화한다.
+        actor.send({
+            type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
+            selected_regime: 'type0',
+            logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+            command_enabled: true,
+            risk_policy_availability: 'CONFIGURED',
+            configured_risk_policy_version: 4,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: 'REALIZED_ONLY',
+            manual_kill_behavior: 'CANCEL_AND_LIQUIDATE',
+            session_risk_policy_version: 4,
+            manual_kill_active: true,
+            manual_kill_cleanup_complete: false,
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 4,
+            last_risk_decision_allowed: true,
+            last_risk_budget: {
+                policy_version: 4,
+                market_version: 7,
+                account_version: 3,
+                context_version: 9,
+                current_position_notional: '125.50',
+                reserved_buy_notional: '24.25',
+                candidate_order_notional: '50.25',
+                projected_position_notional: '200.00',
+                daily_realized_pnl: '-12.75',
+                unrealized_pnl: '-3.50',
+                daily_loss: '12.75',
+                manual_kill_active: false,
+            },
+            is_trading: false,
+            has_open_position: false,
+            lifecycle_status: 'not_started',
+        });
+
+        expect(actor.getSnapshot().context).toMatchObject({
+            risk_policy_availability: 'CONFIGURED',
+            configured_risk_policy_version: 4,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: 'REALIZED_ONLY',
+            manual_kill_behavior: 'CANCEL_AND_LIQUIDATE',
+            session_risk_policy_version: 4,
+            manual_kill_active: true,
+            manual_kill_cleanup_complete: false,
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 4,
+            last_risk_decision_allowed: true,
+            last_risk_budget: {
+                policy_version: 4,
+                market_version: 7,
+                account_version: 3,
+                context_version: 9,
+                current_position_notional: '125.50',
+                reserved_buy_notional: '24.25',
+                candidate_order_notional: '50.25',
+                projected_position_notional: '200.00',
+                daily_realized_pnl: '-12.75',
+                unrealized_pnl: '-3.50',
+                daily_loss: '12.75',
+                manual_kill_active: false,
+            },
+        });
+
+        // Configured policy hot-swap은 현재 활성 epoch의 고정 provenance를 바꾸지 않는다.
+        actor.send({
+            type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED',
+            selected_regime: 'type0',
+            logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+            command_enabled: false,
+            risk_policy_availability: 'CONFIGURED',
+            configured_risk_policy_version: 5,
+            manual_kill_behavior: 'BLOCK_NEW_ORDERS',
+            manual_kill_active: true,
+            manual_kill_cleanup_complete: false,
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 4,
+            is_trading: false,
+            has_open_position: false,
+            lifecycle_status: 'not_started',
+        });
+        expect(actor.getSnapshot().context).toMatchObject({
+            configured_risk_policy_version: 5,
+            manual_kill_behavior: 'BLOCK_NEW_ORDERS',
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 4,
+        });
+        actor.stop();
+    });
+
     it('Phase 9: 정지 상태의 복구 Position은 새 자동매매 시작을 차단한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
         const actor = createActor(create_trading_command_machine(command_adapter, {

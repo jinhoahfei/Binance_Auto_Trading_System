@@ -21,7 +21,10 @@ from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
 from binance_auto_trader.application.trading_controller import (
+    OrderExecutionFailureCode,
     TradingController,
+    TradingSessionError,
+    TradingSessionFailureCode,
     TradingSessionStatus,
 )
 from binance_auto_trader.domain.common import RegimeType
@@ -31,6 +34,12 @@ from binance_auto_trader.domain.trading.action_requests import TradingActionRequ
 from binance_auto_trader.domain.trading.events import TradingEvent, TradingEventType
 from binance_auto_trader.domain.trading.order import Fill, Order, OrderResult, OrderStatus
 from binance_auto_trader.domain.trading.position import Position
+from binance_auto_trader.domain.trading.risk import (
+    DailyLossScope,
+    ManualKillBehavior,
+    ManualKillControlState,
+    RiskPolicy,
+)
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
     OrderAttemptKind,
@@ -49,6 +58,7 @@ from tests.integration.test_account_stream_flow import (
     SynchronousAccountWebSocketClient,
     _ready_market_snapshot,
 )
+from tests.integration.phase13_risk_fixture import create_test_risk_policy
 
 
 @dataclass(slots=True)
@@ -99,12 +109,14 @@ class StopPersistenceRESTClient(FakeAccountRESTClient):
         clock: MutableUtcClock,
         *,
         pre_query_terminal: bool = False,
+        terminal_query_index: int = 2,
     ) -> None:
         """
         함수 이름: __init__()
         기능: account fake와 STOP 조회 모드 및 빈 주문별 호출 기록을 초기화한다.
         인자: clock -> 응답 시각을 제공할 mutable UTC clock
             pre_query_terminal -> 첫 STOP query가 terminal partial을 반환할지 여부
+            terminal_query_index -> 일반 모드에서 terminal partial을 반환할 query 순번
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -112,14 +124,37 @@ class StopPersistenceRESTClient(FakeAccountRESTClient):
             raise TypeError("clock must be a MutableUtcClock")
         if type(pre_query_terminal) is not bool:
             raise TypeError("pre_query_terminal must be a bool")
+        if type(terminal_query_index) is not int:
+            raise TypeError("terminal_query_index must be an integer")
+        if terminal_query_index < 2:
+            raise ValueError("terminal_query_index must be at least two")
 
         super().__init__([])
         self.clock = clock
         self.pre_query_terminal = pre_query_terminal
+        self.terminal_query_index = terminal_query_index
         self.operation_trace: list[str] = []
         self.submitted_orders: list[Order] = []
         self.queried_orders: list[Order] = []
         self.canceled_orders: list[Order] = []
+        self.open_order_results: tuple[OrderResult, ...] = ()
+
+    def list_open_order_results(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[OrderResult, ...]:
+        """
+        함수 이름: list_open_order_results()
+        기능: manual-kill fresh verification에 주입한 현재 app-owned open order를 반환한다.
+        인자: symbol -> 조회 대상 canonical Binance symbol
+        반환값: 테스트가 주입한 현재 open OrderResult tuple
+        작성 날짜: 2026/08/29
+        """
+        if symbol != "ETHUSDT":
+            raise ValueError("symbol must be ETHUSDT")
+
+        return self.open_order_results  # Cleanup 완료 뒤 생긴 외부 order도 local journal과 독립해 표현한다.
 
     def submit_order(self, *, order: Order) -> OrderResult:
         """
@@ -168,7 +203,7 @@ class StopPersistenceRESTClient(FakeAccountRESTClient):
                 raise AssertionError("pre-query terminal scenario queries once")
             return self._terminal_partial_result(order)
 
-        if len(self.queried_orders) == 1:
+        if len(self.queried_orders) < self.terminal_query_index:
             return OrderResult(
                 symbol=order.symbol,
                 client_order_id=order.client_order_id,
@@ -176,10 +211,10 @@ class StopPersistenceRESTClient(FakeAccountRESTClient):
                 status=OrderStatus.NEW,
                 processed_at=self.clock(),
             )
-        if len(self.queried_orders) == 2:
+        if len(self.queried_orders) == self.terminal_query_index:
             return self._terminal_partial_result(order)
 
-        raise AssertionError("STOP persistence scenario allows exactly two queries")
+        raise AssertionError("STOP persistence scenario exceeded its query fixture")
 
     def cancel_order(self, *, order: Order) -> OrderResult:
         """
@@ -196,8 +231,11 @@ class StopPersistenceRESTClient(FakeAccountRESTClient):
 
         self.canceled_orders.append(order)
         self.operation_trace.append("cancel:SELL")
-        if len(self.canceled_orders) != 1:
-            raise AssertionError("STOP persistence scenario cancels exactly once")
+        allowed_cancel_count = (
+            1 if self.terminal_query_index == 2 else 2
+        )
+        if len(self.canceled_orders) > allowed_cancel_count:
+            raise AssertionError("STOP persistence scenario exceeded its cancel fixture")
 
         return self._terminal_partial_result(order)  # cancel 응답만으로 완료하지 않는 경계를 자극한다.
 
@@ -289,6 +327,451 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
     작성 날짜: 2026/08/22
     """
 
+    def test_manual_kill_fsyncs_then_cancels_reconciles_and_liquidates(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_fsyncs_then_cancels_reconciles_and_liquidates()
+        기능: CANCEL_AND_LIQUIDATE가 receipt fsync 뒤 same-ID cancel·partial 반영·잔량 청산을 완료하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            clock = MutableUtcClock(MARKET_UPDATED_AT)
+            rest_client = StopPersistenceRESTClient(clock)
+            account = Account()
+            web_socket_gateway = WebSocketGateway(
+                SynchronousAccountWebSocketClient([]),
+                account_snapshot_callback=account.apply_stream_snapshot,
+            )
+            position = Position()
+            storage_path = Path(temporary_directory) / "trades.jsonl"
+            repository = TradeHistoryRepository(storage_path, clock=clock)
+            history_controller = TradeHistoryController(
+                repository,
+                clock=clock,
+            )
+            history_controller.load_trade_history()
+            market_snapshot = _ready_market_snapshot()
+            policy = RiskPolicy(
+                version=1,
+                max_order_notional=None,
+                max_position_notional=None,
+                max_daily_loss=None,
+                daily_loss_scope=DailyLossScope.REALIZED_ONLY,
+                manual_kill_behavior=(
+                    ManualKillBehavior.CANCEL_AND_LIQUIDATE
+                ),
+            )
+            controller = TradingController(
+                APIGateway(rest_client, clock=clock),
+                web_socket_gateway,
+                account,
+                market_snapshot,
+                command_gate=True,
+                position=position,
+                trade_history_controller=history_controller,
+                risk_policy_state=policy,
+                clock=clock,
+            )
+
+            # 실제 session에서 BUY Position을 연 뒤 일반 SELL을 NEW로 남겨 kill cancel 대상에 둔다.
+            controller.load_account()
+            selection = RegimeController(
+                RegimeSTM(),
+                market_snapshot,
+                controller,
+            ).set_regime_type(
+                RegimeType.TYPE_0,
+                command_id="select-manual-kill-cleanup",
+                expected_version=0,
+            )
+            split_result = controller.update_split_ratios(
+                command_id="split-manual-kill-cleanup",
+                expected_version=selection.version,
+                scale_in=Decimal("1"),
+                scale_out=Decimal("1"),
+            )
+            controller.start_trading(
+                command_id="start-manual-kill-cleanup",
+                expected_version=split_result.version,
+            )
+            buy_event = TradingEvent(
+                TradingEventType.MARKET_DATA_UPDATED,
+                clock(),
+                sequence_number=1,
+            )
+            buy_outcomes = _execute_actions(
+                controller,
+                create_entry_order_actions(
+                    StrategyType.CASE_B,
+                    OrderAttemptKind.INITIAL,
+                    buy_event,
+                    controller.context,
+                ),
+            )
+            controller._enqueue_order_outcomes(buy_outcomes)
+            asyncio.run(controller.drain_events())
+            sell_event = TradingEvent(
+                TradingEventType.MARKET_DATA_UPDATED,
+                clock(),
+                sequence_number=2,
+            )
+            self.assertEqual(
+                (),
+                _execute_actions(
+                    controller,
+                    create_exit_order_actions(
+                        StrategyType.CASE_B,
+                        ExitReason.TAKE_PROFIT,
+                        PositionReturnState.CASE_B_HOLDING,
+                        sell_event,
+                        controller.context,
+                        attempt_kind=OrderAttemptKind.INITIAL,
+                    ),
+                ),
+            )
+
+            # 실제 repository append가 끝난 직후 같은 trace에 marker를 남겨 외부 cancel보다 앞섰는지 본다.
+            original_save = (
+                TradeHistoryController.save_manual_kill_control_state
+            )
+
+            def save_and_trace(
+                selected_controller: TradeHistoryController,
+                state: ManualKillControlState,
+            ) -> None:
+                """
+                함수 이름: save_and_trace()
+                기능: concrete manual-kill journal을 저장한 뒤 operation trace에 durable 경계를 남긴다.
+                인자: selected_controller -> 호출을 받은 concrete history Controller
+                    state -> Controller가 fsync할 ManualKillControlState
+                반환값: 없음
+                작성 날짜: 2026/08/29
+                """
+                original_save(selected_controller, state)
+                rest_client.operation_trace.append("fsync:MANUAL_KILL")
+
+            with mock_patch.object(
+                TradeHistoryController,
+                "save_manual_kill_control_state",
+                autospec=True,
+                side_effect=save_and_trace,
+            ):
+                activation = controller.set_manual_kill(
+                    True,
+                    command_id="activate-cancel-and-liquidate",
+                    expected_version=0,
+                )
+
+            # Kill receipt 뒤에만 query→개별 cancel→same-ID query→잔여 force SELL이 실행돼야 한다.
+            self.assertTrue(activation.active)
+            self.assertIs(
+                ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+                activation.behavior,
+            )
+            self.assertEqual(
+                [
+                    "submit:BUY",
+                    "submit:SELL",
+                    "fsync:MANUAL_KILL",
+                    "query:SELL",
+                    "cancel:SELL",
+                    "query:SELL",
+                    "submit:SELL",
+                ],
+                rest_client.operation_trace,
+            )
+            self.assertEqual(Decimal("0"), position.quantity)
+            self.assertTrue(controller.manual_kill_cleanup_complete)
+            self.assertFalse(controller.command_enabled)
+            self.assertEqual(
+                ManualKillControlState(
+                    active=True,
+                    version=1,
+                    command_id="activate-cancel-and-liquidate",
+                    expected_version=0,
+                    behavior=ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+                    policy_version=1,
+                ),
+                repository.get_manual_kill_control_state(),
+            )
+
+            # Durable force outcome을 STM이 소비한 뒤 session도 canonical TERMINATED 상태로 닫힌다.
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(
+                ("901", "902", "903"),
+                tuple(
+                    trade.order_id
+                    for trade in history_controller.trade_history.trades
+                ),
+            )
+
+            # Activation 응답 유실 재시도는 완료 증거만 다시 확인하고 cancel·SELL을 만들지 않는다.
+            replayed_activation = controller.set_manual_kill(
+                True,
+                command_id="activate-cancel-and-liquidate",
+                expected_version=0,
+            )
+            self.assertEqual(activation, replayed_activation)
+
+            # Active epoch 중 policy가 바뀌어도 no-op은 최초 C&L provenance와 완료 증거를 보존한다.
+            controller.replace_risk_policy(
+                RiskPolicy(
+                    version=2,
+                    max_order_notional=None,
+                    max_position_notional=None,
+                    max_daily_loss=None,
+                    daily_loss_scope=DailyLossScope.REALIZED_ONLY,
+                    manual_kill_behavior=(
+                        ManualKillBehavior.BLOCK_NEW_ORDERS
+                    ),
+                )
+            )
+            confirmed_active = controller.set_manual_kill(
+                True,
+                command_id="confirm-cleanup-after-policy-change",
+                expected_version=1,
+            )
+            self.assertIs(
+                ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+                confirmed_active.behavior,
+            )
+            self.assertEqual(1, confirmed_active.policy_version)
+            self.assertTrue(controller.manual_kill_cleanup_complete)
+            self.assertEqual(
+                ManualKillControlState(
+                    active=True,
+                    version=1,
+                    command_id="confirm-cleanup-after-policy-change",
+                    expected_version=1,
+                    behavior=ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+                    policy_version=1,
+                ),
+                repository.get_manual_kill_control_state(),
+            )
+            self.assertEqual(
+                [
+                    "submit:BUY",
+                    "submit:SELL",
+                    "fsync:MANUAL_KILL",
+                    "query:SELL",
+                    "cancel:SELL",
+                    "query:SELL",
+                    "submit:SELL",
+                ],
+                rest_client.operation_trace,
+            )  # Policy 확인 command는 cancel 또는 SELL effect를 중복 생성하지 않는다.
+
+            # 이전 완료 뒤 새 app-owned open order가 보이면 해제 직전 fresh REST 검증이 release를 거부한다.
+            rest_client.open_order_results = (
+                OrderResult(
+                    symbol="ETHUSDT",
+                    client_order_id="bat-orphan-after-cleanup",
+                    exchange_order_id="904",
+                    status=OrderStatus.NEW,
+                    processed_at=clock(),
+                ),
+            )
+            with self.assertRaises(TradingSessionError) as error_context:
+                controller.set_manual_kill(
+                    False,
+                    command_id="release-after-new-open-order",
+                    expected_version=1,
+                )
+
+            self.assertIs(
+                error_context.exception.code,
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+            )
+            self.assertFalse(controller.manual_kill_cleanup_complete)
+            self.assertTrue(controller.reconciliation_required)
+            self.assertTrue(repository.get_manual_kill_control_state().active)
+
+    def test_manual_kill_reenters_cancel_after_reconciliation_and_reconnect(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_manual_kill_reenters_cancel_after_reconciliation_and_reconnect()
+        기능: 이미 RECON인 C&L이 같은 주문을 재취소하고 terminal partial 뒤 잔량만 청산하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with TemporaryDirectory() as temporary_directory:
+            clock = MutableUtcClock(MARKET_UPDATED_AT)
+            rest_client = StopPersistenceRESTClient(
+                clock,
+                terminal_query_index=5,
+            )
+            account = Account()
+            web_socket_client = SynchronousAccountWebSocketClient([])
+            web_socket_gateway = WebSocketGateway(
+                web_socket_client,
+                account_snapshot_callback=account.apply_stream_snapshot,
+            )
+            position = Position()
+            repository = TradeHistoryRepository(
+                Path(temporary_directory) / "trades.jsonl",
+                clock=clock,
+            )
+            history_controller = TradeHistoryController(
+                repository,
+                clock=clock,
+            )
+            history_controller.load_trade_history()
+            market_snapshot = _ready_market_snapshot()
+            controller = TradingController(
+                APIGateway(rest_client, clock=clock),
+                web_socket_gateway,
+                account,
+                market_snapshot,
+                command_gate=True,
+                position=position,
+                trade_history_controller=history_controller,
+                risk_policy_state=RiskPolicy(
+                    version=1,
+                    max_order_notional=None,
+                    max_position_notional=None,
+                    max_daily_loss=None,
+                    daily_loss_scope=DailyLossScope.REALIZED_ONLY,
+                    manual_kill_behavior=(
+                        ManualKillBehavior.CANCEL_AND_LIQUIDATE
+                    ),
+                ),
+                clock=clock,
+            )
+
+            # 정상 session에서 BUY를 채운 뒤 active SELL 하나를 durable pending으로 남긴다.
+            controller.load_account()
+            selection = RegimeController(
+                RegimeSTM(),
+                market_snapshot,
+                controller,
+            ).set_regime_type(
+                RegimeType.TYPE_0,
+                command_id="select-manual-kill-reentry",
+                expected_version=0,
+            )
+            split_result = controller.update_split_ratios(
+                command_id="split-manual-kill-reentry",
+                expected_version=selection.version,
+                scale_in=Decimal("1"),
+                scale_out=Decimal("1"),
+            )
+            controller.start_trading(
+                command_id="start-manual-kill-reentry",
+                expected_version=split_result.version,
+            )
+            buy_event = TradingEvent(
+                TradingEventType.MARKET_DATA_UPDATED,
+                clock(),
+                sequence_number=1,
+            )
+            buy_outcomes = _execute_actions(
+                controller,
+                create_entry_order_actions(
+                    StrategyType.CASE_B,
+                    OrderAttemptKind.INITIAL,
+                    buy_event,
+                    controller.context,
+                ),
+            )
+            controller._enqueue_order_outcomes(buy_outcomes)
+            asyncio.run(controller.drain_events())
+            sell_event = TradingEvent(
+                TradingEventType.MARKET_DATA_UPDATED,
+                clock(),
+                sequence_number=2,
+            )
+            self.assertEqual(
+                (),
+                _execute_actions(
+                    controller,
+                    create_exit_order_actions(
+                        StrategyType.CASE_B,
+                        ExitReason.TAKE_PROFIT,
+                        PositionReturnState.CASE_B_HOLDING,
+                        sell_event,
+                        controller.context,
+                        attempt_kind=OrderAttemptKind.INITIAL,
+                    ),
+                ),
+            )
+
+            # 기존 주문 query budget failure를 재현해 C&L activation 이전부터 session을 RECON으로 둔다.
+            pending_state = next(
+                state
+                for state in controller._order_states_by_client_id.values()
+                if state.order.side is OrderSide.SELL
+                and not state.order.is_terminal
+            )
+            controller._enter_order_reconciliation(
+                pending_state,
+                OrderExecutionFailureCode.QUERY_BUDGET_EXHAUSTED,
+                message_id=None,
+            )
+            self.assertIs(
+                controller.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+
+            # 첫 activation은 query→cancel→query가 계속 active라서 Position SELL을 만들지 않는다.
+            activation = controller.set_manual_kill(
+                True,
+                command_id="activate-manual-kill-reentry",
+                expected_version=0,
+            )
+            self.assertTrue(activation.active)
+            self.assertFalse(controller.manual_kill_cleanup_complete)
+            self.assertEqual(2, len(rest_client.submitted_orders))
+            self.assertEqual(
+                [
+                    "submit:BUY",
+                    "submit:SELL",
+                    "query:SELL",
+                    "cancel:SELL",
+                    "query:SELL",
+                ],
+                rest_client.operation_trace,
+            )
+
+            # Fresh account reconnect도 같은 ID를 재조회·개별 취소하고 다섯 번째 terminal만 반영한다.
+            if web_socket_client.on_disconnect is None:
+                raise AssertionError("account stream disconnect callback is required")
+            web_socket_client.on_disconnect()
+            controller.reconnect_account_stream_after_reconciliation()
+
+            self.assertEqual(Decimal("0"), position.quantity)
+            self.assertTrue(controller.manual_kill_cleanup_complete)
+            self.assertFalse(controller.command_enabled)
+            self.assertEqual(3, len(rest_client.submitted_orders))
+            self.assertIs(rest_client.submitted_orders[-1].side, OrderSide.SELL)
+            self.assertEqual(
+                [
+                    "submit:BUY",
+                    "submit:SELL",
+                    "query:SELL",
+                    "cancel:SELL",
+                    "query:SELL",
+                    "query:SELL",
+                    "query:SELL",
+                    "cancel:SELL",
+                    "query:SELL",
+                    "submit:SELL",
+                ],
+                rest_client.operation_trace,
+            )  # 두 cancel 모두 같은 client ID이고 신규 POST는 정확한 잔량 SELL 하나뿐이다.
+
+            asyncio.run(controller.drain_events())
+            self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
+            self.assertEqual(
+                (),
+                history_controller.get_pending_order_recovery_records(),
+            )
+
     def test_pending_stop_partial_save_retry_continues_residual_force_sell(
         self,
     ) -> None:
@@ -321,6 +804,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                 command_gate=True,
                 position=position,
                 trade_history_controller=history_controller,
+                risk_policy_state=create_test_risk_policy(),
                 clock=clock,
             )
 
@@ -488,6 +972,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                 command_gate=True,
                 position=position,
                 trade_history_controller=history_controller,
+                risk_policy_state=create_test_risk_policy(),
                 clock=clock,
             )
 

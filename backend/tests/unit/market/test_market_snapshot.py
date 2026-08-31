@@ -1,6 +1,7 @@
 """MarketSnapshot의 전체 갱신, dedup, 연속성과 원자성을 검증한다."""
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import MappingProxyType
@@ -149,6 +150,7 @@ class MarketSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.version, 0)
         self.assertIsNone(snapshot.current_eth_price)
         self.assertIsNone(snapshot.updated_at)
+        self.assertEqual(snapshot.update_source_klines, ())
         self.assertEqual(tuple(snapshot.klines_by_interval), SUPPORTED_INTERVALS)
         self.assertTrue(
             all(
@@ -205,6 +207,44 @@ class MarketSnapshotTests(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             snapshot.klines_by_interval[Interval.ONE_MINUTE] = ()
+
+    def test_update_binds_exact_live_source_provenance_atomically(self) -> None:
+        """
+        함수 이름: test_update_binds_exact_live_source_provenance_atomically()
+        기능: 성공 version의 source Kline을 보존하고 history 밖 source는 원자적으로 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        snapshot = MarketSnapshot(clock=fixed_clock)
+        full_klines = make_full_klines()
+        source_kline = full_klines[Interval.ONE_MINUTE][-1]
+
+        # Live update는 현재 candidate history에 exact 포함된 원인 Kline만 provenance로 결합한다.
+        snapshot.update(
+            full_klines,
+            source_klines=(source_kline,),
+        )
+        self.assertEqual(snapshot.update_source_klines, (source_kline,))
+        version_before_invalid_source = snapshot.version
+
+        # 같은 interval이지만 payload가 다른 source는 새 version과 provenance를 만들 수 없다.
+        invalid_source = replace(
+            source_kline,
+            close=source_kline.close + Decimal("1"),
+            high=source_kline.high + Decimal("1"),
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "source Kline must be present",
+        ):
+            snapshot.update(
+                full_klines,
+                source_klines=(invalid_source,),
+            )
+
+        self.assertEqual(snapshot.version, version_before_invalid_source)
+        self.assertEqual(snapshot.update_source_klines, (source_kline,))
 
     def test_sorts_and_later_duplicate_wins(self) -> None:
         """

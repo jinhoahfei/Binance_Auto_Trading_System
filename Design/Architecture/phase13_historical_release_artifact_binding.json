@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "record_type": "phase13_historical_release_artifact_binding",
+  "observed_date": "2026-08-29",
+  "classification": "HISTORICAL_PHASE12_LOCAL_FIXED",
+  "current_phase13_release_candidate": false,
+  "current_phase13_source_provenance_bound": false,
+  "exact_lockfile_build_provenance_bound": false,
+  "artifact_retention": "LOCAL_IGNORED_NOT_RETAINED_IN_REPOSITORY",
+  "app": {
+    "path": "UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader Phase12 Local Fixed.app",
+    "digest_algorithm": "binance-auto-content-tree-sha256-v1",
+    "sha256": "9d9acf36100f9b245872f38a2a78456fcb0fbdf148e3cc014bba402d4ba74ec3",
+    "regular_file_count": 5,
+    "total_regular_file_bytes": 28661999
+  },
+  "dmg": {
+    "path": "UI/apps/desktop/src-tauri/target/release/bundle/dmg/Binance Auto Trader_0.1.0_aarch64_phase12-local-fixed.dmg",
+    "sha256": "563136398d4d6544c0e1e585e67df66cf6f0d3ce61d6a7050eabe7c640964d05",
+    "size": 21779232
+  },
+  "gap_reason": "This retained pair is the historical Phase 12 local-fixed artifact, not a current Phase 13 build bound to the present source and lockfiles."
+}

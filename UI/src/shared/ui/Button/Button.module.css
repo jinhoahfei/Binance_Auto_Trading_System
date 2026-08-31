@@ -33,19 +33,23 @@
 .positive {
   border-color: var(--color-status-positive);
   background: var(--color-status-positive-strong);
-  color: white;
+  color: var(--color-text-on-strong-status);
+}
+
+.positive:disabled {
+  color: var(--color-text-primary);
 }
 
 .negative {
   border-color: var(--color-status-negative);
   background: var(--color-status-negative-strong);
-  color: white;
+  color: var(--color-text-on-strong-status);
 }
 
 .info {
-  border-color: #87aaf0;
-  background: #0f3a76;
-  color: #8ab5ff;
+  border-color: var(--color-status-info);
+  background: var(--color-status-info-strong);
+  color: white;
 }
 
 .neutral {

@@ -729,6 +729,10 @@ class WebSocketGatewayTests(unittest.TestCase):
         later_open_time = DEFAULT_OPEN_TIME_MILLISECONDS + 60_000
         web_socket_client.emit(
             0,
+            _official_websocket_event(close_price="101.00"),
+        )
+        web_socket_client.emit(
+            0,
             _official_websocket_event(
                 open_time_milliseconds=later_open_time,
                 close_time_milliseconds=later_open_time + 59_999,
@@ -737,14 +741,11 @@ class WebSocketGatewayTests(unittest.TestCase):
         )
         web_socket_client.emit(
             0,
-            _official_websocket_event(close_price="101.00"),
-        )
-        web_socket_client.emit(
-            0,
             _official_websocket_event(
                 open_time_milliseconds=later_open_time,
                 close_time_milliseconds=later_open_time + 59_999,
                 close_price="102.00",
+                event_overrides={"E": later_open_time + 2_000},
             ),
         )
 

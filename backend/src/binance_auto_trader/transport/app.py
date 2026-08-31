@@ -7,15 +7,18 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
+import fcntl
 import hashlib
 import hmac
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+from pathlib import Path
 import re
 import select
 import socket
+import stat
 import struct
 from threading import Event, RLock, Thread
 from time import monotonic, sleep
@@ -48,6 +51,7 @@ from .routes.system import get_health, request_shutdown
 from .routes.trade_history import get_trades
 from .routes.trading import (
     liquidate_recovered_position,
+    set_manual_kill,
     start_trading,
     stop_trading,
     update_split_ratios,
@@ -63,9 +67,19 @@ _MAX_REQUEST_TARGET_LENGTH = 8_192
 _MAX_IDEMPOTENCY_RECORDS = 10_000
 _SESSION_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_RUNTIME_OWNERSHIP_LOCK_FILE_NAME = ".backend-runtime.lock"
+_RUNTIME_OWNERSHIP_ARTIFACT_MAXIMUM_BYTES = 1_024
+_RUNTIME_OWNER_ACTIVE = "ACTIVE"
+_RUNTIME_OWNER_ORPHANED = "ORPHANED"
+_RUNTIME_OWNER_RELEASED = "RELEASED"
+_PARENT_STOP_PIPE_EOF_REASON = "parent_stop_pipe_eof"
 _ORIGIN_PATTERN = re.compile(
     r"^(?:tauri://[A-Za-z0-9.-]+|https?://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)$"
 )
+
+# Module을 가져온 interpreter의 PID와 UUID를 묶고 fork 뒤 PID가 달라지면 child identity를 새로 만든다.
+_PROCESS_IDENTITY_PID = os.getpid()
+_PROCESS_START_ID = str(uuid4())
 
 _COMMAND_ENDPOINTS = frozenset(
     {
@@ -73,6 +87,7 @@ _COMMAND_ENDPOINTS = frozenset(
         ("POST", "/v1/trading/start"),
         ("POST", "/v1/trading/stop"),
         ("POST", "/v1/trading/recovered-position/liquidate"),
+        ("PATCH", "/v1/trading/manual-kill"),
         ("PATCH", "/v1/trading/split-ratios"),
         ("POST", "/v1/csv-exports"),
         ("POST", "/v1/shutdown"),
@@ -84,6 +99,7 @@ _BODY_COMMAND_ENDPOINTS = frozenset(
         ("POST", "/v1/trading/start"),
         ("POST", "/v1/trading/stop"),
         ("POST", "/v1/trading/recovered-position/liquidate"),
+        ("PATCH", "/v1/trading/manual-kill"),
         ("PATCH", "/v1/trading/split-ratios"),
         ("POST", "/v1/csv-exports"),
         ("POST", "/v1/shutdown"),
@@ -103,18 +119,20 @@ _KNOWN_ENDPOINTS = frozenset(
 class ServerDescriptor:
     """
     클래스 이름: ServerDescriptor
-    기능: token을 제외하고 Tauri에 알릴 assigned port, session과 schema를 보존한다.
+    기능: token을 제외하고 Tauri에 알릴 port, session, schema와 Python runtime identity를 보존한다.
     작성 날짜: 2026/08/21
     """
 
     port: int
     session_id: str
+    runtime_pid: int
+    process_start_id: str
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         """
         함수 이름: __post_init__()
-        기능: random loopback port, session UUID와 schema version을 검증한다.
+        기능: random loopback port, 두 UUID, runtime PID와 schema version을 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -124,6 +142,8 @@ class ServerDescriptor:
         if self.port <= 0 or self.port > 65_535:
             raise ValueError("port must be an assigned TCP port")
         validate_uuid_text(self.session_id, "session_id")
+        _validate_runtime_pid(self.runtime_pid)
+        validate_uuid_text(self.process_start_id, "process_start_id")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError("schema_version must match the transport schema")
 
@@ -132,14 +152,313 @@ class ServerDescriptor:
         함수 이름: to_dto()
         기능: inherited ready pipe에 기록할 secret 없는 descriptor를 반환한다.
         인자: 없음
-        반환값: port, session_id와 schema_version JSON object
+        반환값: port, session, schema와 secret 없는 runtime identity JSON object
         작성 날짜: 2026/08/21
         """
         return {
             "port": self.port,
             "session_id": self.session_id,
+            "runtime_pid": self.runtime_pid,
+            "process_start_id": self.process_start_id,
             "schema_version": self.schema_version,
         }
+
+
+def _read_runtime_ownership_artifact(
+    descriptor: int,
+) -> JsonObject | None:
+    """
+    함수 이름: _read_runtime_ownership_artifact()
+    기능: lock FD의 기존 runtime identity를 bounded exact JSON으로 검증한다.
+    인자: descriptor -> exclusive lock을 획득한 regular file descriptor
+    반환값: 최초 빈 파일의 None 또는 검증된 ownership artifact
+    작성 날짜: 2026/08/25
+    """
+    _validate_file_descriptor(descriptor, "descriptor")
+    artifact_size = os.fstat(descriptor).st_size
+    if artifact_size == 0:
+        return None  # O_CREAT로 만든 최초 lock file은 stale owner가 없다.
+    if artifact_size < 0 or artifact_size > _RUNTIME_OWNERSHIP_ARTIFACT_MAXIMUM_BYTES:
+        raise RuntimeError("runtime ownership artifact size is invalid")
+
+    # 현재 owner의 write offset에 의존하지 않고 파일 전체를 한 번만 읽는다.
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    artifact_bytes = os.read(descriptor, artifact_size)
+    if len(artifact_bytes) != artifact_size:
+        raise RuntimeError("runtime ownership artifact read was incomplete")
+    try:
+        artifact = json.loads(
+            artifact_bytes.decode("utf-8"),
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("runtime ownership artifact is invalid") from error
+    if not isinstance(artifact, dict) or set(artifact) != {
+        "schema_version",
+        "runtime_pid",
+        "process_start_id",
+        "owner_state",
+    }:
+        raise RuntimeError("runtime ownership artifact shape is invalid")
+    if artifact["schema_version"] != SCHEMA_VERSION:
+        raise RuntimeError("runtime ownership artifact schema is invalid")
+    _validate_runtime_pid(artifact["runtime_pid"])
+    validate_uuid_text(artifact["process_start_id"], "process_start_id")
+    if artifact["owner_state"] not in {
+        _RUNTIME_OWNER_ACTIVE,
+        _RUNTIME_OWNER_ORPHANED,
+        _RUNTIME_OWNER_RELEASED,
+    }:
+        raise RuntimeError("runtime ownership artifact state is invalid")
+    return artifact
+
+
+def _write_runtime_ownership_artifact(
+    descriptor: int,
+    *,
+    runtime_pid: int,
+    process_start_id: str,
+    owner_state: str,
+) -> None:
+    """
+    함수 이름: _write_runtime_ownership_artifact()
+    기능: runtime identity와 ACTIVE/ORPHANED/RELEASED 상태를 같은 lock inode에 fsync한다.
+    인자: descriptor -> exclusive lock을 보유한 file descriptor
+        runtime_pid -> artifact의 positive Python runtime PID
+        process_start_id -> artifact의 canonical process launch UUID
+        owner_state -> ACTIVE, ORPHANED 또는 RELEASED
+    반환값: 없음
+    작성 날짜: 2026/08/25
+    """
+    _validate_file_descriptor(descriptor, "descriptor")
+    _validate_runtime_pid(runtime_pid)
+    validate_uuid_text(process_start_id, "process_start_id")
+    if owner_state not in {
+        _RUNTIME_OWNER_ACTIVE,
+        _RUNTIME_OWNER_ORPHANED,
+        _RUNTIME_OWNER_RELEASED,
+    }:
+        raise ValueError("owner_state must be ACTIVE, ORPHANED, or RELEASED")
+
+    # 고정 key만 직렬화해 credential·port·path가 ownership artifact에 섞이지 않게 한다.
+    ownership_payload = json_bytes(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "runtime_pid": runtime_pid,
+            "process_start_id": process_start_id,
+            "owner_state": owner_state,
+        }
+    ) + b"\n"
+    os.ftruncate(descriptor, 0)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    _write_all_to_fd(descriptor, ownership_payload)
+    os.fsync(descriptor)
+
+
+class _RuntimeOwnershipLock:
+    """
+    클래스 이름: _RuntimeOwnershipLock
+    기능: app-data lock file의 OS advisory lock과 secret 없는 runtime identity artifact를 소유한다.
+    작성 날짜: 2026/08/24
+    """
+
+    def __init__(
+        self,
+        descriptor: int,
+        *,
+        runtime_pid: int,
+        process_start_id: str,
+    ) -> None:
+        """
+        함수 이름: __init__()
+        기능: exclusive lock FD와 정상 RELEASED commit에 쓸 runtime identity를 인수한다.
+        인자: descriptor -> flock 획득과 identity fsync를 마친 file descriptor
+            runtime_pid -> lock을 보유하는 Python runtime PID
+            process_start_id -> lock을 보유하는 process launch UUID
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        # 외부 factory가 넘긴 descriptor와 runtime identity를 보존하기 전에 각각 검증한다.
+        _validate_file_descriptor(descriptor, "descriptor")
+        _validate_runtime_pid(runtime_pid)
+        validate_uuid_text(process_start_id, "process_start_id")
+        self._descriptor: int | None = descriptor
+        self._runtime_pid = runtime_pid
+        self._process_start_id = process_start_id
+
+    @classmethod
+    def acquire(
+        cls,
+        directory: Path,
+        *,
+        runtime_pid: int,
+        process_start_id: str,
+    ) -> "_RuntimeOwnershipLock":
+        """
+        함수 이름: acquire()
+        기능: private app-data의 고정 파일을 삭제하지 않고 nonblocking exclusive lifetime lock을 획득한다.
+        인자: directory -> production child의 app-data 작업 디렉터리
+            runtime_pid -> artifact에 기록할 actual Python runtime PID
+            process_start_id -> artifact에 기록할 canonical process launch UUID
+        반환값: process 종료까지 보유할 _RuntimeOwnershipLock
+        작성 날짜: 2026/08/24
+        """
+        if not isinstance(directory, Path):
+            raise TypeError("directory must be a Path")
+        if not directory.is_dir():
+            raise ValueError("runtime ownership directory must exist")
+        _validate_runtime_pid(runtime_pid)
+        validate_uuid_text(process_start_id, "process_start_id")
+
+        # O_NOFOLLOW와 post-open metadata로 symlink·비정규 파일을 lock identity로 사용하지 못하게 한다.
+        lock_path = directory / _RUNTIME_OWNERSHIP_LOCK_FILE_NAME
+        open_flags = os.O_CREAT | os.O_RDWR
+        open_flags |= getattr(os, "O_CLOEXEC", 0)
+        open_flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(lock_path, open_flags, 0o600)
+        except OSError as error:
+            raise RuntimeError("runtime ownership lock is unavailable") from error
+
+        try:
+            lock_metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(lock_metadata.st_mode)
+                or lock_metadata.st_nlink != 1
+                or lock_metadata.st_uid != os.getuid()
+            ):
+                raise RuntimeError("runtime ownership lock file is invalid")
+            os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            # 이전 process가 정상 RELEASED를 fsync한 경우에만 같은 inode를 새 owner로 갱신한다.
+            previous_artifact = _read_runtime_ownership_artifact(descriptor)
+            if (
+                previous_artifact is not None
+                and previous_artifact["owner_state"] != _RUNTIME_OWNER_RELEASED
+            ):
+                raise RuntimeError(
+                    "runtime ownership artifact requires reconciliation"
+                )
+            _write_runtime_ownership_artifact(
+                descriptor,
+                runtime_pid=runtime_pid,
+                process_start_id=process_start_id,
+                owner_state=_RUNTIME_OWNER_ACTIVE,
+            )
+        except Exception as error:
+            _close_file_descriptor_safely(descriptor)
+            raise RuntimeError("runtime ownership lock is unavailable") from error
+
+        return cls(
+            descriptor,
+            runtime_pid=runtime_pid,
+            process_start_id=process_start_id,
+        )  # 파일은 지우지 않고 actual runtime lifetime 동안 lock FD를 보존한다.
+
+    def release(self) -> None:
+        """
+        함수 이름: release()
+        기능: 정상 runtime 정리 뒤 advisory lock FD를 닫되 ownership artifact 파일은 삭제하지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/24
+        """
+        descriptor = self._descriptor
+        if descriptor is None:
+            return  # 중복 cleanup은 이미 닫힌 다른 FD 번호를 건드리지 않는다.
+
+        # RELEASED fsync가 실패하면 ACTIVE artifact를 남겨 다음 실행이 임의 덮어쓰지 못하게 한다.
+        self._descriptor = None
+        release_error: Exception | None = None
+        try:
+            current_artifact = _read_runtime_ownership_artifact(descriptor)
+            if (
+                current_artifact is not None
+                and current_artifact["owner_state"] == _RUNTIME_OWNER_ACTIVE
+            ):
+                _write_runtime_ownership_artifact(
+                    descriptor,
+                    runtime_pid=self._runtime_pid,
+                    process_start_id=self._process_start_id,
+                    owner_state=_RUNTIME_OWNER_RELEASED,
+                )
+        except Exception as error:
+            release_error = error
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                _close_file_descriptor_safely(descriptor)
+        if release_error is not None:
+            raise RuntimeError(
+                "runtime ownership release could not be persisted"
+            ) from release_error  # 다음 launch가 ACTIVE artifact를 운영자 조정 없이 넘지 못한다.
+
+    def mark_orphaned(self) -> None:
+        """
+        함수 이름: mark_orphaned()
+        기능: parent control EOF를 같은 lock inode의 ORPHANED 상태로 fsync한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        descriptor = self._descriptor
+        if descriptor is None:
+            raise RuntimeError("runtime ownership lock is already released")
+
+        # Parent 소유권 상실은 lock을 풀지 않고 새 launch가 자동 복구하지 못할 내구 상태로 올린다.
+        current_artifact = _read_runtime_ownership_artifact(descriptor)
+        if current_artifact is None:
+            raise RuntimeError("runtime ownership artifact is unavailable")
+        if current_artifact["owner_state"] == _RUNTIME_OWNER_ORPHANED:
+            return  # 반복 EOF 안전 적용은 이미 durable한 상태를 다시 쓰지 않는다.
+        if current_artifact["owner_state"] != _RUNTIME_OWNER_ACTIVE:
+            raise RuntimeError("runtime ownership artifact is not active")
+        _write_runtime_ownership_artifact(
+            descriptor,
+            runtime_pid=self._runtime_pid,
+            process_start_id=self._process_start_id,
+            owner_state=_RUNTIME_OWNER_ORPHANED,
+        )
+
+
+def _get_runtime_process_identity() -> tuple[int, str]:
+    """
+    함수 이름: _get_runtime_process_identity()
+    기능: 현재 interpreter의 positive PID와 fork에도 재사용하지 않는 canonical start UUID를 반환한다.
+    인자: 없음
+    반환값: runtime PID와 process start UUID tuple
+    작성 날짜: 2026/08/24
+    """
+    global _PROCESS_IDENTITY_PID, _PROCESS_START_ID
+
+    # Fork child는 부모 module state를 복사하므로 달라진 PID를 관찰하면 launch UUID도 함께 교체한다.
+    current_process_id = os.getpid()
+    if current_process_id != _PROCESS_IDENTITY_PID:
+        _PROCESS_IDENTITY_PID = current_process_id
+        _PROCESS_START_ID = str(uuid4())
+
+    return (
+        _PROCESS_IDENTITY_PID,
+        _PROCESS_START_ID,
+    )  # 같은 interpreter lifetime의 모든 descriptor와 lock artifact가 같은 identity를 공유한다.
+
+
+def _validate_runtime_pid(runtime_pid: object) -> None:
+    """
+    함수 이름: _validate_runtime_pid()
+    기능: Python runtime PID가 bool 우회 없는 exact positive int인지 검증한다.
+    인자: runtime_pid -> descriptor 또는 ownership artifact에 사용할 PID 후보
+    반환값: 없음
+    작성 날짜: 2026/08/24
+    """
+    # bool과 0 이하 값을 PID로 받아 ownership artifact identity가 모호해지지 않게 한다.
+    if type(runtime_pid) is not int:
+        raise TypeError("runtime_pid must be an exact integer")
+    if runtime_pid <= 0:
+        raise ValueError("runtime_pid must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -655,9 +974,13 @@ class LoopbackTransportServer:
         if assigned_host != _LOOPBACK_HOST:
             raise RuntimeError("transport server is not bound to IPv4 loopback")
 
+        # FD4와 ownership artifact가 같은 actual interpreter identity를 공개하도록 한 번에 읽는다.
+        runtime_pid, process_start_id = _get_runtime_process_identity()
         return ServerDescriptor(
             port=assigned_port,
             session_id=self._event_stream.session_id,
+            runtime_pid=runtime_pid,
+            process_start_id=process_start_id,
         )
 
     @property
@@ -1128,6 +1451,7 @@ class LoopbackTransportServer:
                 "POST",
                 "/v1/trading/recovered-position/liquidate",
             ): liquidate_recovered_position,
+            ("PATCH", "/v1/trading/manual-kill"): set_manual_kill,
             ("PATCH", "/v1/trading/split-ratios"): update_split_ratios,
             ("POST", "/v1/csv-exports"): create_csv_export,
             ("POST", "/v1/shutdown"): request_shutdown,
@@ -1771,11 +2095,21 @@ def run_transport_process(
         raise TypeError("require_closed_before_stop must be a bool")
 
     transport_application: LoopbackTransportApplication | None = None
+    runtime_ownership_lock: _RuntimeOwnershipLock | None = None
     session_token = ""
     token_fd_open = True
     ready_fd_open = True
     stop_fd_open = True
     try:
+        # Production child가 credential을 읽기 전에 app-data lifetime lock을 잡아 중복 runtime을 차단한다.
+        if require_closed_before_stop:
+            runtime_pid, process_start_id = _get_runtime_process_identity()
+            runtime_ownership_lock = _RuntimeOwnershipLock.acquire(
+                Path.cwd(),
+                runtime_pid=runtime_pid,
+                process_start_id=process_start_id,
+            )
+
         session_token = read_session_token_from_fd(token_fd)
         token_fd_open = False
 
@@ -1801,6 +2135,7 @@ def run_transport_process(
                 transport_application.runtime,
                 transport_application.server,
                 stop_fd,
+                runtime_ownership_lock=runtime_ownership_lock,
             )
     finally:
         if token_fd_open:
@@ -1810,16 +2145,23 @@ def run_transport_process(
         if stop_fd_open:
             _close_file_descriptor_safely(stop_fd)
 
-        # Application 조립체가 runtime을 먼저 닫은 뒤 server와 shared stream을 정리한다.
-        if transport_application is not None:
-            transport_application.stop()
-        session_token = ""  # process runner도 shutdown 시 token 참조를 제거한다.
+        try:
+            # Application 조립체가 runtime을 먼저 닫은 뒤 server와 shared stream을 정리한다.
+            if transport_application is not None:
+                transport_application.stop()
+        finally:
+            # 정상 종료에서도 runtime 자원이 모두 닫힐 때까지 app-data ownership lock을 유지한다.
+            if runtime_ownership_lock is not None:
+                runtime_ownership_lock.release()
+            session_token = ""  # process runner도 shutdown 시 token 참조를 제거한다.
 
 
 def _wait_for_safe_process_ack(
     runtime: RuntimeSnapshotSource,
     server: LoopbackTransportServer,
     stop_fd: int,
+    *,
+    runtime_ownership_lock: _RuntimeOwnershipLock | None = None,
 ) -> None:
     """
     함수 이름: _wait_for_safe_process_ack()
@@ -1827,19 +2169,48 @@ def _wait_for_safe_process_ack(
     인자: runtime -> authoritative CLOSED publication을 제공하는 runtime
         server -> shutdown response flush와 active handler 완료를 제공하는 server
         stop_fd -> Tauri waiter가 acknowledgement를 쓰는 inherited read FD
+        runtime_ownership_lock -> production child의 advisory ownership lock 또는 unit seam의 None
     반환값: post-CLOSED ack와 response 완료가 모두 충족되면 없음
     작성 날짜: 2026/08/24
     """
     _validate_file_descriptor(stop_fd, "stop_fd")
+    if runtime_ownership_lock is not None and not isinstance(
+        runtime_ownership_lock,
+        _RuntimeOwnershipLock,
+    ):
+        raise TypeError(
+            "runtime_ownership_lock must be a _RuntimeOwnershipLock or None"
+        )
     stop_pipe_reached_eof = False
     post_closed_ack_received = False
+    ownership_ambiguity_marked = False
+    ownership_artifact_orphaned = False
+    durable_flush_completed = False
 
     while True:
         # Handler가 active-count를 내리기 전에 온 유효 ack도 잃지 않고 완료조건을 나중에 결합한다.
         if post_closed_ack_received and server.shutdown_response_flushed:
             return
         if stop_pipe_reached_eof:
-            sleep(0.05)  # Parent crash EOF는 unsafe exit 권한 없이 process만 유지한다.
+            if (
+                runtime_ownership_lock is not None
+                and not ownership_artifact_orphaned
+            ):
+                try:
+                    runtime_ownership_lock.mark_orphaned()
+                except Exception:
+                    pass  # Artifact fsync도 runtime gate와 독립적으로 다음 iteration에서 재시도한다.
+                else:
+                    ownership_artifact_orphaned = True
+            (
+                ownership_ambiguity_marked,
+                durable_flush_completed,
+            ) = _enforce_parent_stop_pipe_eof_safety(
+                runtime,
+                ownership_ambiguity_marked=ownership_ambiguity_marked,
+                durable_flush_completed=durable_flush_completed,
+            )
+            sleep(0.05)  # Parent crash 뒤 listener와 ownership lock을 유지하며 실패한 안전 경계를 재시도한다.
             continue
 
         readable_descriptors, _, _ = select.select(
@@ -1854,11 +2225,76 @@ def _wait_for_safe_process_ack(
         stop_signal = os.read(stop_fd, 1)
         if not stop_signal:
             stop_pipe_reached_eof = True
+            if runtime_ownership_lock is not None:
+                try:
+                    runtime_ownership_lock.mark_orphaned()
+                except Exception:
+                    pass  # 첫 EOF iteration의 artifact 실패는 다음 loop에서 재시도한다.
+                else:
+                    ownership_artifact_orphaned = True
+            (
+                ownership_ambiguity_marked,
+                durable_flush_completed,
+            ) = _enforce_parent_stop_pipe_eof_safety(
+                runtime,
+                ownership_ambiguity_marked=ownership_ambiguity_marked,
+                durable_flush_completed=durable_flush_completed,
+            )  # EOF를 관찰한 iteration에서 바로 order gate와 durability 경계를 적용한다.
             continue
 
         # READY 중 byte는 버리고 오직 읽은 시점에 CLOSED인 non-empty byte만 latch한다.
         if _runtime_is_closed(runtime):
             post_closed_ack_received = True
+
+
+def _enforce_parent_stop_pipe_eof_safety(
+    runtime: RuntimeSnapshotSource,
+    *,
+    ownership_ambiguity_marked: bool,
+    durable_flush_completed: bool,
+) -> tuple[bool, bool]:
+    """
+    함수 이름: _enforce_parent_stop_pipe_eof_safety()
+    기능: parent FD EOF에서 신규 effect를 잠그고 durable flush가 성공할 때까지 재시도 상태를 반환한다.
+    인자: runtime -> TradingController와 durable history controller를 소유한 runtime
+        ownership_ambiguity_marked -> 이전 attempt에서 ownership gate 적용에 성공했는지 여부
+        durable_flush_completed -> 이전 attempt에서 fsync 장벽이 완료됐는지 여부
+    반환값: ownership gate와 durable flush 각각의 누적 성공 여부
+    작성 날짜: 2026/08/24
+    """
+    if type(ownership_ambiguity_marked) is not bool:
+        raise TypeError("ownership_ambiguity_marked must be a bool")
+    if type(durable_flush_completed) is not bool:
+        raise TypeError("durable_flush_completed must be a bool")
+
+    # 두 operation 실패를 독립적으로 보존해 하나가 실패해도 다른 fail-closed 장벽을 계속 시도한다.
+    try:
+        application_lock = runtime.application_lock
+        with application_lock:
+            if not ownership_ambiguity_marked:
+                try:
+                    runtime.trading_controller.mark_process_ownership_ambiguous(
+                        _PARENT_STOP_PIPE_EOF_REASON
+                    )
+                except Exception:
+                    pass  # 다음 waiter iteration에서 자동 effect gate 적용을 다시 시도한다.
+                else:
+                    ownership_ambiguity_marked = True
+
+            if not durable_flush_completed:
+                try:
+                    runtime.trade_history_controller.flush_durable_state()
+                except Exception:
+                    pass  # Flush failure는 process exit로 축소하지 않고 같은 listener에서 재시도한다.
+                else:
+                    durable_flush_completed = True
+    except Exception:
+        pass  # Lock/shape failure도 process를 닫지 않아 새 owner가 있다고 추측하지 않는다.
+
+    return (
+        ownership_ambiguity_marked,
+        durable_flush_completed,
+    )  # True가 된 operation은 반복 실행하지 않아 side effect를 exact-once로 유지한다.
 
 
 def _runtime_is_closed(runtime: RuntimeSnapshotSource) -> bool:

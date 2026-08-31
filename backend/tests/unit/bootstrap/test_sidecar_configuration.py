@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch as mock_patch
 
 from binance_auto_trader.bootstrap.sidecar import (
     MAX_SIDECAR_CONFIGURATION_BYTES,
@@ -14,7 +15,13 @@ from binance_auto_trader.bootstrap.sidecar import (
     SESSION_TOKEN_FD,
     SIDECAR_CONFIGURATION_FD,
     STOP_SIGNAL_FD,
+    _create_sidecar_runtime_factory,
     read_sidecar_configuration_from_fd,
+)
+from binance_auto_trader.domain.trading import (
+    DailyLossScope,
+    ManualKillBehavior,
+    RiskPolicy,
 )
 from binance_auto_trader.transport import SCHEMA_VERSION
 
@@ -115,6 +122,52 @@ class SidecarConfigurationTests(unittest.TestCase):
         self.assertNotIn("testnet-api-secret", representation)
         self.assertEqual(representation.count("<redacted>"), 2)
 
+    def test_runtime_factory_injects_approved_configured_unbounded_policy(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_runtime_factory_injects_approved_configured_unbounded_policy()
+        기능: packaged sidecar가 unavailable 대신 승인된 None·REALIZED_ONLY·C&L 정책을 주입하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            configuration = self._read_configuration(
+                json.dumps(
+                    self._valid_payload(
+                        Path(temporary_directory) / "history.jsonl"
+                    )
+                ).encode("utf-8")
+            )
+            runtime_factory = _create_sidecar_runtime_factory(configuration)
+            expected_runtime = object()
+
+            # 실제 client를 만들지 않고 composition root가 넘기는 immutable policy만 캡처한다.
+            with mock_patch(
+                "binance_auto_trader.bootstrap.sidecar."
+                "create_testnet_application_runtime",
+                return_value=expected_runtime,
+            ) as create_runtime:
+                actual_runtime = runtime_factory(
+                    lambda _snapshot: None,
+                    lambda _history, _performance: None,
+                    lambda _session, _context: None,
+                )
+
+        self.assertIs(expected_runtime, actual_runtime)
+        policy = create_runtime.call_args.kwargs["risk_policy_state"]
+        self.assertIsInstance(policy, RiskPolicy)
+        self.assertEqual(1, policy.version)
+        self.assertIsNone(policy.max_order_notional)
+        self.assertIsNone(policy.max_position_notional)
+        self.assertIsNone(policy.max_daily_loss)
+        self.assertIs(policy.daily_loss_scope, DailyLossScope.REALIZED_ONLY)
+        self.assertIs(
+            policy.manual_kill_behavior,
+            ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+        )
+
     def test_parser_rejects_extra_duplicate_and_privilege_fields(self) -> None:
         """
         함수 이름: test_parser_rejects_extra_duplicate_and_privilege_fields()
@@ -150,8 +203,8 @@ class SidecarConfigurationTests(unittest.TestCase):
 
             duplicate_payload = json.dumps(valid_payload).encode("utf-8")
             duplicate_payload = duplicate_payload.replace(
-                b'"schema_version": 2',
-                b'"schema_version": 2, "schema_version": 2',
+                b'"schema_version": 3',
+                b'"schema_version": 3, "schema_version": 3',
             )
             invalid_payloads.append(duplicate_payload)
 

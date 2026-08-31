@@ -34,7 +34,7 @@
 
 .error {
   margin: -10px 0 12px;
-  color: var(--color-status-negative);
+  color: var(--color-text-negative);
   font-size: 12px;
   line-height: 18px;
 }

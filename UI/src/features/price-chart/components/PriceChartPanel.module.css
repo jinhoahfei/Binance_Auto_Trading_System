@@ -10,6 +10,11 @@
     box-shadow: var(--shadow-control);
 }
 
+/* Dashboard fixture의 surface는 browser JPEG 변환 뒤 Figma 기준색에 맞춘다. */
+[data-figma-route='dashboard'] .panel {
+    background: #20303e;
+}
+
 .fullscreenPanel {
     position: fixed;
     z-index: 70;
@@ -77,17 +82,17 @@
 }
 
 .liveStatus {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
     background: color-mix(in srgb, var(--color-status-positive) 11%, transparent);
 }
 
 .pendingStatus {
-    color: var(--color-status-info);
+    color: var(--color-text-info);
     background: color-mix(in srgb, var(--color-status-info) 10%, transparent);
 }
 
 .errorStatus {
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
     background: color-mix(in srgb, var(--color-status-negative) 10%, transparent);
 }
 

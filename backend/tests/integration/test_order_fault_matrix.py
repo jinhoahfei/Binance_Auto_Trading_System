@@ -66,6 +66,7 @@ from tests.integration.test_account_stream_flow import (
     SynchronousAccountWebSocketClient,
     _ready_market_snapshot,
 )
+from tests.integration.phase13_risk_fixture import create_test_risk_policy
 
 
 @dataclass(slots=True)
@@ -321,6 +322,7 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
             command_gate=True,
             position=position,
             trade_history_controller=history_controller,
+            risk_policy_state=create_test_risk_policy(),
             clock=clock,
         )
 

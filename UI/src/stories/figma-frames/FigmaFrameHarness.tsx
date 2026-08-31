@@ -52,12 +52,14 @@ function create_dashboard_props(fixture: FigmaFrameFixture): DashboardPageProps 
     account: DEFAULT_DASHBOARD_PROPS.account,
     chart: {
       ...DEFAULT_DASHBOARD_PROPS.chart,
+      interval: '1m',
       indicatorSettingsOpen: fixture.show_indicator_settings,
+      presentationMode: 'fixture',
       ...(fixture.show_indicator_settings
         ? {
             indicatorSettings: {
-              ema9: false,
-              bollingerBand: false,
+              ema9: true,
+              bollingerBand: true,
               volume: false,
             },
           }
@@ -93,6 +95,8 @@ function create_csv_dialog_props(fixture: FigmaFrameFixture): CSVExportDialogPro
   return {
     open: true,
     draft: csv_fixture.draft,
+    visualPeriod: 'TODAY',
+    suppressDateRangeInvalidBorder: fixture.frame_number === 16,
     calendarTarget: csv_fixture.calendar_target,
     ...(csv_fixture.calendar === null ? {} : { calendar: csv_fixture.calendar }),
     ...(csv_fixture.errors === null ? {} : { errors: csv_fixture.errors }),
@@ -119,11 +123,28 @@ function create_csv_dialog_props(fixture: FigmaFrameFixture): CSVExportDialogPro
 function create_trade_history_props(fixture: FigmaFrameFixture): TradeHistoryPageProps {
   const csv_dialog_props = create_csv_dialog_props(fixture);
 
+  // Empty 기준도 Figma에 남아 있는 과거 매도 성과를 보존하고 당일 count만 0으로 만든다.
+  const history_summary = fixture.history_is_empty
+    ? {
+        ...EMPTY_TRADE_HISTORY_SUMMARY_FIXTURE,
+        sellPerformance: {
+          ...EMPTY_TRADE_HISTORY_SUMMARY_FIXTURE.sellPerformance,
+          averageRealizedReturn: TRADE_HISTORY_SUMMARY_FIXTURE.sellPerformance.averageRealizedReturn,
+          completedCount: '0/0',
+          totalRealizedPnl: TRADE_HISTORY_SUMMARY_FIXTURE.sellPerformance.totalRealizedPnl,
+          tone: 'positive' as const,
+        },
+        fees: {
+          ...EMPTY_TRADE_HISTORY_SUMMARY_FIXTURE.fees,
+          averageSlippage: TRADE_HISTORY_SUMMARY_FIXTURE.fees.averageSlippage,
+          totalExecutedAmount: TRADE_HISTORY_SUMMARY_FIXTURE.fees.totalExecutedAmount,
+        },
+      }
+    : TRADE_HISTORY_SUMMARY_FIXTURE;
+
   return {
     description: '2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건',
-    summary: fixture.history_is_empty
-      ? EMPTY_TRADE_HISTORY_SUMMARY_FIXTURE
-      : TRADE_HISTORY_SUMMARY_FIXTURE,
+    summary: history_summary,
     rows: fixture.history_is_empty ? [] : TRADE_HISTORY_ROWS_FIXTURE,
     period: 'TODAY',
     side: 'ALL',
@@ -151,7 +172,11 @@ export function FigmaFrameHarness({ frame }: FigmaFrameHarnessProps) {
   ].filter(Boolean).join(' ');
 
   return (
-    <div className={frame_class_name} data-figma-frame={frame}>
+    <div
+      className={frame_class_name}
+      data-figma-frame={frame}
+      data-figma-route={fixture.route}
+    >
       <AppHeader
         hasOpenPosition={false}
         isCommandPending={fixture.header.is_command_pending}

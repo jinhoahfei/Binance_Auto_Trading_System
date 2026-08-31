@@ -64,6 +64,8 @@
   place-items: center;
   width: 34px;
   height: 34px;
+  /* Text grid는 유지하고 Figma status icon의 광학 중심만 4px 오른쪽으로 맞춘다. */
+  transform: translateX(4px);
 }
 
 .description {

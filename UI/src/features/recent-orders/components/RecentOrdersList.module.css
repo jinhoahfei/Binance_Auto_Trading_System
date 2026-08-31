@@ -64,7 +64,7 @@
 }
 
 .values .positiveValue {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }
 
 .empty {

@@ -6,13 +6,21 @@ from dataclasses import replace
 
 from ..action_requests import ReevaluationTrigger, ScheduleReevaluation, patch
 from ..context import TradingContextView
-from ..events import BuyAttemptPayload, TradingEvent, TradingEventType
+from ..events import (
+    BuyAttemptPayload,
+    BuyRiskBlockedPayload,
+    TradingEvent,
+    TradingEventType,
+)
 from ..states import (
     CaseBPositionState,
+    CaseBSignalState,
     CaseCPositionState,
+    CaseCSignalState,
     OrderAttemptKind,
     OwnershipState,
     StrategyType,
+    TradingPhase,
     TradingStateConfiguration,
 )
 from .base import TransitionOutcome, create_transition_outcome
@@ -39,6 +47,46 @@ def handle_ownership_transition(
 
     runtime = context.runtime
     event_type = event.event_type
+
+    # Journal·POST 전에 차단된 BUY는 retry budget을 소비하지 않고 signal 감시 상태로 복귀한다.
+    if event_type is TradingEventType.BUY_RISK_BLOCKED:
+        payload = event.payload
+        if not isinstance(payload, BuyRiskBlockedPayload):
+            return None
+        cleared_order_patch = patch(
+            pending_strategy=None,
+            pending_order_side=None,
+            pending_order_attempt_kind=None,
+            pending_intent_id=None,
+            trading_phase=TradingPhase.IDLE,
+        )
+        if (
+            payload.strategy is StrategyType.CASE_B
+            and state.case_b_signal_state
+            is CaseBSignalState.B_POSITION_OPEN_SIGNALLED
+        ):
+            return create_transition_outcome(
+                "O-03",
+                replace(
+                    state,
+                    case_b_signal_state=CaseBSignalState.B_WAIT_PULLBACK,
+                ),
+                cleared_order_patch,
+            )
+        if (
+            payload.strategy is StrategyType.CASE_C
+            and state.case_c_signal_state
+            is CaseCSignalState.C_POSITION_OPEN_SIGNALLED
+        ):
+            return create_transition_outcome(
+                "O-07",
+                replace(
+                    state,
+                    case_c_signal_state=CaseCSignalState.C_SETUP,
+                ),
+                cleared_order_patch,
+            )
+        return None  # 전략과 현재 signal state가 다르면 임의 state 복구를 수행하지 않는다.
 
     # Case B 실제 체결 feedback에서만 소유권과 PB initial 상태를 함께 활성화한다.
     if (

@@ -229,6 +229,47 @@ class GlobalTransitionTests(unittest.TestCase):
         self.assertEqual(("G-01",), result.transition_ids)
         self.assertEqual(RootState.LOWER_TOUCH_WATCH, result.state_after.root_state)
 
+    def test_recovery_stop_after_stopping_is_no_op_without_duplicate_force_sell(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_recovery_stop_after_stopping_is_no_op_without_duplicate_force_sell()
+        기능: Communication 8R.1.1.2의 복구 STOP 재전달이 전량매도를 중복 요청하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/28
+        """
+        stm = TradingSTM(RegimeType.TYPE_0)
+        context = create_test_context(
+            position=PositionSnapshot(
+                quantity=Decimal("0.25"),
+                entry_price=Decimal("100"),
+            ),
+        )
+
+        # 복구 owner와 같은 fresh STM global STOP이 최초 G-06 전량매도 요청을 만든다.
+        first_result = stm.handle(
+            create_test_event(TradingEventType.STOP_CONFIRMED),
+            context,
+        )
+        self.assertEqual(first_result.transition_ids, ("G-06",))
+        self.assertTrue(any(
+            isinstance(action, ForceSellAll)
+            for action in first_result.action_requests
+        ))  # 최초 복구 STOP만 실제 노출을 닫는 전량매도 action을 생성한다.
+
+        # 이미 STOPPING인 STM에 같은 STOP이 다시 도착해도 두 번째 매도 action은 만들지 않는다.
+        duplicate_result = stm.handle(
+            create_test_event(TradingEventType.STOP_CONFIRMED, sequence=2),
+            context,
+        )
+        self.assertFalse(duplicate_result.consumed)
+        self.assertEqual(duplicate_result.transition_ids, ())
+        self.assertFalse(any(
+            isinstance(action, ForceSellAll)
+            for action in duplicate_result.action_requests
+        ))  # 재전달은 기존 STOPPING 상태와 단일 제출 identity를 그대로 보존한다.
+
     def test_g_02_enters_all_regions_without_recursive_activation(self) -> None:
         """
         함수 이름: test_g_02_enters_all_regions_without_recursive_activation()

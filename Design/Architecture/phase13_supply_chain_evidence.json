@@ -1,0 +1,161 @@
+{
+  "schema_version": 4,
+  "record_type": "phase13_supply_chain_evidence",
+  "retained_scan_observed_date": "2026-08-25",
+  "evidence_updated_date": "2026-08-29",
+  "overall_status": "NO_GO",
+  "tool": {
+    "name": "osv-scanner",
+    "version": "2.5.1"
+  },
+  "inputs": [
+    {
+      "path": "backend/uv.lock",
+      "sha256": "cfecb5e02854f90c2c8fabbc67d2692c370dc81df767127329a40489e708084f"
+    },
+    {
+      "path": "UI/pnpm-lock.yaml",
+      "sha256": "dd1834c32ee46752104f3dde32558e5f661f605d88bfa9c1ac1062678bc0e24f"
+    },
+    {
+      "path": "UI/apps/desktop/src-tauri/Cargo.lock",
+      "sha256": "759f9787c88a67c4d7b356adfe1842b14d087bf48c7825db3f186d5bedef7783"
+    }
+  ],
+  "inventory": {
+    "package_count": 868,
+    "cyclonedx_spec_version": "1.6",
+    "cyclonedx_component_count": 868
+  },
+  "current_state_comparison": {
+    "retained_scan_observed_date": "2026-08-25",
+    "current_inventory_observed_date": "2026-08-29",
+    "lockfile_inputs_match": true,
+    "package_count_matches": true,
+    "project_manifests_bound": false,
+    "current_vs_scanned_match": false,
+    "mismatch_reasons": [
+      "current_project_manifests_are_not_bound_by_retained_scan"
+    ]
+  },
+  "security_findings": {
+    "finding_record_count": 18,
+    "affected_package_count": 17,
+    "ids": [
+      "GHSA-wrw7-89jp-8q8g",
+      "RUSTSEC-2024-0370",
+      "RUSTSEC-2024-0411",
+      "RUSTSEC-2024-0412",
+      "RUSTSEC-2024-0413",
+      "RUSTSEC-2024-0414",
+      "RUSTSEC-2024-0415",
+      "RUSTSEC-2024-0416",
+      "RUSTSEC-2024-0417",
+      "RUSTSEC-2024-0418",
+      "RUSTSEC-2024-0419",
+      "RUSTSEC-2024-0420",
+      "RUSTSEC-2024-0429",
+      "RUSTSEC-2025-0075",
+      "RUSTSEC-2025-0080",
+      "RUSTSEC-2025-0081",
+      "RUSTSEC-2025-0098",
+      "RUSTSEC-2025-0100"
+    ],
+        "triage": {
+            "unmaintained_records": 16,
+            "unsound_records": 1,
+            "moderate_alias_records": 1,
+            "glib_0_18_5_in_aarch64_apple_darwin_tree": false,
+            "unmaintained_unic_0_9_0_in_aarch64_apple_darwin_tree": true,
+            "release_exception_approved": false
+        },
+        "macos_target_triage": {
+            "target": "aarch64-apple-darwin",
+            "reachable_unmaintained_ids": [
+                "RUSTSEC-2025-0075",
+                "RUSTSEC-2025-0080",
+                "RUSTSEC-2025-0081",
+                "RUSTSEC-2025-0098",
+                "RUSTSEC-2025-0100"
+            ],
+            "non_reachable_ids": [
+                "GHSA-wrw7-89jp-8q8g",
+                "RUSTSEC-2024-0370",
+                "RUSTSEC-2024-0411",
+                "RUSTSEC-2024-0412",
+                "RUSTSEC-2024-0413",
+                "RUSTSEC-2024-0414",
+                "RUSTSEC-2024-0415",
+                "RUSTSEC-2024-0416",
+                "RUSTSEC-2024-0417",
+                "RUSTSEC-2024-0418",
+                "RUSTSEC-2024-0419",
+                "RUSTSEC-2024-0420",
+                "RUSTSEC-2024-0429"
+            ],
+            "immediate_lockfile_only_remediation_available": false,
+            "remediation_note": "Published tauri-utils 2.9.3 resolves urlpattern 0.3.0, so a compatible published Tauri release using the maintained ICU path is required before update, rebuild, and rescan."
+        }
+  },
+  "license_findings": {
+    "policy_approved": false,
+        "manual_review_required": true,
+        "repository_license_declared": true,
+        "packaged_contrib_runtime_hook_observed": false,
+        "unresolved": [
+      {
+        "license": "non-standard",
+        "count": 2,
+        "packages": [
+          "pyinstaller",
+          "pyinstaller-hooks-contrib"
+        ]
+      },
+      {
+        "license": "GPL-2.0",
+        "count": 1,
+        "packages": [
+          "pyinstaller-hooks-contrib"
+        ]
+      }
+    ]
+  },
+  "artifact_binding": {
+    "local_inventory": {
+      "path": "Design/Architecture/phase13_local_supply_chain_inventory.json",
+      "sha256": "fe4cafdec9f21074d24ee9ef8dc9f5393b9b615fc52bdaf0aee3a73e3b832720"
+    },
+    "exact_lockfile_sbom": {
+      "path": "Design/Architecture/phase13_exact_lockfile_sbom.cdx.json",
+      "sha256": "6d855cfa58cbbc20d4d8efdd5243fce3481bf6874d9f798fb25889d8b05c85fb"
+    },
+    "dependency_license_inventory": {
+      "path": "Design/Architecture/phase13_dependency_license_inventory.json",
+      "sha256": "3011a09e760577030f1cebf5073540495d9701def93793fded24996e0fa0b9ba"
+    },
+    "third_party_notice_review": {
+      "path": "Design/Architecture/phase13_third_party_notice_review.md",
+      "sha256": "8dd486ffbde950d8f2ca4655df2b9549af1a0f9b5efebba95b5b9c25f01404fe"
+    },
+    "historical_release_artifact": {
+      "path": "Design/Architecture/phase13_historical_release_artifact_binding.json",
+      "sha256": "c4c4a5fa243c946817562e01c1f44f007c67e9d4e9acd0a63ea08521b7e74909"
+    },
+    "raw_osv_scan": null,
+    "raw_license_scan": null,
+    "current_phase13_release_artifact": null,
+    "complete": false,
+    "gap_reason": "The exact 868-component lockfile SBOM and coordinate-complete license inventory are current. Version-matched local installed metadata provides 494 third-party declarations, but 372 third-party coordinates remain NOASSERTION and declaration evidence is not a complete license-text or legal review. The notice is explicitly a non-release-ready review draft, raw current offline OSV/license output is unavailable, and the recorded app/DMG pair is historical Phase 12 rather than a current Phase 13 artifact bound to present source provenance."
+  },
+  "commands": [
+    "HISTORICAL_NON_EXECUTABLE: osv-scanner scan source --lockfile backend/uv.lock --lockfile UI/pnpm-lock.yaml --lockfile UI/apps/desktop/src-tauri/Cargo.lock --format=json --all-packages --verbosity=error",
+    "HISTORICAL_NON_EXECUTABLE: osv-scanner scan source --lockfile backend/uv.lock --lockfile UI/pnpm-lock.yaml --lockfile UI/apps/desktop/src-tauri/Cargo.lock --licenses --format=json --all-packages --verbosity=error",
+    "HISTORICAL_NON_EXECUTABLE: osv-scanner scan source --lockfile backend/uv.lock --lockfile UI/pnpm-lock.yaml --lockfile UI/apps/desktop/src-tauri/Cargo.lock --format=cyclonedx-1-6 --all-packages --verbosity=error",
+    "CURRENT_LOCAL_ONLY: python3 scripts/run_phase13_offline_osv.py vulnerability",
+    "CURRENT_LOCAL_ONLY: python3 scripts/run_phase13_offline_osv.py license",
+    "CURRENT_LOCAL_ONLY: python3 scripts/phase13_local_supply_artifacts.py check",
+    "CURRENT_LOCAL_ONLY: cargo tree --locked --offline --target aarch64-apple-darwin -i glib@0.18.5",
+    "CURRENT_LOCAL_ONLY: cargo tree --locked --offline --target aarch64-apple-darwin -i unic-char-property@0.9.0"
+  ],
+  "decision": "The exact lockfile SBOM, coordinate inventory, and 494 version-matched local license declarations are byte-bound without external transmission. However 372 third-party coordinates remain NOASSERTION, current offline advisory output, complete license-text/final notice review, and a current Phase 13 release artifact remain unavailable. Historical findings are not promoted to current evidence, so the supply-chain gate is NO_GO and live stays disabled."
+}

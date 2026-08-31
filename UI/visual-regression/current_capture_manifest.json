@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "source": {
+    "kind": "actual_browser_capture",
+    "capture_method": "in_app_browser_explicit_clip",
+    "captured_on": "2026-08-29"
+  },
+  "viewport": {
+    "width": 1440,
+    "height": 1024,
+    "device_scale_factor": 1
+  },
+  "clip": {
+    "x": 0,
+    "y": 0,
+    "width": 1440,
+    "height": 1024
+  },
+  "image_format": "jpeg_jfif",
+  "frames": [
+    {"frame_key": "realtime-indicator", "current_file": "01-realtime-indicator.jpg", "sha256": "646c766af06e638d0df22e50a4bacebe33dfe9301a9a42d0d5ba038dc1957428"},
+    {"frame_key": "recent-orders", "current_file": "02-recent-orders.jpg", "sha256": "54e37bf85afac02c65fd0463962cc886687e843ab9ac995d7a51e211d25e8105"},
+    {"frame_key": "indicator-settings", "current_file": "03-indicator-settings.jpg", "sha256": "d325122f73319535d7a4e4c34b733d45901d37976b9f3d82ede54d7d01f1d738"},
+    {"frame_key": "trade-history", "current_file": "04-trade-history.jpg", "sha256": "15843189d6096c5658c43796ca8cf0e3b5d1111de4e3562ffd1b857c0aaf9259"},
+    {"frame_key": "start-confirmation", "current_file": "05-start-confirm.jpg", "sha256": "311fa5c21d0d26fde94efbbe856e8fd602a2db591aa407fb15102c5e8a59d9c8"},
+    {"frame_key": "stop-with-position", "current_file": "06-stop-with-position.jpg", "sha256": "fd2f63018f59384d0188cb608e52c533f99218920918d767e737c9bb7b0028f3"},
+    {"frame_key": "stop-without-position", "current_file": "07-stop-no-position.jpg", "sha256": "f1195cd796ec0309e6321d10f19f2f33d0c82dac29704963db14830ee62a02e7"},
+    {"frame_key": "csv-end-calendar", "current_file": "08-csv-end-calendar.jpg", "sha256": "e4a498cd46075818728a3f444f2864f25e14c22e7ba13cfc443735789c532459"},
+    {"frame_key": "csv-start-calendar", "current_file": "09-csv-start-calendar.jpg", "sha256": "30f358c0f4d7084a4017d42706981dc940ebc434e17d15574beb5f7d3e7e3164"},
+    {"frame_key": "csv-dialog", "current_file": "10-csv-no-calendar.jpg", "sha256": "1eb60d4dc2a172a43f8c73562325b37e169b2cd20b4fa81dd4b43bc638f29cff"},
+    {"frame_key": "regime-confirmation", "current_file": "11-regime-confirm.jpg", "sha256": "7a5ac87d27ae3cd45ed53fcba4c444ffbc9505f6e6eb174d5b5bb987b5b6d739"},
+    {"frame_key": "regime-required", "current_file": "12-regime-required.jpg", "sha256": "b07be9adb14db6f2db383a66b75e8ae6ac5b9a29970066107803830473da525e"},
+    {"frame_key": "regime-highlight", "current_file": "13-regime-highlight.jpg", "sha256": "6e938c06b02c0001beb73a4ac34025deb60bff9b7b8cb8f3ef2860e33c7aa774"},
+    {"frame_key": "history-empty", "current_file": "14-history-empty.jpg", "sha256": "661b0861f7346b14ccd871782eef3d97d3e27b706e740a3a7a3855478c780ab9"},
+    {"frame_key": "start-loading", "current_file": "15-start-loading.jpg", "sha256": "ec097ed8f0ce2a16801d1ed5d743228fbdbf4ebddd6ec7647ee794f51e996dc4"},
+    {"frame_key": "csv-validation-error", "current_file": "16-csv-error.jpg", "sha256": "d88fbbf9f9a59bcb164712249eef232eaa361dc68fd6f13eac9b42f38893e658"}
+  ]
+}

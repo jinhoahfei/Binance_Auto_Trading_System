@@ -63,7 +63,12 @@ export function TradeTable({
   onStartTrading,
 }: TradeTableProps) {
   return (
-    <section aria-busy={isLoading} aria-label="거래 내역 표" className={styles.card}>
+    <section
+      aria-busy={isLoading}
+      aria-label="거래 내역 표"
+      className={styles.card}
+      data-history-empty={rows.length === 0 ? 'true' : 'false'}
+    >
       <div className={styles.scrollArea} tabIndex={0}>
         <table className={styles.table}>
           <colgroup>

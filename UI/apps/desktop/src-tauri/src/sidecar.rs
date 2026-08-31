@@ -6,10 +6,10 @@ use security_framework::passwords::{generic_password, PasswordOptions};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -38,6 +38,8 @@ const MINIMUM_STAGING_FD: RawFd = 16;
 const MAXIMUM_SECRET_BYTES: usize = 512;
 const MAXIMUM_CONFIG_BYTES: usize = 8 * 1024;
 const MAXIMUM_READY_BYTES: usize = 4 * 1024;
+const RUNTIME_OWNERSHIP_FILE_NAME: &str = ".backend-runtime.lock";
+const MAXIMUM_RUNTIME_OWNERSHIP_BYTES: u64 = 1024;
 const SIDECAR_READY_TIMEOUT: Duration = Duration::from_secs(20);
 const LATE_READY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 const SIDECAR_MONITOR_INTERVAL: Duration = Duration::from_millis(50);
@@ -167,6 +169,30 @@ impl SidecarFailure {
             message: "Backend sidecar did not complete a clean exit.",
         }
     }
+
+    /// 함수 이름: ownership_reconciliation_required()
+    /// 기능: live·locked·invalid ownership artifact를 자동 해제하지 않는 고정 실패를 만든다.
+    /// 인자: 없음
+    /// 반환값: BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED failure
+    /// 작성 날짜: 2026/08/29
+    fn ownership_reconciliation_required() -> Self {
+        Self {
+            code: "BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED",
+            message: "Backend process ownership requires operator reconciliation.",
+        }
+    }
+
+    /// 함수 이름: ownership_release_failed()
+    /// 기능: operator 확인 뒤 identity 재검증 또는 RELEASED fsync 실패를 고정 코드로 만든다.
+    /// 인자: 없음
+    /// 반환값: BACKEND_OWNERSHIP_RELEASE_FAILED failure
+    /// 작성 날짜: 2026/08/29
+    fn ownership_release_failed() -> Self {
+        Self {
+            code: "BACKEND_OWNERSHIP_RELEASE_FAILED",
+            message: "Stale backend process ownership could not be released safely.",
+        }
+    }
 }
 
 impl Display for SidecarFailure {
@@ -202,13 +228,36 @@ pub struct BackendSidecarExitEventArmReceipt {
     pub armed: bool,
 }
 
+/// Python interpreter lifetime을 launcher child handle과 별도로 식별하는 secret-free identity이다.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PythonRuntimeIdentity {
+    runtime_pid: u32,
+    process_start_id: String,
+}
+
 /// Python ready FD에서 허용하는 secret 없는 exact descriptor wire shape이다.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadyDescriptorWire {
     port: u16,
     session_id: String,
+    runtime_pid: u32,
+    process_start_id: String,
     schema_version: u32,
+}
+
+impl ReadyDescriptorWire {
+    /// 함수 이름: runtime_identity()
+    /// 기능: strict FD4 wire에서 managed lifecycle에 보존할 Python runtime identity를 복사한다.
+    /// 인자: 없음
+    /// 반환값: Python PID와 canonical process start UUID
+    /// 작성 날짜: 2026/08/25
+    fn runtime_identity(&self) -> PythonRuntimeIdentity {
+        PythonRuntimeIdentity {
+            runtime_pid: self.runtime_pid,
+            process_start_id: self.process_start_id.clone(),
+        }
+    }
 }
 
 /// FD4 parser가 재시도 가능한 timeout과 framing을 잃은 terminal failure를 구분한다.
@@ -248,17 +297,41 @@ struct SidecarBootstrapConfiguration<'a> {
     max_notional: Option<&'static str>,
 }
 
+/// Launcher child handle과 optional Python runtime identity를 분리해 managed state로 옮기는 owner이다.
+pub struct OwnedSidecarChild {
+    child: Child,
+    launcher_child_pid: u32,
+    python_runtime_identity: Option<PythonRuntimeIdentity>,
+}
+
+impl OwnedSidecarChild {
+    /// 함수 이름: new()
+    /// 기능: OS가 발급한 launcher child PID를 handle과 묶고 검증된 Python identity를 별도 보존한다.
+    /// 인자: child -> spawned launcher child handle,
+    ///      python_runtime_identity -> FD4를 아직 받지 못했으면 None인 Python runtime identity
+    /// 반환값: managed lifecycle로 한 번 이동할 child owner
+    /// 작성 날짜: 2026/08/25
+    fn new(child: Child, python_runtime_identity: Option<PythonRuntimeIdentity>) -> Self {
+        let launcher_child_pid = child.id();
+        Self {
+            child,
+            launcher_child_pid,
+            python_runtime_identity,
+        }
+    }
+}
+
 /// renderer publication 전에 native state로 이전할 child와 descriptor 묶음이다.
 pub struct PreparedBackendSidecar {
     pub descriptor: BackendConnectionDescriptor,
-    pub child: Child,
+    pub child: OwnedSidecarChild,
     pub stop_writer: File,
     pub port: u16,
 }
 
 /// Token/config publication 후 ready를 확인하지 못해 exposure 여부가 ambiguous한 child이다.
 pub struct AmbiguousBackendSidecar {
-    pub child: Child,
+    pub child: OwnedSidecarChild,
     pub stop_writer: File,
     pub late_ready_recovery: Option<LateReadySidecarRecovery>,
 }
@@ -279,6 +352,8 @@ pub enum BackendSidecarPreparation {
 /// 실행 중 child handle, stop pipe와 expected/actual exit를 동일 lock으로 보호한다.
 struct SidecarProcessLifecycle {
     child_handle: Option<Arc<Mutex<Child>>>,
+    launcher_child_pid: Option<u32>,
+    python_runtime_identity: Option<PythonRuntimeIdentity>,
     stop_writer: Option<File>,
     late_ready_pending: bool,
     late_ready_terminal: bool,
@@ -297,6 +372,8 @@ impl Default for SidecarProcessLifecycle {
     fn default() -> Self {
         Self {
             child_handle: None,
+            launcher_child_pid: None,
+            python_runtime_identity: None,
             stop_writer: None,
             late_ready_pending: false,
             late_ready_terminal: false,
@@ -338,17 +415,24 @@ impl Default for SidecarProcessState {
 
 impl SidecarProcessState {
     /// 함수 이름: install()
-    /// 기능: ready 검증을 통과한 child/stop pipe를 소유하고 abnormal exit monitor를 시작한다.
-    /// 인자: child -> spawned Python process, stop_writer -> parent FD5 writer,
+    /// 기능: launcher/Python identity를 분리한 child와 stop pipe를 소유하고 exit monitor를 시작한다.
+    /// 인자: child -> launcher handle과 optional Python identity를 소유한 child wrapper,
+    ///      stop_writer -> parent FD5 writer,
     ///      app_handle -> secret-free exit event를 emit할 Tauri handle
     /// 반환값: lifecycle install 성공 또는 typed state failure
     /// 작성 날짜: 2026/08/24
     pub fn install(
         &self,
-        child: Child,
+        child: OwnedSidecarChild,
         stop_writer: File,
         app_handle: AppHandle,
     ) -> Result<(), SidecarFailure> {
+        let OwnedSidecarChild {
+            child,
+            launcher_child_pid,
+            python_runtime_identity,
+        } = child;
+
         // Child handle과 stop pipe를 monitor 시작 전에 같은 lifecycle publication으로 옮긴다.
         let mut lifecycle = match self.shared.lifecycle.lock() {
             Ok(lifecycle) => lifecycle,
@@ -359,6 +443,8 @@ impl SidecarProcessState {
         }
         let child_handle = Arc::new(Mutex::new(child));
         lifecycle.child_handle = Some(Arc::clone(&child_handle));
+        lifecycle.launcher_child_pid = Some(launcher_child_pid);
+        lifecycle.python_runtime_identity = python_runtime_identity;
         lifecycle.stop_writer = Some(stop_writer);
         lifecycle.late_ready_pending = false;
         lifecycle.late_ready_terminal = false;
@@ -374,6 +460,33 @@ impl SidecarProcessState {
         });
 
         Ok(())
+    }
+
+    /// 함수 이름: record_python_runtime_identity()
+    /// 기능: late READY의 Python identity를 launcher PID와 덮어쓰지 않고 exact-once로 보존한다.
+    /// 인자: identity -> strict FD4 parser가 검증한 Python runtime PID/start UUID
+    /// 반환값: 최초 또는 동일 identity publication 성공, mismatch/state ambiguity면 typed failure
+    /// 작성 날짜: 2026/08/25
+    fn record_python_runtime_identity(
+        &self,
+        identity: PythonRuntimeIdentity,
+    ) -> Result<(), SidecarFailure> {
+        let mut lifecycle = self.lock_lifecycle()?;
+        if lifecycle.launcher_child_pid.is_none() || lifecycle.exit_record.is_some() {
+            return Err(SidecarFailure::unavailable());
+        }
+
+        // 동일 late result의 멱등 publication만 허용하고 다른 runtime identity는 ambiguous로 유지한다.
+        match lifecycle.python_runtime_identity.as_ref() {
+            Some(existing_identity) if existing_identity != &identity => {
+                Err(SidecarFailure::descriptor_rejected())
+            }
+            Some(_) => Ok(()),
+            None => {
+                lifecycle.python_runtime_identity = Some(identity);
+                Ok(())
+            }
+        }
     }
 
     /// 함수 이름: begin_late_ready_recovery()
@@ -583,6 +696,291 @@ impl SidecarProcessState {
     }
 }
 
+/// Python runtime ownership artifact의 exact state를 native operator workflow에서 공유한다.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RuntimeOwnershipState {
+    Active,
+    Orphaned,
+    Released,
+}
+
+impl RuntimeOwnershipState {
+    /// 함수 이름: as_str()
+    /// 기능: artifact enum을 operator 표시와 exact 비교에 쓸 canonical 문자열로 반환한다.
+    /// 인자: 없음
+    /// 반환값: ACTIVE, ORPHANED 또는 RELEASED
+    /// 작성 날짜: 2026/08/29
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "ACTIVE",
+            Self::Orphaned => "ORPHANED",
+            Self::Released => "RELEASED",
+        }
+    }
+}
+
+/// Python writer의 non-secret exact ownership artifact wire를 검증한다.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeOwnershipArtifactWire {
+    schema_version: u32,
+    runtime_pid: u32,
+    process_start_id: String,
+    owner_state: RuntimeOwnershipState,
+}
+
+/// 운영자가 화면에서 확인한 stale runtime identity와 상태 snapshot을 보존한다.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StaleRuntimeOwnershipAttestation {
+    pub schema_version: u32,
+    pub runtime_pid: u32,
+    pub process_start_id: String,
+    pub owner_state: RuntimeOwnershipState,
+    device_id: u64,
+    inode: u64,
+}
+
+impl StaleRuntimeOwnershipAttestation {
+    /// 함수 이름: from_locked_artifact()
+    /// 기능: lock 아래 검증한 artifact와 inode를 operator confirmation에 고정할 immutable snapshot으로 복사한다.
+    /// 인자: artifact -> exact schema와 runtime identity를 가진 wire,
+    ///      device_id -> artifact inode가 속한 device ID,
+    ///      inode -> inspect 시점의 artifact inode
+    /// 반환값: stale runtime ownership attestation
+    /// 작성 날짜: 2026/08/29
+    fn from_locked_artifact(
+        artifact: &RuntimeOwnershipArtifactWire,
+        device_id: u64,
+        inode: u64,
+    ) -> Self {
+        Self {
+            schema_version: artifact.schema_version,
+            runtime_pid: artifact.runtime_pid,
+            process_start_id: artifact.process_start_id.clone(),
+            owner_state: artifact.owner_state,
+            device_id,
+            inode,
+        }
+    }
+}
+
+/// 함수 이름: open_locked_runtime_ownership_artifact()
+/// 기능: owner-only regular artifact를 no-follow로 열고 nonblocking exclusive lock 아래 exact JSON을 읽는다.
+/// 인자: directory -> Tauri per-user app-data directory
+/// 반환값: artifact가 없으면 None, 있으면 lock을 보유한 File, wire, device ID와 inode tuple
+/// 작성 날짜: 2026/08/29
+fn open_locked_runtime_ownership_artifact(
+    directory: &Path,
+) -> Result<Option<(File, RuntimeOwnershipArtifactWire, u64, u64)>, SidecarFailure> {
+    if !directory.is_dir() {
+        return Ok(None);
+    }
+    let ownership_path = directory.join(RUNTIME_OWNERSHIP_FILE_NAME);
+    let ownership_file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(ownership_path)
+    {
+        Ok(ownership_file) => ownership_file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(SidecarFailure::ownership_reconciliation_required()),
+    };
+
+    // Python writer와 같은 inode·owner·permission 계약을 만족한 regular file만 조정한다.
+    let metadata = ownership_file
+        .metadata()
+        .map_err(|_| SidecarFailure::ownership_reconciliation_required())?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.len() == 0
+        || metadata.len() > MAXIMUM_RUNTIME_OWNERSHIP_BYTES
+    {
+        return Err(SidecarFailure::ownership_reconciliation_required());
+    }
+
+    // Advisory lock을 얻지 못하면 runtime이 아직 살아 있다고 보고 identity를 읽지 않는다.
+    let lock_result =
+        unsafe { libc::flock(ownership_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if lock_result != 0 {
+        return Err(SidecarFailure::ownership_reconciliation_required());
+    }
+
+    // Bounded file을 lock 아래 읽어 duplicate·unknown field와 schema drift를 함께 거부한다.
+    let mut ownership_reader = (&ownership_file).take(MAXIMUM_RUNTIME_OWNERSHIP_BYTES + 1);
+    let mut ownership_bytes = Vec::with_capacity(metadata.len() as usize);
+    ownership_reader
+        .read_to_end(&mut ownership_bytes)
+        .map_err(|_| SidecarFailure::ownership_reconciliation_required())?;
+    if ownership_bytes.len() as u64 != metadata.len() {
+        return Err(SidecarFailure::ownership_reconciliation_required());
+    }
+    let artifact: RuntimeOwnershipArtifactWire = serde_json::from_slice(&ownership_bytes)
+        .map_err(|_| SidecarFailure::ownership_reconciliation_required())?;
+    if artifact.schema_version != BACKEND_SCHEMA_VERSION
+        || artifact.runtime_pid == 0
+        || artifact.runtime_pid > libc::pid_t::MAX as u32
+        || !crate::is_canonical_uuid(&artifact.process_start_id)
+    {
+        return Err(SidecarFailure::ownership_reconciliation_required());
+    }
+
+    Ok(Some((
+        ownership_file,
+        artifact,
+        metadata.dev(),
+        metadata.ino(),
+    )))
+}
+
+/// 함수 이름: runtime_process_exists()
+/// 기능: signal을 보내지 않는 kill(pid, 0)으로 recorded PID의 존재 여부를 보수적으로 판정한다.
+/// 인자: runtime_pid -> artifact의 positive Python runtime PID
+/// 반환값: process가 있거나 permission으로 확정할 수 없으면 true
+/// 작성 날짜: 2026/08/29
+fn runtime_process_exists(runtime_pid: u32) -> bool {
+    if runtime_pid == 0 {
+        return true;
+    }
+
+    // Signal 0은 process를 변경하지 않으며 ESRCH만 확정된 부재로 취급한다.
+    let probe_result = unsafe { libc::kill(runtime_pid as libc::pid_t, 0) };
+    if probe_result == 0 {
+        return true;
+    }
+    !matches!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH))
+}
+
+/// 함수 이름: inspect_stale_runtime_owner_in_directory()
+/// 기능: lock이 빈 ACTIVE/ORPHANED artifact와 PID 부재를 결합해 operator attestation 후보를 만든다.
+/// 인자: directory -> runtime ownership artifact를 가진 app-data directory,
+///      process_exists -> PID 존재 판정을 제공하는 production 함수 또는 test seam
+/// 반환값: stale attestation, artifact 없음/RELEASED이면 None, 불명하면 typed failure
+/// 작성 날짜: 2026/08/29
+fn inspect_stale_runtime_owner_in_directory<F>(
+    directory: &Path,
+    process_exists: F,
+) -> Result<Option<StaleRuntimeOwnershipAttestation>, SidecarFailure>
+where
+    F: Fn(u32) -> bool,
+{
+    let Some((_ownership_file, artifact, device_id, inode)) =
+        open_locked_runtime_ownership_artifact(directory)?
+    else {
+        return Ok(None);
+    };
+    if artifact.owner_state == RuntimeOwnershipState::Released {
+        return Ok(None);
+    }
+    if process_exists(artifact.runtime_pid) {
+        return Err(SidecarFailure::ownership_reconciliation_required());
+    }
+
+    Ok(Some(
+        StaleRuntimeOwnershipAttestation::from_locked_artifact(&artifact, device_id, inode),
+    ))
+}
+
+/// 함수 이름: inspect_stale_runtime_owner()
+/// 기능: native startup 전 app-data에서 확정된 stale ACTIVE/ORPHANED owner만 operator surface에 공개한다.
+/// 인자: app_handle -> canonical per-user app-data path owner
+/// 반환값: release 확인이 필요한 attestation 또는 None
+/// 작성 날짜: 2026/08/29
+pub fn inspect_stale_runtime_owner(
+    app_handle: &AppHandle,
+) -> Result<Option<StaleRuntimeOwnershipAttestation>, SidecarFailure> {
+    let app_data_directory = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|_| SidecarFailure::ownership_reconciliation_required())?;
+    if !app_data_directory.exists() {
+        return Ok(None);
+    }
+    ensure_private_app_data_directory(&app_data_directory)?;
+    inspect_stale_runtime_owner_in_directory(&app_data_directory, runtime_process_exists)
+}
+
+/// 함수 이름: release_stale_runtime_owner_in_directory()
+/// 기능: operator가 확인한 exact stale identity를 다시 lock·PID 검증한 뒤 같은 inode에 RELEASED로 fsync한다.
+/// 인자: directory -> runtime ownership artifact를 가진 app-data directory,
+///      attestation -> operator 화면에 표시한 exact identity/state snapshot,
+///      process_exists -> PID 존재 판정을 제공하는 production 함수 또는 test seam
+/// 반환값: RELEASED fsync가 완료되면 없음
+/// 작성 날짜: 2026/08/29
+fn release_stale_runtime_owner_in_directory<F>(
+    directory: &Path,
+    attestation: &StaleRuntimeOwnershipAttestation,
+    process_exists: F,
+) -> Result<(), SidecarFailure>
+where
+    F: Fn(u32) -> bool,
+{
+    let Some((mut ownership_file, mut artifact, device_id, inode)) =
+        open_locked_runtime_ownership_artifact(directory)
+            .map_err(|_| SidecarFailure::ownership_release_failed())?
+    else {
+        return Err(SidecarFailure::ownership_release_failed());
+    };
+
+    // Dialog 이후 artifact가 바뀌었거나 PID가 다시 보이면 이전 확인을 재사용하지 않는다.
+    if device_id != attestation.device_id
+        || inode != attestation.inode
+        || artifact.schema_version != attestation.schema_version
+        || artifact.runtime_pid != attestation.runtime_pid
+        || artifact.process_start_id != attestation.process_start_id
+        || (artifact.owner_state != attestation.owner_state
+            && artifact.owner_state != RuntimeOwnershipState::Released)
+    {
+        return Err(SidecarFailure::ownership_release_failed());
+    }
+    if artifact.owner_state == RuntimeOwnershipState::Released {
+        return Ok(());
+    }
+    if process_exists(artifact.runtime_pid) {
+        return Err(SidecarFailure::ownership_release_failed());
+    }
+
+    // Identity를 삭제하지 않고 state만 RELEASED로 바꿔 다음 launch의 audit 경계를 남긴다.
+    artifact.owner_state = RuntimeOwnershipState::Released;
+    let mut released_payload =
+        serde_json::to_vec(&artifact).map_err(|_| SidecarFailure::ownership_release_failed())?;
+    released_payload.push(b'\n');
+    ownership_file
+        .set_len(0)
+        .and_then(|_| ownership_file.seek(SeekFrom::Start(0)))
+        .and_then(|_| ownership_file.write_all(&released_payload))
+        .and_then(|_| ownership_file.sync_all())
+        .map_err(|_| SidecarFailure::ownership_release_failed())?;
+
+    Ok(())
+}
+
+/// 함수 이름: release_stale_runtime_owner()
+/// 기능: native operator confirmation에 고정된 stale identity를 RELEASED로 전이한다.
+/// 인자: app_handle -> canonical per-user app-data path owner,
+///      attestation -> inspect 단계가 반환한 exact identity/state snapshot
+/// 반환값: durable RELEASED transition 성공 시 없음
+/// 작성 날짜: 2026/08/29
+pub fn release_stale_runtime_owner(
+    app_handle: &AppHandle,
+    attestation: &StaleRuntimeOwnershipAttestation,
+) -> Result<(), SidecarFailure> {
+    let app_data_directory = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|_| SidecarFailure::ownership_release_failed())?;
+    ensure_private_app_data_directory(&app_data_directory)
+        .map_err(|_| SidecarFailure::ownership_release_failed())?;
+    release_stale_runtime_owner_in_directory(
+        &app_data_directory,
+        attestation,
+        runtime_process_exists,
+    )
+}
+
 /// 함수 이름: disable_process_core_dumps()
 /// 기능: renderer token과 FD6 credential이 native/backend crash dump에 기록되지 않게 RLIMIT_CORE를 0으로 고정한다.
 /// 인자: 없음
@@ -684,7 +1082,7 @@ pub fn prepare_backend_sidecar(
             );
             return Ok(BackendSidecarPreparation::Ambiguous(
                 AmbiguousBackendSidecar {
-                    child,
+                    child: OwnedSidecarChild::new(child, None),
                     stop_writer,
                     late_ready_recovery: Some(LateReadySidecarRecovery {
                         ready_reader,
@@ -701,7 +1099,7 @@ pub fn prepare_backend_sidecar(
             );
             return Ok(BackendSidecarPreparation::Ambiguous(
                 AmbiguousBackendSidecar {
-                    child,
+                    child: OwnedSidecarChild::new(child, None),
                     stop_writer,
                     late_ready_recovery: None,
                 },
@@ -711,11 +1109,12 @@ pub fn prepare_backend_sidecar(
 
     // Ready/token은 각각 strict parser/generator를 통과했으므로 추가 fallible rollback 없이 소유권을 이전한다.
     let port = ready.port;
+    let python_runtime_identity = ready.runtime_identity();
     let descriptor = build_connection_descriptor(ready, &mut token);
 
     Ok(BackendSidecarPreparation::Ready(PreparedBackendSidecar {
         descriptor,
-        child,
+        child: OwnedSidecarChild::new(child, Some(python_runtime_identity)),
         stop_writer,
         port,
     }))
@@ -794,6 +1193,16 @@ fn publish_late_ready_descriptor(
     app_handle: AppHandle,
     process_state: SidecarProcessState,
 ) {
+    // Renderer staging 전에 Python identity를 managed child lifetime에 결합해 late READY race를 닫는다.
+    let python_runtime_identity = ready.runtime_identity();
+    if process_state
+        .record_python_runtime_identity(python_runtime_identity)
+        .is_err()
+    {
+        schedule_late_ready_terminal_recovery(app_handle, process_state);
+        return;
+    }
+
     let port = ready.port;
     let descriptor = build_connection_descriptor(ready, &mut token);
     let dispatch_handle = app_handle.clone();
@@ -1412,7 +1821,7 @@ fn set_nonblocking(descriptor: RawFd) -> io::Result<()> {
 }
 
 /// 함수 이름: parse_ready_descriptor()
-/// 기능: unknown field와 invalid port/session/schema를 raw value 반사 없이 거부한다.
+/// 기능: unknown field와 invalid port/session/runtime identity/schema를 raw value 반사 없이 거부한다.
 /// 인자: payload -> newline을 제외한 ready JSON bytes
 /// 반환값: strict ready wire 또는 descriptor failure
 /// 작성 날짜: 2026/08/24
@@ -1420,8 +1829,10 @@ fn parse_ready_descriptor(payload: &[u8]) -> Result<ReadyDescriptorWire, Sidecar
     let ready: ReadyDescriptorWire =
         serde_json::from_slice(payload).map_err(|_| SidecarFailure::descriptor_rejected())?;
     if ready.port == 0
+        || ready.runtime_pid == 0
         || ready.schema_version != BACKEND_SCHEMA_VERSION
         || !crate::is_canonical_uuid(&ready.session_id)
+        || !crate::is_canonical_uuid(&ready.process_start_id)
     {
         return Err(SidecarFailure::descriptor_rejected());
     }
@@ -1511,6 +1922,269 @@ mod tests {
     use serde_json::Value;
 
     const TEST_SESSION_ID: &str = "3c73d583-c1c8-4830-8393-cc31639a40fd";
+    const TEST_PROCESS_START_ID: &str = "9cb54fc1-69eb-4d3a-ac28-4ef0efcc01f4";
+
+    /// 함수 이름: create_runtime_ownership_test_directory()
+    /// 기능: ownership artifact test에서만 사용할 owner-only 임시 directory를 만든다.
+    /// 인자: 없음
+    /// 반환값: 유일한 임시 directory path
+    /// 작성 날짜: 2026/08/29
+    fn create_runtime_ownership_test_directory() -> PathBuf {
+        let mut unique_component =
+            generate_session_token().expect("temporary directory token generation must succeed");
+        let test_directory =
+            std::env::temp_dir().join(format!("binance-auto-runtime-ownership-{unique_component}"));
+        unique_component.zeroize();
+        fs::create_dir(&test_directory).expect("ownership test directory must be created");
+        fs::set_permissions(&test_directory, fs::Permissions::from_mode(0o700))
+            .expect("ownership test directory must be private");
+        test_directory
+    }
+
+    /// 함수 이름: write_runtime_ownership_test_artifact()
+    /// 기능: Python writer와 같은 exact JSON·0600 artifact를 test directory에 기록한다.
+    /// 인자: directory -> fixture directory,
+    ///      runtime_pid -> fixture Python PID,
+    ///      process_start_id -> fixture launch UUID,
+    ///      owner_state -> fixture ownership state
+    /// 반환값: 생성한 artifact path
+    /// 작성 날짜: 2026/08/29
+    fn write_runtime_ownership_test_artifact(
+        directory: &Path,
+        runtime_pid: u32,
+        process_start_id: &str,
+        owner_state: RuntimeOwnershipState,
+    ) -> PathBuf {
+        let artifact_path = directory.join(RUNTIME_OWNERSHIP_FILE_NAME);
+        let artifact = RuntimeOwnershipArtifactWire {
+            schema_version: BACKEND_SCHEMA_VERSION,
+            runtime_pid,
+            process_start_id: process_start_id.to_owned(),
+            owner_state,
+        };
+        let mut artifact_bytes =
+            serde_json::to_vec(&artifact).expect("ownership fixture must serialize");
+        artifact_bytes.push(b'\n');
+
+        // Fixture도 production의 existing single-link regular file·owner-only mode를 그대로 따른다.
+        let mut artifact_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&artifact_path)
+            .expect("ownership fixture file must be created");
+        artifact_file
+            .write_all(&artifact_bytes)
+            .expect("ownership fixture must be written");
+        artifact_file
+            .sync_all()
+            .expect("ownership fixture must be durable");
+        artifact_path
+    }
+
+    /// 함수 이름: stale_active_and_orphaned_owner_release_preserves_identity_and_inode()
+    /// 기능: PID가 사라진 ACTIVE/ORPHANED artifact가 exact attestation 뒤 같은 inode의 RELEASED로 전이되는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/29
+    #[test]
+    fn stale_active_and_orphaned_owner_release_preserves_identity_and_inode() {
+        for owner_state in [
+            RuntimeOwnershipState::Active,
+            RuntimeOwnershipState::Orphaned,
+        ] {
+            let test_directory = create_runtime_ownership_test_directory();
+            let artifact_path = write_runtime_ownership_test_artifact(
+                &test_directory,
+                4_321,
+                TEST_PROCESS_START_ID,
+                owner_state,
+            );
+            let original_inode = fs::metadata(&artifact_path)
+                .expect("ownership fixture metadata must exist")
+                .ino();
+
+            // 두 PID probe 모두 확정 부재일 때만 화면 snapshot과 durable release를 허용한다.
+            let attestation = inspect_stale_runtime_owner_in_directory(&test_directory, |_| false)
+                .expect("stale ownership inspection must succeed")
+                .expect("ACTIVE or ORPHANED artifact must require attestation");
+            assert_eq!(attestation.schema_version, BACKEND_SCHEMA_VERSION);
+            assert_eq!(attestation.runtime_pid, 4_321);
+            assert_eq!(attestation.process_start_id, TEST_PROCESS_START_ID);
+            assert_eq!(attestation.owner_state, owner_state);
+            assert!(release_stale_runtime_owner_in_directory(
+                &test_directory,
+                &attestation,
+                |_| false,
+            )
+            .is_ok());
+
+            let released_bytes =
+                fs::read(&artifact_path).expect("released ownership artifact must remain readable");
+            let released: RuntimeOwnershipArtifactWire = serde_json::from_slice(&released_bytes)
+                .expect("released ownership artifact must remain exact JSON");
+            assert_eq!(released.schema_version, BACKEND_SCHEMA_VERSION);
+            assert_eq!(released.runtime_pid, 4_321);
+            assert_eq!(released.process_start_id, TEST_PROCESS_START_ID);
+            assert_eq!(released.owner_state, RuntimeOwnershipState::Released);
+            assert_eq!(
+                fs::metadata(&artifact_path)
+                    .expect("released artifact metadata must exist")
+                    .ino(),
+                original_inode
+            );
+            assert!(
+                inspect_stale_runtime_owner_in_directory(&test_directory, |_| true)
+                    .expect("RELEASED artifact inspection must succeed")
+                    .is_none()
+            );
+
+            fs::remove_file(&artifact_path).expect("ownership fixture must be removed");
+            fs::remove_dir(&test_directory).expect("ownership fixture directory must be removed");
+        }
+    }
+
+    /// 함수 이름: live_or_locked_runtime_owner_never_reaches_release_attestation()
+    /// 기능: recorded PID가 존재하거나 advisory lock이 잡힌 artifact를 stale로 오인하지 않는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/29
+    #[test]
+    fn live_or_locked_runtime_owner_never_reaches_release_attestation() {
+        let test_directory = create_runtime_ownership_test_directory();
+        let artifact_path = write_runtime_ownership_test_artifact(
+            &test_directory,
+            4_321,
+            TEST_PROCESS_START_ID,
+            RuntimeOwnershipState::Active,
+        );
+        let original_bytes = fs::read(&artifact_path).expect("ownership fixture must be readable");
+
+        // PID가 보이는 경우에는 artifact identity가 valid해도 public 확인 화면을 만들지 않는다.
+        let live_failure = inspect_stale_runtime_owner_in_directory(&test_directory, |_| true)
+            .expect_err("live runtime owner must fail closed");
+        assert_eq!(
+            live_failure.code,
+            "BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED"
+        );
+        assert_eq!(
+            fs::read(&artifact_path).expect("live artifact must remain readable"),
+            original_bytes
+        );
+
+        let locked_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&artifact_path)
+            .expect("ownership fixture must open for lock test");
+        let lock_result =
+            unsafe { libc::flock(locked_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(lock_result, 0);
+        let locked_failure = inspect_stale_runtime_owner_in_directory(&test_directory, |_| false)
+            .expect_err("locked runtime owner must fail closed");
+        assert_eq!(
+            locked_failure.code,
+            "BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED"
+        );
+        drop(locked_file);
+
+        fs::remove_file(&artifact_path).expect("ownership fixture must be removed");
+        fs::remove_dir(&test_directory).expect("ownership fixture directory must be removed");
+    }
+
+    /// 함수 이름: unsafe_or_nonexact_runtime_owner_artifact_is_never_attested()
+    /// 기능: owner-only mode 위반과 unknown JSON field가 operator release 후보로 승격되지 않는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/29
+    #[test]
+    fn unsafe_or_nonexact_runtime_owner_artifact_is_never_attested() {
+        let test_directory = create_runtime_ownership_test_directory();
+        let artifact_path = write_runtime_ownership_test_artifact(
+            &test_directory,
+            4_321,
+            TEST_PROCESS_START_ID,
+            RuntimeOwnershipState::Active,
+        );
+
+        // Group-readable metadata 하나만으로도 내용을 해석하거나 operator에게 표시하지 않는다.
+        fs::set_permissions(&artifact_path, fs::Permissions::from_mode(0o640))
+            .expect("ownership fixture mode must change for rejection test");
+        let mode_failure = inspect_stale_runtime_owner_in_directory(&test_directory, |_| false)
+            .expect_err("non-private ownership artifact must fail closed");
+        assert_eq!(
+            mode_failure.code,
+            "BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED"
+        );
+
+        // Permission을 복원해도 exact four-field schema가 아니면 release attestation을 만들지 않는다.
+        fs::set_permissions(&artifact_path, fs::Permissions::from_mode(0o600))
+            .expect("ownership fixture mode must be restored");
+        let schema_version = BACKEND_SCHEMA_VERSION;
+        let nonexact_payload = format!(
+            "{{\"schema_version\":{schema_version},\"runtime_pid\":4321,\"process_start_id\":\"{TEST_PROCESS_START_ID}\",\"owner_state\":\"ACTIVE\",\"unexpected\":true}}\n"
+        );
+        fs::write(&artifact_path, nonexact_payload)
+            .expect("nonexact ownership fixture must be written");
+        let shape_failure = inspect_stale_runtime_owner_in_directory(&test_directory, |_| false)
+            .expect_err("unknown ownership field must fail closed");
+        assert_eq!(
+            shape_failure.code,
+            "BACKEND_OWNERSHIP_RECONCILIATION_REQUIRED"
+        );
+
+        fs::remove_file(&artifact_path).expect("ownership fixture must be removed");
+        fs::remove_dir(&test_directory).expect("ownership fixture directory must be removed");
+    }
+
+    /// 함수 이름: release_revalidates_pid_and_same_inode_after_operator_delay()
+    /// 기능: dialog 대기 중 PID가 재등장하거나 path inode가 교체되면 이전 attestation을 폐기하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/29
+    #[test]
+    fn release_revalidates_pid_and_same_inode_after_operator_delay() {
+        let test_directory = create_runtime_ownership_test_directory();
+        let artifact_path = write_runtime_ownership_test_artifact(
+            &test_directory,
+            4_321,
+            TEST_PROCESS_START_ID,
+            RuntimeOwnershipState::Orphaned,
+        );
+        let attestation = inspect_stale_runtime_owner_in_directory(&test_directory, |_| false)
+            .expect("stale ownership inspection must succeed")
+            .expect("ORPHANED artifact must require attestation");
+
+        // 확인 직후 PID가 다시 보이면 write를 시작하기 전에 fail closed한다.
+        let live_failure =
+            release_stale_runtime_owner_in_directory(&test_directory, &attestation, |_| true)
+                .expect_err("reappeared PID must prevent stale release");
+        assert_eq!(live_failure.code, "BACKEND_OWNERSHIP_RELEASE_FAILED");
+
+        // 같은 내용을 복제해도 확인하지 않은 새 inode에는 RELEASED state를 기록하지 않는다.
+        let retained_path = test_directory.join("retained-runtime-owner");
+        fs::rename(&artifact_path, &retained_path)
+            .expect("inspected inode must remain allocated for race test");
+        let replacement_path = write_runtime_ownership_test_artifact(
+            &test_directory,
+            4_321,
+            TEST_PROCESS_START_ID,
+            RuntimeOwnershipState::Orphaned,
+        );
+        let inode_failure =
+            release_stale_runtime_owner_in_directory(&test_directory, &attestation, |_| false)
+                .expect_err("replacement inode must invalidate stale attestation");
+        assert_eq!(inode_failure.code, "BACKEND_OWNERSHIP_RELEASE_FAILED");
+        let replacement: RuntimeOwnershipArtifactWire = serde_json::from_slice(
+            &fs::read(&replacement_path).expect("replacement artifact must be readable"),
+        )
+        .expect("replacement artifact must remain exact JSON");
+        assert_eq!(replacement.owner_state, RuntimeOwnershipState::Orphaned);
+
+        fs::remove_file(&replacement_path).expect("replacement fixture must be removed");
+        fs::remove_file(&retained_path).expect("retained fixture must be removed");
+        fs::remove_dir(&test_directory).expect("ownership fixture directory must be removed");
+    }
 
     /// 함수 이름: generated_token_has_required_base64url_shape()
     /// 기능: CSPRNG token이 32-byte base64url no-padding wire shape를 만족하는지 검증한다.
@@ -1535,14 +2209,48 @@ mod tests {
     /// 작성 날짜: 2026/08/24
     #[test]
     fn ready_descriptor_rejects_unknown_fields_and_schema_drift() {
+        let schema_version = BACKEND_SCHEMA_VERSION;
+        let wrong_schema_version = BACKEND_SCHEMA_VERSION + 1;
         let unknown_field = format!(
-            "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"schema_version\":2,\"token\":\"forbidden\"}}"
+            "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"runtime_pid\":4321,\"process_start_id\":\"{TEST_PROCESS_START_ID}\",\"schema_version\":{schema_version},\"token\":\"forbidden\"}}"
         );
-        let wrong_schema =
-            format!("{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"schema_version\":3}}");
+        let wrong_schema = format!(
+            "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"runtime_pid\":4321,\"process_start_id\":\"{TEST_PROCESS_START_ID}\",\"schema_version\":{wrong_schema_version}}}"
+        );
 
         assert!(parse_ready_descriptor(unknown_field.as_bytes()).is_err());
         assert!(parse_ready_descriptor(wrong_schema.as_bytes()).is_err());
+    }
+
+    /// 함수 이름: ready_descriptor_requires_positive_exact_pid_and_canonical_start_uuid()
+    /// 기능: Python runtime PID의 zero/non-integer와 noncanonical process UUID를 strict 거부하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/25
+    #[test]
+    fn ready_descriptor_requires_positive_exact_pid_and_canonical_start_uuid() {
+        let schema_version = BACKEND_SCHEMA_VERSION;
+        let valid = format!(
+            "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"runtime_pid\":4321,\"process_start_id\":\"{TEST_PROCESS_START_ID}\",\"schema_version\":{schema_version}}}"
+        );
+        let valid_ready = parse_ready_descriptor(valid.as_bytes())
+            .expect("strict positive runtime identity must parse");
+
+        assert_eq!(valid_ready.runtime_pid, 4_321);
+        assert_eq!(valid_ready.process_start_id, TEST_PROCESS_START_ID);
+        for invalid_pid in ["0", "-1", "1.0", "true", "\"4321\""] {
+            let invalid = format!(
+                "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"runtime_pid\":{invalid_pid},\"process_start_id\":\"{TEST_PROCESS_START_ID}\",\"schema_version\":{schema_version}}}"
+            );
+            assert!(parse_ready_descriptor(invalid.as_bytes()).is_err());
+        }
+
+        // UUID parser가 받아도 canonical lowercase text가 아닌 uppercase representation은 거부한다.
+        let uppercase_start_id = TEST_PROCESS_START_ID.to_uppercase();
+        let noncanonical = format!(
+            "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"runtime_pid\":4321,\"process_start_id\":\"{uppercase_start_id}\",\"schema_version\":{schema_version}}}"
+        );
+        assert!(parse_ready_descriptor(noncanonical.as_bytes()).is_err());
     }
 
     /// 함수 이름: bootstrap_configuration_is_exact_read_only_contract()
@@ -1651,6 +2359,82 @@ mod tests {
         assert!(!classify_expected_exit(false, None));
     }
 
+    /// 함수 이름: lifecycle_preserves_launcher_and_python_runtime_identities_separately()
+    /// 기능: launcher PID와 late Python PID/start UUID를 동일 값으로 추정하지 않고 exit 뒤에도 보존하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/25
+    #[test]
+    fn lifecycle_preserves_launcher_and_python_runtime_identities_separately() {
+        let state = SidecarProcessState::default();
+        {
+            let mut lifecycle = state
+                .shared
+                .lifecycle
+                .lock()
+                .expect("fixture lifecycle lock must be available");
+            lifecycle.launcher_child_pid = Some(7_001);
+        }
+        let identity = PythonRuntimeIdentity {
+            runtime_pid: 8_002,
+            process_start_id: TEST_PROCESS_START_ID.to_owned(),
+        };
+
+        state
+            .record_python_runtime_identity(identity.clone())
+            .expect("first late runtime identity must be recorded");
+        state.record_exit(Some(0));
+        let lifecycle = state
+            .shared
+            .lifecycle
+            .lock()
+            .expect("recorded lifecycle lock must be available");
+
+        assert_eq!(lifecycle.launcher_child_pid, Some(7_001));
+        assert_eq!(lifecycle.python_runtime_identity, Some(identity));
+    }
+
+    /// 함수 이름: lifecycle_rejects_mismatched_late_runtime_identity()
+    /// 기능: 같은 launcher lifetime에 다른 Python PID 또는 start UUID가 재게시되면 fail closed하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/08/25
+    #[test]
+    fn lifecycle_rejects_mismatched_late_runtime_identity() {
+        let state = SidecarProcessState::default();
+        {
+            let mut lifecycle = state
+                .shared
+                .lifecycle
+                .lock()
+                .expect("fixture lifecycle lock must be available");
+            lifecycle.launcher_child_pid = Some(7_001);
+        }
+        let original = PythonRuntimeIdentity {
+            runtime_pid: 8_002,
+            process_start_id: TEST_PROCESS_START_ID.to_owned(),
+        };
+        let mismatch = PythonRuntimeIdentity {
+            runtime_pid: 8_003,
+            process_start_id: "9a96508f-5585-48de-8464-495943de35f5".to_owned(),
+        };
+
+        state
+            .record_python_runtime_identity(original.clone())
+            .expect("first late runtime identity must be recorded");
+        let failure = state
+            .record_python_runtime_identity(mismatch)
+            .expect_err("different runtime identity must be rejected");
+        let lifecycle = state
+            .shared
+            .lifecycle
+            .lock()
+            .expect("rejected lifecycle lock must be available");
+
+        assert_eq!(failure.code, "INVALID_BACKEND_DESCRIPTOR");
+        assert_eq!(lifecycle.python_runtime_identity, Some(original));
+    }
+
     /// 함수 이름: exit_timeout_has_default_and_hard_max_without_kill_policy()
     /// 기능: 인자 없는 UI 호출과 hard max validation을 deterministic하게 검증한다.
     /// 인자: 없음
@@ -1700,8 +2484,9 @@ mod tests {
             read_ready_descriptor(&mut reader, &mut framing, Duration::from_millis(1)),
             Err(ReadyDescriptorReadFailure::Timeout)
         ));
+        let schema_version = BACKEND_SCHEMA_VERSION;
         let late_payload = format!(
-            "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"schema_version\":2}}\n"
+            "{{\"port\":41000,\"session_id\":\"{TEST_SESSION_ID}\",\"runtime_pid\":4321,\"process_start_id\":\"{TEST_PROCESS_START_ID}\",\"schema_version\":{schema_version}}}\n"
         );
         writer
             .write_all(late_payload.as_bytes())
@@ -1739,7 +2524,10 @@ mod tests {
             Err(ReadyDescriptorReadFailure::Timeout)
         ));
         assert!(!framing.is_empty());
-        let suffix = format!("\"session_id\":\"{TEST_SESSION_ID}\",\"schema_version\":2}}\n");
+        let schema_version = BACKEND_SCHEMA_VERSION;
+        let suffix = format!(
+            "\"session_id\":\"{TEST_SESSION_ID}\",\"runtime_pid\":4321,\"process_start_id\":\"{TEST_PROCESS_START_ID}\",\"schema_version\":{schema_version}}}\n"
+        );
         writer
             .write_all(suffix.as_bytes())
             .expect("late READY suffix must be written");
@@ -1748,6 +2536,8 @@ mod tests {
 
         assert_eq!(ready.port, 41_000);
         assert_eq!(ready.session_id, TEST_SESSION_ID);
+        assert_eq!(ready.runtime_pid, 4_321);
+        assert_eq!(ready.process_start_id, TEST_PROCESS_START_ID);
     }
 
     /// 함수 이름: ready_eof_is_terminal_and_not_retryable()
@@ -1807,7 +2597,7 @@ mod tests {
         let (recorded, should_emit) = state.record_exit(Some(17));
 
         assert!(!should_emit);
-        assert_eq!(recorded.expected, false);
+        assert!(!recorded.expected);
         assert_eq!(
             state
                 .arm_exit_event_delivery()

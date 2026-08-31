@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
+import stat
 from threading import RLock
 from typing import BinaryIO
 from zoneinfo import ZoneInfo
@@ -24,6 +25,11 @@ from binance_auto_trader.domain.trading.order import (
     Order,
     PendingOrderRecoveryLifecycle,
     PendingOrderRecoveryRecord,
+    PendingOrderSubmissionProvenance,
+)
+from binance_auto_trader.domain.trading.risk import (
+    ManualKillBehavior,
+    ManualKillControlState,
 )
 from binance_auto_trader.domain.trading.states import (
     ExitReason,
@@ -33,10 +39,14 @@ from binance_auto_trader.domain.trading.states import (
 
 
 _PENDING_ORDER_LEGACY_SCHEMA_VERSION = 1
-_PENDING_ORDER_SCHEMA_VERSION = 2
+_PENDING_ORDER_LIFECYCLE_SCHEMA_VERSION = 2
+_PENDING_ORDER_POLICY_SCHEMA_VERSION = 3
+_PENDING_ORDER_SCHEMA_VERSION = 4
 _SUPPORTED_PENDING_ORDER_SCHEMA_VERSIONS = frozenset(
     {
         _PENDING_ORDER_LEGACY_SCHEMA_VERSION,
+        _PENDING_ORDER_LIFECYCLE_SCHEMA_VERSION,
+        _PENDING_ORDER_POLICY_SCHEMA_VERSION,
         _PENDING_ORDER_SCHEMA_VERSION,
     }
 )
@@ -68,7 +78,29 @@ _PENDING_ORDER_TRANSITION_KEYS = frozenset(
 _PENDING_ORDER_REMOVE_KEYS = frozenset(
     {"client_order_id", "operation", "record_type", "schema_version"}
 )
-_PENDING_ORDER_METADATA_KEYS = frozenset(
+_MANUAL_KILL_CONTROL_LEGACY_SCHEMA_VERSION = 1
+_MANUAL_KILL_CONTROL_SCHEMA_VERSION = 2
+_SUPPORTED_MANUAL_KILL_CONTROL_SCHEMA_VERSIONS = frozenset(
+    {
+        _MANUAL_KILL_CONTROL_LEGACY_SCHEMA_VERSION,
+        _MANUAL_KILL_CONTROL_SCHEMA_VERSION,
+    }
+)
+_MANUAL_KILL_CONTROL_REPLAY_LIMIT = 1_024
+_MANUAL_KILL_CONTROL_RECORD_TYPE = "manual_kill_control"
+_MANUAL_KILL_CONTROL_KEYS = frozenset(
+    {
+        "active",
+        "behavior",
+        "command_id",
+        "expected_version",
+        "policy_version",
+        "record_type",
+        "schema_version",
+        "version",
+    }
+)
+_PENDING_ORDER_LEGACY_METADATA_KEYS = frozenset(
     {
         "client_order_id",
         "exit_reason",
@@ -83,6 +115,46 @@ _PENDING_ORDER_METADATA_KEYS = frozenset(
         "symbol",
     }
 )
+_PENDING_ORDER_POLICY_METADATA_KEYS = frozenset(
+    {*_PENDING_ORDER_LEGACY_METADATA_KEYS, "risk_policy_version"}
+)
+_PENDING_ORDER_METADATA_KEYS = frozenset(
+    {*_PENDING_ORDER_POLICY_METADATA_KEYS, "exit_pct_b_at_intent"}
+)
+# Lifecycle graph는 거래소 사실이 후퇴하지 않고 history commit 직전까지 전진하게 한다.
+_PENDING_ORDER_LIFECYCLE_TRANSITIONS = {
+    PendingOrderRecoveryLifecycle.PREPARED: frozenset(
+        {
+            PendingOrderRecoveryLifecycle.SUBMITTED,
+            PendingOrderRecoveryLifecycle.UNKNOWN,
+            PendingOrderRecoveryLifecycle.PARTIAL,
+            PendingOrderRecoveryLifecycle.TERMINAL,
+            PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED,
+        }
+    ),
+    PendingOrderRecoveryLifecycle.SUBMITTED: frozenset(
+        {
+            PendingOrderRecoveryLifecycle.UNKNOWN,
+            PendingOrderRecoveryLifecycle.PARTIAL,
+            PendingOrderRecoveryLifecycle.TERMINAL,
+            PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED,
+        }
+    ),
+    PendingOrderRecoveryLifecycle.UNKNOWN: frozenset(
+        {
+            PendingOrderRecoveryLifecycle.PARTIAL,
+            PendingOrderRecoveryLifecycle.TERMINAL,
+        }
+    ),
+    PendingOrderRecoveryLifecycle.PARTIAL: frozenset(
+        {PendingOrderRecoveryLifecycle.TERMINAL}
+    ),
+    PendingOrderRecoveryLifecycle.TERMINAL: frozenset(
+        {PendingOrderRecoveryLifecycle.HISTORY_COMMITTED}
+    ),
+    PendingOrderRecoveryLifecycle.HISTORY_COMMITTED: frozenset(),
+    PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED: frozenset(),
+}
 _KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
 
 
@@ -162,6 +234,36 @@ class PendingOrderJournalConflictError(ValueError):
         super().__init__(
             "pending-order client ID is already bound to different metadata"
         )  # 예외 문자열에는 충돌 payload와 client ID 자체를 포함하지 않는다.
+
+
+class ManualKillControlJournalCorruptedError(ValueError):
+    """
+    클래스 이름: ManualKillControlJournalCorruptedError
+    기능: 재시작 manual kill control journal의 자동 해석 불가능한 손상을 나타낸다.
+    작성 날짜: 2026/08/29
+    """
+
+    code = "MANUAL_KILL_CONTROL_JOURNAL_CORRUPTED"
+
+    def __init__(self, line_number: int, reason: str) -> None:
+        """
+        함수 이름: __init__()
+        기능: 손상 line 번호와 원문을 포함하지 않는 안정적인 원인 분류를 보존한다.
+        인자: line_number -> 1부터 시작하는 손상 JSONL line 번호
+            reason -> credential이나 record 원문이 없는 오류 분류
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # 운영 오류에 control journal 원문이 섞이지 않도록 line과 예외 타입만 공개한다.
+        if type(line_number) is not int or line_number < 1:
+            raise ValueError("line_number must be a positive integer")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("reason must be a non-empty string")
+        self.line_number = line_number
+        self.reason = reason
+        super().__init__(
+            f"manual-kill control journal line {line_number} is corrupted: {reason}"
+        )  # 사용자 UI에는 raw JSON이 아니라 typed corruption만 전달한다.
 
 
 class _NonStandardJsonConstantError(ValueError):
@@ -333,6 +435,83 @@ def _normalize_client_order_id(client_order_id: object) -> str:
     return client_order_id  # Order 생성 검증과 동일한 원문 identity를 보존한다.
 
 
+def _manual_kill_control_to_json_object(
+    state: ManualKillControlState,
+) -> dict[str, object]:
+    """
+    함수 이름: _manual_kill_control_to_json_object()
+    기능: 검증된 manual kill command receipt를 current schema exact JSON object로 변환한다.
+    인자: state -> fsync할 manual kill control state
+    반환값: credential을 포함하지 않는 canonical JSON mapping
+    작성 날짜: 2026/08/29
+    """
+    # Domain 생성자의 exact type 검증을 통과한 state만 persistence schema로 내린다.
+    if not isinstance(state, ManualKillControlState):
+        raise TypeError("state must be a ManualKillControlState")
+
+    return {
+        "record_type": _MANUAL_KILL_CONTROL_RECORD_TYPE,
+        "schema_version": _MANUAL_KILL_CONTROL_SCHEMA_VERSION,
+        "active": state.active,
+        "version": state.version,
+        "command_id": state.command_id,
+        "expected_version": state.expected_version,
+        "behavior": (
+            None if state.behavior is None else state.behavior.value
+        ),
+        "policy_version": state.policy_version,
+    }  # key 순서는 diff와 byte 증거가 안정적으로 유지되도록 고정한다.
+
+
+def _manual_kill_control_from_json_object(
+    decoded_record: object,
+) -> tuple[int, ManualKillControlState]:
+    """
+    함수 이름: _manual_kill_control_from_json_object()
+    기능: strict JSON 결과를 지원하는 manual kill schema와 command receipt로 검증해 복원한다.
+    인자: decoded_record -> 중복 key와 비표준 상수를 거부한 JSON 값
+    반환값: 검증된 schema version과 ManualKillControlState
+    작성 날짜: 2026/08/29
+    """
+    # Array·scalar와 추가 field를 모두 거부해 미래 schema를 현재 writer로 추측 해석하지 않는다.
+    if not isinstance(decoded_record, Mapping):
+        raise TypeError("manual-kill control record must be an object")
+    if frozenset(decoded_record) != _MANUAL_KILL_CONTROL_KEYS:
+        raise ValueError("manual-kill control record keys are invalid")
+    if decoded_record["record_type"] != _MANUAL_KILL_CONTROL_RECORD_TYPE:
+        raise ValueError("manual-kill control record_type is invalid")
+    schema_version = decoded_record["schema_version"]
+    if (
+        type(schema_version) is not int
+        or schema_version
+        not in _SUPPORTED_MANUAL_KILL_CONTROL_SCHEMA_VERSIONS
+    ):
+        raise ValueError("manual-kill control schema_version is unsupported")
+
+    behavior_value = decoded_record["behavior"]
+    if behavior_value is not None:
+        if not isinstance(behavior_value, str):
+            raise TypeError("manual-kill behavior must be a string or null")
+        try:
+            behavior = ManualKillBehavior(behavior_value)
+        except ValueError as error:
+            raise ValueError("manual-kill behavior is unsupported") from error
+    else:
+        behavior = None
+
+    return (
+        schema_version,
+        ManualKillControlState(
+            active=decoded_record["active"],
+            version=decoded_record["version"],
+            command_id=decoded_record["command_id"],
+            expected_version=decoded_record["expected_version"],
+            behavior=behavior,
+            policy_version=decoded_record["policy_version"],
+        ),
+    )  # bool/version의 마지막 exact 검증은 domain value가 단일 owner로 수행한다.
+
+
 def _pending_decimal_to_text(value: Decimal, field_name: str) -> str:
     """
     함수 이름: _pending_decimal_to_text()
@@ -421,26 +600,56 @@ def _pending_order_to_json_object(order: Order) -> dict[str, object]:
             order.market_price_at_decision,
             "market_price_at_decision",
         ),
+        "risk_policy_version": order.risk_policy_version,
         "exit_reason": (
             None if order.exit_reason is None else order.exit_reason.value
+        ),
+        "exit_pct_b_at_intent": (
+            None
+            if order.exit_pct_b_at_intent is None
+            else _pending_decimal_to_text(
+                order.exit_pct_b_at_intent,
+                "exit_pct_b_at_intent",
+            )
         ),
     }  # exact key 목록은 decode 시 다시 검증해 sidecar가 확장 저장소가 되지 않게 한다.
 
 
-def _pending_order_from_json_object(record: object) -> Order:
+def _pending_order_from_json_object(
+    record: object,
+    *,
+    legacy_policy_version: bool = False,
+    legacy_exit_pct_b: bool = False,
+) -> Order:
     """
     함수 이름: _pending_order_from_json_object()
     기능: exact metadata object를 검증된 canonical Order로 복원한다.
     인자: record -> UPSERT event의 decoded order 값
+        legacy_policy_version -> schema v1/v2에 policy version 필드가 없음을 허용할지 여부
+        legacy_exit_pct_b -> schema v1~v3에 매도 의도 %B 필드가 없음을 허용할지 여부
     반환값: 제출 전 metadata만 가진 Order
-    작성 날짜: 2026/08/22
+    작성 날짜: 2026/08/25
     """
     # list나 scalar가 mapping처럼 처리되지 않도록 outer shape부터 고정한다.
     if not isinstance(record, Mapping):
         raise TypeError("pending order metadata must be a JSON object")
+    if type(legacy_policy_version) is not bool:
+        raise TypeError("legacy_policy_version must be a bool")
+    if type(legacy_exit_pct_b) is not bool:
+        raise TypeError("legacy_exit_pct_b must be a bool")
+    if legacy_policy_version and not legacy_exit_pct_b:
+        raise ValueError("legacy policy schema must also omit exit pct B")
     _require_exact_pending_keys(
         record,
-        _PENDING_ORDER_METADATA_KEYS,
+        (
+            _PENDING_ORDER_LEGACY_METADATA_KEYS
+            if legacy_policy_version
+            else (
+                _PENDING_ORDER_POLICY_METADATA_KEYS
+                if legacy_exit_pct_b
+                else _PENDING_ORDER_METADATA_KEYS
+            )
+        ),
         "pending order metadata",
     )
 
@@ -450,6 +659,14 @@ def _pending_order_from_json_object(record: object) -> Order:
         None
         if exit_reason_value is None
         else ExitReason(exit_reason_value)
+    )
+    exit_pct_b_at_intent = (
+        None
+        if legacy_exit_pct_b or record["exit_pct_b_at_intent"] is None
+        else _pending_decimal_from_text(
+            record["exit_pct_b_at_intent"],
+            "exit_pct_b_at_intent",
+        )
     )
     return Order(
         intent_id=record["intent_id"],
@@ -471,7 +688,13 @@ def _pending_order_from_json_object(record: object) -> Order:
             record["market_price_at_decision"],
             "market_price_at_decision",
         ),
+        risk_policy_version=(
+            None
+            if legacy_policy_version
+            else record["risk_policy_version"]
+        ),
         exit_reason=exit_reason,
+        exit_pct_b_at_intent=exit_pct_b_at_intent,
     )  # domain 생성 성공 자체가 startup 복구 가능한 metadata의 마지막 검증 경계다.
 
 
@@ -480,8 +703,8 @@ def _build_pending_upsert_event(order: Order) -> dict[str, object]:
     함수 이름: _build_pending_upsert_event()
     기능: 한 Order metadata를 활성화하는 canonical UPSERT event를 만든다.
     인자: order -> 활성 pending 상태로 저장할 Order
-    반환값: PREPARED lifecycle을 명시한 sidecar schema v2 UPSERT object
-    작성 날짜: 2026/08/23
+    반환값: PREPARED lifecycle을 명시한 sidecar schema v4 UPSERT object
+    작성 날짜: 2026/08/25
     """
     # envelope에는 schema 식별자와 복구 operation 외의 운영 정보를 저장하지 않는다.
     return {
@@ -502,8 +725,8 @@ def _build_pending_transition_event(
     기능: active pending order의 durable lifecycle을 전진시키는 canonical event를 만든다.
     인자: client_order_id -> lifecycle을 변경할 application order ID
         lifecycle -> fsync할 다음 recovery lifecycle
-    반환값: sidecar schema v2 TRANSITION object
-    작성 날짜: 2026/08/23
+    반환값: sidecar schema v4 TRANSITION object
+    작성 날짜: 2026/08/25
     """
     if not isinstance(lifecycle, PendingOrderRecoveryLifecycle):
         raise TypeError("lifecycle must be a PendingOrderRecoveryLifecycle")
@@ -520,13 +743,38 @@ def _build_pending_transition_event(
     }
 
 
+def _pending_lifecycle_can_transition(
+    current_lifecycle: PendingOrderRecoveryLifecycle,
+    next_lifecycle: PendingOrderRecoveryLifecycle,
+) -> bool:
+    """
+    함수 이름: _pending_lifecycle_can_transition()
+    기능: durable 주문 lifecycle의 멱등 재실행과 단조 전진 허용 여부를 판정한다.
+    인자: current_lifecycle -> journal이 현재 증명한 lifecycle
+        next_lifecycle -> caller가 fsync하려는 lifecycle
+    반환값: 멱등 또는 허용된 단조 전진이면 True
+    작성 날짜: 2026/08/25
+    """
+    # Enum 외 값이 transition graph의 dictionary lookup으로 숨지 않게 먼저 거부한다.
+    if not isinstance(current_lifecycle, PendingOrderRecoveryLifecycle):
+        raise TypeError("current_lifecycle must be a PendingOrderRecoveryLifecycle")
+    if not isinstance(next_lifecycle, PendingOrderRecoveryLifecycle):
+        raise TypeError("next_lifecycle must be a PendingOrderRecoveryLifecycle")
+
+    return (
+        current_lifecycle is next_lifecycle
+        or next_lifecycle
+        in _PENDING_ORDER_LIFECYCLE_TRANSITIONS[current_lifecycle]
+    )  # 불명·partial에서 제출 전으로 되돌아가는 상태는 허용하지 않는다.
+
+
 def _build_pending_remove_event(client_order_id: str) -> dict[str, object]:
     """
     함수 이름: _build_pending_remove_event()
     기능: 한 활성 Order metadata를 제거하는 canonical REMOVE event를 만든다.
     인자: client_order_id -> 비활성화할 pending order key
-    반환값: sidecar schema v2 REMOVE object
-    작성 날짜: 2026/08/23
+    반환값: sidecar schema v4 REMOVE object
+    작성 날짜: 2026/08/25
     """
     # terminal 처리 뒤에는 식별자 하나만 tombstone으로 남겨 metadata 중복을 피한다.
     return {
@@ -547,10 +795,10 @@ def _pending_event_from_decoded_json(
 ]:
     """
     함수 이름: _pending_event_from_decoded_json()
-    기능: decoded sidecar object를 검증된 UPSERT·TRANSITION·REMOVE payload로 변환한다.
+    기능: decoded sidecar object를 schema 제출 근거가 포함된 recovery payload로 변환한다.
     인자: decoded_record -> strict JSON decoder가 반환한 값
     반환값: operation과 검증된 recovery payload tuple
-    작성 날짜: 2026/08/23
+    작성 날짜: 2026/08/29
     """
     # scalar나 array event는 envelope field를 조회하기 전에 명시적으로 거부한다.
     if not isinstance(decoded_record, Mapping):
@@ -584,13 +832,26 @@ def _pending_event_from_decoded_json(
         if lifecycle is not PendingOrderRecoveryLifecycle.PREPARED:
             raise ValueError("pending-order UPSERT lifecycle must be PREPARED")
         return operation, PendingOrderRecoveryRecord(
-            order=_pending_order_from_json_object(decoded_record["order"]),
+            order=_pending_order_from_json_object(
+                decoded_record["order"],
+                legacy_policy_version=(
+                    schema_version < _PENDING_ORDER_POLICY_SCHEMA_VERSION
+                ),
+                legacy_exit_pct_b=(
+                    schema_version < _PENDING_ORDER_SCHEMA_VERSION
+                ),
+            ),
             lifecycle=lifecycle,
+            submission_provenance=(
+                PendingOrderSubmissionProvenance.SUBMITTED_FSYNC_PRECEDES_REST_POST
+                if schema_version >= _PENDING_ORDER_POLICY_SCHEMA_VERSION
+                else PendingOrderSubmissionProvenance.LEGACY_PREPARED_AMBIGUOUS
+            ),
         )
     if operation == _PENDING_ORDER_TRANSITION:
-        if schema_version != _PENDING_ORDER_SCHEMA_VERSION:
+        if schema_version == _PENDING_ORDER_LEGACY_SCHEMA_VERSION:
             raise ValueError(
-                "pending-order TRANSITION requires the current schema"
+                "pending-order TRANSITION requires lifecycle schema"
             )
         _require_exact_pending_keys(
             decoded_record,
@@ -603,6 +864,14 @@ def _pending_event_from_decoded_json(
         if lifecycle is PendingOrderRecoveryLifecycle.PREPARED:
             raise ValueError(
                 "pending-order TRANSITION must advance from PREPARED"
+            )
+        if (
+            schema_version == _PENDING_ORDER_LIFECYCLE_SCHEMA_VERSION
+            and lifecycle
+            is not PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
+        ):
+            raise ValueError(
+                "pending-order schema v2 supports only confirmed rejection"
             )
         return operation, (
             _normalize_client_order_id(decoded_record["client_order_id"]),
@@ -624,19 +893,28 @@ def _pending_event_from_decoded_json(
 class TradeHistoryRepository:
     """
     클래스 이름: TradeHistoryRepository
-    기능: local JSONL v1/v2 streaming 복구와 v2 durable idempotent append를 관리한다.
-    작성 날짜: 2026/08/22
+    기능: local trade JSONL v1/v2/v3와 pending sidecar v1~v4의 streaming 복구 및 durable idempotent append를 관리한다.
+    작성 날짜: 2026/08/29
     """
 
     __slots__ = (
         "_clock",
         "_index_loaded",
         "_lock",
+        "_manual_kill_control_loaded",
+        "_manual_kill_control_replay",
+        "_manual_kill_control_state",
+        "_manual_kill_control_storage_path",
         "_ordered_order_ids",
         "_pending_order_storage_path",
+        "_pending_client_ids_by_intent_attempt",
         "_pending_order_lifecycles_by_client_id",
         "_pending_orders_by_client_id",
         "_pending_orders_loaded",
+        "_pending_exit_pct_b_by_intent",
+        "_pending_risk_policy_versions_by_intent",
+        "_pending_submission_provenance_by_client_id",
+        "_pending_submission_counts_by_intent",
         "_storage_path",
         "_trades_by_order_id",
         "_uncertain_order_ids",
@@ -672,6 +950,9 @@ class TradeHistoryRepository:
         self._pending_order_storage_path = normalized_path.with_name(
             f"{normalized_path.name}.pending-orders.jsonl"
         )
+        self._manual_kill_control_storage_path = normalized_path.with_name(
+            f"{normalized_path.name}.manual-kill-control.jsonl"
+        )
         self._clock = selected_clock
         self._lock = RLock()
         self._trades_by_order_id: dict[str, Trade] = {}
@@ -683,7 +964,30 @@ class TradeHistoryRepository:
             str,
             PendingOrderRecoveryLifecycle,
         ] = {}
+        self._pending_submission_provenance_by_client_id: dict[
+            str,
+            PendingOrderSubmissionProvenance,
+        ] = {}
+        self._pending_exit_pct_b_by_intent: dict[
+            str,
+            Decimal | None,
+        ] = {}
+        self._pending_risk_policy_versions_by_intent: dict[
+            str,
+            int | None,
+        ] = {}
+        self._pending_submission_counts_by_intent: dict[str, int] = {}
+        self._pending_client_ids_by_intent_attempt: dict[
+            tuple[str, int],
+            str,
+        ] = {}
         self._pending_orders_loaded = False  # 첫 mutation도 disk event 전체를 먼저 replay한다.
+        self._manual_kill_control_replay: tuple[
+            ManualKillControlState,
+            ...,
+        ] = ()
+        self._manual_kill_control_state = ManualKillControlState()
+        self._manual_kill_control_loaded = False  # 첫 command 전에 disk journal을 항상 replay한다.
 
     @property
     def storage_path(self) -> Path:
@@ -722,6 +1026,28 @@ class TradeHistoryRepository:
         return self._pending_order_storage_path  # 파생 Path identity만 공개하고 파일 내용은 감춘다.
 
     @property
+    def manual_kill_control_storage_path(self) -> Path:
+        """
+        함수 이름: manual_kill_control_storage_path()
+        기능: manual kill 재시작 상태를 보존하는 별도 JSONL 경로를 반환한다.
+        인자: 없음
+        반환값: manual kill control journal Path
+        작성 날짜: 2026/08/29
+        """
+        return self._manual_kill_control_storage_path  # 비밀이 없는 파생 경로 identity만 공개한다.
+
+    @property
+    def supports_manual_kill_control_recovery(self) -> bool:
+        """
+        함수 이름: supports_manual_kill_control_recovery()
+        기능: concrete repository가 manual kill durable 복구 capability를 제공함을 알린다.
+        인자: 없음
+        반환값: 항상 True
+        작성 날짜: 2026/08/29
+        """
+        return True  # 실제 fsync journal을 소유한 adapter만 capability를 선언한다.
+
+    @property
     def supports_pending_order_recovery(self) -> bool:
         """
         함수 이름: supports_pending_order_recovery()
@@ -732,13 +1058,186 @@ class TradeHistoryRepository:
         """
         return True  # 실제 sidecar 구현이 있는 adapter만 capability를 선언한다.
 
+    def get_manual_kill_control_state(self) -> ManualKillControlState:
+        """
+        함수 이름: get_manual_kill_control_state()
+        기능: manual kill journal 전체를 strict replay해 마지막 durable state를 반환한다.
+        인자: 없음
+        반환값: journal이 없으면 inactive version 0, 있으면 마지막 canonical state
+        작성 날짜: 2026/08/29
+        """
+        with self._lock:
+            previous_loaded = self._manual_kill_control_loaded
+            previous_replay = self._manual_kill_control_replay
+            previous_state = self._manual_kill_control_state
+
+            # 같은 descriptor에서 strict replay와 fsync를 끝내 path 교체·truncate를 inactive로 완화하지 않는다.
+            open_flags = (
+                os.O_RDWR
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            try:
+                control_descriptor = os.open(
+                    self._manual_kill_control_storage_path,
+                    open_flags,
+                )
+            except FileNotFoundError:
+                if (
+                    previous_state != ManualKillControlState()
+                    or previous_replay
+                ):
+                    self._manual_kill_control_loaded = False
+                    raise ManualKillControlJournalCorruptedError(
+                        1,
+                        "MissingJournal",
+                    )
+                self._manual_kill_control_replay = ()
+                self._manual_kill_control_state = ManualKillControlState()
+                self._manual_kill_control_loaded = True
+                return self._manual_kill_control_state  # 파일 부재만 명시적 초기 상태로 해석한다.
+
+            # 완전한 journal replay와 durability 확인이 모두 끝난 뒤에만 in-memory state를 게시한다.
+            try:
+                with os.fdopen(
+                    control_descriptor,
+                    "r+b",
+                    buffering=0,
+                ) as control_file:
+                    self._validate_manual_kill_control_descriptor(
+                        control_file.fileno()
+                    )
+                    replay_stat = os.fstat(control_file.fileno())
+                    (
+                        loaded_state,
+                        loaded_replay,
+                    ) = self._read_manual_kill_control_file(
+                        control_file
+                    )
+                    os.fsync(control_file.fileno())
+                    verified_stat = os.fstat(control_file.fileno())
+                    if (
+                        replay_stat.st_size != verified_stat.st_size
+                        or replay_stat.st_mtime_ns
+                        != verified_stat.st_mtime_ns
+                        or replay_stat.st_ctime_ns
+                        != verified_stat.st_ctime_ns
+                    ):
+                        raise ManualKillControlJournalCorruptedError(
+                            1,
+                            "ConcurrentJournalMutation",
+                        )
+                    self._validate_manual_kill_control_descriptor(
+                        control_file.fileno()
+                    )
+                _fsync_parent_directory(
+                    self._manual_kill_control_storage_path
+                )
+                if previous_loaded and (
+                    loaded_state != previous_state
+                    or loaded_replay != previous_replay
+                ):
+                    raise ManualKillControlJournalCorruptedError(
+                        1,
+                        "JournalDrift",
+                    )
+            except Exception:
+                self._manual_kill_control_loaded = False
+                raise
+
+            self._manual_kill_control_replay = loaded_replay
+            self._manual_kill_control_state = loaded_state
+            self._manual_kill_control_loaded = True
+            return loaded_state  # frozen state라 caller가 repository replay 결과를 변경할 수 없다.
+
+    def get_manual_kill_control_replay(
+        self,
+    ) -> tuple[ManualKillControlState, ...]:
+        """
+        함수 이름: get_manual_kill_control_replay()
+        기능: restart command cache에 복원할 bounded manual kill receipt를 순서대로 반환한다.
+        인자: 없음
+        반환값: 마지막 1,024개 이하의 검증된 command receipt tuple
+        작성 날짜: 2026/08/29
+        """
+        with self._lock:
+            self.get_manual_kill_control_state()  # 같은 lock의 strict 전체 replay를 먼저 완료한다.
+            return self._manual_kill_control_replay  # tuple이라 caller가 repository cache를 바꾸지 못한다.
+
+    def save_manual_kill_control_state(
+        self,
+        state: ManualKillControlState,
+    ) -> None:
+        """
+        함수 이름: save_manual_kill_control_state()
+        기능: manual kill 성공 command receipt와 결과 control version을 append·fsync한다.
+        인자: state -> 현재 durable state에서 실행된 exact 다음 command 결과
+        반환값: file과 directory fsync가 끝나면 없음
+        작성 날짜: 2026/08/29
+        """
+        # Domain value가 아닌 tuple이나 mapping을 persistence 경계에서 암묵 변환하지 않는다.
+        if not isinstance(state, ManualKillControlState):
+            raise TypeError("state must be a ManualKillControlState")
+
+        with self._lock:
+            self.get_manual_kill_control_state()  # 매 append 직전 disk와 cache를 strict 재결합한다.
+            current_state = self._manual_kill_control_state
+            existing_receipt = next(
+                (
+                    receipt
+                    for receipt in self._manual_kill_control_replay
+                    if receipt.command_id == state.command_id
+                ),
+                None,
+            )
+            if existing_receipt is not None:
+                if existing_receipt != state:
+                    raise ValueError(
+                        "manual-kill command ID cannot be reused"
+                    )
+                return  # 직전 strict replay/fsync가 same receipt의 durability도 다시 확정했다.
+            if state.command_id is None or state.expected_version is None:
+                raise ValueError(
+                    "manual-kill durable receipt requires command provenance"
+                )
+            if state.expected_version != current_state.version:
+                raise ValueError(
+                    "manual-kill expected version must match durable state"
+                )
+            expected_result_version = current_state.version + int(
+                state.active is not current_state.active
+            )
+            if state.version != expected_result_version:
+                raise ValueError(
+                    "manual-kill result version does not match command outcome"
+                )
+            if (
+                current_state.active
+                and state.active
+                and (
+                    state.behavior != current_state.behavior
+                    or state.policy_version != current_state.policy_version
+                )
+            ):
+                raise ValueError(
+                    "active manual-kill no-op cannot change policy provenance"
+                )
+
+            self._append_manual_kill_control_state(state)
+            self._manual_kill_control_replay = (
+                *self._manual_kill_control_replay,
+                state,
+            )[-_MANUAL_KILL_CONTROL_REPLAY_LIMIT:]
+            self._manual_kill_control_state = state  # fsync 성공 뒤에만 새 control state를 게시한다.
+            self._manual_kill_control_loaded = True
+
     def save_pending_order(self, order: Order) -> None:
         """
         함수 이름: save_pending_order()
-        기능: 외부 제출 전에 Order metadata UPSERT를 별도 sidecar에 durable append한다.
+        기능: 외부 제출 전 Order metadata와 v4 제출 경계를 sidecar에 durable append한다.
         인자: order -> 제출 직전 intent와 client ID를 가진 canonical Order
         반환값: 없음
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/08/29
         """
         # credential이나 raw response를 구조적으로 가질 수 없는 Order만 public 경계에서 받는다.
         if not isinstance(order, Order):
@@ -761,6 +1260,69 @@ class TradeHistoryRepository:
                     order_snapshot.client_order_id
                 )  # 동일 idempotency key가 다른 제출 intent를 덮어쓰지 못하게 한다.
 
+            # REMOVE된 attempt를 동일 client ID로 다시 활성화하거나 active intent를 겹쳐 제출하지 못하게 한다.
+            intent_attempt = (
+                order_snapshot.intent_id,
+                order_snapshot.submission_attempt,
+            )
+            historical_client_order_id = (
+                self._pending_client_ids_by_intent_attempt.get(
+                    intent_attempt
+                )
+            )
+            if historical_client_order_id is not None:
+                raise PendingOrderJournalConflictError(
+                    order_snapshot.client_order_id
+                )
+            if any(
+                active_order.intent_id == order_snapshot.intent_id
+                for active_order in self._pending_orders_by_client_id.values()
+            ):
+                raise PendingOrderJournalConflictError(
+                    order_snapshot.client_order_id
+                )
+
+            # 이 intent가 이미 남긴 journal이 있으면 바로 다음 attempt만 소비한다.
+            durable_submission_count = (
+                self._pending_submission_counts_by_intent.get(
+                    order_snapshot.intent_id
+                )
+            )
+            if (
+                durable_submission_count is not None
+                and order_snapshot.submission_attempt
+                != durable_submission_count
+            ):
+                raise PendingOrderJournalConflictError(
+                    order_snapshot.client_order_id
+                )
+
+            # REMOVE·restart 후 attempt도 최초 intent의 exact risk policy version을 계속 사용한다.
+            if (
+                order_snapshot.intent_id
+                in self._pending_risk_policy_versions_by_intent
+                and self._pending_risk_policy_versions_by_intent[
+                    order_snapshot.intent_id
+                ]
+                != order_snapshot.risk_policy_version
+            ):
+                raise PendingOrderJournalConflictError(
+                    order_snapshot.client_order_id
+                )
+
+            # REMOVE·restart 후 Case C retry도 최초 SELL 의도 %B를 바꿔 쓰지 못한다.
+            if (
+                order_snapshot.intent_id
+                in self._pending_exit_pct_b_by_intent
+                and self._pending_exit_pct_b_by_intent[
+                    order_snapshot.intent_id
+                ]
+                != order_snapshot.exit_pct_b_at_intent
+            ):
+                raise PendingOrderJournalConflictError(
+                    order_snapshot.client_order_id
+                )
+
             self._append_pending_order_event(
                 _build_pending_upsert_event(order_snapshot)
             )
@@ -770,6 +1332,73 @@ class TradeHistoryRepository:
             self._pending_order_lifecycles_by_client_id[
                 order_snapshot.client_order_id
             ] = PendingOrderRecoveryLifecycle.PREPARED
+            self._pending_submission_provenance_by_client_id[
+                order_snapshot.client_order_id
+            ] = (
+                PendingOrderSubmissionProvenance.SUBMITTED_FSYNC_PRECEDES_REST_POST
+            )  # Schema v3 이상 UPSERT는 SUBMITTED fsync 전에 REST POST가 불가능한 writer 계약을 증명한다.
+            self._pending_submission_counts_by_intent[
+                order_snapshot.intent_id
+            ] = order_snapshot.submission_attempt + 1
+            self._pending_risk_policy_versions_by_intent.setdefault(
+                order_snapshot.intent_id,
+                order_snapshot.risk_policy_version,
+            )  # 첫 UPSERT의 None도 legacy provenance로 보존해 후속 attempt가 새 version을 추측하지 못한다.
+            self._pending_exit_pct_b_by_intent.setdefault(
+                order_snapshot.intent_id,
+                order_snapshot.exit_pct_b_at_intent,
+            )  # 첫 UPSERT의 None도 legacy 미상 provenance로 보존해 retry가 시장값을 추측하지 못한다.
+            self._pending_client_ids_by_intent_attempt[
+                intent_attempt
+            ] = order_snapshot.client_order_id
+
+    def transition_pending_order_lifecycle(
+        self,
+        client_order_id: str,
+        lifecycle: PendingOrderRecoveryLifecycle,
+    ) -> None:
+        """
+        함수 이름: transition_pending_order_lifecycle()
+        기능: active sidecar 주문의 lifecycle을 멱등 또는 허용된 단조 상태로 fsync한다.
+        인자: client_order_id -> 전이할 application order ID
+            lifecycle -> 남길 다음 durable lifecycle
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        normalized_client_order_id = _normalize_client_order_id(client_order_id)
+        if not isinstance(lifecycle, PendingOrderRecoveryLifecycle):
+            raise TypeError("lifecycle must be a PendingOrderRecoveryLifecycle")
+        if lifecycle is PendingOrderRecoveryLifecycle.PREPARED:
+            raise ValueError("pending-order transition must advance from PREPARED")
+
+        with self._lock:
+            # TRANSITION은 반드시 먼저 fsync된 active Order metadata 하나를 대상으로 한다.
+            if not self._pending_orders_loaded:
+                self.get_pending_orders()
+            if normalized_client_order_id not in self._pending_orders_by_client_id:
+                raise ValueError(
+                    "pending-order transition requires an active pending order"
+                )
+            current_lifecycle = self._pending_order_lifecycles_by_client_id[
+                normalized_client_order_id
+            ]
+            if current_lifecycle is lifecycle:
+                return  # fsync 반환 후 같은 사실을 재관찰해도 journal을 늘리지 않는다.
+            if not _pending_lifecycle_can_transition(
+                current_lifecycle,
+                lifecycle,
+            ):
+                raise ValueError("pending-order lifecycle transition is invalid")
+
+            self._append_pending_order_event(
+                _build_pending_transition_event(
+                    normalized_client_order_id,
+                    lifecycle,
+                )
+            )
+            self._pending_order_lifecycles_by_client_id[
+                normalized_client_order_id
+            ] = lifecycle  # file·directory fsync 후에만 복구 snapshot을 전진시킨다.
 
     def mark_pending_order_submission_rejected(
         self,
@@ -782,40 +1411,11 @@ class TradeHistoryRepository:
         반환값: 없음
         작성 날짜: 2026/08/23
         """
-        normalized_client_order_id = _normalize_client_order_id(client_order_id)
-        with self._lock:
-            # TRANSITION은 반드시 먼저 fsync된 PREPARED metadata 하나를 대상으로 한다.
-            if not self._pending_orders_loaded:
-                self.get_pending_orders()
-            if normalized_client_order_id not in self._pending_orders_by_client_id:
-                raise ValueError(
-                    "submission rejection requires an active pending order"
-                )
-            current_lifecycle = (
-                self._pending_order_lifecycles_by_client_id[
-                    normalized_client_order_id
-                ]
-            )
-            if (
-                current_lifecycle
-                is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
-            ):
-                return  # fsync 성공 뒤 같은 typed rejection을 다시 관찰해도 event를 늘리지 않는다.
-            if current_lifecycle is not PendingOrderRecoveryLifecycle.PREPARED:
-                raise ValueError("pending-order lifecycle transition is invalid")
-
-            next_lifecycle = (
-                PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
-            )
-            self._append_pending_order_event(
-                _build_pending_transition_event(
-                    normalized_client_order_id,
-                    next_lifecycle,
-                )
-            )
-            self._pending_order_lifecycles_by_client_id[
-                normalized_client_order_id
-            ] = next_lifecycle  # file·directory fsync 뒤에만 in-memory lifecycle을 전진시킨다.
+        # 기존 application port는 generic transition의 typed 호환 wrapper로 유지한다.
+        self.transition_pending_order_lifecycle(
+            client_order_id,
+            PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED,
+        )
 
     def delete_pending_order(self, client_order_id: str) -> None:
         """
@@ -840,6 +1440,9 @@ class TradeHistoryRepository:
             del self._pending_order_lifecycles_by_client_id[
                 normalized_client_order_id
             ]
+            del self._pending_submission_provenance_by_client_id[
+                normalized_client_order_id
+            ]
 
     def get_pending_orders(self) -> tuple[Order, ...]:
         """
@@ -856,15 +1459,26 @@ class TradeHistoryRepository:
             except FileNotFoundError:
                 self._pending_orders_by_client_id = {}
                 self._pending_order_lifecycles_by_client_id = {}
+                self._pending_submission_provenance_by_client_id = {}
+                self._pending_exit_pct_b_by_intent = {}
+                self._pending_risk_policy_versions_by_intent = {}
+                self._pending_submission_counts_by_intent = {}
+                self._pending_client_ids_by_intent_attempt = {}
                 self._pending_orders_loaded = True
                 return ()  # 첫 startup은 기존 history JSONL을 pending source로 사용하지 않는다.
 
             # 모든 event가 검증되기 전에는 이전 active index를 공개하지 않는다.
             try:
                 with pending_order_file:
-                    loaded_orders, loaded_lifecycles = self._read_pending_order_file(
-                        pending_order_file
-                    )
+                    (
+                        loaded_orders,
+                        loaded_lifecycles,
+                        loaded_submission_provenance,
+                        loaded_submission_counts,
+                        loaded_client_ids_by_intent_attempt,
+                        loaded_risk_policy_versions,
+                        loaded_exit_pct_b_by_intent,
+                    ) = self._read_pending_order_file(pending_order_file)
                 self._confirm_pending_order_storage_durability()
             except Exception:
                 self._pending_orders_loaded = False
@@ -872,6 +1486,21 @@ class TradeHistoryRepository:
 
             self._pending_orders_by_client_id = loaded_orders
             self._pending_order_lifecycles_by_client_id = loaded_lifecycles
+            self._pending_submission_provenance_by_client_id = (
+                loaded_submission_provenance
+            )
+            self._pending_submission_counts_by_intent = (
+                loaded_submission_counts
+            )
+            self._pending_risk_policy_versions_by_intent = (
+                loaded_risk_policy_versions
+            )
+            self._pending_exit_pct_b_by_intent = (
+                loaded_exit_pct_b_by_intent
+            )
+            self._pending_client_ids_by_intent_attempt = (
+                loaded_client_ids_by_intent_attempt
+            )
             self._pending_orders_loaded = True
             return tuple(loaded_orders.values())  # caller가 내부 replay index를 변경하지 못하게 한다.
 
@@ -880,27 +1509,50 @@ class TradeHistoryRepository:
     ) -> tuple[PendingOrderRecoveryRecord, ...]:
         """
         함수 이름: get_pending_order_recovery_records()
-        기능: active Order와 마지막 durable lifecycle을 같은 replay snapshot으로 반환한다.
+        기능: active Order, durable lifecycle과 제출 경계를 같은 replay snapshot으로 반환한다.
         인자: 없음
         반환값: sidecar 순서를 보존한 immutable recovery record tuple
-        작성 날짜: 2026/08/23
+        작성 날짜: 2026/08/29
         """
         with self._lock:
             # 재시작 검증과 다른 process의 durable tombstone도 관찰하도록 매번 disk를 replay한다.
             self.get_pending_orders()
 
-            # 두 index는 같은 event replay에서 만들어져 client ID별 Order와 lifecycle이 일치한다.
+            # 세 index는 같은 replay에서 만들어져 Order·lifecycle·제출 경계가 일치한다.
             return tuple(
                 PendingOrderRecoveryRecord(
                     order=order,
                     lifecycle=self._pending_order_lifecycles_by_client_id[
                         client_order_id
                     ],
+                    submission_provenance=(
+                        self._pending_submission_provenance_by_client_id[
+                            client_order_id
+                        ]
+                    ),
                 )
                 for client_order_id, order in (
                     self._pending_orders_by_client_id.items()
                 )
             )
+
+    def get_pending_order_submission_counts(
+        self,
+    ) -> tuple[tuple[str, int], ...]:
+        """
+        함수 이름: get_pending_order_submission_counts()
+        기능: REMOVE된 attempt를 포함해 intent별 durable 제출 소비 횟수를 replay한다.
+        인자: 없음
+        반환값: 첫 UPSERT 순서를 보존한 intent·submission count tuple
+        작성 날짜: 2026/08/25
+        """
+        with self._lock:
+            # 다른 process의 최신 UPSERT·REMOVE를 모두 반영하도록 매번 disk를 replay한다.
+            self.get_pending_orders()
+
+            return tuple(
+                self._pending_submission_counts_by_intent.items()
+            )  # 내부 dictionary를 노출하지 않고 immutable snapshot으로 반환한다.
 
     def get_trade_history(self) -> tuple[Trade, ...]:
         """
@@ -1054,6 +1706,282 @@ class TradeHistoryRepository:
             )  # durable append와 동일한 file order를 streaming dedup 기준에 추가한다.
             self._uncertain_order_ids.discard(normalized_order_id)
 
+    def _append_manual_kill_control_state(
+        self,
+        state: ManualKillControlState,
+    ) -> None:
+        """
+        함수 이름: _append_manual_kill_control_state()
+        기능: canonical manual kill state 한 줄을 write·file fsync·directory fsync한다.
+        인자: state -> 이전 durable state에서 실행된 toggle 또는 no-op command receipt
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # 비밀 필드가 없는 exact schema를 한 번의 binary write 대상으로 먼저 완성한다.
+        encoded_record = json.dumps(
+            _manual_kill_control_to_json_object(state),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        open_flags = (
+            os.O_RDWR
+            | os.O_APPEND
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        created_file = False
+        try:
+            try:
+                control_descriptor = os.open(
+                    self._manual_kill_control_storage_path,
+                    open_flags,
+                )
+            except FileNotFoundError:
+                if (
+                    self._manual_kill_control_state
+                    != ManualKillControlState()
+                    or self._manual_kill_control_replay
+                ):
+                    raise ManualKillControlJournalCorruptedError(
+                        1,
+                        "MissingJournal",
+                    )
+                control_descriptor = os.open(
+                    self._manual_kill_control_storage_path,
+                    open_flags | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                created_file = True
+
+            # 검증한 inode와 실제 append·post-write replay가 같은 descriptor를 공유한다.
+            with os.fdopen(
+                control_descriptor,
+                "r+b",
+                buffering=0,
+            ) as control_file:
+                self._validate_manual_kill_control_descriptor(
+                    control_file.fileno()
+                )
+                replay_stat = os.fstat(control_file.fileno())
+                if created_file:
+                    loaded_state = ManualKillControlState()
+                    loaded_replay: tuple[
+                        ManualKillControlState,
+                        ...,
+                    ] = ()
+                else:
+                    control_file.seek(0)
+                    (
+                        loaded_state,
+                        loaded_replay,
+                    ) = self._read_manual_kill_control_file(control_file)
+                if (
+                    loaded_state != self._manual_kill_control_state
+                    or loaded_replay != self._manual_kill_control_replay
+                ):
+                    raise ManualKillControlJournalCorruptedError(
+                        1,
+                        "JournalDrift",
+                    )
+
+                # O_APPEND descriptor에 한 record를 쓰고 같은 inode를 즉시 strict replay한다.
+                pre_write_stat = os.fstat(control_file.fileno())
+                if (
+                    replay_stat.st_size != pre_write_stat.st_size
+                    or replay_stat.st_mtime_ns != pre_write_stat.st_mtime_ns
+                    or replay_stat.st_ctime_ns != pre_write_stat.st_ctime_ns
+                ):
+                    raise ManualKillControlJournalCorruptedError(
+                        1,
+                        "ConcurrentJournalMutation",
+                    )
+                written_length = control_file.write(encoded_record)
+                if written_length != len(encoded_record):
+                    raise OSError(
+                        "manual-kill control append wrote an incomplete record"
+                    )
+                control_file.flush()  # 사용자 공간 buffer를 OS write 경계까지 내린다.
+                os.fsync(control_file.fileno())
+                control_file.seek(0)
+                (
+                    verified_state,
+                    verified_replay,
+                ) = self._read_manual_kill_control_file(control_file)
+                expected_replay = (
+                    *self._manual_kill_control_replay,
+                    state,
+                )[-_MANUAL_KILL_CONTROL_REPLAY_LIMIT:]
+                post_write_stat = os.fstat(control_file.fileno())
+                if (
+                    post_write_stat.st_size
+                    != pre_write_stat.st_size + len(encoded_record)
+                    or verified_state != state
+                    or verified_replay != expected_replay
+                ):
+                    raise ManualKillControlJournalCorruptedError(
+                        1,
+                        "PostWriteReplayMismatch",
+                    )
+                self._validate_manual_kill_control_descriptor(
+                    control_file.fileno()
+                )
+            _fsync_parent_directory(self._manual_kill_control_storage_path)
+        except Exception:
+            self._manual_kill_control_loaded = False
+            raise  # append 여부가 불명인 실패는 다음 호출에서 journal 전체 replay를 강제한다.
+
+    def _validate_manual_kill_control_descriptor(
+        self,
+        control_descriptor: int,
+    ) -> None:
+        """
+        함수 이름: _validate_manual_kill_control_descriptor()
+        기능: 열린 manual-kill journal이 현재 path의 단일 regular inode인지 검증한다.
+        인자: control_descriptor -> strict replay 또는 append에 사용하는 열린 file descriptor
+        반환값: 안전한 동일 inode면 없음
+        작성 날짜: 2026/08/29
+        """
+        # Symlink·hardlink·path 교체가 검증한 bytes와 append 대상을 분리하지 못하게 identity를 묶는다.
+        descriptor_stat = os.fstat(control_descriptor)
+        try:
+            path_stat = os.stat(
+                self._manual_kill_control_storage_path,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            raise ManualKillControlJournalCorruptedError(
+                1,
+                "JournalIdentityUnavailable",
+            ) from error
+        if (
+            not stat.S_ISREG(descriptor_stat.st_mode)
+            or not stat.S_ISREG(path_stat.st_mode)
+            or descriptor_stat.st_nlink != 1
+            or path_stat.st_nlink != 1
+            or descriptor_stat.st_dev != path_stat.st_dev
+            or descriptor_stat.st_ino != path_stat.st_ino
+        ):
+            raise ManualKillControlJournalCorruptedError(
+                1,
+                "JournalIdentityMismatch",
+            )
+
+    def _confirm_manual_kill_control_storage_durability(self) -> None:
+        """
+        함수 이름: _confirm_manual_kill_control_storage_durability()
+        기능: 현재 보이는 manual kill journal와 directory entry를 다시 fsync한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        # 같은 strict replay 경계를 재사용해 fsync 전에 path 교체·truncate도 함께 탐지한다.
+        self.get_manual_kill_control_state()
+
+    def _read_manual_kill_control_file(
+        self,
+        control_file: BinaryIO,
+    ) -> tuple[
+        ManualKillControlState,
+        tuple[ManualKillControlState, ...],
+    ]:
+        """
+        함수 이름: _read_manual_kill_control_file()
+        기능: manual kill JSONL을 strict replay하고 schema별 command/version 계약을 검증한다.
+        인자: control_file -> binary read로 열린 control journal
+        반환값: 마지막 canonical state와 bounded command receipt tuple
+        작성 날짜: 2026/08/29
+        """
+        # 공개 state와 분리된 local 값에 모든 line을 적용한 뒤 한 번에 반환한다.
+        loaded_state = ManualKillControlState()
+        replay_records: list[ManualKillControlState] = []
+        line_number = 0
+        while True:
+            raw_line = control_file.readline()
+            if raw_line == b"":
+                break
+            line_number += 1
+
+            # Crash 중간의 partial tail도 kill 해제로 오인하지 않고 typed corruption으로 차단한다.
+            if not raw_line.endswith(b"\n") or raw_line.endswith(b"\r\n"):
+                raise ManualKillControlJournalCorruptedError(
+                    line_number,
+                    "InvalidJsonlFraming",
+                )
+            try:
+                (
+                    schema_version,
+                    next_state,
+                ) = _manual_kill_control_from_json_object(
+                    _decode_json_line(raw_line[:-1]),
+                )
+                existing_receipt = next(
+                    (
+                        receipt
+                        for receipt in replay_records
+                        if receipt.command_id == next_state.command_id
+                    ),
+                    None,
+                )
+                if existing_receipt is not None:
+                    if existing_receipt != next_state:
+                        raise ValueError("command ID was reused")
+                    continue  # 동일 receipt의 uncertain duplicate line은 state를 다시 전진시키지 않는다.
+                if next_state.expected_version != loaded_state.version:
+                    raise ValueError("expected version is not authoritative")
+                if (
+                    schema_version
+                    == _MANUAL_KILL_CONTROL_LEGACY_SCHEMA_VERSION
+                ):
+                    if next_state.version != loaded_state.version + 1:
+                        raise ValueError("legacy control version is not consecutive")
+                    if next_state.active is loaded_state.active:
+                        raise ValueError("legacy control state did not toggle")
+                else:
+                    expected_result_version = loaded_state.version + int(
+                        next_state.active is not loaded_state.active
+                    )
+                    if next_state.version != expected_result_version:
+                        raise ValueError(
+                            "control result version does not match command outcome"
+                        )
+                    if (
+                        loaded_state.active
+                        and next_state.active
+                        and (
+                            next_state.behavior != loaded_state.behavior
+                            or next_state.policy_version
+                            != loaded_state.policy_version
+                        )
+                    ):
+                        raise ValueError(
+                            "active no-op changed policy provenance"
+                        )
+            except (
+                _DuplicateJsonKeyError,
+                _NonStandardJsonConstantError,
+                TypeError,
+                UnicodeDecodeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                raise ManualKillControlJournalCorruptedError(
+                    line_number,
+                    type(error).__name__,
+                ) from error
+            loaded_state = next_state  # 검증된 line만 다음 version의 기준으로 전진시킨다.
+            replay_records.append(next_state)
+            if len(replay_records) > _MANUAL_KILL_CONTROL_REPLAY_LIMIT:
+                replay_records.pop(0)  # Controller의 bounded command cache와 같은 최근 범위만 보존한다.
+
+        if line_number == 0:
+            raise ManualKillControlJournalCorruptedError(
+                1,
+                "EmptyJournal",
+            )  # 존재하는 빈 파일은 이전 active state truncation일 수 있어 inactive로 완화하지 않는다.
+
+        return loaded_state, tuple(replay_records)
+
     def _append_pending_order_event(
         self,
         event_record: Mapping[str, object],
@@ -1108,17 +2036,33 @@ class TradeHistoryRepository:
     ) -> tuple[
         dict[str, Order],
         dict[str, PendingOrderRecoveryLifecycle],
+        dict[str, PendingOrderSubmissionProvenance],
+        dict[str, int],
+        dict[tuple[str, int], str],
+        dict[str, int | None],
+        dict[str, Decimal | None],
     ]:
         """
         함수 이름: _read_pending_order_file()
         기능: sidecar를 streaming 검증하고 active client-ID Order index를 replay한다.
         인자: pending_order_file -> 처음부터 읽을 open binary sidecar
-        반환값: 마지막 UPSERT·TRANSITION·REMOVE를 반영한 Order와 lifecycle dictionary
-        작성 날짜: 2026/08/23
+        반환값: active Order·lifecycle·제출 경계와 durable intent 소비·attempt·policy·매도 %B dictionary
+        작성 날짜: 2026/08/29
         """
         # 완전한 replay 전까지 공개 index와 분리된 local dictionary만 변경한다.
         loaded_orders: dict[str, Order] = {}
         loaded_lifecycles: dict[str, PendingOrderRecoveryLifecycle] = {}
+        loaded_submission_provenance: dict[
+            str,
+            PendingOrderSubmissionProvenance,
+        ] = {}
+        loaded_submission_counts: dict[str, int] = {}
+        loaded_client_ids_by_intent_attempt: dict[
+            tuple[str, int],
+            str,
+        ] = {}
+        loaded_risk_policy_versions: dict[str, int | None] = {}
+        loaded_exit_pct_b_by_intent: dict[str, Decimal | None] = {}
         line_number = 0
         while True:
             raw_line = pending_order_file.readline()
@@ -1156,7 +2100,7 @@ class TradeHistoryRepository:
                     type(error).__name__,
                 ) from None
 
-            # 동일 UPSERT만 하나의 key로 수렴시키고 metadata나 lifecycle 역행은 중단한다.
+            # 동일 UPSERT만 key로 수렴시키고 metadata·lifecycle·제출 근거 변조는 중단한다.
             if operation == _PENDING_ORDER_UPSERT:
                 if not isinstance(payload, PendingOrderRecoveryRecord):
                     raise AssertionError(
@@ -1183,8 +2127,110 @@ class TradeHistoryRepository:
                         line_number,
                         "PendingOrderLifecycleRegression",
                     ) from None
+                existing_submission_provenance = (
+                    loaded_submission_provenance.get(
+                        order.client_order_id
+                    )
+                )
+                if (
+                    existing_submission_provenance is not None
+                    and existing_submission_provenance
+                    is not payload.submission_provenance
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderSubmissionProvenanceConflict",
+                    ) from None
+
+                # REMOVE 후에도 intent attempt identity를 보존해 재시작 예산이 초기화되지 않게 한다.
+                intent_attempt = (
+                    order.intent_id,
+                    order.submission_attempt,
+                )
+                existing_client_order_id = (
+                    loaded_client_ids_by_intent_attempt.get(
+                        intent_attempt
+                    )
+                )
+                if (
+                    existing_client_order_id is not None
+                    and existing_client_order_id != order.client_order_id
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderAttemptIdentityConflict",
+                    ) from None
+                if (
+                    existing_client_order_id == order.client_order_id
+                    and order.client_order_id not in loaded_orders
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderAttemptResurrection",
+                    ) from None
+                if any(
+                    active_order.intent_id == order.intent_id
+                    and active_order.client_order_id
+                    != order.client_order_id
+                    for active_order in loaded_orders.values()
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderConcurrentIntentAttempts",
+                    ) from None
+                durable_submission_count = loaded_submission_counts.get(
+                    order.intent_id
+                )
+                if (
+                    durable_submission_count is not None
+                    and order.submission_attempt > durable_submission_count
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderSubmissionAttemptGap",
+                    ) from None
+
+                # Tombstone 후에도 최초 attempt의 policy version을 유지해 restart 변경을 손상으로 분류한다.
+                if (
+                    order.intent_id in loaded_risk_policy_versions
+                    and loaded_risk_policy_versions[order.intent_id]
+                    != order.risk_policy_version
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderRiskPolicyVersionConflict",
+                    ) from None
+
+                # Tombstone 뒤에도 최초 Case C SELL %B를 보존해 replay drift를 손상으로 분류한다.
+                if (
+                    order.intent_id in loaded_exit_pct_b_by_intent
+                    and loaded_exit_pct_b_by_intent[order.intent_id]
+                    != order.exit_pct_b_at_intent
+                ):
+                    raise PendingOrderJournalCorruptedError(
+                        line_number,
+                        "PendingOrderExitPctBConflict",
+                    ) from None
                 loaded_orders[order.client_order_id] = order
                 loaded_lifecycles[order.client_order_id] = payload.lifecycle
+                loaded_submission_provenance[
+                    order.client_order_id
+                ] = payload.submission_provenance
+                loaded_client_ids_by_intent_attempt[
+                    intent_attempt
+                ] = order.client_order_id
+                loaded_submission_counts[order.intent_id] = max(
+                    order.submission_attempt + 1,
+                    loaded_submission_counts.get(order.intent_id, 0),
+                )
+                loaded_risk_policy_versions.setdefault(
+                    order.intent_id,
+                    order.risk_policy_version,
+                )
+                loaded_exit_pct_b_by_intent.setdefault(
+                    order.intent_id,
+                    order.exit_pct_b_at_intent,
+                )
             elif operation == _PENDING_ORDER_TRANSITION:
                 if not isinstance(payload, tuple) or len(payload) != 2:
                     raise AssertionError(
@@ -1206,7 +2252,10 @@ class TradeHistoryRepository:
                 current_lifecycle = loaded_lifecycles[client_order_id]
                 if current_lifecycle is lifecycle:
                     continue  # 불확실 fsync 뒤 반복된 같은 transition은 멱등 수렴한다.
-                if current_lifecycle is not PendingOrderRecoveryLifecycle.PREPARED:
+                if not _pending_lifecycle_can_transition(
+                    current_lifecycle,
+                    lifecycle,
+                ):
                     raise PendingOrderJournalCorruptedError(
                         line_number,
                         "PendingOrderLifecycleRegression",
@@ -1217,11 +2266,17 @@ class TradeHistoryRepository:
                     raise AssertionError("validated REMOVE payload must be a string")
                 loaded_orders.pop(payload, None)
                 loaded_lifecycles.pop(payload, None)
+                loaded_submission_provenance.pop(payload, None)
 
         return (
             loaded_orders,
             loaded_lifecycles,
-        )  # event 전체가 검증된 경우에만 두 index를 함께 게시한다.
+            loaded_submission_provenance,
+            loaded_submission_counts,
+            loaded_client_ids_by_intent_attempt,
+            loaded_risk_policy_versions,
+            loaded_exit_pct_b_by_intent,
+        )  # 전체 검증 후 active 근거와 durable 예산·policy·매도 %B index를 함께 게시한다.
 
     def _build_append_payload(self, encoded_record: bytes) -> bytes:
         """
@@ -1277,9 +2332,9 @@ class TradeHistoryRepository:
     def flush_durable_state(self) -> None:
         """
         함수 이름: flush_durable_state()
-        기능: history 파일과 존재하는 pending journal 및 directory entry를 종료 전에 fsync한다.
+        기능: history 파일과 존재하는 pending/manual-kill journal 및 directory entry를 종료 전에 fsync한다.
         인자: 없음
-        반환값: 현재 보이는 local 거래 상태의 durability 확인이 끝나면 없음
+        반환값: 현재 보이는 local 거래·control 상태의 durability 확인이 끝나면 없음
         작성 날짜: 2026/08/24
         """
         # 동일 repository mutation과 종료 장벽을 직렬화해 fsync 뒤 새 append가 끼어들지 않게 한다.
@@ -1292,6 +2347,15 @@ class TradeHistoryRepository:
             # Pending journal이 없다는 사실은 같은 directory fsync로 충분하고 빈 파일은 만들지 않는다.
             if self._pending_order_storage_path.exists():
                 self._confirm_pending_order_storage_durability()
+            # Cached receipt가 있으면 unlink된 path도 정상 종료로 우회하지 못하게 strict replay한다.
+            if (
+                self._manual_kill_control_loaded
+                or self._manual_kill_control_state
+                != ManualKillControlState()
+                or self._manual_kill_control_replay
+                or self._manual_kill_control_storage_path.exists()
+            ):
+                self._confirm_manual_kill_control_storage_durability()
 
     def _read_history_file(
         self,

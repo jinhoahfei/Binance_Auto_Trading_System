@@ -29,6 +29,7 @@ MARKET_SOURCE_PATHS = (
     DOMAIN_ROOT / "common" / "enums.py",
     *tuple((SOURCE_ROOT / "adapters" / "binance").rglob("*.py")),
     SOURCE_ROOT / "application" / "market_data_controller.py",
+    SOURCE_ROOT / "application" / "market_evaluation_builder.py",
     SOURCE_ROOT / "application" / "regime_controller.py",
 )
 CLASS_NAME_PATTERN = re.compile(r"^_?[A-Z][A-Za-z0-9]*$")

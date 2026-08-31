@@ -26,6 +26,9 @@ export type ChartIndicator = 'ema9' | 'bollingerBand' | 'volume';
 
 export type PriceChartDataStatus = 'idle' | 'loading' | 'live' | 'reconnecting' | 'error';
 
+/** 실제 상호작용 화면과 결정적 Figma 검증 화면의 chart 표현 계약이다. */
+export type PriceChartPresentationMode = 'interactive' | 'fixture';
+
 export interface IndicatorSettingsViewModel {
     readonly bollingerBand: boolean;
     readonly ema9: boolean;
@@ -74,4 +77,5 @@ export interface PriceChartPanelProps extends PriceChartViewModel {
     readonly historyLoading?: boolean;
     readonly onLoadEarlier?: (() => void) | undefined;
     readonly onIntent?: ((intent: PriceChartIntent) => void) | undefined;
+    readonly presentationMode?: PriceChartPresentationMode;
 }

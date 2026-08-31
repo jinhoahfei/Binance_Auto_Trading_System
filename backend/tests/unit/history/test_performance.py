@@ -113,6 +113,20 @@ class PerformanceTests(unittest.TestCase):
         self.assertEqual(performance.completed_sell_count, 2)
         self.assertEqual(performance.win_rate, Decimal("50.00000000"))
 
+    def test_constructor_rejects_invalid_clock_and_non_trade_values(self) -> None:
+        """
+        함수 이름: test_constructor_rejects_invalid_clock_and_non_trade_values()
+        기능: Communication 3.3 생성자가 잘못된 clock과 복원 원소를 성과 0으로 숨기지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        # Startup 복원 근거가 유효하지 않으면 어떤 aggregate도 게시하기 전에 거부해야 한다.
+        with self.assertRaisesRegex(TypeError, "clock must be callable"):
+            Performance(clock="not-callable")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(TypeError, "only Trade"):
+            Performance((object(),), clock=fixed_clock)  # type: ignore[arg-type]
+
     def test_kst_midnight_separates_daily_from_cumulative_aggregates(self) -> None:
         """
         함수 이름: test_kst_midnight_separates_daily_from_cumulative_aggregates()

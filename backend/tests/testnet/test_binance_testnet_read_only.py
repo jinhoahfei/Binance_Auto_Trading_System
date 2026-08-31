@@ -4,6 +4,7 @@ import os
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Lock
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ from binance_auto_trader.bootstrap import (
     start_application,
 )
 from binance_auto_trader.bootstrap.testnet import (
+    BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV,
     BINANCE_RUN_TESTNET_ENV,
     BINANCE_RUN_TESTNET_ORDERS_ENV,
     BINANCE_TESTNET_API_KEY_ENV,
@@ -22,11 +24,12 @@ from binance_auto_trader.bootstrap.testnet import (
     create_testnet_application_runtime,
     load_testnet_configuration,
 )
-from binance_auto_trader.domain.market import SUPPORTED_INTERVALS
+from binance_auto_trader.domain.market import Kline, SUPPORTED_INTERVALS
 
 from tests.testnet._support import (
     READ_ONLY_SKIP_REASON,
     READ_ONLY_TESTNET_REQUESTED,
+    seed_verified_closed_history,
 )
 
 
@@ -46,6 +49,7 @@ def _build_read_only_testnet_environment() -> dict[str, str]:
             BINANCE_TESTNET_API_SECRET_ENV
         ],
         BINANCE_RUN_TESTNET_ORDERS_ENV: "0",
+        BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV: "0",
     }  # Credential 값은 client 조립에만 사용하고 assertion이나 출력에는 포함하지 않는다.
 
 
@@ -70,6 +74,7 @@ class ReadOnlyTestnetEnvironmentIsolationTests(unittest.TestCase):
             BINANCE_TESTNET_API_KEY_ENV: "fixture-api-key",
             BINANCE_TESTNET_API_SECRET_ENV: "fixture-api-secret",
             BINANCE_RUN_TESTNET_ORDERS_ENV: "1",
+            BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV: "1",
             BINANCE_TESTNET_MAX_NOTIONAL_ENV: "20",
         }
         with patch.dict(os.environ, parent_environment, clear=True):
@@ -85,10 +90,12 @@ class ReadOnlyTestnetEnvironmentIsolationTests(unittest.TestCase):
                     BINANCE_TESTNET_API_KEY_ENV,
                     BINANCE_TESTNET_API_SECRET_ENV,
                     BINANCE_RUN_TESTNET_ORDERS_ENV,
+                    BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV,
                 }
             ),
         )
         self.assertFalse(configuration.allow_testnet_orders)
+        self.assertFalse(configuration.allow_phase13_public_case2)
         self.assertIsNone(configuration.max_notional)
 
 
@@ -106,7 +113,7 @@ class BinanceTestnetReadOnlyTests(unittest.TestCase):
     def setUp(self) -> None:
         """
         함수 이름: setUp()
-        기능: opt-in 설정을 검증하고 network 미연결 runtime을 임시 history로 조립한다.
+        기능: opt-in 설정과 optional closed baseline을 검증하고 network 미연결 runtime을 조립한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/22
@@ -118,6 +125,9 @@ class BinanceTestnetReadOnlyTests(unittest.TestCase):
         )
         self.temporary_directory = TemporaryDirectory()
         history_path = Path(self.temporary_directory.name) / "history.jsonl"
+
+        # 이전 actual run이 있으면 pending 0·Position 0으로 검증된 closed history만 startup에 복제한다.
+        seed_verified_closed_history(history_path)
         self.runtime = create_testnet_application_runtime(
             history_path=history_path,
             environment=self.testnet_environment,
@@ -253,6 +263,54 @@ class BinanceTestnetReadOnlyTests(unittest.TestCase):
         self.assertIs(closed_state.status, ApplicationStatus.CLOSED)
         self.assertFalse(self.runtime.web_socket_gateway.account_connected)
         self.assertFalse(self.runtime.web_socket_gateway.account_ready)
+
+    def test_public_kline_subscription_promotes_same_generation_live_observer(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_public_kline_subscription_promotes_same_generation_live_observer()
+        기능: 실제 Testnet Kline 연결이 재구독 없이 같은 세대의 live observer로 승격되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/28
+        """
+        observed_intervals = set()
+        observation_lock = Lock()
+
+        def observe_kline(kline: Kline) -> None:
+            """
+            함수 이름: observe_kline()
+            기능: credential 없는 실제 Kline의 interval을 모아 모든 구독 stream 수신을 알린다.
+            인자: kline -> WebSocketGateway가 정규화한 Kline
+            반환값: 없음
+            작성 날짜: 2026/08/28
+            """
+            # Callback thread가 같은 set을 갱신하므로 lock 안에서 완료 조건까지 함께 판정한다.
+            with observation_lock:
+                observed_intervals.add(kline.interval)
+
+        # 네 public stream을 한 세대로 열고 buffer replay 직후 동일 handle을 live로 승격한다.
+        subscription = self.runtime.web_socket_gateway.start_all_kline_buffering(
+            "ETHUSDT",
+            SUPPORTED_INTERVALS,
+        )
+        try:
+            promoted_subscription = (
+                self.runtime.web_socket_gateway.promote_kline_buffer_to_live(
+                    observe_kline,
+                    subscription,
+                )
+            )
+            self.assertIs(promoted_subscription, subscription)
+            self.assertTrue(self.runtime.web_socket_gateway.kline_live_ready)
+            with observation_lock:
+                self.assertTrue(
+                    observed_intervals.issubset(set(SUPPORTED_INTERVALS))
+                )  # Testnet 무거래 구간에는 frame이 없을 수 있어 수신된 값의 계약만 검증한다.
+        finally:
+            subscription.close()  # 실패 시에도 public socket과 receive worker를 즉시 회수한다.
+
+        self.assertFalse(self.runtime.web_socket_gateway.kline_live_ready)
 
 
 if __name__ == "__main__":

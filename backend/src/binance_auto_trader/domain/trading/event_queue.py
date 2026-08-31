@@ -231,6 +231,7 @@ OrderFinishedObserver: TypeAlias = Callable[
     None,
 ]
 EventProcessingObserver: TypeAlias = Callable[[TradingEvent | None], None]
+EventContextPreparer: TypeAlias = Callable[[TradingEvent], TradingEvent]
 
 
 class ActionExecutor(Protocol):
@@ -271,6 +272,7 @@ class RunToCompletionEventProcessor:
         clock: Callable[[], datetime] | None = None,
         order_finished_observer: OrderFinishedObserver | None = None,
         event_processing_observer: EventProcessingObserver | None = None,
+        event_context_preparer: EventContextPreparer | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -282,6 +284,7 @@ class RunToCompletionEventProcessor:
             clock -> 내부 event 발생 시각 공급 함수, 생략하면 현재 UTC 시각 사용
             order_finished_observer -> order_finished 성공을 관찰할 optional callback
             event_processing_observer -> action batch의 원 event 식별자를 열고 닫는 optional callback
+            event_context_preparer -> claimed event의 immutable market 평가를 Context에 적용할 callback
         반환값: 없음
         작성 날짜: 2026/08/14
         """
@@ -294,6 +297,10 @@ class RunToCompletionEventProcessor:
             event_processing_observer
         ):
             raise TypeError("event_processing_observer must be callable or None")
+        if event_context_preparer is not None and not callable(
+            event_context_preparer
+        ):
+            raise TypeError("event_context_preparer must be callable or None")
 
         # 주입된 STM·Context·executor와 빈 queue까지 그대로 한 processor 세션에 보존한다.
         self._stm = stm
@@ -307,6 +314,7 @@ class RunToCompletionEventProcessor:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._order_finished_observer = order_finished_observer
         self._event_processing_observer = event_processing_observer
+        self._event_context_preparer = event_context_preparer
         self._processing = False
 
     @property
@@ -338,7 +346,16 @@ class RunToCompletionEventProcessor:
 
         self._processing = True
         try:
-            # 한 microstep은 동일한 context snapshot만 사용하며 이전 lower event는 버린다.
+            # Claimed market event의 immutable 평가를 먼저 적용해 뒤에 도착한 Kline과 source를 섞지 않는다.
+            if self._event_context_preparer is not None:
+                prepared_event = self._event_context_preparer(event)
+                if not isinstance(prepared_event, TradingEvent):
+                    raise TypeError(
+                        "event_context_preparer must return a TradingEvent"
+                    )
+                event = prepared_event
+
+            # 한 microstep은 준비된 동일 context snapshot만 사용하며 이전 lower event는 버린다.
             context = self._context_provider()
             if _is_stale_lower_event(event, context):
                 return None

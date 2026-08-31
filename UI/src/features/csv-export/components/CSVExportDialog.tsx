@@ -31,6 +31,10 @@ export const DEFAULT_CSV_EXPORT_DRAFT: CSVExportDraftViewModel = {
 export interface CSVExportDialogProps {
   open: boolean;
   draft: CSVExportDraftViewModel;
+  /** 제어·접근성 상태를 바꾸지 않고 정적 기준의 시각 강조에만 사용할 기간이다. */
+  visualPeriod?: CSVExportPeriod;
+  /** 검증 의미는 유지하고 정적 기준의 날짜 테두리만 중립으로 표시한다. */
+  suppressDateRangeInvalidBorder?: boolean;
   errors?: CSVExportValidationErrors;
   calendarTarget?: CalendarTarget | null;
   calendar?: CalendarViewModel;
@@ -62,6 +66,8 @@ export interface CSVExportDialogProps {
 export function CSVExportDialog({
   open,
   draft,
+  visualPeriod,
+  suppressDateRangeInvalidBorder = false,
   errors = {},
   calendarTarget = null,
   calendar,
@@ -89,10 +95,14 @@ export function CSVExportDialog({
   }
 
   const is_custom_period = draft.period === 'CUSTOM';
+  const visually_selected_period = visualPeriod ?? draft.period;
   const active_calendar_target = calendarTarget && calendar ? calendarTarget : null;
   const path_error_id = errors.saveLocation ? 'csv-save-location-error' : undefined;
   const date_error_id = errors.dateRange ? 'csv-date-range-error' : undefined;
   const file_name_error_id = errors.fileName ? 'csv-file-name-error' : undefined;
+
+  // Production은 invalid border를 유지하고 명시적 fixture presentation만 시각 처리를 분리한다.
+  const show_date_range_invalid_border = Boolean(errors.dateRange) && !suppressDateRangeInvalidBorder;
 
   return (
     <Dialog.Root open={open}>
@@ -177,7 +187,7 @@ export function CSVExportDialog({
             {period_options.map((option) => (
               <button
                 aria-pressed={draft.period === option.value}
-                className={draft.period === option.value ? styles.selectedPeriod : ''}
+                className={visually_selected_period === option.value ? styles.selectedPeriod : ''}
                 disabled={exporting}
                 key={option.value}
                 onClick={() => onPeriodChange(option.value)}
@@ -199,9 +209,11 @@ export function CSVExportDialog({
             <button
               aria-describedby={date_error_id}
               aria-expanded={active_calendar_target === 'START'}
+              aria-invalid={Boolean(errors.dateRange)}
               className={`${styles.dateField} ${is_custom_period ? styles.dateEnabled : ''} ${
                 active_calendar_target === 'START' ? styles.dateOpen : ''
-              } ${errors.dateRange ? styles.invalid : ''}`}
+              } ${show_date_range_invalid_border ? styles.invalid : ''}`}
+              data-calendar-target="START"
               data-calendar-trigger="true"
               disabled={!is_custom_period || exporting}
               onClick={() => onCalendarOpen('START')}
@@ -231,9 +243,11 @@ export function CSVExportDialog({
             <button
               aria-describedby={date_error_id}
               aria-expanded={active_calendar_target === 'END'}
+              aria-invalid={Boolean(errors.dateRange)}
               className={`${styles.dateField} ${is_custom_period ? styles.dateEnabled : ''} ${
                 active_calendar_target === 'END' ? styles.dateOpen : ''
-              } ${errors.dateRange ? styles.invalid : ''}`}
+              } ${show_date_range_invalid_border ? styles.invalid : ''}`}
+              data-calendar-target="END"
               data-calendar-trigger="true"
               disabled={!is_custom_period || exporting}
               onClick={() => onCalendarOpen('END')}

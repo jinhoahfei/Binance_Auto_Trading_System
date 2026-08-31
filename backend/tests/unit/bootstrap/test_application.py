@@ -14,6 +14,9 @@ from binance_auto_trader.application import (
     TradingController,
     TradingSessionStatus,
 )
+from binance_auto_trader.application.market_evaluation_builder import (
+    ThirtyMinuteMarketEvaluationBuilder,
+)
 from binance_auto_trader.bootstrap import (
     ApplicationStatus,
     ExecutionMode,
@@ -22,7 +25,11 @@ from binance_auto_trader.bootstrap import (
     parse_execution_mode,
 )
 from binance_auto_trader.bootstrap.application import _FAKE_ORDER_CAPABILITY
-from binance_auto_trader.domain.trading import OrderResult, OrderStatus
+from binance_auto_trader.domain.trading import (
+    OrderResult,
+    OrderStatus,
+    RiskPolicyUnavailable,
+)
 
 
 FIXED_TIME = datetime(2026, 8, 21, 2, 0, tzinfo=timezone.utc)  # 시간 의존 상태를 고정한다.
@@ -240,6 +247,15 @@ class ApplicationFactoryTests(unittest.TestCase):
             runtime.market_data_controller._regime_controller,
             runtime.regime_controller,
         )
+        # Production market path는 concrete builder와 같은 TradingController observer를 한 쌍으로 소유한다.
+        self.assertIsInstance(
+            runtime.market_data_controller._market_evaluation_builder,
+            ThirtyMinuteMarketEvaluationBuilder,
+        )
+        self.assertIs(
+            runtime.market_data_controller._trading_market_observer,
+            runtime.trading_controller,
+        )
         self.assertIs(
             runtime.regime_controller._regime_stm,
             runtime.regime_stm,
@@ -262,6 +278,10 @@ class ApplicationFactoryTests(unittest.TestCase):
         )
         self.assertIs(runtime.execution_mode, ExecutionMode.FAKE)
         self.assertIs(runtime.trading_controller._command_gate, True)
+        self.assertIsInstance(
+            runtime.trading_controller.risk_policy_state,
+            RiskPolicyUnavailable,
+        )  # 임의 위험 숫자를 주입하지 않은 factory는 BUY를 명시적 unavailable로 차단한다.
         self.assertIsNone(runtime._trading_event_runtime_worker)
         self.assertFalse(runtime.trading_controller.command_enabled)
         self.assertIs(runtime.state.status, ApplicationStatus.CREATED)
@@ -314,6 +334,15 @@ class ApplicationFactoryTests(unittest.TestCase):
                 web_socket_client,
                 history_repository=repository,
                 trading_session_update_observer=object(),  # type: ignore[arg-type]
+            )
+
+        # 위험 정책도 typed immutable state 외 mapping·duck type을 runtime에 보존하지 않는다.
+        with self.assertRaisesRegex(TypeError, "risk_policy_state"):
+            create_application_runtime(
+                rest_client,
+                web_socket_client,
+                history_repository=repository,
+                risk_policy_state=object(),  # type: ignore[arg-type]
             )
 
     def test_transport_observer_composes_worker_without_initial_publication(

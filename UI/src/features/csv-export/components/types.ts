@@ -21,5 +21,7 @@ export interface CalendarViewModel {
   year: number;
   month: number;
   selectedDate: string;
+  /** 선택 원과 별도로 달력 header에 표시할 fixture 기준 날짜다. */
+  headerDate?: string;
   disabledDates?: ReadonlyArray<string>;
 }

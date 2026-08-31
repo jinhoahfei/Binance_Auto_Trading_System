@@ -526,6 +526,36 @@ class RunToCompletionProcessorTests(unittest.IsolatedAsyncioTestCase):
             stm.order_finished_call_count,
         )  # concrete order outcome 한 건이 정확히 message 14를 통과한다.
 
+    def test_order_finished_rejects_non_outcome_without_state_mutation(self) -> None:
+        """
+        함수 이름: test_order_finished_rejects_non_outcome_without_state_mutation()
+        기능: 일반 시장 event가 주문 완료 adapter를 통과하거나 STM 상태를 바꾸지 못하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        stm = TradingSTM(RegimeType.TYPE_0)
+        context_view = TradingContextView(
+            version=1,
+            evaluated_at=TEST_EVALUATION_TIME,
+            market=MarketEvaluationSnapshot(),
+            runtime=TradingRuntimeSnapshot(),
+        )
+        invalid_event = create_queued_event(
+            TradingEventType.MARKET_DATA_UPDATED,
+            event_id="not-an-order-outcome",
+        )
+        state_before = stm.current_state
+
+        # Message 14는 구체적인 정규화 주문 결과만 받고 그 밖의 event는 전이 전에 닫는다.
+        with self.assertRaisesRegex(
+            ValueError,
+            "requires a concrete normalized order outcome event",
+        ):
+            stm.order_finished(invalid_event, context_view)
+
+        self.assertEqual(stm.current_state, state_before)  # 거부 경로는 부분 전이를 남기지 않는다.
+
     async def test_action_cannot_recursively_process_queue(self) -> None:
         """
         함수 이름: test_action_cannot_recursively_process_queue()

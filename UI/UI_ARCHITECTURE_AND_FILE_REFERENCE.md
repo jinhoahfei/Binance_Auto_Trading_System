@@ -130,6 +130,9 @@ UI/
 │   └── vite-env.d.ts
 ├── visual-regression/
 │   ├── figma/                        # Figma 1440×1024 기준 PNG 16개
+│   ├── baseline_manifest.json        # 기준 PNG identity와 viewport binding
+│   ├── comparison_policy.json        # JPEG/FFmpeg/SSIM/anti-alias fail 기준
+│   ├── current_capture_manifest.json # actual browser JPEG identity와 clip attestation
 │   └── README.md
 ├── .gitignore
 ├── index.html
@@ -908,6 +911,9 @@ src/stories/
 ```text
 visual-regression/
 ├── README.md
+├── baseline_manifest.json
+├── comparison_policy.json
+├── current_capture_manifest.json
 └── figma/
     ├── 01-realtime-indicator.png
     ├── 02-recent-orders.png
@@ -930,6 +936,9 @@ visual-regression/
 | 파일/그룹 | 역할 |
 |---|---|
 | `visual-regression/README.md` | Figma file key, viewport, Story 순서와 비교 규칙을 설명한다. |
+| `visual-regression/baseline_manifest.json` | Figma PNG 16개의 key, 파일명, viewport와 SHA-256을 고정한다. |
+| `visual-regression/comparison_policy.json` | 1440×1024/DPR1 clip, JPEG/JFIF, FFmpeg 8.0, 대칭 anti-alias normalization과 SSIM 0.98 기준을 고정한다. |
+| `visual-regression/current_capture_manifest.json` | Actual browser JPEG 16개의 key, 파일명, digest와 explicit clip attestation을 고정한다. |
 | `01-realtime-indicator.png` | 우측 실시간 지표 tab 기준이다. |
 | `02-recent-orders.png` | 우측 최근 체결 tab 기준이다. |
 | `03-indicator-settings.png` | 차트 지표 설정 popover 기준이다. |

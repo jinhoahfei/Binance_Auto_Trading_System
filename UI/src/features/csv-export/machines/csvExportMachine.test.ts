@@ -59,6 +59,23 @@ describe('csvExportMachine', () => {
         actor.stop();
     });
 
+    it('test_csv_export_clicked_while_editing_is_ignored: 열린 dialog를 중복 초기화하지 않는다', () => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = createActor(create_csv_export_machine(command_adapter, {
+            today: '2026-08-12',
+        }));
+
+        actor.start();
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+        actor.send({ type: 'SELECT_CSV_WEEKLY_HISTORY' });
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+
+        // Editing 상태의 중복 click은 선택 기간과 command 기록을 바꾸지 않아야 한다.
+        expect(actor.getSnapshot().matches({ editing: { period: 'weekly' } })).toBe(true);
+        expect(command_adapter.command_records).toHaveLength(0);
+        actor.stop();
+    });
+
     it('TD4-05/VR-07: 저장 위치가 없으면 export 명령을 차단하고 필드를 표시한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
         const actor = createActor(create_csv_export_machine(command_adapter, {

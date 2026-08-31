@@ -313,7 +313,27 @@ export function present_dashboard_props(
             activeTab: view_model.trader_panel.active_tab === 'recent_orders'
                 ? 'recent'
                 : 'realtime',
+            configured_risk_policy_version:
+                view_model.trading.configured_risk_policy_version,
+            max_order_notional: view_model.trading.max_order_notional,
+            max_position_notional: view_model.trading.max_position_notional,
+            max_daily_loss: view_model.trading.max_daily_loss,
+            daily_loss_scope: view_model.trading.daily_loss_scope,
+            manual_kill_behavior: view_model.trading.manual_kill_behavior,
+            last_risk_decision_allowed: view_model.trading.last_risk_decision_allowed,
+            last_risk_budget: view_model.trading.last_risk_budget,
+            manual_kill_active: view_model.trading.manual_kill_active,
+            manual_kill_cleanup_complete:
+                view_model.trading.manual_kill_cleanup_complete,
+            manual_kill_activation_behavior:
+                view_model.trading.manual_kill_activation_behavior,
+            manual_kill_activation_policy_version:
+                view_model.trading.manual_kill_activation_policy_version,
             orders: view_model.trader_panel.trades.map(create_recent_order_view_model),
+            process_ownership_ambiguous: view_model.trading.process_ownership_ambiguous,
+            risk_block_reason: view_model.trading.risk_block_reason,
+            risk_policy_availability: view_model.trading.risk_policy_availability,
+            session_risk_policy_version: view_model.trading.session_risk_policy_version,
             indicatorGroups: dynamic_indicator_groups,
             onIntent: (intent) => handle_trader_panel_intent(intent, controller),
         },

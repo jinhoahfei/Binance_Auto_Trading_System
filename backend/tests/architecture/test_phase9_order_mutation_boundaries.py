@@ -79,6 +79,12 @@ class PhaseNineOrderMutationBoundaryTests(unittest.TestCase):
                 "cancel_order",
             ),
             (
+                "application/trading_controller.py",
+                "TradingController",
+                "_cancel_pending_order_during_manual_kill_startup",
+                "cancel_order",
+            ),
+            (
                 "bootstrap/testnet.py",
                 "_TestnetOrderPermissionRESTClient",
                 "prepare_order",

@@ -17,6 +17,13 @@ from binance_auto_trader.bootstrap.testnet import (
     BINANCE_TESTNET_API_SECRET_ENV,
     create_testnet_application_runtime,
 )
+from binance_auto_trader.domain.trading import (
+    DailyLossScope,
+    ManualKillBehavior,
+    RiskPolicy,
+)
+
+
 SESSION_TOKEN_FD = 3
 READY_DESCRIPTOR_FD = 4
 STOP_SIGNAL_FD = 5
@@ -25,6 +32,7 @@ MAX_SIDECAR_CONFIGURATION_BYTES = 16 * 1024
 _MAX_ORIGIN_LENGTH = 256
 _MAX_HISTORY_PATH_LENGTH = 4_096
 _MAX_CREDENTIAL_LENGTH = 1_024
+_APPROVED_RISK_POLICY_VERSION = 1
 _ALLOWED_ORIGIN_PATTERN = re.compile(
     r"^(?:tauri://[A-Za-z0-9.-]+|https?://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)$"
 )
@@ -308,12 +316,21 @@ def _create_sidecar_runtime_factory(
         작성 날짜: 2026/08/24
         """
         # Mapping은 os.environ에 게시하지 않고 runtime 생성 호출의 명시 인자로만 전달한다.
+        approved_risk_policy = RiskPolicy(
+            version=_APPROVED_RISK_POLICY_VERSION,
+            max_order_notional=None,
+            max_position_notional=None,
+            max_daily_loss=None,
+            daily_loss_scope=DailyLossScope.REALIZED_ONLY,
+            manual_kill_behavior=ManualKillBehavior.CANCEL_AND_LIQUIDATE,
+        )  # None 세 값은 unavailable이 아니라 사용자가 승인한 configured-unbounded 정책이다.
         return create_testnet_application_runtime(
             account_update_observer,
             trade_history_update_observer,
             trading_session_update_observer,
             history_path=configuration.history_path,
             environment=configuration.to_testnet_environment(),
+            risk_policy_state=approved_risk_policy,
         )
 
     return runtime_factory

@@ -1,0 +1,11 @@
+PROPRIETARY SOFTWARE NOTICE
+
+Copyright (c) 2026. All rights reserved.
+
+This backend package is private and intended only for the owner's personal
+use. No license or other permission is granted to use, copy, modify, publish,
+distribute, sublicense, sell, or create derivative works from it.
+
+Third-party software remains governed by its own license terms, attribution
+requirements, and notices. This notice does not replace, narrow, or remove
+those third-party obligations.

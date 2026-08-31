@@ -9,6 +9,11 @@
     box-shadow: var(--shadow-control);
 }
 
+/* Dashboard fixture의 surface는 browser JPEG 변환 뒤 Figma 기준색에 맞춘다. */
+[data-figma-route='dashboard'] .panel {
+    background: #20303e;
+}
+
 .panel header h2,
 .panel header p,
 .sectionHeader h3 {
@@ -30,6 +35,136 @@
     line-height: 16px;
 }
 
+.riskNotice {
+    padding: 12px;
+    margin-top: 14px;
+    background: color-mix(in srgb, var(--color-status-warning) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-status-warning) 48%, var(--color-border-default));
+    border-radius: var(--radius-md);
+}
+
+.riskNotice h3,
+.riskNotice p,
+.riskNotice ul {
+    margin: 0;
+}
+
+.riskNotice h3 {
+    color: var(--color-status-warning);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 18px;
+}
+
+.riskNotice .riskNoticeIntroduction {
+    margin-top: 3px;
+    color: var(--color-text-secondary);
+    font-size: 11.5px;
+    line-height: 16px;
+}
+
+.riskNotice ul {
+    display: grid;
+    gap: 8px;
+    padding: 0;
+    margin-top: 9px;
+    list-style: none;
+}
+
+.riskNotice li {
+    display: grid;
+    gap: 2px;
+}
+
+.riskNotice li strong,
+.riskNotice li span {
+    font-size: 11.5px;
+    line-height: 16px;
+}
+
+.riskNotice li strong {
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.riskNotice li span {
+    color: var(--color-text-secondary);
+}
+
+.riskBudget {
+    padding: 12px;
+    margin-top: 10px;
+    background: color-mix(in srgb, var(--color-status-info) 7%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-status-info) 34%, var(--color-border-default));
+    border-radius: var(--radius-md);
+}
+
+.riskBudgetHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.riskBudgetHeader h3,
+.riskBudgetHeader span,
+.riskBudget dl,
+.riskBudget dt,
+.riskBudget dd,
+.riskBudgetProvenance {
+    margin: 0;
+}
+
+.riskBudgetHeader h3 {
+    color: var(--color-text-primary);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 18px;
+}
+
+.riskBudgetHeader span {
+    color: var(--color-text-info);
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 16px;
+}
+
+.riskBudget dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px 14px;
+    margin-top: 9px;
+}
+
+.riskBudget dl div {
+    display: grid;
+    gap: 1px;
+}
+
+.riskBudget dt,
+.riskBudget dd,
+.riskBudgetProvenance {
+    font-size: 11px;
+    line-height: 15px;
+}
+
+.riskBudget dt,
+.riskBudgetProvenance {
+    color: var(--color-text-secondary);
+}
+
+.riskBudget dd {
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.riskBudgetProvenance {
+    padding-top: 8px;
+    margin-top: 8px;
+    border-top: 1px solid var(--color-border-default);
+}
+
 .tabs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -38,6 +173,11 @@
     margin-top: 17px;
     background: var(--color-bg-control-strong);
     border-radius: var(--radius-md);
+}
+
+/* Dashboard fixture의 tab strip은 Figma 기준선에 맞춰 4px 아래에 둔다. */
+[data-figma-route='dashboard'] .tabs {
+    margin-top: 21px;
 }
 
 .tab,
@@ -65,6 +205,10 @@
     margin-top: 20px;
 }
 
+.tabPanel[hidden] {
+    display: none;
+}
+
 .sectionHeader {
     display: flex;
     align-items: center;
@@ -84,7 +228,7 @@
     padding: 0;
     background: transparent;
     border: 0;
-    color: var(--color-status-info);
+    color: var(--color-text-info);
     font-size: 12.5px;
     font-weight: 600;
     line-height: 16px;

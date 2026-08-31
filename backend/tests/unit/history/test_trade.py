@@ -331,6 +331,29 @@ class TradeTests(unittest.TestCase):
         self.assertIsNone(trade.realized_pnl)
         self.assertIsNone(trade.exit_reason)
 
+    def test_factory_rejects_mismatched_execution_identity_without_trade(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_factory_rejects_mismatched_execution_identity_without_trade()
+        기능: 다른 client order ID의 체결 요약으로 Trade가 생성되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        order, summary = make_order_execution(exchange_order_id="303")
+        mismatched_summary = replace(
+            summary,
+            client_order_id="different-client-order",
+        )
+
+        # 주문 의도와 체결 identity가 다르면 durable Trade 생성 전에 즉시 거부한다.
+        with self.assertRaisesRegex(
+            ValueError,
+            "summary client_order_id does not match order",
+        ):
+            Trade.from_order_execution(order, mismatched_summary)
+
     def test_factory_builds_sell_with_realized_result_and_exit_reason(self) -> None:
         """
         함수 이름: test_factory_builds_sell_with_realized_result_and_exit_reason()

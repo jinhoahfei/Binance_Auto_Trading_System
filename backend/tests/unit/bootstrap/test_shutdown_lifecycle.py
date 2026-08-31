@@ -21,9 +21,13 @@ from binance_auto_trader.bootstrap import (
     create_application_runtime,
     request_application_shutdown,
 )
+from binance_auto_trader.bootstrap.application import (
+    _AccountStreamRecoveryWorker,
+)
 from binance_auto_trader.domain.trading import (
     AccountSnapshot,
     AssetBalance,
+    ManualKillBehavior,
     Position,
 )
 from tests.unit.bootstrap.test_application import (
@@ -144,6 +148,110 @@ class ShutdownLifecycleTests(unittest.TestCase):
             self.assertFalse(event_worker.request_processing())
             self.assertEqual(published_states, [])
 
+    def test_shutdown_joins_market_recovery_before_reacquiring_app_lock(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_shutdown_joins_market_recovery_before_reacquiring_app_lock()
+        기능: publication app lock을 기다리는 market worker와 shutdown owner가 교착하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/25
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            runtime = _create_ready_runtime(
+                Path(temporary_directory) / "history.jsonl"
+            )
+            recovery_started = Event()
+            release_publication = Event()
+            publication_completed = Event()
+            close_entered = Event()
+            shutdown_results: list[object] = []
+            shutdown_errors: list[BaseException] = []
+
+            def recover_market_stream() -> None:
+                """
+                함수 이름: recover_market_stream()
+                기능: shutdown close가 허용할 때까지 기다린 뒤 production publication lock을 획득한다.
+                인자: 없음
+                반환값: 없음
+                작성 날짜: 2026/08/25
+                """
+                # 실제 recovery와 같이 외부 작업 뒤 application publication lock으로 진입한다.
+                recovery_started.set()
+                release_publication.wait(timeout=2.0)
+                with runtime.application_lock:
+                    publication_completed.set()
+
+            market_recovery_worker = _AccountStreamRecoveryWorker(
+                recover_market_stream,
+                lambda: True,
+                worker_name="test-market-recovery",
+            )
+            object.__setattr__(
+                runtime,
+                "_market_stream_recovery_worker",
+                market_recovery_worker,
+            )  # Frozen runtime의 production worker slot만 deterministic fixture로 교체한다.
+            original_close = _AccountStreamRecoveryWorker.close
+
+            def close_and_release(
+                worker: _AccountStreamRecoveryWorker,
+            ) -> None:
+                """
+                함수 이름: close_and_release()
+                기능: shutdown이 market worker close에 도달한 순간 publication 대기를 해제한다.
+                인자: worker -> shutdown이 닫는 recovery worker
+                반환값: production close 결과
+                작성 날짜: 2026/08/25
+                """
+                # 선택한 market worker만 barrier를 열고 production join 구현을 그대로 실행한다.
+                if worker is market_recovery_worker:
+                    close_entered.set()
+                    release_publication.set()
+                original_close(worker)
+
+            def run_shutdown() -> None:
+                """
+                함수 이름: run_shutdown()
+                기능: 교착 여부를 관찰할 daemon thread에서 실제 shutdown owner를 실행한다.
+                인자: 없음
+                반환값: 없음
+                작성 날짜: 2026/08/25
+                """
+                # 결과와 예외를 분리해 timeout과 production 실패를 함께 진단한다.
+                try:
+                    shutdown_results.append(
+                        request_application_shutdown(
+                            runtime,
+                            command_id="shutdown-market-recovery",
+                            expected_version=0,
+                        )
+                    )
+                except BaseException as error:
+                    shutdown_errors.append(error)
+
+            self.assertTrue(market_recovery_worker.request_recovery())
+            self.assertTrue(recovery_started.wait(timeout=1.0))
+            with patch.object(
+                _AccountStreamRecoveryWorker,
+                "close",
+                autospec=True,
+                side_effect=close_and_release,
+            ):
+                shutdown_thread = Thread(target=run_shutdown, daemon=True)
+                shutdown_thread.start()
+                shutdown_thread.join(timeout=2.0)
+
+            # Market publication이 app lock을 얻고 종료한 뒤 shutdown도 CLOSED까지 완료돼야 한다.
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertTrue(close_entered.is_set())
+            self.assertTrue(publication_completed.is_set())
+            self.assertEqual(shutdown_errors, [])
+            self.assertEqual(len(shutdown_results), 1)
+            self.assertTrue(shutdown_results[0].accepted)
+            self.assertIs(runtime.state.status, ApplicationStatus.CLOSED)
+
     def test_open_position_blocks_without_lowering_ready_state(self) -> None:
         """
         함수 이름: test_open_position_blocks_without_lowering_ready_state()
@@ -185,6 +293,43 @@ class ShutdownLifecycleTests(unittest.TestCase):
                 self.assertIs(runtime.state.status, ApplicationStatus.READY)
             finally:
                 close_application(runtime)  # 차단 test가 남긴 runtime resource를 명시 회수한다.
+
+    def test_incomplete_manual_kill_cleanup_blocks_safe_shutdown(self) -> None:
+        """
+        함수 이름: test_incomplete_manual_kill_cleanup_blocks_safe_shutdown()
+        기능: local Position·pending이 없어도 active C&L의 fresh cleanup 미완료가 종료를 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/29
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            runtime = _create_ready_runtime(
+                Path(temporary_directory) / "history.jsonl"
+            )
+            try:
+                controller = runtime.trading_controller
+                with controller._session_lock:
+                    # Fresh REST에만 남은 app order를 검출한 직후의 authoritative C&L 상태를 재현한다.
+                    controller._manual_kill_active = True
+                    controller._manual_kill_behavior_at_activation = (
+                        ManualKillBehavior.CANCEL_AND_LIQUIDATE
+                    )
+                    controller._manual_kill_cleanup_verified = False
+
+                with self.assertRaises(ShutdownBlockedError) as error_context:
+                    request_application_shutdown(
+                        runtime,
+                        command_id="shutdown-incomplete-manual-kill",
+                        expected_version=0,
+                    )
+
+                receipt = error_context.exception.receipt
+                self.assertFalse(receipt.position_open)
+                self.assertFalse(receipt.pending_order)
+                self.assertTrue(receipt.reconciliation_required)
+                self.assertIs(runtime.state.status, ApplicationStatus.READY)
+            finally:
+                close_application(runtime)  # 차단된 C&L fixture의 background 자원만 명시적으로 회수한다.
 
     def test_reconciliation_and_stale_version_fail_before_shutdown(self) -> None:
         """

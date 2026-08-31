@@ -23,6 +23,27 @@ async function wait_for_trade_history_settlement(): Promise<void> {
     });
 }
 
+// 직접 구성한 lifecycle fixture도 schema v3의 authoritative risk 상태를 빠짐없이 제공한다.
+const AUTHORITATIVE_RISK_STATE = {
+    risk_policy_availability: 'CONFIGURED',
+    configured_risk_policy_version: 1,
+    max_order_notional: null,
+    max_position_notional: null,
+    max_daily_loss: null,
+    daily_loss_scope: 'REALIZED_ONLY',
+    manual_kill_behavior: 'CANCEL_AND_LIQUIDATE',
+    session_risk_policy_version: 1,
+    risk_control_version: 0,
+    manual_kill_active: false,
+    manual_kill_cleanup_complete: true,
+    manual_kill_activation_behavior: null,
+    manual_kill_activation_policy_version: null,
+    last_risk_decision_allowed: null,
+    last_risk_budget: null,
+    risk_block_reason: null,
+    process_ownership_ambiguous: false,
+} as const;
+
 describe('UiApplicationFacade', () => {
     it('test_show_trade_details_message_trace: SHOW intent를 Case 3 1계열 live query와 render까지 연결한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
@@ -515,6 +536,7 @@ describe('UiApplicationFacade', () => {
             version: 4,
             session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
             command_enabled: true,
+            ...AUTHORITATIVE_RISK_STATE,
             scale_in: '0.5',
             scale_out: '0.5',
             scale_in_percentage: 50,
@@ -563,6 +585,29 @@ describe('UiApplicationFacade', () => {
                 regime_metrics: [],
                 logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
                 command_enabled: false,
+                ...AUTHORITATIVE_RISK_STATE,
+                risk_control_version: 3,
+                manual_kill_active: true,
+                manual_kill_cleanup_complete: false,
+                manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+                manual_kill_activation_policy_version: 1,
+                last_risk_decision_allowed: false,
+                last_risk_budget: {
+                    policy_version: 1,
+                    market_version: 7,
+                    account_version: 3,
+                    context_version: 4,
+                    current_position_notional: '125.50',
+                    reserved_buy_notional: '24.25',
+                    candidate_order_notional: '50.25',
+                    projected_position_notional: '200.00',
+                    daily_realized_pnl: '-12.75',
+                    unrealized_pnl: '-3.50',
+                    daily_loss: '12.75',
+                    manual_kill_active: true,
+                },
+                risk_block_reason: 'MANUAL_KILL_SWITCH_ACTIVE',
+                process_ownership_ambiguous: true,
                 recent_trades: [],
                 scale_in_percentage: 40,
                 scale_out_percentage: 60,
@@ -617,6 +662,38 @@ describe('UiApplicationFacade', () => {
         expect(view_model.trade_history.symbol).toBe('ETH/USDT');
         expect(view_model.split_order.scale_in_percentage).toBe(40);
         expect(view_model.trading.has_open_position).toBe(true);
+        expect(view_model.trading).toMatchObject({
+            risk_policy_availability: 'CONFIGURED',
+            configured_risk_policy_version: 1,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: 'REALIZED_ONLY',
+            manual_kill_behavior: 'CANCEL_AND_LIQUIDATE',
+            session_risk_policy_version: 1,
+            risk_control_version: 3,
+            manual_kill_active: true,
+            manual_kill_cleanup_complete: false,
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 1,
+            last_risk_decision_allowed: false,
+            last_risk_budget: {
+                policy_version: 1,
+                market_version: 7,
+                account_version: 3,
+                context_version: 4,
+                current_position_notional: '125.50',
+                reserved_buy_notional: '24.25',
+                candidate_order_notional: '50.25',
+                projected_position_notional: '200.00',
+                daily_realized_pnl: '-12.75',
+                unrealized_pnl: '-3.50',
+                daily_loss: '12.75',
+                manual_kill_active: true,
+            },
+            risk_block_reason: 'MANUAL_KILL_SWITCH_ACTIVE',
+            process_ownership_ambiguous: true,
+        });
 
         unsubscribe();
         facade.stop();
@@ -648,6 +725,7 @@ describe('UiApplicationFacade', () => {
                 regime_metrics: [],
                 logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
                 command_enabled: false,
+                ...AUTHORITATIVE_RISK_STATE,
                 recent_trades: [],
                 scale_in_percentage: 50,
                 scale_out_percentage: 50,
@@ -712,6 +790,7 @@ describe('UiApplicationFacade', () => {
             version: 5,
             session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
             command_enabled: false,
+            ...AUTHORITATIVE_RISK_STATE,
             scale_in: '0.4',
             scale_out: '0.6',
             scale_in_percentage: 40,
@@ -744,6 +823,7 @@ describe('UiApplicationFacade', () => {
             version: 6,
             session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
             command_enabled: true,
+            ...AUTHORITATIVE_RISK_STATE,
             scale_in: '0.4',
             scale_out: '0.6',
             scale_in_percentage: 40,

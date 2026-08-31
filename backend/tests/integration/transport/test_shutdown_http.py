@@ -41,7 +41,7 @@ class ShutdownHttpIntegrationTests(unittest.TestCase):
         )
         server.start()
         request_body = json.dumps(
-            {"schema_version": 2, "expected_version": 4},
+            {"schema_version": 3, "expected_version": 4},
             separators=(",", ":"),
         )
         receipt = ShutdownSafetyReceipt(

@@ -4,10 +4,20 @@ version = "0.1.0"
 description = "Binance Auto Trader desktop shell"
 authors = ["Binance Auto Trader"]
 edition = "2021"
+publish = false
+license-file = "../../../../LICENSE"
 
 [lib]
 name = "binance_auto_trader_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "native-picker-current-host-smoke"
+path = "src/bin/native_picker_current_host_smoke.rs"
+required-features = ["native-picker-smoke"]
+
+[features]
+native-picker-smoke = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

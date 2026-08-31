@@ -77,11 +77,11 @@
 }
 
 .online {
-  color: var(--color-status-positive);
+  color: var(--color-text-positive);
 }
 
 .offline {
-  color: var(--color-status-negative);
+  color: var(--color-text-negative);
 }
 
 .actions {

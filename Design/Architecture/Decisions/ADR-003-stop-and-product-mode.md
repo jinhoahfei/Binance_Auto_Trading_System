@@ -120,6 +120,22 @@ standard/special/tax의 maker/taker/buyer/seller 12개 비율과 discount가 모
 때만 수수료 자산 부재로 제한 수용하고, 필드 누락이나 하나라도 양수인 null 조합은 거부한다.
 이는 live enable 정책이 아니라 Phase 9 Testnet의 보수적 fail-closed 조건이다.
 
+Phase 9의 `10 USDT`는 이미 완료한 개별 Testnet BUY의 승인 cap이다. Phase 13의
+후속 actual Testnet Case 2는 local in-scope gate가 모두 통과한 뒤에만 별도 opt-in으로
+허용하며, 각 신규 BUY의 decision price × submitted quantity를 `100 USDT`
+이하로 제한한다. 이 hard cap은 configured risk policy의 nullable 상한과 다른
+Testnet 실행 경계이다. STOP/recovery SELL은 BUY cap으로 막지 않고 authoritative
+Position, free ETH와 최신 filter가 허용하는 정확한 보유 수량만 청산한다.
+
+프로젝트 자체의 배포 범위는 비공개·개인용이며 배포 license를 부여하지 않는다.
+Python backend는 `LicenseRef-Proprietary`와 `Private :: Do Not Upload`, UI npm package는
+`private: true`와 `UNLICENSED`, Tauri crate는 `publish = false`와 repository `LICENSE`를
+선언한다. Root·backend proprietary notice와 README도 같은 범위를 고지한다. Local supply
+inventory는 이 세 manifest와 repository notice byte를 결합하고 project 자체의
+`UNKNOWN` license group이 없음을 검증한다. 이 결정은 dependency의 license, notice와
+기타 제3자 의무를 제거하지 않는다. PyInstaller 계열의 두 third-party license group,
+raw license scan, SBOM과 release artifact binding은 별도 `NO_GO`로 남는다.
+
 ## 5. Live 승인 gate
 
 `live` 주문은 다음 조건을 모두 만족할 때만 가능하다.
@@ -128,8 +144,10 @@ standard/special/tax의 maker/taker/buyer/seller 12개 비율과 discount가 모
 2. backend 전용 설정에서 `execution_mode=live`를 명시했다.
 3. 사용자 승인 record가 존재하며 `schema_version`, 승인 release commit,
    `approved_at`, `approved_by`를 포함한다.
-4. `max_order_notional`, `max_position_notional`, `max_daily_loss`가 사용자에 의해
-   각각 0보다 큰 Decimal로 설정되어 있다. 안전한 임의 기본값은 없다.
+4. versioned `RiskPolicy`가 명시적으로 주입되고 승인 record가 policy version과
+   세 상한, daily-loss 범위와 manual-kill 동작을 정확히 bind한다. 세 상한은
+   양의 유한 `Decimal` 또는 명시적 `None`이며 누락된 policy를 무제한으로
+   대체하지 않는다.
 5. 현재 binary의 commit과 승인 record의 commit이 정확히 일치한다.
 6. 앱을 시작할 때마다 사용자가 `LIVE ETHUSDT` 문구를 직접 확인한다. 이 확인은 저장해
    다음 실행에 재사용하지 않는다.
@@ -137,12 +155,37 @@ standard/special/tax의 maker/taker/buyer/seller 12개 비율과 discount가 모
 8. reconciliation이 끝났고 open order, Position, Account snapshot이 서로 일치한다.
 
 한 조건이라도 없거나 일치하지 않으면 `LIVE_GATE_NOT_SATISFIED`로 주문을 거부하고
-mode를 효과적으로 `disabled`로 취급한다. 한도 값은 Phase 13의 별도 사용자 승인 대상이며
-이 ADR에서 숫자를 추측하지 않는다.
+mode를 효과적으로 `disabled`로 취급한다. 2026-08-29 사용자가 확정한
+`max_order_notional=None`, `max_position_notional=None`, `max_daily_loss=None`은
+configured policy의 **명시적 무제한**이며 policy 부재 `UNAVAILABLE`과 다르다.
+`daily_loss_scope=REALIZED_ONLY`, `manual_kill_behavior=CANCEL_AND_LIQUIDATE`를
+함께 적용한다. 이 선택은 Phase 13 구현 결정이지 live release 승인은 아니므로,
+별도 live 승인 record와 서명된 checklist 전에는 계속 disabled다.
 
-`max_daily_loss`에 도달하거나 reconciliation이 필요한 순간에는 신규 BUY/SELL을 막는다.
-이미 존재하는 Position의 안전한 정리는 운영자 확인과 동일 주문 reconciliation 정책으로만
-수행한다.
+세 상한이 `None`이어도 후보 주문, 현재·예약·예상 Position notional과 KST 실현
+손실은 `Decimal`로 계산·게시한다. 각 비교만 건너뛰며 거대한 숫자로 치환하지
+않는다. 이 정책에는 단건·누적·일일 운영 cap이 없으므로 전략 손절은 운영
+위험 상한의 대체가 아니라는 잔여 위험을 live 승인 전에 다시 검토한다.
+
+유한 `max_daily_loss`에 도달하거나 reconciliation이 필요한 순간에는 신규 BUY를
+막는다. 이미 존재하는 Position의 안전한 정리, cancel, same-ID query와 history
+복구는 신규 노출 차단으로 막지 않는다. `CANCEL_AND_LIQUIDATE`는 kill receipt를
+먼저 durable하게 저장한 뒤 app-owned 주문을 cancel·reconcile하고 정확한 잔여 Position을
+기존 STOP/recovery 경로로 청산한다. 현재 구현은 receipt fsync 후 durable
+app-owned pending을 same-ID query하고, 취소 가능한 주문을 개별 cancel한 뒤 같은
+ID를 다시 조회해 terminal/partial을 History·Position에 reconcile한다. 잔여 보유량은
+canonical STOP/recovery SELL로 청산하고, restart는 activation epoch의 같은 cleanup
+identity·behavior·policy version으로 자동 재개한다. Controller의 authoritative cleanup
+boolean은 account stream readiness, app-owned open order 0, pending/UNKNOWN 0, Position 0이
+모두 확인된 뒤에만 `True`다. RECON activation, reconnect same-ID re-cancel, partial residual SELL,
+fresh release TOCTOU와 cleanup-incomplete shutdown 차단의 focused local test는 통과했다. 실제 Phase 13
+Testnet Case 2와 local suite에 없는 추가 외부 timeout/5xx/persistence 조합은 아직 남아 있다.
+
+Phase 13의 상세 계산, pending reservation, manual kill과 policy-version mismatch는 ADR-006을
+적용한다. ADR-006의 risk gate는 신규 노출 BUY만 차단하고, 일반 전략 SELL,
+operator가 명시한 STOP/recovery SELL, cancel, same-ID query, reconciliation과 persistence
+복구를 계속 허용한다. 두 ADR의 적용 범위가 겹치면 신규 노출 증가와 기존 노출
+감축을 이 규칙으로 구분한다.
 
 ## 6. 종료와 실패 표시
 
@@ -164,7 +207,14 @@ mode를 효과적으로 `disabled`로 취급한다. 한도 값은 Phase 13의 �
 - [x] Phase 7에서 position 0 sell Action 0회와 세 stop branch를 테스트했다. 실제 Gateway 호출 검증은 Action executor가 구현되는 Phase 8/9 범위다.
 - [x] Phase 9에서 설명 가능한 복구 Position의 명시 청산만 허용하고 자동 resume를 금지하는 정책을 확정했다.
 - [x] Phase 9 복구 청산은 free·filter 뒤 정확한 Position 전량 한 주문만 허용하고, 신규 Testnet MARKET BUY의 수신 ETH 수수료 가능성을 dust 회계 전까지 차단한다. 이미 durable한 Position의 recovery SELL은 과거 BUY 정책 변화만으로 막지 않으며, max-notional의 승인 의미는 BUY entry이고 STOP/recovery SELL만 예외다.
-- [ ] Phase 13에서 사용자가 한도와 release 승인을 별도로 확정한다.
+- [x] Phase 13에서 configured-unbounded 세 상한, `REALIZED_ONLY` 및
+  `CANCEL_AND_LIQUIDATE` 정책 값을 사용자가 확정했다.
+- [x] Configured-unbounded domain·wire·UI gate와 `CANCEL_AND_LIQUIDATE`의 receipt-first
+  cancel·same-ID reconcile·안전 청산, restart resume·activation replay·policy provenance를
+  구현하고 focused local test로 검증했다.
+- [ ] Public market event로 시작하는 실제 Phase 13 Testnet trace와 local suite에 없는 추가 외부
+  timeout/5xx/persistence 조합 evidence를 완료한다.
+- [ ] Live release commit, signed checklist와 별도 live 승인 record를 확정한다.
 
 ### Phase 7 완료 증거
 

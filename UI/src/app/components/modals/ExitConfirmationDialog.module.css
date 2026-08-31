@@ -21,7 +21,7 @@
 
 .notice p {
     margin: 4px 0 0;
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
     font-size: 12px;
 }
 

@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "source": {
+    "kind": "figma_export",
+    "file_key": "kzt9vOXj0QmPeYxO8SVPax",
+    "captured_on": "2026-08-12"
+  },
+  "viewport": {
+    "width": 1440,
+    "height": 1024,
+    "device_scale_factor": 1
+  },
+  "frames": [
+    {
+      "frame_key": "realtime-indicator",
+      "reference_file": "01-realtime-indicator.png",
+      "sha256": "ea27698faf6a359c3737e718d7f50af19293ebc008044c7af8706af9b56fe7b1"
+    },
+    {
+      "frame_key": "recent-orders",
+      "reference_file": "02-recent-orders.png",
+      "sha256": "85bd608c636f9fce81903a9731347ed14f9a2947667d93f436ab3b53cb70fee8"
+    },
+    {
+      "frame_key": "indicator-settings",
+      "reference_file": "03-indicator-settings.png",
+      "sha256": "4b041507fee41a68cbff548fdeb35a20edc67b14ea4112d7499fad1b9e78d34f"
+    },
+    {
+      "frame_key": "trade-history",
+      "reference_file": "04-trade-history.png",
+      "sha256": "e297d8c38033b4515be7d9c00105d04ae951967c2aa8294846622b00907f1cb4"
+    },
+    {
+      "frame_key": "start-confirmation",
+      "reference_file": "05-start-confirm.png",
+      "sha256": "4e194312810b90b1778125c06527b22a8fad9e027fab183a04eec81300afaa58"
+    },
+    {
+      "frame_key": "stop-with-position",
+      "reference_file": "06-stop-with-position.png",
+      "sha256": "fc61fa54b27dc0157ef475a7e90874e99fe65dc53793d1d3a7e6dc7595671176"
+    },
+    {
+      "frame_key": "stop-without-position",
+      "reference_file": "07-stop-no-position.png",
+      "sha256": "b94ed78f87f9bda55282473505d515df9af1404cc13221e6b10b48812873c331"
+    },
+    {
+      "frame_key": "csv-end-calendar",
+      "reference_file": "08-csv-end-calendar.png",
+      "sha256": "5d595e7b58bd9eb0711223bb2625280c00d1c6b1c278acaf3800fb7e6e0fc3e5"
+    },
+    {
+      "frame_key": "csv-start-calendar",
+      "reference_file": "09-csv-start-calendar.png",
+      "sha256": "ccdbdb89cb959ef785bac47f62b6fbd926d82ee10bac7ccdc19095f37c90f5d5"
+    },
+    {
+      "frame_key": "csv-dialog",
+      "reference_file": "10-csv-no-calendar.png",
+      "sha256": "35d1cd2afe41fc31b52ba1549e9694e5a435fc6648b7ce2822f6c9f8e094250f"
+    },
+    {
+      "frame_key": "regime-confirmation",
+      "reference_file": "11-regime-confirm.png",
+      "sha256": "013df13f5964b41d4aa7bfba9f363d5c9510de361d0a754565f0a6c4691a074f"
+    },
+    {
+      "frame_key": "regime-required",
+      "reference_file": "12-regime-required.png",
+      "sha256": "ae75673aa3726dfa4dbfec8d1fd919f9c0792481d207c9f23079617a265bc01d"
+    },
+    {
+      "frame_key": "regime-highlight",
+      "reference_file": "13-regime-highlight.png",
+      "sha256": "355d808d65c16a0253d79e0b3fd5cce14e1f635e965389752ea8823247bfcf02"
+    },
+    {
+      "frame_key": "history-empty",
+      "reference_file": "14-history-empty.png",
+      "sha256": "cb4c1779d6295c19659905088856c41f822884e0621d13d646ea4e5d5ec347e2"
+    },
+    {
+      "frame_key": "start-loading",
+      "reference_file": "15-start-loading.png",
+      "sha256": "d543b59cf421445d3b6bef2c4a20573ffa87626cd3c127023fd6d108197a1fd6"
+    },
+    {
+      "frame_key": "csv-validation-error",
+      "reference_file": "16-csv-error.png",
+      "sha256": "ea9d75c16a070d1171425870f0bd43f4e5c1a7a955a790d2a8611e84e84f28d5"
+    }
+  ]
+}

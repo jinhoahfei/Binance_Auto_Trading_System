@@ -35,6 +35,10 @@ function get_tone_class(tone: MetricTone) {
 export function SummaryCards({ summary }: SummaryCardsProps) {
   const daily_return_tone = get_tone_class(summary.dailyReturn.tone);
   const sell_performance_tone = get_tone_class(summary.sellPerformance.tone);
+  // 집계가 없는 placeholder 승률은 과거 손익 detail의 positive tone을 상속하지 않는다.
+  const sell_rate_tone = summary.sellPerformance.winRate.includes('--')
+    ? styles.neutral
+    : sell_performance_tone;
 
   return (
     <section aria-label="거래 요약" className={styles.grid}>
@@ -52,7 +56,7 @@ export function SummaryCards({ summary }: SummaryCardsProps) {
           전체 매도 성과
         </h2>
         <div className={styles.sellHeadline}>
-          <p className={`${styles.sellRate} ${sell_performance_tone}`}>{summary.sellPerformance.winRate}</p>
+          <p className={`${styles.sellRate} ${sell_rate_tone}`}>{summary.sellPerformance.winRate}</p>
           <p className={styles.sellCount}>{summary.sellPerformance.completedCount}</p>
         </div>
         <div className={styles.sellDetails}>

@@ -14,6 +14,17 @@
     height: 100%;
 }
 
+/* Fixture host는 Figma 기준 SVG의 수동 축 영역을 침범하지 않는다. */
+.fixtureChartHost {
+    top: -22px;
+    right: 46px;
+    bottom: auto;
+    height: 350px;
+    pointer-events: none;
+    transform: translate(-43px, -12px) scaleY(1.03);
+    transform-origin: center;
+}
+
 .chartHost > div,
 .chartHost table {
     width: 100% !important;
@@ -55,9 +66,9 @@
 }
 
 .candleInformation .positiveValue {
-    color: var(--color-status-positive);
+    color: var(--color-text-positive);
 }
 
 .candleInformation .negativeValue {
-    color: var(--color-status-negative);
+    color: var(--color-text-negative);
 }

@@ -54,6 +54,7 @@ class RuntimeField(StrEnum):
     TP_PRICE = "tp_price"
     PREVIOUS_TRAIL_EMA_SLOPE = "previous_trail_ema_slope"
     PENDING_EXIT_REASON = "pending_exit_reason"
+    PENDING_EXIT_PCT_B = "pending_exit_pct_b"
     PENDING_RETURN_STATE = "pending_return_state"
     CASE_B_EXIT_REASON = "case_b_exit_reason"
     CASE_C_EXIT_REASON = "case_c_exit_reason"
@@ -215,6 +216,7 @@ class SubmitOrder:
     attempt_kind: OrderAttemptKind
     idempotency_key: str
     exit_reason: ExitReason | None = None
+    exit_pct_b_at_intent: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

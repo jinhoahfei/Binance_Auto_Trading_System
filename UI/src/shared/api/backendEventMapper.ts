@@ -1,11 +1,17 @@
 import type {
     BackendAccountSnapshot,
+    BackendDailyLossScope,
+    BackendDecimalString,
     BackendEventEnvelope,
     BackendHttpEnvelope,
     BackendIndicatorSnapshot,
+    BackendManualKillBehavior,
     BackendPerformanceSnapshot,
     BackendRegimeType,
     BackendResyncRequired,
+    BackendRiskBudgetSnapshot,
+    BackendRiskBlockReason,
+    BackendRiskPolicyAvailability,
     BackendSnapshot,
     BackendTradeSnapshot,
     BackendTradingStatus,
@@ -62,6 +68,26 @@ const BACKEND_TRADING_STATUSES: ReadonlySet<BackendTradingStatus> = new Set([
     'stopping',
     'reconciliation_required',
     'terminated',
+]);
+const BACKEND_RISK_POLICY_AVAILABILITIES: ReadonlySet<BackendRiskPolicyAvailability> = new Set([
+    'CONFIGURED',
+    'UNAVAILABLE',
+]);
+const BACKEND_DAILY_LOSS_SCOPES: ReadonlySet<BackendDailyLossScope> = new Set([
+    'REALIZED_ONLY',
+    'REALIZED_AND_UNREALIZED',
+]);
+const BACKEND_MANUAL_KILL_BEHAVIORS: ReadonlySet<BackendManualKillBehavior> = new Set([
+    'BLOCK_NEW_ORDERS',
+    'CANCEL_AND_LIQUIDATE',
+]);
+const BACKEND_RISK_BLOCK_REASONS: ReadonlySet<BackendRiskBlockReason> = new Set([
+    'RISK_POLICY_UNAVAILABLE',
+    'RISK_POLICY_VERSION_MISMATCH',
+    'MANUAL_KILL_SWITCH_ACTIVE',
+    'RISK_ORDER_NOTIONAL_EXCEEDED',
+    'RISK_DAILY_LOSS_EXCEEDED',
+    'RISK_POSITION_NOTIONAL_EXCEEDED',
 ]);
 
 /**
@@ -199,6 +225,23 @@ function assert_safe_integer(
 }
 
 /**
+ * 함수 이름: assert_nullable_safe_integer()
+ * 기능: nullable policy version을 null 또는 지정 최솟값 이상의 안전한 정수로 제한한다.
+ * 인자: value -> 검증할 JSON 값, field_name -> 오류 field 이름, minimum -> 허용 최소값
+ * 반환값: 검증된 안전한 정수 또는 null
+ * 작성 날짜: 2026/08/25
+ */
+function assert_nullable_safe_integer(
+    value: unknown,
+    field_name: string,
+    minimum = 0,
+): number | null {
+    return value === null
+        ? null
+        : assert_safe_integer(value, field_name, minimum);
+}
+
+/**
  * 함수 이름: assert_decimal_string()
  * 기능: 금융 wire 값이 exponent와 locale separator가 없는 plain Decimal 문자열인지 검증한다.
  * 인자: value -> 검증할 JSON 값, field_name -> 오류 field 이름
@@ -232,6 +275,207 @@ function assert_nullable_decimal_string(
     return value === null
         ? null
         : assert_decimal_string(value, field_name);
+}
+
+/**
+ * 함수 이름: assert_nullable_positive_decimal_string()
+ * 기능: configured 위험 상한을 양의 plain Decimal 문자열 또는 명시적 무제한 null로 제한한다.
+ * 인자: value -> 검증할 JSON 값, field_name -> 오류 field 이름
+ * 반환값: 정밀도를 보존한 양의 Decimal 문자열 또는 null
+ * 작성 날짜: 2026/08/29
+ */
+function assert_nullable_positive_decimal_string(
+    value: unknown,
+    field_name: string,
+): BackendDecimalString | null {
+    const decimal_text = assert_nullable_decimal_string(value, field_name);
+
+    // JS number 변환 없이 문자열 문법만으로 음수와 모든 zero 표현을 거부한다.
+    if (decimal_text !== null
+        && !/^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$/u.test(decimal_text)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            `${field_name} must be a positive decimal string or null`,
+        );
+    }
+
+    return decimal_text;
+}
+
+/**
+ * 함수 이름: assert_non_negative_decimal_string()
+ * 기능: 노출·손실 wire 값을 음수가 아닌 plain Decimal 문자열로 제한한다.
+ * 인자: value -> 검증할 JSON 값, field_name -> 오류 field 이름
+ * 반환값: 정밀도가 보존된 0 이상 Decimal 문자열
+ * 작성 날짜: 2026/08/29
+ */
+function assert_non_negative_decimal_string(
+    value: unknown,
+    field_name: string,
+): BackendDecimalString {
+    const decimal_text = assert_decimal_string(value, field_name);
+
+    // 금융 금액의 음수 표기를 배제하되 소수 정밀도와 0 표기는 유지한다.
+    if (!/^(?:0(?:\.[0-9]+)?|[1-9][0-9]*(?:\.[0-9]+)?)$/u.test(decimal_text)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            `${field_name} must be a non-negative decimal string`,
+        );
+    }
+
+    return decimal_text;
+}
+
+/**
+ * 함수 이름: decimal_text_to_scaled_integer()
+ * 기능: 음수가 아닌 Decimal 문자열을 정확한 공통 scale의 BigInt로 변환한다.
+ * 인자: decimal_text -> 이미 검증된 Decimal 문자열, scale -> 맞출 소수 자릿수
+ * 반환값: 반올림 없이 scale만 맞춘 BigInt
+ * 작성 날짜: 2026/08/29
+ */
+function decimal_text_to_scaled_integer(
+    decimal_text: BackendDecimalString,
+    scale: number,
+): bigint {
+    const [integer_digits, fractional_digits = ''] = decimal_text.split('.');
+    const scaled_digits = `${integer_digits}${fractional_digits.padEnd(scale, '0')}`;
+
+    return BigInt(scaled_digits);  // JS number로 변환하지 않고 exact Decimal 합계를 검증한다.
+}
+
+/**
+ * 함수 이름: validate_risk_budget_snapshot()
+ * 기능: 마지막 BUY 위험 예산의 전체 Decimal·version·노출 합계 계약을 검증한다.
+ * 인자: value -> risk budget JSON 또는 BUY 평가 전 null
+ * 반환값: generated RiskBudgetSnapshot 또는 null
+ * 작성 날짜: 2026/08/29
+ */
+function validate_risk_budget_snapshot(
+    value: unknown,
+): BackendRiskBudgetSnapshot | null {
+    if (value === null) {
+        return null;  // 평가 전을 모든 값 0인 예산으로 축약하지 않는다.
+    }
+
+    const budget = assert_record(value, 'trading.last_risk_budget');
+    const expected_budget_fields: ReadonlySet<string> = new Set([
+        'policy_version',
+        'market_version',
+        'account_version',
+        'context_version',
+        'current_position_notional',
+        'reserved_buy_notional',
+        'candidate_order_notional',
+        'projected_position_notional',
+        'daily_realized_pnl',
+        'unrealized_pnl',
+        'daily_loss',
+        'manual_kill_active',
+    ]);
+    const received_budget_fields = Object.keys(budget);
+
+    // Unknown field나 누락 field가 typed facade state에 숨지 못하게 exact DTO 표면을 고정한다.
+    if (received_budget_fields.length !== expected_budget_fields.size
+        || received_budget_fields.some((field_name) => {
+            return !expected_budget_fields.has(field_name);
+        })) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.last_risk_budget fields are invalid',
+        );
+    }
+
+    const policy_version = assert_nullable_safe_integer(
+        budget.policy_version,
+        'trading.last_risk_budget.policy_version',
+        1,
+    );
+    const market_version = assert_safe_integer(
+        budget.market_version,
+        'trading.last_risk_budget.market_version',
+    );
+    const account_version = assert_safe_integer(
+        budget.account_version,
+        'trading.last_risk_budget.account_version',
+    );
+    const context_version = assert_safe_integer(
+        budget.context_version,
+        'trading.last_risk_budget.context_version',
+    );
+
+    // 노출 값은 각각 0 이상이고 projected가 세 구성 금액의 exact 합이어야 한다.
+    const current_position_notional = assert_non_negative_decimal_string(
+        budget.current_position_notional,
+        'trading.last_risk_budget.current_position_notional',
+    );
+    const reserved_buy_notional = assert_non_negative_decimal_string(
+        budget.reserved_buy_notional,
+        'trading.last_risk_budget.reserved_buy_notional',
+    );
+    const candidate_order_notional = assert_non_negative_decimal_string(
+        budget.candidate_order_notional,
+        'trading.last_risk_budget.candidate_order_notional',
+    );
+    const projected_position_notional = assert_non_negative_decimal_string(
+        budget.projected_position_notional,
+        'trading.last_risk_budget.projected_position_notional',
+    );
+    const exposure_values = [
+        current_position_notional,
+        reserved_buy_notional,
+        candidate_order_notional,
+        projected_position_notional,
+    ];
+    const exposure_scale = Math.max(
+        ...exposure_values.map((decimal_text) => decimal_text.split('.')[1]?.length ?? 0),
+    );
+    const expected_projected_notional = [
+        current_position_notional,
+        reserved_buy_notional,
+        candidate_order_notional,
+    ].reduce((sum, decimal_text) => {
+        return sum + decimal_text_to_scaled_integer(decimal_text, exposure_scale);
+    }, BigInt(0));
+    if (expected_projected_notional
+        !== decimal_text_to_scaled_integer(projected_position_notional, exposure_scale)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.last_risk_budget exposure total is inconsistent',
+        );
+    }
+
+    // PnL은 이익·손실 부호를 모두 보존하고 daily loss만 0 이상으로 제한한다.
+    const daily_realized_pnl = assert_decimal_string(
+        budget.daily_realized_pnl,
+        'trading.last_risk_budget.daily_realized_pnl',
+    );
+    const unrealized_pnl = assert_decimal_string(
+        budget.unrealized_pnl,
+        'trading.last_risk_budget.unrealized_pnl',
+    );
+    const daily_loss = assert_non_negative_decimal_string(
+        budget.daily_loss,
+        'trading.last_risk_budget.daily_loss',
+    );
+    const manual_kill_active = assert_boolean(
+        budget.manual_kill_active,
+        'trading.last_risk_budget.manual_kill_active',
+    );
+
+    return {
+        policy_version,
+        market_version,
+        account_version,
+        context_version,
+        current_position_notional,
+        reserved_buy_notional,
+        candidate_order_notional,
+        projected_position_notional,
+        daily_realized_pnl,
+        unrealized_pnl,
+        daily_loss,
+        manual_kill_active,
+    };
 }
 
 /**
@@ -417,6 +661,171 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
             'An active trading state requires a trading session ID',
+        );
+    }
+
+    // Phase 13 risk publication은 임의 문자열이나 truthy 값이 UI 운영 상태를 가장하지 못하게 한다.
+    if (typeof trading.risk_policy_availability !== 'string'
+        || !BACKEND_RISK_POLICY_AVAILABILITIES.has(
+            trading.risk_policy_availability as BackendRiskPolicyAvailability,
+        )) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.risk_policy_availability is invalid',
+        );
+    }
+    const configured_risk_policy_version = assert_nullable_safe_integer(
+        trading.configured_risk_policy_version,
+        'trading.configured_risk_policy_version',
+        1,
+    );
+    const max_order_notional = assert_nullable_positive_decimal_string(
+        trading.max_order_notional,
+        'trading.max_order_notional',
+    );
+    const max_position_notional = assert_nullable_positive_decimal_string(
+        trading.max_position_notional,
+        'trading.max_position_notional',
+    );
+    const max_daily_loss = assert_nullable_positive_decimal_string(
+        trading.max_daily_loss,
+        'trading.max_daily_loss',
+    );
+    const daily_loss_scope = trading.daily_loss_scope === null
+        ? null
+        : assert_string(trading.daily_loss_scope, 'trading.daily_loss_scope');
+    const manual_kill_behavior = trading.manual_kill_behavior === null
+        ? null
+        : assert_string(trading.manual_kill_behavior, 'trading.manual_kill_behavior');
+    assert_nullable_safe_integer(
+        trading.session_risk_policy_version,
+        'trading.session_risk_policy_version',
+        1,
+    );
+    assert_safe_integer(trading.risk_control_version, 'trading.risk_control_version');
+    const manual_kill_active = assert_boolean(
+        trading.manual_kill_active,
+        'trading.manual_kill_active',
+    );
+    const manual_kill_cleanup_complete = assert_boolean(
+        trading.manual_kill_cleanup_complete,
+        'trading.manual_kill_cleanup_complete',
+    );
+    const manual_kill_activation_behavior = (
+        trading.manual_kill_activation_behavior === null
+            ? null
+            : assert_string(
+                trading.manual_kill_activation_behavior,
+                'trading.manual_kill_activation_behavior',
+            )
+    );
+    const manual_kill_activation_policy_version = assert_nullable_safe_integer(
+        trading.manual_kill_activation_policy_version,
+        'trading.manual_kill_activation_policy_version',
+        1,
+    );
+    const last_risk_decision_allowed = trading.last_risk_decision_allowed === null
+        ? null
+        : assert_boolean(
+            trading.last_risk_decision_allowed,
+            'trading.last_risk_decision_allowed',
+        );
+    const last_risk_budget = validate_risk_budget_snapshot(
+        trading.last_risk_budget,
+    );
+    const risk_block_reason = trading.risk_block_reason === null
+        ? null
+        : assert_string(trading.risk_block_reason, 'trading.risk_block_reason');
+    assert_boolean(
+        trading.process_ownership_ambiguous,
+        'trading.process_ownership_ambiguous',
+    );
+
+    // Availability와 policy version은 하나의 authoritative 상태이므로 모순된 조합을 거부한다.
+    const policy_is_configured = trading.risk_policy_availability === 'CONFIGURED';
+    if (policy_is_configured !== (configured_risk_policy_version !== null)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading risk policy availability and version are inconsistent',
+        );
+    }
+    if (daily_loss_scope !== null
+        && !BACKEND_DAILY_LOSS_SCOPES.has(daily_loss_scope as BackendDailyLossScope)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.daily_loss_scope is invalid',
+        );
+    }
+    if (manual_kill_behavior !== null
+        && !BACKEND_MANUAL_KILL_BEHAVIORS.has(
+            manual_kill_behavior as BackendManualKillBehavior,
+        )) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.manual_kill_behavior is invalid',
+        );
+    }
+    if (manual_kill_activation_behavior !== null
+        && !BACKEND_MANUAL_KILL_BEHAVIORS.has(
+            manual_kill_activation_behavior as BackendManualKillBehavior,
+        )) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.manual_kill_activation_behavior is invalid',
+        );
+    }
+
+    // 활성 epoch provenance는 behavior/version을 한 쌍으로 보존하고 inactive 상태에는 남기지 않는다.
+    const activation_provenance_is_complete = (
+        (manual_kill_activation_behavior === null)
+        === (manual_kill_activation_policy_version === null)
+    );
+    if (!activation_provenance_is_complete
+        || (!manual_kill_active && manual_kill_activation_behavior !== null)
+        || (!manual_kill_active && !manual_kill_cleanup_complete)
+        || (!manual_kill_cleanup_complete
+            && manual_kill_activation_behavior !== 'CANCEL_AND_LIQUIDATE')) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading manual-kill activation provenance is inconsistent',
+        );
+    }
+
+    // Unavailable은 정책 자체의 부재이고 configured만 scope·behavior와 nullable 상한을 소유한다.
+    if ((policy_is_configured && (daily_loss_scope === null || manual_kill_behavior === null))
+        || (!policy_is_configured && (
+            max_order_notional !== null
+            || max_position_notional !== null
+            || max_daily_loss !== null
+            || daily_loss_scope !== null
+            || manual_kill_behavior !== null
+        ))) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading risk policy details are inconsistent with availability',
+        );
+    }
+    if (risk_block_reason !== null
+        && !BACKEND_RISK_BLOCK_REASONS.has(risk_block_reason as BackendRiskBlockReason)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading.risk_block_reason is invalid',
+        );
+    }
+
+    // 허용 판정은 사유가 없어야 하고 차단 판정은 반드시 allowlist 사유를 가져야 한다.
+    if ((last_risk_decision_allowed === null && risk_block_reason !== null)
+        || (last_risk_decision_allowed === true && risk_block_reason !== null)
+        || (last_risk_decision_allowed === false && risk_block_reason === null)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading risk decision and block reason are inconsistent',
+        );
+    }
+    if ((last_risk_decision_allowed === null) !== (last_risk_budget === null)) {
+        throw new BackendContractError(
+            'MALFORMED_BACKEND_PAYLOAD',
+            'trading risk decision and budget are inconsistent',
         );
     }
     validate_trading_logic_coverage(trading.logic_coverage);
@@ -1108,6 +1517,24 @@ export function map_backend_snapshot(
         regime_metrics,
         logic_coverage,
         command_enabled: trading.command_enabled,
+        risk_policy_availability: trading.risk_policy_availability,
+        configured_risk_policy_version: trading.configured_risk_policy_version,
+        max_order_notional: trading.max_order_notional,
+        max_position_notional: trading.max_position_notional,
+        max_daily_loss: trading.max_daily_loss,
+        daily_loss_scope: trading.daily_loss_scope,
+        manual_kill_behavior: trading.manual_kill_behavior,
+        session_risk_policy_version: trading.session_risk_policy_version,
+        risk_control_version: trading.risk_control_version,
+        manual_kill_active: trading.manual_kill_active,
+        manual_kill_cleanup_complete: trading.manual_kill_cleanup_complete,
+        manual_kill_activation_behavior: trading.manual_kill_activation_behavior,
+        manual_kill_activation_policy_version:
+            trading.manual_kill_activation_policy_version,
+        last_risk_decision_allowed: trading.last_risk_decision_allowed,
+        last_risk_budget: trading.last_risk_budget,
+        risk_block_reason: trading.risk_block_reason,
+        process_ownership_ambiguous: trading.process_ownership_ambiguous,
         recent_trades,
         account_strategy,
         account_asset,
@@ -1128,6 +1555,26 @@ export function map_backend_snapshot(
             regime_metrics: server_snapshot.regime_metrics,
             logic_coverage: server_snapshot.logic_coverage,
             command_enabled: server_snapshot.command_enabled,
+            risk_policy_availability: server_snapshot.risk_policy_availability,
+            configured_risk_policy_version: server_snapshot.configured_risk_policy_version,
+            max_order_notional: server_snapshot.max_order_notional,
+            max_position_notional: server_snapshot.max_position_notional,
+            max_daily_loss: server_snapshot.max_daily_loss,
+            daily_loss_scope: server_snapshot.daily_loss_scope,
+            manual_kill_behavior: server_snapshot.manual_kill_behavior,
+            session_risk_policy_version: server_snapshot.session_risk_policy_version,
+            risk_control_version: server_snapshot.risk_control_version,
+            manual_kill_active: server_snapshot.manual_kill_active,
+            manual_kill_cleanup_complete:
+                server_snapshot.manual_kill_cleanup_complete,
+            manual_kill_activation_behavior:
+                server_snapshot.manual_kill_activation_behavior,
+            manual_kill_activation_policy_version:
+                server_snapshot.manual_kill_activation_policy_version,
+            last_risk_decision_allowed: server_snapshot.last_risk_decision_allowed,
+            last_risk_budget: server_snapshot.last_risk_budget,
+            risk_block_reason: server_snapshot.risk_block_reason,
+            process_ownership_ambiguous: server_snapshot.process_ownership_ambiguous,
             recent_trades: server_snapshot.recent_trades,
             account_strategy: server_snapshot.account_strategy,
             account_asset: server_snapshot.account_asset,
@@ -1262,6 +1709,26 @@ export function map_backend_event_to_intents(
                 version: trading.version,
                 session_id: trading.session_id,
                 command_enabled: trading.command_enabled,
+                risk_policy_availability: trading.risk_policy_availability,
+                configured_risk_policy_version: trading.configured_risk_policy_version,
+                max_order_notional: trading.max_order_notional,
+                max_position_notional: trading.max_position_notional,
+                max_daily_loss: trading.max_daily_loss,
+                daily_loss_scope: trading.daily_loss_scope,
+                manual_kill_behavior: trading.manual_kill_behavior,
+                session_risk_policy_version: trading.session_risk_policy_version,
+                risk_control_version: trading.risk_control_version,
+                manual_kill_active: trading.manual_kill_active,
+                manual_kill_cleanup_complete:
+                    trading.manual_kill_cleanup_complete,
+                manual_kill_activation_behavior:
+                    trading.manual_kill_activation_behavior,
+                manual_kill_activation_policy_version:
+                    trading.manual_kill_activation_policy_version,
+                last_risk_decision_allowed: trading.last_risk_decision_allowed,
+                last_risk_budget: trading.last_risk_budget,
+                risk_block_reason: trading.risk_block_reason,
+                process_ownership_ambiguous: trading.process_ownership_ambiguous,
                 scale_in: trading.scale_in,
                 scale_out: trading.scale_out,
                 scale_in_percentage: Number(trading.scale_in) * 100,

@@ -79,6 +79,69 @@ function create_snapshot_with_logic_coverage(logic_coverage: unknown): unknown {
     };
 }
 
+/**
+ * 함수 이름: create_snapshot_with_trading_patch()
+ * 기능: schema v3 trading field 하나씩의 fail-closed 검증에 사용할 snapshot을 만든다.
+ * 인자: patch -> authoritative trading fixture에 덮어쓸 임의 JSON field
+ * 반환값: trading patch 외 aggregate가 같은 snapshot 모양
+ * 작성 날짜: 2026/08/25
+ */
+function create_snapshot_with_trading_patch(
+    patch: Readonly<Record<string, unknown>>,
+): unknown {
+    const snapshot = create_backend_snapshot_fixture();
+
+    return {
+        ...snapshot,
+        trading: {
+            ...snapshot.trading,
+            ...patch,
+        },
+    };
+}
+
+/**
+ * 함수 이름: create_configured_unbounded_snapshot()
+ * 기능: 세 위험 상한을 명시적 null로 둔 configured 정책의 coherent snapshot을 만든다.
+ * 인자: 없음
+ * 반환값: REALIZED_ONLY와 CANCEL_AND_LIQUIDATE provenance를 가진 snapshot
+ * 작성 날짜: 2026/08/29
+ */
+function create_configured_unbounded_snapshot(): BackendSnapshot {
+    const snapshot = create_backend_snapshot_fixture();
+
+    // Unavailable fixture의 정책 field를 한 번에 교체해 configured-unbounded 상태를 만든다.
+    return {
+        ...snapshot,
+        trading: {
+            ...snapshot.trading,
+            risk_policy_availability: 'CONFIGURED',
+            configured_risk_policy_version: 4,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: 'REALIZED_ONLY',
+            manual_kill_behavior: 'CANCEL_AND_LIQUIDATE',
+            session_risk_policy_version: 4,
+            last_risk_decision_allowed: true,
+            last_risk_budget: {
+                policy_version: 4,
+                market_version: 7,
+                account_version: 3,
+                context_version: 9,
+                current_position_notional: '125.50',
+                reserved_buy_notional: '24.25',
+                candidate_order_notional: '50.25',
+                projected_position_notional: '200.00',
+                daily_realized_pnl: '-12.75',
+                unrealized_pnl: '-3.50',
+                daily_loss: '12.75',
+                manual_kill_active: false,
+            },
+        },
+    };
+}
+
 describe('backend runtime contract validation', () => {
     it('ready coherent snapshot의 UUID, Decimal, UTC와 required aggregate를 검증한다', () => {
         const snapshot = create_backend_snapshot_fixture();
@@ -116,6 +179,197 @@ describe('backend runtime contract validation', () => {
         expect(() => validate_backend_snapshot(malformed_snapshot)).toThrowError(
             expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
         );
+    });
+
+    it.each([
+        {
+            name: 'unknown policy availability',
+            patch: { risk_policy_availability: 'PENDING' },
+        },
+        {
+            name: 'configured policy without version',
+            patch: {
+                risk_policy_availability: 'CONFIGURED',
+                configured_risk_policy_version: null,
+            },
+        },
+        {
+            name: 'unavailable policy with version',
+            patch: {
+                risk_policy_availability: 'UNAVAILABLE',
+                configured_risk_policy_version: 1,
+            },
+        },
+        {
+            name: 'zero session policy version',
+            patch: { session_risk_policy_version: 0 },
+        },
+        {
+            name: 'negative risk control version',
+            patch: { risk_control_version: -1 },
+        },
+        {
+            name: 'non-boolean manual kill',
+            patch: { manual_kill_active: 1 },
+        },
+        {
+            name: 'non-boolean manual kill cleanup completion',
+            patch: { manual_kill_cleanup_complete: 'true' },
+        },
+        {
+            name: 'missing manual kill cleanup completion',
+            patch: { manual_kill_cleanup_complete: undefined },
+        },
+        {
+            name: 'partial manual kill activation provenance',
+            patch: {
+                manual_kill_active: true,
+                manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            },
+        },
+        {
+            name: 'incomplete cleanup without liquidation activation',
+            patch: {
+                manual_kill_active: true,
+                manual_kill_cleanup_complete: false,
+            },
+        },
+        {
+            name: 'non-boolean last decision',
+            patch: { last_risk_decision_allowed: 'false' },
+        },
+        {
+            name: 'unknown risk reason',
+            patch: {
+                last_risk_decision_allowed: false,
+                risk_block_reason: 'raw-secret-marker',
+            },
+        },
+        {
+            name: 'blocked decision without reason',
+            patch: { last_risk_decision_allowed: false },
+        },
+        {
+            name: 'allowed decision with reason',
+            patch: {
+                last_risk_decision_allowed: true,
+                risk_block_reason: 'RISK_POLICY_UNAVAILABLE',
+            },
+        },
+        {
+            name: 'non-boolean process ownership ambiguity',
+            patch: { process_ownership_ambiguous: 'true' },
+        },
+    ])('Phase 13 trading risk snapshot의 $name을 fail closed한다', ({ patch }) => {
+        expect(() => validate_backend_snapshot(
+            create_snapshot_with_trading_patch(patch),
+        )).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
+    });
+
+    it.each([
+        {
+            name: 'number order cap',
+            patch: { max_order_notional: 10 },
+        },
+        {
+            name: 'zero position cap',
+            patch: { max_position_notional: '0.000' },
+        },
+        {
+            name: 'negative daily cap',
+            patch: { max_daily_loss: '-1' },
+        },
+        {
+            name: 'unknown daily scope',
+            patch: { daily_loss_scope: 'ALL_PNL' },
+        },
+        {
+            name: 'unknown manual kill behavior',
+            patch: { manual_kill_behavior: 'IGNORE' },
+        },
+    ])('configured risk 세부 field의 $name을 fail closed한다', ({ patch }) => {
+        const snapshot = create_configured_unbounded_snapshot();
+
+        expect(() => validate_backend_snapshot({
+            ...snapshot,
+            trading: {
+                ...snapshot.trading,
+                ...patch,
+            },
+        })).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
+    });
+
+    it.each([
+        {
+            name: 'negative current exposure',
+            patch: { current_position_notional: '-1' },
+        },
+        {
+            name: 'number realized PnL',
+            patch: { daily_realized_pnl: -12.75 },
+        },
+        {
+            name: 'unsafe source version',
+            patch: { market_version: Number.MAX_SAFE_INTEGER + 1 },
+        },
+        {
+            name: 'inconsistent projected exposure',
+            patch: { projected_position_notional: '199.99' },
+        },
+        {
+            name: 'unknown raw field',
+            patch: { raw_exchange_detail: 'must-not-enter-facade' },
+        },
+    ])('risk budget의 $name을 fail closed한다', ({ patch }) => {
+        const snapshot = create_configured_unbounded_snapshot();
+
+        // 정상 budget의 한 field만 변조해 Decimal·version·합계 경계를 각각 검증한다.
+        expect(() => validate_backend_snapshot({
+            ...snapshot,
+            trading: {
+                ...snapshot.trading,
+                last_risk_budget: {
+                    ...snapshot.trading.last_risk_budget!,
+                    ...patch,
+                },
+            },
+        })).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
+    });
+
+    it('risk decision과 budget의 nullable lifecycle이 다르면 fail closed한다', () => {
+        const snapshot = create_configured_unbounded_snapshot();
+
+        // 허용·차단 결과만 있고 계산 근거가 없는 publication을 거부한다.
+        expect(() => validate_backend_snapshot({
+            ...snapshot,
+            trading: {
+                ...snapshot.trading,
+                last_risk_budget: null,
+            },
+        })).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
+    });
+
+    it('configured-unbounded와 unavailable을 서로 다른 coherent wire 상태로 허용한다', () => {
+        const configured_snapshot = create_configured_unbounded_snapshot();
+        const unavailable_snapshot = create_backend_snapshot_fixture();
+
+        expect(validate_backend_snapshot(configured_snapshot)).toBe(configured_snapshot);
+        expect(validate_backend_snapshot(unavailable_snapshot)).toBe(unavailable_snapshot);
+    });
+
+    it('malformed risk reason을 거부할 때 credential/raw payload를 오류에 포함하지 않는다', () => {
+        const secret_marker = 'credential-raw-secret-marker';
+
+        try {
+            validate_backend_snapshot(create_snapshot_with_trading_patch({
+                last_risk_decision_allowed: false,
+                risk_block_reason: secret_marker,
+            }));
+            throw new Error('Expected parser failure');
+        } catch (error) {
+            expect(error).toBeInstanceOf(BackendContractError);
+            expect(String(error)).not.toContain(secret_marker);
+        }
     });
 
     it.each([
@@ -375,6 +629,25 @@ describe('backend snapshot and event mapping', () => {
             { regime_type: 'type4', support_status: 'unsupported', start_guard: 'UNSUPPORTED_TRADING_LOGIC' },
         ]);
         expect(mapped.facade_options.command_enabled).toBe(false);
+        expect(mapped.facade_options).toMatchObject({
+            risk_policy_availability: 'UNAVAILABLE',
+            configured_risk_policy_version: null,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: null,
+            manual_kill_behavior: null,
+            session_risk_policy_version: null,
+            risk_control_version: 0,
+            manual_kill_active: false,
+            manual_kill_cleanup_complete: true,
+            manual_kill_activation_behavior: null,
+            manual_kill_activation_policy_version: null,
+            last_risk_decision_allowed: null,
+            last_risk_budget: null,
+            risk_block_reason: null,
+            process_ownership_ambiguous: false,
+        });
         expect(mapped.facade_options.is_trading).toBe(false);
         expect(mapped.facade_options).not.toHaveProperty('history_records');
         expect(mapped.server_snapshot).toMatchObject({
@@ -382,6 +655,19 @@ describe('backend snapshot and event mapping', () => {
             trading_session_id: null,
             has_open_position: false,
             trading_state_label: 'not_started',
+            risk_policy_availability: 'UNAVAILABLE',
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: null,
+            manual_kill_behavior: null,
+            risk_control_version: 0,
+            manual_kill_active: false,
+            manual_kill_cleanup_complete: true,
+            manual_kill_activation_behavior: null,
+            manual_kill_activation_policy_version: null,
+            risk_block_reason: null,
+            process_ownership_ambiguous: false,
         });
         expect(JSON.stringify(mapped.facade_options.logic_coverage)).not.toContain('LOWER_BB');
         expect(mapped.server_snapshot.account_asset).toMatchObject({
@@ -410,6 +696,74 @@ describe('backend snapshot and event mapping', () => {
             amount: '0.43215 USDT',
             totalExecutedAmount: '-',
             averageSlippage: '-',
+        });
+    });
+
+    it('configured-unbounded 정책을 null 상한과 typed provenance 그대로 facade에 전달한다', () => {
+        const mapped = map_backend_snapshot(
+            create_configured_unbounded_snapshot(),
+            '2026-08-29',
+        );
+
+        // 세 null은 unavailable로 축약하거나 거대한 JS number sentinel로 바꾸지 않는다.
+        expect(mapped.facade_options).toMatchObject({
+            risk_policy_availability: 'CONFIGURED',
+            configured_risk_policy_version: 4,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: 'REALIZED_ONLY',
+            manual_kill_behavior: 'CANCEL_AND_LIQUIDATE',
+            session_risk_policy_version: 4,
+            last_risk_decision_allowed: true,
+            last_risk_budget: {
+                policy_version: 4,
+                market_version: 7,
+                account_version: 3,
+                context_version: 9,
+                current_position_notional: '125.50',
+                reserved_buy_notional: '24.25',
+                candidate_order_notional: '50.25',
+                projected_position_notional: '200.00',
+                daily_realized_pnl: '-12.75',
+                unrealized_pnl: '-3.50',
+                daily_loss: '12.75',
+                manual_kill_active: false,
+            },
+        });
+        expect(mapped.server_snapshot.max_order_notional).toBeNull();
+        expect(mapped.server_snapshot.risk_policy_availability).not.toBe('UNAVAILABLE');
+    });
+
+    it('hot-swap configured policy와 활성 manual-kill epoch provenance를 별도로 보존한다', () => {
+        const configured_snapshot = create_configured_unbounded_snapshot();
+        const hot_swapped_snapshot: BackendSnapshot = {
+            ...configured_snapshot,
+            trading: {
+                ...configured_snapshot.trading,
+                configured_risk_policy_version: 5,
+                manual_kill_behavior: 'BLOCK_NEW_ORDERS',
+                session_risk_policy_version: 4,
+                manual_kill_active: true,
+                manual_kill_cleanup_complete: false,
+                manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+                manual_kill_activation_policy_version: 4,
+            },
+        };
+
+        // Configured policy 교체가 이미 활성화된 cleanup provenance를 덮어쓰지 않아야 한다.
+        const mapped = map_backend_snapshot(hot_swapped_snapshot, '2026-08-29');
+
+        expect(mapped.facade_options).toMatchObject({
+            configured_risk_policy_version: 5,
+            manual_kill_behavior: 'BLOCK_NEW_ORDERS',
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 4,
+            manual_kill_cleanup_complete: false,
+        });
+        expect(mapped.server_snapshot).toMatchObject({
+            manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
+            manual_kill_activation_policy_version: 4,
         });
     });
 
@@ -526,6 +880,23 @@ describe('backend snapshot and event mapping', () => {
             version: 8,
             session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
             command_enabled: false,
+            risk_policy_availability: 'UNAVAILABLE',
+            configured_risk_policy_version: null,
+            max_order_notional: null,
+            max_position_notional: null,
+            max_daily_loss: null,
+            daily_loss_scope: null,
+            manual_kill_behavior: null,
+            session_risk_policy_version: null,
+            risk_control_version: 0,
+            manual_kill_active: false,
+            manual_kill_cleanup_complete: true,
+            manual_kill_activation_behavior: null,
+            manual_kill_activation_policy_version: null,
+            last_risk_decision_allowed: null,
+            last_risk_budget: null,
+            risk_block_reason: null,
+            process_ownership_ambiguous: false,
             scale_in: '0.4',
             scale_out: '0.6',
             scale_in_percentage: 40,

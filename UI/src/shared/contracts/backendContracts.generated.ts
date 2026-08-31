@@ -1,6 +1,6 @@
 /* 이 파일은 Python transport schema에서 생성됩니다. 직접 수정하지 마세요. */
 
-export const BACKEND_SCHEMA_VERSION = 2 as const;
+export const BACKEND_SCHEMA_VERSION = 3 as const;
 export const BACKEND_MAX_TRADE_PAGE_SIZE = 1000 as const;
 
 export type BackendDecimalString = string;
@@ -21,6 +21,16 @@ export type BackendHistoryPeriod = 'today' | 'last7days' | 'last30days' | 'all';
 export type BackendTradeSideFilter = 'all' | 'buy' | 'sell';
 export type BackendCsvPeriod = 'today' | 'last7days' | 'last30days' | 'custom';
 export type BackendStrategyType = 'CASE_B' | 'CASE_C';
+export type BackendRiskPolicyAvailability = 'CONFIGURED' | 'UNAVAILABLE';
+export type BackendDailyLossScope = 'REALIZED_ONLY' | 'REALIZED_AND_UNREALIZED';
+export type BackendManualKillBehavior = 'BLOCK_NEW_ORDERS' | 'CANCEL_AND_LIQUIDATE';
+export type BackendRiskBlockReason =
+    | 'RISK_POLICY_UNAVAILABLE'
+    | 'RISK_POLICY_VERSION_MISMATCH'
+    | 'MANUAL_KILL_SWITCH_ACTIVE'
+    | 'RISK_ORDER_NOTIONAL_EXCEEDED'
+    | 'RISK_DAILY_LOSS_EXCEEDED'
+    | 'RISK_POSITION_NOTIONAL_EXCEEDED';
 
 export interface BackendConnectionSnapshot {
     readonly status: 'online';
@@ -69,6 +79,21 @@ export interface BackendTradingLogicCoverage {
     readonly start_guard: BackendTradingLogicStartGuard;
 }
 
+export interface BackendRiskBudgetSnapshot {
+    readonly policy_version: number | null;
+    readonly market_version: number;
+    readonly account_version: number;
+    readonly context_version: number;
+    readonly current_position_notional: BackendDecimalString;
+    readonly reserved_buy_notional: BackendDecimalString;
+    readonly candidate_order_notional: BackendDecimalString;
+    readonly projected_position_notional: BackendDecimalString;
+    readonly daily_realized_pnl: BackendDecimalString;
+    readonly unrealized_pnl: BackendDecimalString;
+    readonly daily_loss: BackendDecimalString;
+    readonly manual_kill_active: boolean;
+}
+
 export interface BackendTradingSnapshot {
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
@@ -78,6 +103,23 @@ export interface BackendTradingSnapshot {
     readonly scale_out: BackendDecimalString;
     readonly has_open_position: boolean;
     readonly session_id: string | null;
+    readonly risk_policy_availability: BackendRiskPolicyAvailability;
+    readonly configured_risk_policy_version: number | null;
+    readonly max_order_notional: BackendDecimalString | null;
+    readonly max_position_notional: BackendDecimalString | null;
+    readonly max_daily_loss: BackendDecimalString | null;
+    readonly daily_loss_scope: BackendDailyLossScope | null;
+    readonly manual_kill_behavior: BackendManualKillBehavior | null;
+    readonly session_risk_policy_version: number | null;
+    readonly risk_control_version: number;
+    readonly manual_kill_active: boolean;
+    readonly manual_kill_cleanup_complete: boolean;
+    readonly manual_kill_activation_behavior: BackendManualKillBehavior | null;
+    readonly manual_kill_activation_policy_version: number | null;
+    readonly last_risk_decision_allowed: boolean | null;
+    readonly last_risk_budget: BackendRiskBudgetSnapshot | null;
+    readonly risk_block_reason: BackendRiskBlockReason | null;
+    readonly process_ownership_ambiguous: boolean;
     readonly logic_coverage: ReadonlyArray<BackendTradingLogicCoverage>;
 }
 

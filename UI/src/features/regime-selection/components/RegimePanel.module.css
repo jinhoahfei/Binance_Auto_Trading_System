@@ -10,6 +10,11 @@
     box-shadow: var(--shadow-control);
 }
 
+/* Dashboard fixture의 surface는 browser JPEG 변환 뒤 Figma 기준색에 맞춘다. */
+[data-figma-route='dashboard'] .panel {
+    background: #20303e;
+}
+
 .highlight {
     animation: regime-highlight 800ms ease-in-out 5;
 }
@@ -73,7 +78,7 @@
 }
 
 .appliedValue {
-    color: var(--color-text-tertiary);
+    color: var(--color-text-secondary);
     font-size: 10px;
     line-height: 11px;
 }
@@ -107,7 +112,7 @@
     align-items: center;
     justify-content: center;
     height: 20px;
-    color: color-mix(in srgb, var(--color-status-info) 88%, var(--color-text-primary));
+    color: var(--color-text-info);
     font-size: 12px;
     font-weight: 600;
     line-height: 16px;

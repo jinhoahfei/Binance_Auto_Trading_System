@@ -155,6 +155,8 @@ export function TradingConfirmationDialog({
   const copy = get_dialog_copy(kind, regimeLabel, unavailableReason);
   const is_pending = pending || kind === 'starting';
   const icon_tone = copy.tone === 'positive' ? 'positive' : 'negative';
+  // Starting fixture와 실제 연결 단계는 상태별 확정 문구를 generic 처리 문구보다 우선한다.
+  const pending_confirmation_label = kind === 'starting' ? copy.confirmLabel : '처리 중…';
 
   return (
     <ModalSurface
@@ -170,7 +172,11 @@ export function TradingConfirmationDialog({
           <i aria-hidden="true" />
           {copy.detail}
         </strong>
-        {is_pending ? <span className={styles.progress} aria-label="연결 진행 중" /> : null}
+        {is_pending ? (
+          <span className={styles.progress} role="status">
+            <span className="sr-only">연결 진행 중</span>
+          </span>
+        ) : null}
       </div>
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <div className={styles.actions}>
@@ -178,7 +184,7 @@ export function TradingConfirmationDialog({
           {copy.cancelLabel}
         </Button>
         <Button disabled={is_pending} onClick={onConfirm} tone={copy.tone}>
-          {is_pending ? '처리 중…' : copy.confirmLabel}
+          {is_pending ? pending_confirmation_label : copy.confirmLabel}
         </Button>
       </div>
     </ModalSurface>
