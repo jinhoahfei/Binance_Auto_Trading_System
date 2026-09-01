@@ -162,11 +162,11 @@ class AccountSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class _AccountState:
+class AccountStateSnapshot:
     """
-    클래스 이름: _AccountState
-    기능: Account의 한 version에 속한 잔액·가격·평가 상태를 원자적으로 묶는다.
-    작성 날짜: 2026/08/21
+    클래스 이름: AccountStateSnapshot
+    기능: Account의 한 version에 속한 잔액·가격·평가 상태를 불변 공개 값으로 묶는다.
+    작성 날짜: 2026/09/01
     """
 
     balances: Mapping[str, AssetBalance]
@@ -204,7 +204,7 @@ class Account:
 
         self._valuation_asset = valuation_asset
         self._lock = RLock()
-        self._state = _AccountState(
+        self._state = AccountStateSnapshot(
             balances=MappingProxyType({}),
             current_price=None,
             valuation=None,
@@ -289,6 +289,17 @@ class Account:
         작성 날짜: 2026/08/21
         """
         return self._state.ready
+
+    def get_snapshot(self) -> AccountStateSnapshot:
+        """
+        함수 이름: get_snapshot()
+        기능: 한 mutation version의 전체 Account 상태를 불변 snapshot으로 반환한다.
+        인자: 없음
+        반환값: 후속 mutation으로 변경되지 않는 AccountStateSnapshot
+        작성 날짜: 2026/09/01
+        """
+        with self._lock:
+            return self._state  # 단일 불변 pointer를 읽어 version과 잔액이 섞이지 않게 한다.
 
     def get_holdings(self, asset: str = SUPPORTED_VALUATION_ASSET) -> Decimal:
         """
@@ -418,7 +429,7 @@ class Account:
             ):
                 return False  # 동일 full 사실은 observer가 읽는 version을 불필요하게 올리지 않는다.
 
-            self._state = _AccountState(
+            self._state = AccountStateSnapshot(
                 balances=MappingProxyType(next_balances),
                 current_price=current_price,
                 valuation=next_valuation,
@@ -464,7 +475,7 @@ class Account:
             ):
                 return False
 
-            self._state = _AccountState(
+            self._state = AccountStateSnapshot(
                 balances=MappingProxyType(next_balances),
                 current_price=current_state.current_price,
                 valuation=self._calculate_valuation(

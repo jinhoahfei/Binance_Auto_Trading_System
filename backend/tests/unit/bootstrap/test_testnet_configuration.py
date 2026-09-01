@@ -1666,10 +1666,10 @@ class TestnetConfigurationTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_phase13_runtime_wires_single_controller_and_http_post_attempt()
-        기능: 세 번째 opt-in이 Controller intent 예산 1과 REST 주문 timestamp retry 금지를 함께 조립하는지 검증한다.
+        기능: 세 번째 opt-in이 단일 evidence clock, Controller intent 예산 1과 REST timestamp retry 금지를 조립하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/31
+        작성 날짜: 2026/09/01
         """
         environment = _read_only_environment()
         environment.update(
@@ -1679,8 +1679,12 @@ class TestnetConfigurationTests(unittest.TestCase):
                 testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV: "100",
             }
         )
+        evidence_clock = Mock(
+            name="phase13_evidence_clock",
+            return_value=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
 
-        # Client와 generic runtime factory를 가로채므로 실제 socket이나 주문 없이 exact 조립 인자만 본다.
+        # Client와 generic runtime factory를 가로채므로 실제 socket이나 주문 없이 시계 identity까지 본다.
         with patch.object(
             testnet_module,
             "_load_testnet_client_types",
@@ -1693,12 +1697,27 @@ class TestnetConfigurationTests(unittest.TestCase):
             runtime = testnet_module.create_testnet_application_runtime(
                 history_path=Path("phase13-history.jsonl"),
                 environment=environment,
+                clock=evidence_clock,
             )
 
         self.assertIs(runtime, sentinel.runtime)
         self.assertFalse(
             _FakeRESTClient.calls[0]["allow_order_timestamp_retry"]
         )
+        self.assertIs(_FakeRESTClient.calls[0]["clock"], evidence_clock)
+        self.assertIs(
+            _FakeRESTClient.calls[0]["result_clock"],
+            evidence_clock,
+        )  # Offset provenance와 fallback OrderResult가 runtime 시계에서 갈라지지 않는다.
+        self.assertIs(
+            runtime_factory.call_args.kwargs["clock"],
+            evidence_clock,
+        )
+        permission_client = runtime_factory.call_args.args[0]
+        self.assertIs(
+            permission_client._clock,
+            evidence_clock,
+        )  # Proxy attempt snapshot도 REST와 runtime 사이에서 별도 wall clock을 만들지 않는다.
         self.assertEqual(
             runtime_factory.call_args.kwargs[
                 "maximum_order_submissions_per_intent"

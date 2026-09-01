@@ -18,9 +18,6 @@ from binance_auto_trader.adapters.binance import (
     BinanceWebSocketClient,
     WebSocketGateway,
 )
-from binance_auto_trader.adapters.binance.api_gateway import (
-    APP_CLIENT_ORDER_ID_PREFIX,
-)
 from binance_auto_trader.adapters.filesystem import CSVFileGateway
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
 from binance_auto_trader.application import (
@@ -1254,17 +1251,25 @@ def create_application_runtime(
                 return False  # 종료 snapshot 뒤 도착한 executionReport를 새 pending으로 만들지 않는다.
 
             result_accepted = trading_controller.observe_order_result(result)
-            unknown_application_order = (
-                not result_accepted
-                and result.client_order_id.startswith(
-                    APP_CLIENT_ORDER_ID_PREFIX
+            unknown_or_external_order = not result_accepted
+            if unknown_or_external_order:
+                # Controller가 이미 잠근 unknown·external event를 다시 기록하지 않고 한 번만 게시한다.
+                if trading_session_update_observer is not None:
+                    trading_session_update_observer(
+                        trading_controller,
+                        selected_execution_mode,
+                    )
+                recovery_can_start = (
+                    selected_execution_mode is ExecutionMode.TESTNET
+                    and application_state_store.state.status
+                    is ApplicationStatus.READY
+                    and trading_controller.startup_reconciliation_complete
+                    and not (
+                        trading_controller.external_execution_reconciliation_required
+                    )
                 )
-            )
-            if unknown_application_order:
-                # 알 수 없는 app 주문은 정상 callback으로 삼키지 않고 full REST 재조정 worker를 깨운다.
-                require_stream_reconciliation(
-                    "unknown_application_order_result"
-                )
+            else:
+                recovery_can_start = False
             if (
                 result_accepted
                 and trading_session_update_observer is not None
@@ -1274,7 +1279,14 @@ def create_application_runtime(
                     selected_execution_mode,
                 )  # 수락 결과만 여기서 게시하고 unknown app-order는 공통 reconciliation 경로가 게시한다.
 
-            return result_accepted
+        # App-prefix unknown만 callback lock 밖의 bounded worker에서 REST full-resync를 시작한다.
+        if (
+            recovery_can_start
+            and account_stream_recovery_worker is not None
+        ):
+            account_stream_recovery_worker.request_recovery()
+
+        return result_accepted
 
     def require_stream_reconciliation(reason: str) -> None:
         """
@@ -1305,6 +1317,9 @@ def create_application_runtime(
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
+                and not (
+                    trading_controller.external_execution_reconciliation_required
+                )
             )
 
         # Blocking REST/WS는 callback thread에서 실행하지 않고 runtime worker에만 요청한다.
@@ -1432,6 +1447,9 @@ def create_application_runtime(
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
+                and not (
+                    trading_controller.external_execution_reconciliation_required
+                )
             )
 
     def publish_account_stream_recovery_success() -> None:

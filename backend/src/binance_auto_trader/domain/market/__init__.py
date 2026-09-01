@@ -10,7 +10,7 @@ from .ema_slope import (
 )
 from .indicator_snapshot import IndicatorSnapshot, SwingStructure
 from .kline import Kline
-from .market_snapshot import MarketSnapshot
+from .market_snapshot import MarketSnapshot, MarketStateSnapshot
 
 
 __all__ = [
@@ -18,6 +18,7 @@ __all__ = [
     "IndicatorSnapshot",
     "Kline",
     "MarketSnapshot",
+    "MarketStateSnapshot",
     "SUPPORTED_INTERVALS",
     "SwingStructure",
     "calculate_candidate_ema9_slope",

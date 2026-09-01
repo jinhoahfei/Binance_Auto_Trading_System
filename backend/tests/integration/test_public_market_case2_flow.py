@@ -1430,11 +1430,48 @@ class PublicMarketCase2FlowTests(unittest.TestCase):
                     ).splitlines()
                 ),
             )
-            sell_trace_ids = tuple(
-                trace_entry.message_id
-                for trace_entry in fixture.trading_controller.order_execution_trace
+            sell_trace = tuple(
+                trace_entry
+                for trace_entry in (
+                    fixture.trading_controller.order_execution_trace
+                )
                 if trace_entry.client_order_id == sell_order.client_order_id
             )
+            sell_trace_ids = tuple(
+                trace_entry.message_id for trace_entry in sell_trace
+            )
+            self.assertEqual(
+                ("1", "2", "3", "4", "5", "6", "6.1", "7"),
+                sell_trace_ids[:8],
+            )
+            # STOP의 예약 message도 일반 BUY처럼 mutation 전 동일 version과 정확한 +1을 증명한다.
+            self.assertEqual(
+                sell_trace[0].context_version_before,
+                sell_trace[0].context_version_after,
+            )
+            self.assertEqual(
+                sell_trace[0].context_version_before,
+                sell_trace[1].context_version_before,
+            )
+            self.assertEqual(
+                sell_trace[1].context_version_before + 1,
+                sell_trace[1].context_version_after,
+            )
+            expected_stop_event_id = (
+                f"stop-{fixture.trading_controller.session_id}-"
+                "stop-public-case2-position"
+            )
+            self.assertEqual(
+                expected_stop_event_id,
+                sell_trace[0].command_event_id,
+            )
+            self.assertEqual(
+                (
+                    f"order-outcome-{sell_order.client_order_id}-"
+                    "FORCE_SELL_FINISHED"
+                ),
+                sell_trace[-1].command_event_id,
+            )  # 최초 STOP과 terminal outcome은 서로 다른 production event identity를 보존한다.
             self.assertEqual(1, sell_trace_ids.count("11"))
             self.assertEqual(1, sell_trace_ids.count("13.1"))
             self.assertEqual("14", sell_trace_ids[-1])

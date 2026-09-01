@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 import fcntl
 import hashlib
@@ -16,8 +18,9 @@ import stat
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from threading import Lock, RLock
 import time
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from uuid import UUID, uuid4
@@ -41,10 +44,21 @@ from binance_auto_trader.adapters.binance.mappers import (
     validate_account_relevant_filters,
     validate_market_notional,
 )
-from binance_auto_trader.application import TradingSessionStatus
+from binance_auto_trader.application import (
+    PublicMarketBoundaryTraceEntry,
+    ReconciliationCauseCategory,
+    ReconciliationCauseSnapshot,
+    ReconciliationCauseStatus,
+    TradingSessionStatus,
+)
 from binance_auto_trader.bootstrap import (
+    ApplicationStartupError,
     ApplicationRuntime,
+    ApplicationStateSnapshot,
     ApplicationStatus,
+    StartupFailure,
+    StartupFailureCode,
+    StartupStage,
     TestnetConfiguration,
     close_application,
     create_testnet_application_runtime,
@@ -60,10 +74,14 @@ from binance_auto_trader.bootstrap.testnet import (
     BINANCE_TESTNET_API_SECRET_ENV,
     BINANCE_TESTNET_MAX_NOTIONAL_ENV,
 )
-from binance_auto_trader.domain.common import RegimeType
+from binance_auto_trader.domain.common import Interval, RegimeType
 from binance_auto_trader.domain.history import Performance, Trade
-from binance_auto_trader.domain.market import Kline
+from binance_auto_trader.domain.market import Kline, MarketStateSnapshot
 from binance_auto_trader.domain.trading import (
+    Account,
+    AccountSnapshot,
+    AccountStateSnapshot,
+    AssetBalance,
     DailyLossScope,
     ExitReason,
     Fill,
@@ -84,6 +102,7 @@ from binance_auto_trader.transport import (
 from tests.testnet._phase13_trace import (
     PHASE13_PUBLIC_TRACE_RECORD_TYPE,
     PHASE13_PUBLIC_TRACE_SCHEMA_VERSION,
+    _parse_public_market_command_event,
     canonical_actual_phase13_public_trace_bytes,
     seal_actual_phase13_public_trace,
     seal_phase13_public_trace,
@@ -125,14 +144,6 @@ _PENDING_ORDER_FIELDS = frozenset(
         "submitted_quantity",
         "symbol",
     }
-)
-_KLINE_SOURCE_PATTERN = re.compile(
-    r"kline:(?P<symbol>[A-Z0-9]+):(?P<interval>[0-9A-Za-z]+):"
-    r"(?P<open_time>[0-9]{4}-[0-9]{2}-[0-9]{2}T"
-    r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z):"
-    r"(?P<event_time>[0-9]{4}-[0-9]{2}-[0-9]{2}T"
-    r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z):"
-    r"(?P<close_state>open|closed)\Z"
 )
 _TRANSPORT_AGGREGATES = {
     "ACCOUNT_UPDATED": "ACCOUNT",
@@ -224,11 +235,13 @@ _FAILURE_SECRET_FRAGMENT_PATTERN = re.compile(
     r"query[_-]?(?:param|parameter))",
     re.IGNORECASE,
 )
-_PHASE13_FAILURE_EVIDENCE_SCHEMA_VERSION = 1
+# 새 failure artifact는 v2만 쓰되 보존된 v1 bytes는 별도 exact branch로 계속 검증한다.
+_PHASE13_FAILURE_EVIDENCE_SCHEMA_VERSION = 2
+_SUPPORTED_PHASE13_FAILURE_EVIDENCE_SCHEMA_VERSIONS = frozenset({1, 2})
 _PHASE13_FAILURE_EVIDENCE_RECORD_TYPE = (
     "phase13_public_case2_testnet_failure_evidence"
 )
-_FAILURE_EVIDENCE_BODY_FIELDS = frozenset(
+_FAILURE_EVIDENCE_BODY_FIELDS_V1 = frozenset(
     {
         "schema_version",
         "record_type",
@@ -243,7 +256,13 @@ _FAILURE_EVIDENCE_BODY_FIELDS = frozenset(
         "evidence_errors",
     }
 )
-_FAILURE_EVIDENCE_DOCUMENT_FIELDS = _FAILURE_EVIDENCE_BODY_FIELDS | {
+_FAILURE_EVIDENCE_BODY_FIELDS_V2 = _FAILURE_EVIDENCE_BODY_FIELDS_V1 | {
+    "first_cause"
+}
+_FAILURE_EVIDENCE_DOCUMENT_FIELDS_V1 = _FAILURE_EVIDENCE_BODY_FIELDS_V1 | {
+    "failure_sha256"
+}
+_FAILURE_EVIDENCE_DOCUMENT_FIELDS_V2 = _FAILURE_EVIDENCE_BODY_FIELDS_V2 | {
     "failure_sha256"
 }
 _FAILURE_MUTATION_GUARD_FIELDS = frozenset(
@@ -252,7 +271,7 @@ _FAILURE_MUTATION_GUARD_FIELDS = frozenset(
 _FAILURE_RECOVERY_FIELDS = frozenset(
     {"attempted", "outcome", "typed_reason"}
 )
-_FAILURE_SUBMISSION_ATTEMPT_FIELDS = frozenset(
+_FAILURE_SUBMISSION_ATTEMPT_FIELDS_V1 = frozenset(
     {
         "sequence",
         "symbol",
@@ -264,6 +283,10 @@ _FAILURE_SUBMISSION_ATTEMPT_FIELDS = frozenset(
         "client_order_id",
     }
 )
+_FAILURE_SUBMISSION_ATTEMPT_FIELDS_V2 = (
+    _FAILURE_SUBMISSION_ATTEMPT_FIELDS_V1
+    - {"intent_id", "client_order_id"}
+)
 _FAILURE_RUNTIME_STATE_FIELDS = frozenset(
     {
         "application_status",
@@ -274,7 +297,7 @@ _FAILURE_RUNTIME_STATE_FIELDS = frozenset(
         "durable_trade_count",
     }
 )
-_FAILURE_FRESH_VERIFICATION_FIELDS = frozenset(
+_FAILURE_FRESH_VERIFICATION_FIELDS_V1 = frozenset(
     {
         "status",
         "typed_reason",
@@ -286,6 +309,295 @@ _FAILURE_FRESH_VERIFICATION_FIELDS = frozenset(
         "run_exchange_order_count",
         "durable_trade_count",
     }
+)
+_FAILURE_FRESH_VERIFICATION_FIELDS_V2 = (
+    _FAILURE_FRESH_VERIFICATION_FIELDS_V1
+    | {
+        "failure_stage",
+        "account_open_orders_empty",
+        "account_open_order_lists_empty",
+    }
+)
+_FAILURE_FRESH_OBSERVATION_FIELDS_V2 = (
+    "verified_at",
+    "position_quantity",
+    "pending_order_count",
+    "reconciliation_required",
+    "matching_open_order_count",
+    "account_open_orders_empty",
+    "account_open_order_lists_empty",
+    "run_exchange_order_count",
+    "durable_trade_count",
+)
+_FAILURE_FIRST_CAUSE_FIELDS = frozenset(
+    {"reconciliation_required", "status", "category"}
+)
+_FAILURE_FIRST_CAUSE_STATUSES = frozenset(
+    {"MISSING", "EXACT", "DUPLICATE", "CONFLICT"}
+)
+_FAILURE_FIRST_CAUSE_CATEGORIES = frozenset(
+    {
+        "ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION",
+        "PREPARE_FILTER_OR_CAP_REJECTED",
+        "EVENT_WORKER_OR_RUNTIME_FAILED",
+        "MARKET_STREAM_FAILED",
+        "ORDER_OR_PERSISTENCE_AMBIGUOUS",
+        "PROCESS_OWNERSHIP_AMBIGUOUS",
+    }
+)
+_FAILURE_FRESH_VERIFICATION_STATUSES = frozenset({"VERIFIED", "INCOMPLETE"})
+_FAILURE_FRESH_VERIFICATION_STAGES = frozenset(
+    {
+        "RUNTIME_CREATION",
+        "STARTUP_APPLICATION",
+        "MARKET",
+        "REGIME",
+        "ACCOUNT",
+        "HISTORY",
+        "RECONCILIATION",
+        "STREAM",
+        "FILTER",
+        "LOCAL_STATE",
+        "OPEN_ORDERS",
+        "OPEN_ORDER_LISTS",
+        "RECENT_ORDERS",
+        "DURABILITY",
+        "CLEANUP",
+    }
+)
+_FAILURE_APPLICATION_STATUSES = frozenset(
+    {"CREATED", "STARTING", "READY", "SHUTTING_DOWN", "FAILED", "CLOSED"}
+)
+_FAILURE_TRADING_STATUSES = frozenset(
+    {
+        "NOT_STARTED",
+        "RUNNING",
+        "STOPPING",
+        "RECONCILIATION_REQUIRED",
+        "TERMINATED",
+    }
+)
+_FAILURE_ACTUAL_REASONS = frozenset(
+    {
+        "ACTUAL_TIMEOUT",
+        "ACTUAL_ASSERTION_FAILED",
+        "ACTUAL_PERMISSION_FAILED",
+        "ACTUAL_IO_FAILED",
+        "ACTUAL_VALIDATION_FAILED",
+        "ACTUAL_RUNTIME_FAILED",
+        "ACTUAL_UNEXPECTED_FAILURE",
+    }
+)
+_FAILURE_RECOVERY_OUTCOMES = frozenset(
+    {"NOT_REQUIRED", "SKIPPED", "SUCCESS", "FAILED"}
+)
+_FAILURE_RECOVERY_REASONS = frozenset(
+    {
+        "FAILURE_RECOVERY_TIMEOUT",
+        "FAILURE_RECOVERY_ASSERTION_FAILED",
+        "FAILURE_RECOVERY_PERMISSION_FAILED",
+        "FAILURE_RECOVERY_IO_FAILED",
+        "FAILURE_RECOVERY_VALIDATION_FAILED",
+        "FAILURE_RECOVERY_RUNTIME_FAILED",
+        "FAILURE_RECOVERY_UNEXPECTED_FAILURE",
+        "FAILURE_RECOVERY_STATE_UNAVAILABLE",
+        "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+        "FAILURE_RECOVERY_EFFECTIVE_FREE_UNCONFIRMED",
+        "FAILURE_RECOVERY_STATE_CHANGED",
+        "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+    }
+)
+_FAILURE_RECOVERY_FAILED_REASONS = frozenset(
+    {
+        "FAILURE_RECOVERY_TIMEOUT",
+        "FAILURE_RECOVERY_ASSERTION_FAILED",
+        "FAILURE_RECOVERY_PERMISSION_FAILED",
+        "FAILURE_RECOVERY_IO_FAILED",
+        "FAILURE_RECOVERY_VALIDATION_FAILED",
+        "FAILURE_RECOVERY_RUNTIME_FAILED",
+        "FAILURE_RECOVERY_UNEXPECTED_FAILURE",
+        "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+    }
+)
+_FAILURE_STARTUP_REASONS = frozenset(
+    {
+        "APPLICATION_ALREADY_STARTING",
+        "APPLICATION_CLOSED",
+        "MARKET_INITIALIZATION_FAILED",
+        "MARKET_NOT_READY",
+        "REGIME_NOT_READY",
+        "ACCOUNT_INITIALIZATION_FAILED",
+        "ACCOUNT_NOT_READY",
+        "HISTORY_INITIALIZATION_FAILED",
+        "ORDER_RECONCILIATION_FAILED",
+        "ORDER_RECONCILIATION_NOT_READY",
+    }
+)
+_FAILURE_FRESH_STAGE_ALLOWED_REASONS = {
+    "RUNTIME_CREATION": frozenset({"FRESH_VERIFICATION_FAILED"}),
+    "STARTUP_APPLICATION": frozenset(
+        {
+            "FRESH_VERIFICATION_FAILED",
+            "FRESH_RUNTIME_NOT_READY",
+            "APPLICATION_ALREADY_STARTING",
+            "APPLICATION_CLOSED",
+        }
+    ),
+    "MARKET": frozenset(
+        {"MARKET_INITIALIZATION_FAILED", "MARKET_NOT_READY"}
+    ),
+    "REGIME": frozenset({"REGIME_NOT_READY"}),
+    "ACCOUNT": frozenset(
+        {"ACCOUNT_INITIALIZATION_FAILED", "ACCOUNT_NOT_READY"}
+    ),
+    "HISTORY": frozenset({"HISTORY_INITIALIZATION_FAILED"}),
+    "RECONCILIATION": frozenset(
+        {
+            "ORDER_RECONCILIATION_FAILED",
+            "ORDER_RECONCILIATION_NOT_READY",
+        }
+    ),
+    "STREAM": frozenset({"FRESH_STREAM_NOT_READY"}),
+    "FILTER": frozenset({"FRESH_FILTER_REJECTED"}),
+    "LOCAL_STATE": frozenset({"FRESH_LOCAL_STATE_INCOMPLETE"}),
+    "OPEN_ORDERS": frozenset(
+        {"FRESH_OPEN_ORDERS_NOT_EMPTY", "FRESH_OPEN_ORDERS_CHANGED"}
+    ),
+    "OPEN_ORDER_LISTS": frozenset(
+        {"FRESH_OPEN_ORDER_LISTS_NOT_EMPTY"}
+    ),
+    "RECENT_ORDERS": frozenset(
+        {
+            "FRESH_EXCHANGE_BASELINE_UNAVAILABLE",
+            "FRESH_RECENT_ORDERS_CHANGED",
+        }
+    ),
+    "DURABILITY": frozenset({"FRESH_DURABILITY_CHANGED"}),
+    "CLEANUP": frozenset(
+        {
+            "FRESH_RUNTIME_CLOSE_FAILED",
+            "FRESH_SNAPSHOT_CLEANUP_FAILED",
+            "PRIMARY_RUNTIME_NOT_CLOSED",
+        }
+    ),
+}
+_FAILURE_FRESH_REASONS = frozenset().union(
+    *_FAILURE_FRESH_STAGE_ALLOWED_REASONS.values()
+)
+_FAILURE_FRESH_SECONDARY_REASONS = frozenset(
+    {
+        "FRESH_RUNTIME_CLOSE_FAILED",
+        "FRESH_DURABILITY_CHANGED",
+        "FRESH_SNAPSHOT_CLEANUP_FAILED",
+    }
+)
+_FAILURE_POST_VERIFICATION_STAGE_REASONS = frozenset(
+    {
+        ("DURABILITY", "FRESH_DURABILITY_CHANGED"),
+        ("CLEANUP", "FRESH_RUNTIME_CLOSE_FAILED"),
+        ("CLEANUP", "FRESH_SNAPSHOT_CLEANUP_FAILED"),
+    }
+)
+_FAILURE_FRESH_ALLOWED_SECONDARY_BY_PRIMARY = {
+    "FRESH_RUNTIME_CLOSE_FAILED": frozenset(
+        {
+            "FRESH_DURABILITY_CHANGED",
+            "FRESH_SNAPSHOT_CLEANUP_FAILED",
+        }
+    ),
+    "FRESH_DURABILITY_CHANGED": frozenset(
+        {"FRESH_SNAPSHOT_CLEANUP_FAILED"}
+    ),
+    "FRESH_SNAPSHOT_CLEANUP_FAILED": frozenset(),
+    "PRIMARY_RUNTIME_NOT_CLOSED": frozenset(),
+}
+_FAILURE_CAUSE_ERRORS = frozenset(
+    {
+        "RECONCILIATION_CAUSE_MISSING",
+        "RECONCILIATION_CAUSE_DUPLICATE",
+        "RECONCILIATION_CAUSE_CONFLICT",
+    }
+)
+_FAILURE_RUNTIME_EVIDENCE_ERRORS = frozenset(
+    {
+        "RUNTIME_RECONCILIATION_UNAVAILABLE",
+        "RUNTIME_POSITION_UNAVAILABLE",
+        "RUNTIME_PENDING_UNAVAILABLE",
+        "RUNTIME_HISTORY_UNAVAILABLE",
+    }
+)
+_FAILURE_FINALIZER_EVIDENCE_ERRORS = frozenset(
+    {
+        "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED",
+    }
+)
+_FAILURE_EVIDENCE_ERRORS = (
+    _FAILURE_RECOVERY_REASONS
+    | _FAILURE_FRESH_REASONS
+    | _FAILURE_CAUSE_ERRORS
+    | _FAILURE_RUNTIME_EVIDENCE_ERRORS
+    | _FAILURE_FINALIZER_EVIDENCE_ERRORS
+)
+# Error 목록은 producer의 cause→recovery→gate→runtime→fresh→final downgrade 순서를 보존한다.
+_FAILURE_EVIDENCE_ERROR_PHASES = (
+    _FAILURE_CAUSE_ERRORS,
+    _FAILURE_RECOVERY_REASONS
+    - {"FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE"},
+    _FAILURE_FINALIZER_EVIDENCE_ERRORS,
+    frozenset({"RUNTIME_RECONCILIATION_UNAVAILABLE"}),
+    frozenset({"RUNTIME_POSITION_UNAVAILABLE"}),
+    frozenset({"RUNTIME_PENDING_UNAVAILABLE"}),
+    frozenset({"RUNTIME_HISTORY_UNAVAILABLE"}),
+    _FAILURE_FRESH_REASONS - _FAILURE_FRESH_SECONDARY_REASONS,
+    frozenset({"FRESH_RUNTIME_CLOSE_FAILED"}),
+    frozenset({"FRESH_DURABILITY_CHANGED"}),
+    frozenset({"FRESH_SNAPSHOT_CLEANUP_FAILED"}),
+    frozenset({"FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE"}),
+)
+_STARTUP_STAGE_TO_FAILURE_STAGE = {
+    StartupStage.APPLICATION: "STARTUP_APPLICATION",
+    StartupStage.MARKET: "MARKET",
+    StartupStage.REGIME: "REGIME",
+    StartupStage.ACCOUNT: "ACCOUNT",
+    StartupStage.HISTORY: "HISTORY",
+    StartupStage.RECONCILIATION: "RECONCILIATION",
+}
+_STARTUP_STAGE_ALLOWED_FAILURE_CODES = {
+    StartupStage.APPLICATION: frozenset(
+        {
+            StartupFailureCode.APPLICATION_ALREADY_STARTING,
+            StartupFailureCode.APPLICATION_CLOSED,
+        }
+    ),
+    StartupStage.MARKET: frozenset(
+        {
+            StartupFailureCode.MARKET_INITIALIZATION_FAILED,
+            StartupFailureCode.MARKET_NOT_READY,
+        }
+    ),
+    StartupStage.REGIME: frozenset(
+        {StartupFailureCode.REGIME_NOT_READY}
+    ),
+    StartupStage.ACCOUNT: frozenset(
+        {
+            StartupFailureCode.ACCOUNT_INITIALIZATION_FAILED,
+            StartupFailureCode.ACCOUNT_NOT_READY,
+        }
+    ),
+    StartupStage.HISTORY: frozenset(
+        {StartupFailureCode.HISTORY_INITIALIZATION_FAILED}
+    ),
+    StartupStage.RECONCILIATION: frozenset(
+        {
+            StartupFailureCode.ORDER_RECONCILIATION_FAILED,
+            StartupFailureCode.ORDER_RECONCILIATION_NOT_READY,
+        }
+    ),
+}
+_FAILURE_DURABILITY_FILE_SUFFIXES = (
+    "",
+    ".pending-orders.jsonl",
+    ".manual-kill-control.jsonl",
 )
 
 
@@ -300,9 +612,34 @@ class _StrictJsonError(ValueError):
 class _PhaseThirteenRecordedOutcomeFailure(AssertionError):
     """
     클래스 이름: _PhaseThirteenRecordedOutcomeFailure
-    기능: NO_SIGNAL/BLOCKED trace가 이미 durable하게 기록된 의도된 test failure를 구분한다.
+    기능: NO_SIGNAL trace가 이미 durable하게 기록된 의도된 test failure를 구분한다.
     작성 날짜: 2026/08/31
     """
+
+
+class _PhaseThirteenReconciliationFailure(AssertionError):
+    """
+    클래스 이름: _PhaseThirteenReconciliationFailure
+    기능: reconciliation 감지 순간의 원자 cause snapshot을 원문 없는 고정 실패에 결속한다.
+    작성 날짜: 2026/08/31
+    """
+
+    def __init__(self, cause_snapshot: ReconciliationCauseSnapshot) -> None:
+        """
+        함수 이름: __init__()
+        기능: exact frozen cause snapshot만 보존하고 secret-free 고정 assertion message를 만든다.
+        인자: cause_snapshot -> Controller lock에서 한 번에 읽은 reconciliation cause snapshot
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        if type(cause_snapshot) is not ReconciliationCauseSnapshot:
+            raise TypeError("cause_snapshot must be exact")
+
+        # 원 category 외 raw callback reason이나 예외 문구를 assertion 문자열에 포함하지 않는다.
+        super().__init__(
+            "public Case 2 entered reconciliation before a durable BUY"
+        )
+        self.cause_snapshot = cause_snapshot  # Finalizer는 오염 전 frozen identity만 다시 읽는다.
 
 
 def _assert_complete_success_order_trace(
@@ -586,6 +923,88 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)  # 로컬 timezone이나 naive 시각이 evidence에 섞이지 않게 한다.
 
 
+class _RunScopedEvidenceClock:
+    """
+    클래스 이름: _RunScopedEvidenceClock
+    기능: 단일 UTC anchor와 monotonic 경과 시간으로 한 run의 비후퇴 증거 시각을 만든다.
+    작성 날짜: 2026/09/01
+    """
+
+    __slots__ = (
+        "_anchor_monotonic_ns",
+        "_anchor_utc",
+        "_last_utc",
+        "_lock",
+        "_monotonic_clock",
+    )
+
+    def __init__(
+        self,
+        *,
+        wall_clock: Callable[[], datetime] | None = None,
+        monotonic_clock: Callable[[], int] | None = None,
+    ) -> None:
+        """
+        함수 이름: __init__()
+        기능: wall UTC를 한 번만 읽고 대응하는 monotonic 기준점을 고정한다.
+        인자: wall_clock -> 최초 UTC anchor provider 또는 None
+            monotonic_clock -> 경과 nanosecond provider 또는 None
+        반환값: 없음
+        작성 날짜: 2026/09/01
+        """
+        selected_wall_clock = _utc_now if wall_clock is None else wall_clock
+        selected_monotonic_clock = (
+            time.monotonic_ns
+            if monotonic_clock is None
+            else monotonic_clock
+        )
+        if not callable(selected_wall_clock):
+            raise TypeError("wall_clock must be callable or None")
+        if not callable(selected_monotonic_clock):
+            raise TypeError("monotonic_clock must be callable or None")
+        anchor_utc = selected_wall_clock()
+        anchor_monotonic_ns = selected_monotonic_clock()
+        if (
+            not isinstance(anchor_utc, datetime)
+            or anchor_utc.tzinfo is None
+            or anchor_utc.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("wall_clock must return a timezone-aware UTC datetime")
+        if type(anchor_monotonic_ns) is not int:
+            raise TypeError("monotonic_clock must return an exact integer")
+
+        # 이후 wall clock은 다시 읽지 않아 NTP·수동 시각 역행이 artifact ordering을 깨지 못한다.
+        self._anchor_utc = anchor_utc.astimezone(timezone.utc)
+        self._anchor_monotonic_ns = anchor_monotonic_ns
+        self._monotonic_clock = selected_monotonic_clock
+        self._last_utc = self._anchor_utc
+        self._lock = Lock()
+
+    def __call__(self) -> datetime:
+        """
+        함수 이름: __call__()
+        기능: monotonic 경과를 UTC anchor에 더하고 concurrent·source regression을 직전 시각으로 clamp한다.
+        인자: 없음
+        반환값: 이전 반환보다 이르지 않은 timezone-aware UTC datetime
+        작성 날짜: 2026/09/01
+        """
+        with self._lock:
+            monotonic_now_ns = self._monotonic_clock()
+            if type(monotonic_now_ns) is not int:
+                raise TypeError("monotonic_clock must return an exact integer")
+            elapsed_ns = max(
+                0,
+                monotonic_now_ns - self._anchor_monotonic_ns,
+            )
+            candidate_utc = self._anchor_utc + timedelta(
+                microseconds=elapsed_ns // 1_000,
+            )
+            if candidate_utc < self._last_utc:
+                candidate_utc = self._last_utc
+            self._last_utc = candidate_utc
+            return candidate_utc  # 같은 microsecond 반환도 허용하되 어떤 call도 뒤로 가지 않는다.
+
+
 def _datetime_to_wire(value: datetime) -> str:
     """
     함수 이름: _datetime_to_wire()
@@ -723,65 +1142,6 @@ def _extract_pending_order_upserts(
             extracted_upserts.append(copied_metadata)
 
     return tuple(extracted_upserts)  # Journal의 최초 submit 순서는 actual 주문 수 증거가 된다.
-
-
-def _parse_public_market_command_event(
-    command_event_id: str,
-) -> dict[str, object]:
-    """
-    함수 이름: _parse_public_market_command_event()
-    기능: production order trace의 public market event ID에서 version과 Kline provenance를 추출한다.
-    인자: command_event_id -> TradingController가 기록한 원 event identity
-    반환값: source event, 대표 Kline identity/time과 market version mapping
-    작성 날짜: 2026/08/31
-    """
-    if not isinstance(command_event_id, str) or not command_event_id:
-        raise TypeError("command_event_id must be a non-empty string")
-    command_parts = command_event_id.split(":", 2)
-    if len(command_parts) != 3 or command_parts[0] != "market":
-        raise ValueError("order trace is not rooted in a public market event")
-    try:
-        market_version = int(command_parts[1])
-    except ValueError as error:
-        raise ValueError("public market event has an invalid version") from error
-    if market_version < 1 or str(market_version) != command_parts[1]:
-        raise ValueError("public market event version must be canonical and positive")
-
-    # Atomic boundary source는 `kline-batch|...`이며 각 component를 독립 exact parser로 검증한다.
-    source_event_id = command_parts[2]
-    source_components = (
-        source_event_id.split("|")[1:]
-        if source_event_id.startswith("kline-batch|")
-        else [source_event_id]
-    )
-    if not source_components or any(not component for component in source_components):
-        raise ValueError("public market source list must not be empty")
-    parsed_components = []
-    for source_component in source_components:
-        component_match = _KLINE_SOURCE_PATTERN.fullmatch(source_component)
-        if component_match is None:
-            raise ValueError("public market source has an invalid Kline identity")
-        parsed_components.append(component_match.groupdict())
-
-    # Case 2 계산의 primary 30분봉이 batch에 있으면 그것을 선택하고 없으면 유일/첫 source를 보존한다.
-    selected_component = next(
-        (
-            component
-            for component in parsed_components
-            if component["interval"] == "30m"
-        ),
-        parsed_components[0],
-    )
-    return {
-        "source_event_id": source_event_id,
-        "source_kline_identity": (
-            f"{selected_component['symbol']}:"
-            f"{selected_component['interval']}:"
-            f"{selected_component['open_time']}"
-        ),
-        "source_event_time": selected_component["event_time"],
-        "market_version": market_version,
-    }  # Raw WebSocket payload 대신 production이 이미 정규화한 source identity만 남긴다.
 
 
 def _transport_related_id(event_dto: Mapping[str, object]) -> str | None:
@@ -1479,9 +1839,9 @@ def _create_non_mutating_trace_body(
 ) -> dict[str, object]:
     """
     함수 이름: _create_non_mutating_trace_body()
-    기능: actual order가 0인 NO_SIGNAL 또는 pre-submit BLOCKED run을 baseline·fresh state와 결속한다.
-    인자: outcome -> NO_SIGNAL 또는 BLOCKED
-        typed_reason -> BLOCKED typed reason 또는 NO_SIGNAL의 None
+    기능: actual order가 0인 NO_SIGNAL run을 baseline·fresh state와 결속한다.
+    인자: outcome -> exact NO_SIGNAL
+        typed_reason -> exact None
         run_id -> UUIDv4 실행 identity
         started_at -> 실제 관찰 시작 UTC 시각
         completed_at -> 관찰·fresh 검증 완료 UTC 시각
@@ -1498,10 +1858,8 @@ def _create_non_mutating_trace_body(
     반환값: trace_sha256를 제외한 exact trace body
     작성 날짜: 2026/08/31
     """
-    if outcome not in {"NO_SIGNAL", "BLOCKED"}:
-        raise ValueError("non-mutating trace outcome must be NO_SIGNAL or BLOCKED")
-    if (outcome == "NO_SIGNAL") != (typed_reason is None):
-        raise ValueError("only BLOCKED requires a typed reason")
+    if outcome != "NO_SIGNAL" or typed_reason is not None:
+        raise ValueError("v3 non-mutating trace must be exact NO_SIGNAL")
     run_trades, performance_evidence = _create_performance_evidence(
         baseline_trades=baseline_trades,
         total_trades=total_trades,
@@ -1714,6 +2072,871 @@ def _classify_failure_recovery_error(error: Exception) -> str:
     return "FAILURE_RECOVERY_UNEXPECTED_FAILURE"  # 원 exception class와 message는 artifact에 넣지 않는다.
 
 
+def _normalize_failure_first_cause(
+    cause_snapshot: ReconciliationCauseSnapshot,
+    evidence_errors: list[str],
+) -> dict[str, object]:
+    """
+    함수 이름: _normalize_failure_first_cause()
+    기능: Controller의 frozen cause snapshot을 v2 exact mapping과 secondary error로 변환한다.
+    인자: cause_snapshot -> failure 감지 시 application lock에서 읽은 원자 snapshot
+        evidence_errors -> missing/duplicate/conflict code를 추가할 mutable 목록
+    반환값: raw reason 없는 first_cause mapping
+    작성 날짜: 2026/08/31
+    """
+    if type(cause_snapshot) is not ReconciliationCauseSnapshot:
+        evidence_errors.append("RECONCILIATION_CAUSE_MISSING")
+        return {
+            "reconciliation_required": True,
+            "status": ReconciliationCauseStatus.MISSING.value,
+            "category": None,
+        }  # Unknown object는 category를 추측하지 않고 conservative reconciliation으로 봉인한다.
+
+    cause_status = cause_snapshot.status
+    cause_category = cause_snapshot.category
+    if cause_status is ReconciliationCauseStatus.EXACT:
+        if not isinstance(cause_category, ReconciliationCauseCategory):
+            evidence_errors.append("RECONCILIATION_CAUSE_MISSING")
+            return {
+                "reconciliation_required": cause_snapshot.reconciliation_required,
+                "status": ReconciliationCauseStatus.MISSING.value,
+                "category": None,
+            }
+        normalized_category: str | None = cause_category.value
+    else:
+        secondary_error = {
+            ReconciliationCauseStatus.MISSING: "RECONCILIATION_CAUSE_MISSING",
+            ReconciliationCauseStatus.DUPLICATE: (
+                "RECONCILIATION_CAUSE_DUPLICATE"
+            ),
+            ReconciliationCauseStatus.CONFLICT: (
+                "RECONCILIATION_CAUSE_CONFLICT"
+            ),
+        }.get(cause_status)
+        if secondary_error is None:
+            secondary_error = "RECONCILIATION_CAUSE_MISSING"
+            cause_status = ReconciliationCauseStatus.MISSING
+        evidence_errors.append(secondary_error)
+        normalized_category = None  # 불확정 latch는 최초 후보 category도 artifact에 노출하지 않는다.
+
+    return {
+        "reconciliation_required": cause_snapshot.reconciliation_required,
+        "status": cause_status.value,
+        "category": normalized_category,
+    }
+
+
+def _create_incomplete_fresh_verification() -> dict[str, object]:
+    """
+    함수 이름: _create_incomplete_fresh_verification()
+    기능: 관찰 전 값을 추측한 zero로 채우지 않는 v2 fresh failure mapping을 만든다.
+    인자: 없음
+    반환값: stage와 모든 선택 truth가 아직 None인 INCOMPLETE mapping
+    작성 날짜: 2026/08/31
+    """
+    return {
+        "status": "INCOMPLETE",
+        "typed_reason": "FRESH_VERIFICATION_FAILED",
+        "failure_stage": None,
+        "verified_at": None,
+        "position_quantity": None,
+        "pending_order_count": None,
+        "reconciliation_required": None,
+        "matching_open_order_count": None,
+        "account_open_orders_empty": None,
+        "account_open_order_lists_empty": None,
+        "run_exchange_order_count": None,
+        "durable_trade_count": None,
+    }
+
+
+def _set_fresh_verification_failure(
+    fresh_verification: dict[str, object],
+    failure_stage: str,
+    typed_reason: str,
+    evidence_errors: list[str],
+) -> None:
+    """
+    함수 이름: _set_fresh_verification_failure()
+    기능: 최초 fresh failure stage를 고정하고 후속 cleanup 오류는 stage를 덮지 않게 한다.
+    인자: fresh_verification -> 갱신할 v2 partial truth mapping
+        failure_stage -> 실패 operation 직전에 고정한 stable stage
+        typed_reason -> raw exception을 포함하지 않는 exact reason
+        evidence_errors -> secondary evidence error를 추가할 mutable 목록
+    반환값: 없음
+    작성 날짜: 2026/08/31
+    """
+    if failure_stage not in _FAILURE_FRESH_VERIFICATION_STAGES:
+        raise ValueError("failure_stage must be supported")
+    if typed_reason not in _FAILURE_FRESH_STAGE_ALLOWED_REASONS[failure_stage]:
+        raise ValueError("typed_reason must match failure_stage")
+
+    # 첫 실패가 이미 있으면 cleanup reason만 누적하고 인과 stage는 바꾸지 않는다.
+    if fresh_verification["failure_stage"] is None:
+        fresh_verification["failure_stage"] = failure_stage
+        fresh_verification["typed_reason"] = typed_reason
+    if typed_reason not in evidence_errors:
+        evidence_errors.append(typed_reason)
+    fresh_verification["status"] = "INCOMPLETE"
+
+
+@dataclass(frozen=True, slots=True)
+class _FailureDurabilityFileFingerprint:
+    """
+    클래스 이름: _FailureDurabilityFileFingerprint
+    기능: durable leaf의 identity·owner·mode·link·content·change time을 불변 비교 값으로 보존한다.
+    작성 날짜: 2026/09/01
+    """
+
+    exists: bool
+    device: int | None
+    inode: int | None
+    mode: int | None
+    user_id: int | None
+    group_id: int | None
+    link_count: int | None
+    size: int | None
+    change_time_ns: int | None
+    modification_time_ns: int | None
+    sha256: str | None
+
+
+_MISSING_FAILURE_DURABILITY_FINGERPRINT = (
+    _FailureDurabilityFileFingerprint(
+        exists=False,
+        device=None,
+        inode=None,
+        mode=None,
+        user_id=None,
+        group_id=None,
+        link_count=None,
+        size=None,
+        change_time_ns=None,
+        modification_time_ns=None,
+        sha256=None,
+    )
+)
+
+
+@dataclass(slots=True)
+class _FailureDurabilitySnapshotHandle:
+    """
+    클래스 이름: _FailureDurabilitySnapshotHandle
+    기능: source와 isolated directory descriptor를 fresh runtime 종료까지 고정하고 ABA를 검증한다.
+    작성 날짜: 2026/09/01
+    """
+
+    history_path: Path
+    source_directory_path: Path
+    source_directory_descriptor: int
+    source_directory_identity: tuple[int, int, int, int]
+    source_directory_change_time_ns: int
+    source_ancestor_descriptors: tuple[int, ...]
+    source_ancestor_identities: tuple[tuple[int, int, int], ...]
+    directory_descriptor: int
+    directory_identity: tuple[int, int, int, int]
+    directory_change_time_ns: int
+    ancestor_descriptors: tuple[int, ...]
+    ancestor_identities: tuple[tuple[int, int, int], ...]
+    closed: bool = False
+
+    def verify(self) -> None:
+        """
+        함수 이름: verify()
+        기능: source/copy pinned directory와 공개 path의 identity·change time을 함께 확인한다.
+        인자: 없음
+        반환값: directory가 같은 inode와 change time이면 없음
+        작성 날짜: 2026/09/01
+        """
+        if self.closed:
+            raise RuntimeError("durability snapshot handle is closed")
+        _verify_failure_durability_ancestor_chain(
+            self.source_ancestor_descriptors,
+            self.source_ancestor_identities,
+        )
+        _verify_failure_durability_directory_identity(
+            self.source_directory_path,
+            self.source_directory_descriptor,
+            self.source_directory_identity,
+            expected_change_time_ns=self.source_directory_change_time_ns,
+        )
+        _verify_failure_durability_ancestor_chain(
+            self.ancestor_descriptors,
+            self.ancestor_identities,
+        )
+        _verify_failure_durability_directory_identity(
+            self.history_path.parent,
+            self.directory_descriptor,
+            self.directory_identity,
+            expected_change_time_ns=self.directory_change_time_ns,
+        )
+
+    def close(self) -> None:
+        """
+        함수 이름: close()
+        기능: fresh runtime 검증이 끝난 source/copy directory descriptor를 멱등 해제한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/01
+        """
+        if self.closed:
+            return
+        close_error: OSError | None = None
+        try:
+            _close_failure_durability_directory_chain(
+                self.ancestor_descriptors
+            )
+        except OSError as error:
+            close_error = error
+        finally:
+            try:
+                _close_failure_durability_directory_chain(
+                    self.source_ancestor_descriptors
+                )
+            except OSError as error:
+                if close_error is None:
+                    close_error = error
+            finally:
+                self.closed = True  # TemporaryDirectory cleanup 전에 두 descriptor chain을 정확히 한 번 해제한다.
+        if close_error is not None:
+            raise close_error
+
+
+def _failure_durability_state_identity(
+    file_state: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    """
+    함수 이름: _failure_durability_state_identity()
+    기능: lstat·open·fstat 경계에서 바뀐 inode와 metadata를 검사할 exact tuple을 만든다.
+    인자: file_state -> 비교할 stat_result
+    반환값: device, inode, mode, uid, gid, nlink, size, ctime, mtime tuple
+    작성 날짜: 2026/09/01
+    """
+    return (
+        file_state.st_dev,
+        file_state.st_ino,
+        stat.S_IMODE(file_state.st_mode),
+        file_state.st_uid,
+        file_state.st_gid,
+        file_state.st_nlink,
+        file_state.st_size,
+        file_state.st_ctime_ns,
+        file_state.st_mtime_ns,
+    )
+
+
+def _require_failure_durability_file_state(
+    file_state: os.stat_result,
+) -> None:
+    """
+    함수 이름: _require_failure_durability_file_state()
+    기능: source와 copy leaf를 현재 user의 mode 0600 단일-link regular file로 제한한다.
+    인자: file_state -> descriptor 또는 no-follow path의 stat_result
+    반환값: 안전한 leaf이면 없음
+    작성 날짜: 2026/08/31
+    """
+    if (
+        not stat.S_ISREG(file_state.st_mode)
+        or file_state.st_uid != os.geteuid()
+        or stat.S_IMODE(file_state.st_mode) != 0o600
+        or file_state.st_nlink != 1
+    ):
+        raise PermissionError(
+            "durability leaf must be an owner-only singly linked regular file"
+        )
+
+
+def _close_failure_durability_directory_chain(
+    directory_descriptors: tuple[int, ...],
+) -> None:
+    """
+    함수 이름: _close_failure_durability_directory_chain()
+    기능: root부터 leaf까지 고정한 directory descriptor를 역순으로 모두 닫는다.
+    인자: directory_descriptors -> 소유 중인 descriptor tuple
+    반환값: 모두 닫히면 없음
+    작성 날짜: 2026/09/01
+    """
+    first_error: OSError | None = None
+    for directory_descriptor in reversed(directory_descriptors):
+        try:
+            os.close(directory_descriptor)
+        except OSError as error:
+            if first_error is None:
+                first_error = error  # 한 close가 실패해도 나머지 ancestor FD를 누수시키지 않는다.
+    if first_error is not None:
+        raise first_error
+
+
+def _verify_failure_durability_ancestor_chain(
+    directory_descriptors: tuple[int, ...],
+    expected_identities: tuple[tuple[int, int, int], ...],
+) -> None:
+    """
+    함수 이름: _verify_failure_durability_ancestor_chain()
+    기능: pinned absolute directory chain의 device·inode·ctime을 root부터 순서대로 재검증한다.
+    인자: directory_descriptors -> root부터 leaf까지 열린 descriptor tuple
+        expected_identities -> 각 descriptor의 device, inode, ctime tuple
+    반환값: 전체 chain이 처음과 같으면 없음
+    작성 날짜: 2026/09/01
+    """
+    if (
+        not directory_descriptors
+        or len(directory_descriptors) != len(expected_identities)
+    ):
+        raise RuntimeError("durability ancestor chain is incomplete")
+    for directory_descriptor, expected_identity in zip(
+        directory_descriptors,
+        expected_identities,
+        strict=True,
+    ):
+        directory_state = os.fstat(directory_descriptor)
+        observed_identity = (
+            directory_state.st_dev,
+            directory_state.st_ino,
+            directory_state.st_ctime_ns,
+        )
+        if (
+            not stat.S_ISDIR(directory_state.st_mode)
+            or observed_identity != expected_identity
+        ):
+            raise RuntimeError("durability ancestor directory identity changed")
+
+
+def _open_failure_durability_directory_chain(
+    directory_path: Path,
+    *,
+    require_private_mode: bool,
+) -> tuple[
+    tuple[int, ...],
+    tuple[tuple[int, int, int], ...],
+    tuple[int, int, int, int],
+]:
+    """
+    함수 이름: _open_failure_durability_directory_chain()
+    기능: 절대 root부터 source/copy leaf directory까지 모든 no-follow descriptor를 고정한다.
+    인자: directory_path -> 열 directory path
+        require_private_mode -> mode 0700을 요구할지 여부
+    반환값: descriptor chain, 각 device/inode/ctime, final device/inode/uid/mode tuple
+    작성 날짜: 2026/09/01
+    """
+    if not isinstance(directory_path, Path):
+        raise TypeError("directory_path must be a Path")
+    no_follow_flag = getattr(os, "O_NOFOLLOW", None)
+    if no_follow_flag is None:
+        raise RuntimeError("durability access requires O_NOFOLLOW")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | no_follow_flag
+    normalized_path = Path(os.path.abspath(directory_path))
+    if (
+        normalized_path.parts[:2] == (os.sep, "var")
+        and os.path.islink("/var")
+        and os.readlink("/var") == "private/var"
+    ):
+        normalized_path = Path("/private/var").joinpath(
+            *normalized_path.parts[2:]
+        )  # macOS의 고정 root alias만 lexical canonical path로 바꾸고 임의 symlink는 허용하지 않는다.
+    directory_descriptors: list[int] = []
+    directory_identities: list[tuple[int, int, int]] = []
+    try:
+        root_descriptor = os.open(os.sep, directory_flags)
+        directory_descriptors.append(root_descriptor)
+        root_state = os.fstat(root_descriptor)
+        directory_identities.append(
+            (root_state.st_dev, root_state.st_ino, root_state.st_ctime_ns)
+        )
+
+        # Root부터 각 component를 dir_fd+O_NOFOLLOW로 열고 ancestor FD를 닫지 않는다.
+        for path_component in normalized_path.parts[1:]:
+            next_descriptor = os.open(
+                path_component,
+                directory_flags,
+                dir_fd=directory_descriptors[-1],
+            )
+            directory_descriptors.append(next_descriptor)
+            next_state = os.fstat(next_descriptor)
+            directory_identities.append(
+                (
+                    next_state.st_dev,
+                    next_state.st_ino,
+                    next_state.st_ctime_ns,
+                )
+            )
+    except Exception:
+        _close_failure_durability_directory_chain(
+            tuple(directory_descriptors)
+        )
+        raise
+
+    directory_descriptor = directory_descriptors[-1]
+    descriptor_state = os.fstat(directory_descriptor)
+    descriptor_identity = (
+        descriptor_state.st_dev,
+        descriptor_state.st_ino,
+        descriptor_state.st_uid,
+        stat.S_IMODE(descriptor_state.st_mode),
+    )
+    if (
+        not stat.S_ISDIR(descriptor_state.st_mode)
+        or descriptor_state.st_uid != os.geteuid()
+        or descriptor_state.st_mode & 0o022
+        or (
+            require_private_mode
+            and stat.S_IMODE(descriptor_state.st_mode) != 0o700
+        )
+    ):
+        _close_failure_durability_directory_chain(
+            tuple(directory_descriptors)
+        )
+        raise PermissionError("durability directory identity is unsafe")
+
+    return (
+        tuple(directory_descriptors),
+        tuple(directory_identities),
+        descriptor_identity,
+    )
+
+
+def _open_failure_durability_directory(
+    directory_path: Path,
+    *,
+    require_private_mode: bool,
+) -> tuple[int, tuple[int, int, int, int]]:
+    """
+    함수 이름: _open_failure_durability_directory()
+    기능: 짧은 operation용 final directory FD를 no-follow absolute chain으로 안전하게 연다.
+    인자: directory_path -> 열 directory path
+        require_private_mode -> mode 0700을 요구할지 여부
+    반환값: 열린 final descriptor와 device, inode, uid, mode identity tuple
+    작성 날짜: 2026/09/01
+    """
+    (
+        directory_descriptors,
+        _directory_identities,
+        descriptor_identity,
+    ) = _open_failure_durability_directory_chain(
+        directory_path,
+        require_private_mode=require_private_mode,
+    )
+    directory_descriptor = directory_descriptors[-1]
+    try:
+        _close_failure_durability_directory_chain(
+            directory_descriptors[:-1]
+        )
+    except OSError:
+        os.close(directory_descriptor)
+        raise
+
+    return directory_descriptor, descriptor_identity
+
+
+def _verify_failure_durability_directory_identity(
+    directory_path: Path,
+    directory_descriptor: int,
+    expected_identity: tuple[int, int, int, int],
+    *,
+    expected_change_time_ns: int | None = None,
+) -> None:
+    """
+    함수 이름: _verify_failure_durability_directory_identity()
+    기능: operation 뒤 path와 pinned directory descriptor가 여전히 같은 identity인지 확인한다.
+    인자: directory_path -> 재검사할 directory path
+        directory_descriptor -> operation 동안 열어 둔 descriptor
+        expected_identity -> open 직후 고정한 identity
+        expected_change_time_ns -> ABA rename·entry 변경을 탐지할 optional directory ctime
+    반환값: 일치하면 없음
+    작성 날짜: 2026/08/31
+    """
+    descriptor_state = os.fstat(directory_descriptor)
+    path_descriptor, path_identity = _open_failure_durability_directory(
+        directory_path,
+        require_private_mode=(expected_identity[3] == 0o700),
+    )
+    try:
+        path_state = os.fstat(path_descriptor)
+    finally:
+        os.close(path_descriptor)
+    descriptor_identity = (
+        descriptor_state.st_dev,
+        descriptor_state.st_ino,
+        descriptor_state.st_uid,
+        stat.S_IMODE(descriptor_state.st_mode),
+    )
+    if (
+        not stat.S_ISDIR(descriptor_state.st_mode)
+        or not stat.S_ISDIR(path_state.st_mode)
+        or descriptor_identity != expected_identity
+        or path_identity != expected_identity
+        or (
+            expected_change_time_ns is not None
+            and (
+                descriptor_state.st_ctime_ns != expected_change_time_ns
+                or path_state.st_ctime_ns != expected_change_time_ns
+            )
+        )
+    ):
+        raise RuntimeError("durability directory path identity changed")
+
+
+def _read_failure_durability_leaf(
+    directory_descriptor: int,
+    leaf_name: str,
+) -> tuple[bytes, _FailureDurabilityFileFingerprint]:
+    """
+    함수 이름: _read_failure_durability_leaf()
+    기능: pinned directory leaf를 no-follow로 읽고 identity·ctime·mtime을 재검사한다.
+    인자: directory_descriptor -> pinned parent directory descriptor
+        leaf_name -> separator 없는 durability leaf 이름
+    반환값: exact bytes와 rich immutable fingerprint tuple
+    작성 날짜: 2026/09/01
+    """
+    if not isinstance(leaf_name, str) or not leaf_name or Path(leaf_name).name != leaf_name:
+        raise ValueError("durability leaf_name must be canonical")
+    try:
+        path_state_before = os.stat(
+            leaf_name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        try:
+            os.stat(
+                leaf_name,
+                dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return b"", _MISSING_FAILURE_DURABILITY_FINGERPRINT
+        raise RuntimeError("durability leaf appeared while checking absence")
+    _require_failure_durability_file_state(path_state_before)
+
+    descriptor_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    descriptor_flags |= getattr(os, "O_NOFOLLOW", 0)
+    leaf_descriptor = os.open(
+        leaf_name,
+        descriptor_flags,
+        dir_fd=directory_descriptor,
+    )
+    try:
+        descriptor_state_before = os.fstat(leaf_descriptor)
+        _require_failure_durability_file_state(descriptor_state_before)
+        if _failure_durability_state_identity(
+            descriptor_state_before
+        ) != _failure_durability_state_identity(path_state_before):
+            raise RuntimeError("durability leaf changed between lstat and open")
+
+        # Descriptor read는 short read와 signal interruption을 처리하고 path를 다시 열지 않는다.
+        byte_chunks: list[bytes] = []
+        while True:
+            try:
+                byte_chunk = os.read(leaf_descriptor, 1024 * 1024)
+            except InterruptedError:
+                continue
+            if not byte_chunk:
+                break
+            byte_chunks.append(byte_chunk)
+        leaf_bytes = b"".join(byte_chunks)
+        descriptor_state_after = os.fstat(leaf_descriptor)
+        path_state_after = os.stat(
+            leaf_name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        expected_identity = _failure_durability_state_identity(
+            descriptor_state_before
+        )
+        if (
+            _failure_durability_state_identity(descriptor_state_after)
+            != expected_identity
+            or _failure_durability_state_identity(path_state_after)
+            != expected_identity
+            or len(leaf_bytes) != descriptor_state_before.st_size
+        ):
+            raise RuntimeError("durability leaf changed while reading")
+    finally:
+        os.close(leaf_descriptor)
+
+    return leaf_bytes, _FailureDurabilityFileFingerprint(
+        exists=True,
+        device=descriptor_state_before.st_dev,
+        inode=descriptor_state_before.st_ino,
+        mode=stat.S_IMODE(descriptor_state_before.st_mode),
+        user_id=descriptor_state_before.st_uid,
+        group_id=descriptor_state_before.st_gid,
+        link_count=descriptor_state_before.st_nlink,
+        size=descriptor_state_before.st_size,
+        change_time_ns=descriptor_state_before.st_ctime_ns,
+        modification_time_ns=descriptor_state_before.st_mtime_ns,
+        sha256=hashlib.sha256(leaf_bytes).hexdigest(),
+    )
+
+
+def _capture_failure_durability_fingerprint(
+    history_path: Path,
+) -> tuple[_FailureDurabilityFileFingerprint, ...]:
+    """
+    함수 이름: _capture_failure_durability_fingerprint()
+    기능: pinned parent의 세 leaf identity·SHA-256·change time을 fail-closed로 읽는다.
+    인자: history_path -> actual run 또는 isolated copy의 history JSONL 경로
+    반환값: 고정 leaf 순서의 rich immutable fingerprint tuple
+    작성 날짜: 2026/09/01
+    """
+    if not isinstance(history_path, Path):
+        raise TypeError("history_path must be a Path")
+    directory_descriptor, directory_identity = (
+        _open_failure_durability_directory(
+            history_path.parent,
+            require_private_mode=True,
+        )
+    )
+    try:
+        fingerprints = tuple(
+            _read_failure_durability_leaf(
+                directory_descriptor,
+                f"{history_path.name}{file_suffix}",
+            )[1]
+            for file_suffix in _FAILURE_DURABILITY_FILE_SUFFIXES
+        )
+        _verify_failure_durability_directory_identity(
+            history_path.parent,
+            directory_descriptor,
+            directory_identity,
+        )
+    finally:
+        os.close(directory_descriptor)
+
+    return fingerprints
+
+
+def _require_failure_durability_snapshot_equivalence(
+    source_fingerprints: tuple[_FailureDurabilityFileFingerprint, ...],
+    copy_fingerprints: tuple[_FailureDurabilityFileFingerprint, ...],
+) -> None:
+    """
+    함수 이름: _require_failure_durability_snapshot_equivalence()
+    기능: source와 copy의 존재·size·SHA는 같고 모든 존재 leaf inode는 다름을 검증한다.
+    인자: source_fingerprints -> copy 직후 재읽은 source tuple
+        copy_fingerprints -> runtime 시작 전 isolated copy tuple
+    반환값: exact isolated copy이면 없음
+    작성 날짜: 2026/08/31
+    """
+    if (
+        not source_fingerprints
+        or len(source_fingerprints) != len(copy_fingerprints)
+        or len(source_fingerprints) > len(_FAILURE_DURABILITY_FILE_SUFFIXES)
+    ):
+        raise ValueError("durability fingerprint count is invalid")
+    for source_fingerprint, copy_fingerprint in zip(
+        source_fingerprints,
+        copy_fingerprints,
+        strict=True,
+    ):
+        if source_fingerprint.exists != copy_fingerprint.exists:
+            raise RuntimeError("durability copy existence differs from source")
+        if not source_fingerprint.exists:
+            continue
+        if (
+            source_fingerprint.size != copy_fingerprint.size
+            or source_fingerprint.sha256 != copy_fingerprint.sha256
+            or (
+                source_fingerprint.device,
+                source_fingerprint.inode,
+            )
+            == (
+                copy_fingerprint.device,
+                copy_fingerprint.inode,
+            )
+        ):
+            raise RuntimeError("durability copy is not an exact distinct inode")
+
+
+def _copy_failure_durability_snapshot(
+    source_history_path: Path,
+    snapshot_directory: Path,
+) -> _FailureDurabilitySnapshotHandle:
+    """
+    함수 이름: _copy_failure_durability_snapshot()
+    기능: 세 durable leaf를 private inode로 fsync하고 source/copy parent descriptor를 넘긴다.
+    인자: source_history_path -> primary runtime이 닫힌 뒤의 authoritative history 경로
+        snapshot_directory -> fresh runtime만 사용할 mode 0700 임시 directory
+    반환값: fresh runtime 종료까지 directory FD를 소유할 snapshot handle
+    작성 날짜: 2026/09/01
+    """
+    if not isinstance(source_history_path, Path):
+        raise TypeError("source_history_path must be a Path")
+    if not isinstance(snapshot_directory, Path):
+        raise TypeError("snapshot_directory must be a Path")
+    (
+        source_ancestor_descriptors,
+        source_ancestor_identities,
+        source_directory_identity,
+    ) = _open_failure_durability_directory_chain(
+        source_history_path.parent,
+        require_private_mode=True,
+    )
+    source_descriptor = source_ancestor_descriptors[-1]
+    source_change_time_ns = os.fstat(source_descriptor).st_ctime_ns
+    destination_ancestor_descriptors: tuple[int, ...] | None = None
+    snapshot_handle: _FailureDurabilitySnapshotHandle | None = None
+    try:
+        (
+            destination_ancestor_descriptors,
+            destination_ancestor_identities,
+            destination_directory_identity,
+        ) = _open_failure_durability_directory_chain(
+            snapshot_directory,
+            require_private_mode=True,
+        )
+        destination_descriptor = destination_ancestor_descriptors[-1]
+        if source_directory_identity[:2] == destination_directory_identity[:2]:
+            raise RuntimeError("durability source and copy directories must differ")
+        isolated_history_path = snapshot_directory / source_history_path.name
+        destination_open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        destination_open_flags |= getattr(os, "O_CLOEXEC", 0)
+        destination_open_flags |= getattr(os, "O_NOFOLLOW", 0)
+
+        # 각 source leaf를 descriptor로 읽은 뒤 O_EXCL destination에 쓰고 두 path identity를 즉시 재검사한다.
+        for file_suffix in _FAILURE_DURABILITY_FILE_SUFFIXES:
+            leaf_name = f"{source_history_path.name}{file_suffix}"
+            source_bytes, source_fingerprint = (
+                _read_failure_durability_leaf(
+                    source_descriptor,
+                    leaf_name,
+                )
+            )
+            if not source_fingerprint.exists:
+                try:
+                    os.stat(
+                        leaf_name,
+                        dir_fd=destination_descriptor,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    continue
+                raise FileExistsError("absent source leaf exists in copy")
+            copied_descriptor = os.open(
+                leaf_name,
+                destination_open_flags,
+                0o600,
+                dir_fd=destination_descriptor,
+            )
+            try:
+                remaining_bytes = memoryview(source_bytes)
+                while remaining_bytes:
+                    try:
+                        written_count = os.write(
+                            copied_descriptor,
+                            remaining_bytes,
+                        )
+                    except InterruptedError:
+                        continue
+                    if written_count < 1:
+                        raise OSError(
+                            "durability snapshot copy made no progress"
+                        )
+                    remaining_bytes = remaining_bytes[written_count:]
+                os.fsync(copied_descriptor)
+                copied_state = os.fstat(copied_descriptor)
+                _require_failure_durability_file_state(copied_state)
+                copied_path_state = os.stat(
+                    leaf_name,
+                    dir_fd=destination_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    _failure_durability_state_identity(copied_state)
+                    != _failure_durability_state_identity(copied_path_state)
+                    or copied_state.st_size != len(source_bytes)
+                ):
+                    raise RuntimeError(
+                        "durability copy changed before publication"
+                    )
+            finally:
+                os.close(copied_descriptor)
+
+            copied_bytes, copied_fingerprint = (
+                _read_failure_durability_leaf(
+                    destination_descriptor,
+                    leaf_name,
+                )
+            )
+            source_bytes_after, source_fingerprint_after = (
+                _read_failure_durability_leaf(
+                    source_descriptor,
+                    leaf_name,
+                )
+            )
+            if (
+                source_fingerprint_after != source_fingerprint
+                or source_bytes_after != source_bytes
+                or copied_bytes != source_bytes
+            ):
+                raise RuntimeError("durability source changed during copy")
+            _require_failure_durability_snapshot_equivalence(
+                (source_fingerprint_after,),
+                (copied_fingerprint,),
+            )
+
+        os.fsync(destination_descriptor)
+        _verify_failure_durability_ancestor_chain(
+            source_ancestor_descriptors,
+            source_ancestor_identities,
+        )
+        _verify_failure_durability_directory_identity(
+            source_history_path.parent,
+            source_descriptor,
+            source_directory_identity,
+            expected_change_time_ns=source_change_time_ns,
+        )
+        destination_state = os.fstat(destination_descriptor)
+        destination_ancestor_identities = (
+            *destination_ancestor_identities[:-1],
+            (
+                destination_state.st_dev,
+                destination_state.st_ino,
+                destination_state.st_ctime_ns,
+            ),
+        )  # Snapshot leaf publication으로 의도적으로 바뀐 final directory ctime만 새 기준으로 고정한다.
+        _verify_failure_durability_ancestor_chain(
+            destination_ancestor_descriptors,
+            destination_ancestor_identities,
+        )
+        _verify_failure_durability_directory_identity(
+            snapshot_directory,
+            destination_descriptor,
+            destination_directory_identity,
+        )
+        snapshot_handle = _FailureDurabilitySnapshotHandle(
+            history_path=isolated_history_path,
+            source_directory_path=source_history_path.parent,
+            source_directory_descriptor=source_descriptor,
+            source_directory_identity=source_directory_identity,
+            source_directory_change_time_ns=source_change_time_ns,
+            source_ancestor_descriptors=source_ancestor_descriptors,
+            source_ancestor_identities=source_ancestor_identities,
+            directory_descriptor=destination_descriptor,
+            directory_identity=destination_directory_identity,
+            directory_change_time_ns=destination_state.st_ctime_ns,
+            ancestor_descriptors=destination_ancestor_descriptors,
+            ancestor_identities=destination_ancestor_identities,
+        )
+        source_ancestor_descriptors = None  # Handle이 source ancestor chain을 fresh runtime 종료까지 소유한다.
+        destination_ancestor_descriptors = None  # Handle이 copy ancestor chain도 cleanup까지 소유한다.
+    finally:
+        if destination_ancestor_descriptors is not None:
+            _close_failure_durability_directory_chain(
+                destination_ancestor_descriptors
+            )
+        if source_ancestor_descriptors is not None:
+            _close_failure_durability_directory_chain(
+                source_ancestor_descriptors
+            )
+
+    if snapshot_handle is None:
+        raise RuntimeError("durability snapshot handle was not created")
+
+    return snapshot_handle  # Plain Path만 넘기지 않고 pinned descriptor를 runtime 검증 종료까지 유지한다.
+
+
 def _require_failure_timestamp(value: object, location: str) -> str:
     """
     함수 이름: _require_failure_timestamp()
@@ -1834,6 +3057,15 @@ def _failure_recovery_has_safe_terminal_facts(
         or fresh_verification.get("pending_order_count") != 0
         or fresh_verification.get("reconciliation_required") is not False
         or fresh_verification.get("matching_open_order_count") != 0
+        or (
+            "account_open_orders_empty" in fresh_verification
+            and fresh_verification.get("account_open_orders_empty") is not True
+        )
+        or (
+            "account_open_order_lists_empty" in fresh_verification
+            and fresh_verification.get("account_open_order_lists_empty")
+            is not True
+        )
         or any(type(value) is not int for value in required_fresh_counts)
     ):
         return False
@@ -1900,11 +3132,22 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
     반환값: 없음
     작성 날짜: 2026/08/31
     """
-    if set(trace_body) != _FAILURE_EVIDENCE_BODY_FIELDS:
+    if not isinstance(trace_body, Mapping):
+        raise TypeError("failure evidence body must be a mapping")
+    schema_version = trace_body.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (
+        _SUPPORTED_PHASE13_FAILURE_EVIDENCE_SCHEMA_VERSIONS
+    ):
+        raise ValueError("failure evidence schema version is unsupported")
+    expected_body_fields = (
+        _FAILURE_EVIDENCE_BODY_FIELDS_V2
+        if schema_version == 2
+        else _FAILURE_EVIDENCE_BODY_FIELDS_V1
+    )
+    if set(trace_body) != expected_body_fields:
         raise ValueError("failure evidence body fields are not exact")
     if (
-        trace_body["schema_version"] != _PHASE13_FAILURE_EVIDENCE_SCHEMA_VERSION
-        or trace_body["record_type"] != _PHASE13_FAILURE_EVIDENCE_RECORD_TYPE
+        trace_body["record_type"] != _PHASE13_FAILURE_EVIDENCE_RECORD_TYPE
         or trace_body["outcome"] != "FAILED"
     ):
         raise ValueError("failure evidence identity is invalid")
@@ -1914,6 +3157,8 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
         or _FAILURE_TOKEN_PATTERN.fullmatch(typed_reason) is None
     ):
         raise ValueError("failure typed_reason must be a canonical token")
+    if schema_version == 2 and typed_reason not in _FAILURE_ACTUAL_REASONS:
+        raise ValueError("failure typed_reason is unsupported")
     try:
         parsed_run_id = UUID(str(trace_body["run_id"]))
     except ValueError as error:
@@ -1936,6 +3181,32 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
     if completed_at < started_at:
         raise ValueError("failure completed_at precedes started_at")
 
+    # V2 first cause는 Controller의 한 lock snapshot만 허용하고 불확정 상태에는 category를 남기지 않는다.
+    if schema_version == 2:
+        first_cause = trace_body["first_cause"]
+        if (
+            not isinstance(first_cause, Mapping)
+            or set(first_cause) != _FAILURE_FIRST_CAUSE_FIELDS
+            or type(first_cause["reconciliation_required"]) is not bool
+            or first_cause["status"] not in _FAILURE_FIRST_CAUSE_STATUSES
+        ):
+            raise ValueError("failure first cause is invalid")
+        first_cause_status = first_cause["status"]
+        first_cause_category = first_cause["category"]
+        if first_cause_status == ReconciliationCauseStatus.EXACT.value:
+            if first_cause_category not in _FAILURE_FIRST_CAUSE_CATEGORIES:
+                raise ValueError("exact failure cause requires a category")
+            if (
+                first_cause_category
+                in {
+                    ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED.value,
+                    ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS.value,
+                }
+                and first_cause["reconciliation_required"] is not True
+            ):
+                raise ValueError("permanent failure cause lacks its blocker")
+        elif first_cause_category is not None:
+            raise ValueError("non-exact failure cause must omit category")
     # Mutation guard는 failure handler가 추가 제출을 차단한 뒤의 snapshot만 seal한다.
     mutation_guard = trace_body["mutation_guard"]
     if (
@@ -1949,10 +3220,16 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
     attempts = mutation_guard["submission_attempts"]
     if len(attempts) > 2:
         raise ValueError("failure evidence permits at most two order attempts")
+    expected_attempt_fields = (
+        _FAILURE_SUBMISSION_ATTEMPT_FIELDS_V2
+        if schema_version == 2
+        else _FAILURE_SUBMISSION_ATTEMPT_FIELDS_V1
+    )
+    latest_attempted_at: str | None = None
     for sequence, attempt in enumerate(attempts, start=1):
         if (
             not isinstance(attempt, Mapping)
-            or set(attempt) != _FAILURE_SUBMISSION_ATTEMPT_FIELDS
+            or set(attempt) != expected_attempt_fields
             or attempt["sequence"] != sequence
             or attempt["symbol"] != "ETHUSDT"
             or attempt["order_type"] != "MARKET"
@@ -1961,14 +3238,28 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
             or attempt["submission_attempt"] != 0
         ):
             raise ValueError("failure submission attempt is invalid")
-        for field_name in ("intent_id", "client_order_id"):
-            field_value = attempt[field_name]
-            if (
-                not isinstance(field_value, str)
-                or _FAILURE_SAFE_TEXT_PATTERN.fullmatch(field_value) is None
-            ):
-                raise ValueError("failure submission identity is invalid")
-        _require_failure_timestamp(attempt["attempted_at"], "attempted_at")
+        if schema_version == 1:
+            for field_name in ("intent_id", "client_order_id"):
+                field_value = attempt[field_name]
+                if (
+                    not isinstance(field_value, str)
+                    or _FAILURE_SAFE_TEXT_PATTERN.fullmatch(field_value) is None
+                ):
+                    raise ValueError("failure submission identity is invalid")
+        attempted_at = _require_failure_timestamp(
+            attempt["attempted_at"],
+            "attempted_at",
+        )
+        if schema_version == 2 and (
+            attempted_at < started_at
+            or attempted_at > completed_at
+            or (
+                latest_attempted_at is not None
+                and attempted_at < latest_attempted_at
+            )
+        ):
+            raise ValueError("failure attempt timestamp is outside run order")
+        latest_attempted_at = attempted_at
     if bool(attempts) != mutation_guard["mutation_started"]:
         raise ValueError("failure mutation flag does not match submission attempts")
     if tuple(attempt["side"] for attempt in attempts) not in {
@@ -1984,8 +3275,7 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
         not isinstance(recovery, Mapping)
         or set(recovery) != _FAILURE_RECOVERY_FIELDS
         or type(recovery["attempted"]) is not bool
-        or recovery["outcome"]
-        not in {"NOT_REQUIRED", "SKIPPED", "SUCCESS", "FAILED"}
+        or recovery["outcome"] not in _FAILURE_RECOVERY_OUTCOMES
     ):
         raise ValueError("failure recovery evidence is invalid")
     recovery_reason = recovery["typed_reason"]
@@ -1994,6 +3284,12 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
         or _FAILURE_TOKEN_PATTERN.fullmatch(recovery_reason) is None
     ):
         raise ValueError("failure recovery reason must be a canonical token")
+    if (
+        schema_version == 2
+        and recovery_reason is not None
+        and recovery_reason not in _FAILURE_RECOVERY_REASONS
+    ):
+        raise ValueError("failure recovery reason is unsupported")
     if recovery["outcome"] in {"NOT_REQUIRED", "SUCCESS"}:
         if recovery_reason is not None:
             raise ValueError("completed failure recovery must not have a reason")
@@ -2003,6 +3299,14 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
         recovery["outcome"] in {"SUCCESS", "FAILED"}
     ):
         raise ValueError("failure recovery attempted flag is inconsistent")
+    if schema_version == 2 and recovery["outcome"] == "FAILED" and (
+        recovery_reason not in _FAILURE_RECOVERY_FAILED_REASONS
+    ):
+        raise ValueError("failed recovery reason precedes any STOP attempt")
+    if schema_version == 2 and recovery["attempted"] and (
+        not attempts or attempts[0]["side"] != "BUY"
+    ):
+        raise ValueError("attempted recovery lacks an initial BUY attempt")
     if recovery["outcome"] == "SUCCESS" and tuple(
         attempt["side"] for attempt in attempts
     ) != ("BUY", "SELL"):
@@ -2021,9 +3325,61 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
             or _FAILURE_TOKEN_PATTERN.fullmatch(field_value) is None
         ):
             raise ValueError("failure runtime status is invalid")
+    if schema_version == 2 and (
+        runtime_state["application_status"] not in _FAILURE_APPLICATION_STATUSES
+        or runtime_state["trading_status"] not in _FAILURE_TRADING_STATUSES
+    ):
+        raise ValueError("failure runtime status is unsupported")
+    if schema_version == 2 and runtime_state["trading_status"] in {
+        "RUNNING",
+        "STOPPING",
+    }:
+        raise ValueError("failure runtime scheduler gate is still open")
+    if (
+        schema_version == 2
+        and recovery["attempted"]
+        and runtime_state["application_status"] != "READY"
+    ):
+        raise ValueError("attempted recovery lacks a READY application")
+    if (
+        schema_version == 2
+        and attempts
+        and runtime_state["application_status"] not in {"READY", "CLOSED"}
+    ):
+        raise ValueError("submission attempts lack an observable application")
+    if (
+        schema_version == 2
+        and attempts
+        and runtime_state["trading_status"] == "NOT_STARTED"
+    ):
+        raise ValueError("submission attempts lack an active trading session")
     runtime_reconciliation = runtime_state["reconciliation_required"]
     if runtime_reconciliation is not None and type(runtime_reconciliation) is not bool:
         raise TypeError("failure reconciliation flag must be bool or None")
+    if (
+        schema_version == 2
+        and runtime_state["trading_status"] == "RECONCILIATION_REQUIRED"
+        and runtime_reconciliation is False
+    ):
+        raise ValueError("reconciliation status contradicts runtime blocker")
+    if schema_version == 2 and (
+        first_cause_status == ReconciliationCauseStatus.EXACT.value
+        and first_cause_category
+        in {
+            ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED.value,
+            ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS.value,
+        }
+    ):
+        if recovery["attempted"] or recovery["outcome"] != "SKIPPED":
+            raise ValueError("permanent first cause cannot complete recovery")
+        if recovery_reason in {
+            "FAILURE_RECOVERY_EFFECTIVE_FREE_UNCONFIRMED",
+            "FAILURE_RECOVERY_STATE_CHANGED",
+            "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+        }:
+            raise ValueError("permanent first cause cannot reach late recovery")
+        if runtime_reconciliation is False:
+            raise ValueError("permanent first cause lost its runtime blocker")
     _require_failure_decimal_or_none(
         runtime_state["position_quantity"],
         "runtime position_quantity",
@@ -2034,13 +3390,63 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
             type(field_value) is not int or field_value < 0
         ):
             raise ValueError("failure runtime count must be non-negative or None")
+    if (
+        schema_version == 2
+        and runtime_state["durable_trade_count"] is not None
+        and runtime_state["durable_trade_count"] > len(attempts)
+    ):
+        raise ValueError("failure runtime durable count exceeds order attempts")
+    if (
+        schema_version == 2
+        and runtime_state["pending_order_count"] is not None
+        and runtime_state["pending_order_count"] > 1
+    ):
+        raise ValueError("failure runtime pending count exceeds serial owner cap")
+    if (
+        schema_version == 2
+        and recovery["attempted"]
+        and runtime_state["durable_trade_count"] is not None
+        and runtime_state["durable_trade_count"] < 1
+    ):
+        raise ValueError("attempted recovery lacks a durable BUY")
+    if (
+        schema_version == 2
+        and len(attempts) == 2
+        and runtime_state["durable_trade_count"] is not None
+        and runtime_state["durable_trade_count"] < 1
+    ):
+        raise ValueError("SELL attempt lacks a runtime durable BUY")
+    if (
+        schema_version == 2
+        and not attempts
+        and runtime_state["position_quantity"] is not None
+        and not _is_zero_failure_decimal(runtime_state["position_quantity"])
+    ):
+        raise ValueError("failure runtime position lacks an order attempt")
+    if (
+        schema_version == 2
+        and len(attempts) == 1
+        and runtime_state["durable_trade_count"] == 1
+        and runtime_state["position_quantity"] is not None
+        and _is_zero_failure_decimal(runtime_state["position_quantity"])
+    ):
+        raise ValueError("single durable BUY lacks runtime position")
 
     fresh_verification = trace_body["fresh_verification"]
-    if not isinstance(fresh_verification, Mapping) or set(fresh_verification) != (
-        _FAILURE_FRESH_VERIFICATION_FIELDS
+    expected_fresh_fields = (
+        _FAILURE_FRESH_VERIFICATION_FIELDS_V2
+        if schema_version == 2
+        else _FAILURE_FRESH_VERIFICATION_FIELDS_V1
+    )
+    if (
+        not isinstance(fresh_verification, Mapping)
+        or set(fresh_verification) != expected_fresh_fields
     ):
         raise ValueError("failure fresh verification fields are not exact")
-    if fresh_verification["status"] not in {"VERIFIED", "INCOMPLETE"}:
+    if (
+        fresh_verification["status"]
+        not in _FAILURE_FRESH_VERIFICATION_STATUSES
+    ):
         raise ValueError("failure fresh verification status is invalid")
     fresh_reason = fresh_verification["typed_reason"]
     if (fresh_verification["status"] == "VERIFIED") != (fresh_reason is None):
@@ -2050,9 +3456,46 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
         or _FAILURE_TOKEN_PATTERN.fullmatch(fresh_reason) is None
     ):
         raise ValueError("failure fresh typed reason is invalid")
+    if (
+        schema_version == 2
+        and fresh_reason is not None
+        and fresh_reason not in _FAILURE_FRESH_REASONS
+    ):
+        raise ValueError("failure fresh typed reason is unsupported")
+    if schema_version == 2:
+        failure_stage = fresh_verification["failure_stage"]
+        if fresh_verification["status"] == "VERIFIED":
+            if failure_stage is not None:
+                raise ValueError("VERIFIED fresh evidence must omit failure stage")
+        elif failure_stage not in _FAILURE_FRESH_VERIFICATION_STAGES:
+            raise ValueError("INCOMPLETE fresh evidence requires an exact stage")
+        elif fresh_reason not in _FAILURE_FRESH_STAGE_ALLOWED_REASONS[
+            failure_stage
+        ]:
+            raise ValueError("fresh reason does not match its failure stage")
+        for field_name in (
+            "account_open_orders_empty",
+            "account_open_order_lists_empty",
+        ):
+            field_value = fresh_verification[field_name]
+            if field_value is not None and type(field_value) is not bool:
+                raise TypeError("failure fresh empty-state flag is invalid")
     verified_at = fresh_verification["verified_at"]
     if verified_at is not None:
-        _require_failure_timestamp(verified_at, "fresh verified_at")
+        verified_at = _require_failure_timestamp(
+            verified_at,
+            "fresh verified_at",
+        )
+        if schema_version == 2 and not (
+            started_at <= verified_at <= completed_at
+        ):
+            raise ValueError("fresh verified_at is outside the run window")
+        if (
+            schema_version == 2
+            and latest_attempted_at is not None
+            and verified_at < latest_attempted_at
+        ):
+            raise ValueError("fresh verified_at precedes the last order attempt")
     for field_name in ("position_quantity",):
         _require_failure_decimal_or_none(
             fresh_verification[field_name],
@@ -2069,9 +3512,289 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
             type(field_value) is not int or field_value < 0
         ):
             raise ValueError("failure fresh count must be non-negative or None")
+    fresh_run_order_count = fresh_verification["run_exchange_order_count"]
+    fresh_durable_trade_count = fresh_verification["durable_trade_count"]
+    if schema_version == 2:
+        if (
+            fresh_verification["pending_order_count"] is not None
+            and fresh_verification["pending_order_count"] > 1
+        ):
+            raise ValueError("failure fresh pending count exceeds serial owner cap")
+        if (
+            fresh_verification["matching_open_order_count"] is not None
+            and not attempts
+            and fresh_verification["matching_open_order_count"] != 0
+        ):
+            raise ValueError(
+                "fresh matching open-order count lacks an order attempt"
+            )
+        if (
+            fresh_run_order_count is not None
+            and fresh_durable_trade_count is None
+        ):
+            raise ValueError("fresh run count lacks durable truth")
+        if (
+            fresh_durable_trade_count is not None
+            and fresh_durable_trade_count > len(attempts)
+        ):
+            raise ValueError("fresh durable count exceeds order attempts")
+        if (
+            fresh_durable_trade_count is not None
+            and runtime_state["durable_trade_count"] is not None
+            and fresh_durable_trade_count
+            < runtime_state["durable_trade_count"]
+        ):
+            raise ValueError("fresh durable truth regresses runtime history")
+        if (
+            recovery["attempted"]
+            and fresh_durable_trade_count is not None
+            and fresh_durable_trade_count < 1
+        ):
+            raise ValueError("fresh recovery truth lacks a durable BUY")
+        if (
+            len(attempts) == 2
+            and fresh_durable_trade_count is not None
+            and fresh_durable_trade_count < 1
+        ):
+            raise ValueError("SELL attempt lacks a fresh durable BUY")
+        if fresh_run_order_count is not None and (
+            fresh_run_order_count != fresh_durable_trade_count
+            or fresh_run_order_count > len(attempts)
+        ):
+            raise ValueError("fresh run count contradicts durable attempts")
+        if (
+            not attempts
+            and fresh_verification["position_quantity"] is not None
+            and not _is_zero_failure_decimal(
+                fresh_verification["position_quantity"]
+            )
+        ):
+            raise ValueError("fresh position lacks a durable trade")
+        if (
+            fresh_durable_trade_count == 1
+            and fresh_verification["position_quantity"] is not None
+            and _is_zero_failure_decimal(
+                fresh_verification["position_quantity"]
+            )
+        ):
+            raise ValueError("single durable BUY lacks fresh position")
     reconciliation_required = fresh_verification["reconciliation_required"]
     if reconciliation_required is not None and type(reconciliation_required) is not bool:
         raise TypeError("failure fresh reconciliation flag must be bool or None")
+    fresh_truth_complete_v2 = (
+        schema_version == 2
+        and verified_at is not None
+        and fresh_verification["position_quantity"] is not None
+        and fresh_verification["pending_order_count"] == 0
+        and reconciliation_required is False
+        and fresh_verification["matching_open_order_count"] == 0
+        and fresh_verification["account_open_orders_empty"] is True
+        and fresh_verification["account_open_order_lists_empty"] is True
+        and fresh_run_order_count is not None
+        and fresh_durable_trade_count is not None
+    )
+    if schema_version == 2 and fresh_verification["status"] == "INCOMPLETE":
+        stage_reason_pair = (
+            fresh_verification["failure_stage"],
+            fresh_reason,
+        )
+        all_fresh_observations_missing = all(
+            fresh_verification[field_name] is None
+            for field_name in _FAILURE_FRESH_OBSERVATION_FIELDS_V2
+        )
+        local_observations_missing = all(
+            fresh_verification[field_name] is None
+            for field_name in (
+                "position_quantity",
+                "pending_order_count",
+                "reconciliation_required",
+            )
+        )
+        local_observations_published = (
+            fresh_verification["pending_order_count"] is not None
+            and reconciliation_required is not None
+        )
+        if not (
+            local_observations_missing or local_observations_published
+        ):
+            raise ValueError("fresh local observation group is partial")
+        local_state_ready = (
+            fresh_verification["position_quantity"] is not None
+            and fresh_verification["pending_order_count"] == 0
+            and reconciliation_required is False
+        )
+        open_order_group_consistent = not (
+            fresh_verification["account_open_orders_empty"] is None
+            and fresh_verification["matching_open_order_count"] is not None
+        )
+        if not open_order_group_consistent:
+            raise ValueError("fresh open-order observation group is partial")
+        open_orders_ready = (
+            fresh_verification["account_open_orders_empty"] is True
+            and fresh_verification["matching_open_order_count"] == 0
+        )
+        pre_recent_prefix_ready = (
+            local_state_ready
+            and open_orders_ready
+            and fresh_verification["account_open_order_lists_empty"] is True
+        )
+        counts_missing = (
+            fresh_run_order_count is None
+            and fresh_durable_trade_count is None
+        )
+        counts_complete = (
+            fresh_run_order_count is not None
+            and fresh_durable_trade_count is not None
+        )
+        failure_stage = fresh_verification["failure_stage"]
+        if fresh_verification["failure_stage"] in {
+            "RUNTIME_CREATION",
+            "STARTUP_APPLICATION",
+            "MARKET",
+            "REGIME",
+            "ACCOUNT",
+            "HISTORY",
+            "RECONCILIATION",
+        } and not all_fresh_observations_missing:
+            raise ValueError("startup-stage failure contains downstream truth")
+        if failure_stage == "LOCAL_STATE" and not (
+            verified_at is None
+            and (
+                local_observations_missing
+                or (
+                    local_observations_published
+                    and not local_state_ready
+                )
+            )
+            and fresh_verification["account_open_orders_empty"] is None
+            and fresh_verification["matching_open_order_count"] is None
+            and fresh_verification["account_open_order_lists_empty"] is None
+            and counts_missing
+        ):
+            raise ValueError("local-state failure has a downstream prefix")
+        if failure_stage == "FILTER" and not (
+            all_fresh_observations_missing
+            or (
+                verified_at is None
+                and pre_recent_prefix_ready
+                and counts_missing
+            )
+        ):
+            raise ValueError("filter failure has an impossible observation prefix")
+        if failure_stage == "STREAM" and not (
+            all_fresh_observations_missing
+            or (
+                verified_at is None
+                and pre_recent_prefix_ready
+                and counts_complete
+            )
+        ):
+            raise ValueError("stream failure has an impossible observation prefix")
+        if failure_stage == "OPEN_ORDERS":
+            first_open_order_shape = (
+                fresh_verification["account_open_order_lists_empty"] is None
+                and counts_missing
+            )
+            final_open_order_shape = (
+                fresh_verification["account_open_order_lists_empty"] is True
+                and counts_complete
+                and type(
+                    fresh_verification["account_open_orders_empty"]
+                )
+                is bool
+                and fresh_verification["matching_open_order_count"] is not None
+            )
+            if not (
+                verified_at is None
+                and local_state_ready
+                and open_order_group_consistent
+                and (first_open_order_shape or final_open_order_shape)
+                and (
+                    fresh_reason != "FRESH_OPEN_ORDERS_CHANGED"
+                    or (
+                        final_open_order_shape
+                        and fresh_verification["account_open_orders_empty"]
+                        is True
+                        and fresh_verification[
+                            "matching_open_order_count"
+                        ]
+                        is not None
+                    )
+                )
+                and not (
+                    fresh_reason == "FRESH_OPEN_ORDERS_NOT_EMPTY"
+                    and final_open_order_shape
+                    and fresh_verification["account_open_orders_empty"]
+                    is True
+                    and fresh_verification["matching_open_order_count"] != 0
+                )
+            ):
+                raise ValueError("open-order failure lacks its observed prefix")
+        if failure_stage == "OPEN_ORDER_LISTS" and not (
+            verified_at is None
+            and local_state_ready
+            and open_orders_ready
+            and (
+                (
+                    counts_missing
+                    and fresh_verification[
+                        "account_open_order_lists_empty"
+                    ]
+                    is not True
+                )
+                or (
+                    counts_complete
+                    and type(
+                        fresh_verification[
+                            "account_open_order_lists_empty"
+                        ]
+                    )
+                    is bool
+                )
+            )
+        ):
+            raise ValueError("open-order-list failure lacks its observed prefix")
+        if failure_stage == "RECENT_ORDERS" and not (
+            verified_at is None
+            and pre_recent_prefix_ready
+            and (
+                (
+                    fresh_reason == "FRESH_EXCHANGE_BASELINE_UNAVAILABLE"
+                    and counts_missing
+                )
+                or (
+                    fresh_reason == "FRESH_RECENT_ORDERS_CHANGED"
+                    and (
+                        (
+                            fresh_run_order_count is None
+                            and fresh_durable_trade_count is not None
+                        )
+                        or counts_complete
+                    )
+                )
+            )
+        ):
+            raise ValueError("recent-order failure lacks its observed prefix")
+        if failure_stage == "DURABILITY" and not (
+            all_fresh_observations_missing or fresh_truth_complete_v2
+        ):
+            raise ValueError("durability failure has a partial observation prefix")
+        if verified_at is not None and (
+            stage_reason_pair not in _FAILURE_POST_VERIFICATION_STAGE_REASONS
+            or not fresh_truth_complete_v2
+        ):
+            raise ValueError(
+                "incomplete verified_at lacks post-verification failure truth"
+            )
+        if stage_reason_pair in {
+            ("CLEANUP", "FRESH_RUNTIME_CLOSE_FAILED"),
+            ("CLEANUP", "FRESH_SNAPSHOT_CLEANUP_FAILED"),
+        } and not fresh_truth_complete_v2:
+            raise ValueError("cleanup failure lacks complete fresh truth")
+        if fresh_reason == "PRIMARY_RUNTIME_NOT_CLOSED" and (
+            not all_fresh_observations_missing
+        ):
+            raise ValueError("primary close failure must omit fresh observations")
     if fresh_verification["status"] == "VERIFIED" and (
         verified_at is None
         or fresh_verification["position_quantity"] is None
@@ -2085,6 +3808,7 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
                 "durable_trade_count",
             )
         )
+        or (schema_version == 2 and not fresh_truth_complete_v2)
     ):
         raise ValueError(
             "VERIFIED fresh evidence requires every observed field"
@@ -2099,12 +3823,212 @@ def _validate_failure_evidence_body(trace_body: Mapping[str, object]) -> None:
         raise ValueError(
             "completed failure recovery contradicts terminal state evidence"
         )
-    if not isinstance(trace_body["evidence_errors"], list) or any(
+    if schema_version == 2 and recovery["outcome"] == "NOT_REQUIRED":
+        not_required_truth = (
+            runtime_state["durable_trade_count"],
+            fresh_durable_trade_count,
+            len(attempts),
+        )
+        if not_required_truth not in {(0, 0, 0), (2, 2, 2)}:
+            raise ValueError("NOT_REQUIRED recovery has an impossible trade suffix")
+        if (
+            not_required_truth == (2, 2, 2)
+            and runtime_state["trading_status"] != "TERMINATED"
+        ):
+            raise ValueError("completed round trip lacks terminal runtime truth")
+    if schema_version == 2 and recovery_reason in {
+        "FAILURE_RECOVERY_EFFECTIVE_FREE_UNCONFIRMED",
+        "FAILURE_RECOVERY_STATE_CHANGED",
+    }:
+        if not attempts or runtime_state["application_status"] != "READY":
+            raise ValueError("late recovery skip lacks its known-safe BUY")
+        if (
+            runtime_state["durable_trade_count"] is not None
+            and runtime_state["durable_trade_count"] < 1
+        ) or (
+            fresh_durable_trade_count is not None
+            and fresh_durable_trade_count < 1
+        ):
+            raise ValueError("late recovery skip contradicts durable BUY truth")
+    if (
+        schema_version == 2
+        and recovery_reason
+        == "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE"
+    ):
+        if recovery["attempted"]:
+            attempted_runtime_is_terminal = (
+                len(attempts) == 2
+                and runtime_state["application_status"] == "READY"
+                and runtime_state["trading_status"] == "TERMINATED"
+                and (
+                    runtime_state["position_quantity"] is None
+                    or _is_zero_failure_decimal(
+                        runtime_state["position_quantity"]
+                    )
+                )
+                and runtime_state["pending_order_count"] in {None, 0}
+                and runtime_state["durable_trade_count"] in {None, 2}
+            )
+            fresh_terminal_values_are_consistent = (
+                (
+                    fresh_run_order_count is None
+                    or fresh_run_order_count == 2
+                )
+                and (
+                    fresh_durable_trade_count is None
+                    or fresh_durable_trade_count == 2
+                )
+                and (
+                    fresh_verification["position_quantity"] is None
+                    or _is_zero_failure_decimal(
+                        fresh_verification["position_quantity"]
+                    )
+                )
+            )
+            if not (
+                attempted_runtime_is_terminal
+                and fresh_terminal_values_are_consistent
+            ):
+                raise ValueError(
+                    "attempted final verification lacks terminal recovery truth"
+                )
+        candidate_outcome = (
+            "SUCCESS" if recovery["attempted"] else "NOT_REQUIRED"
+        )
+        if _failure_recovery_has_safe_terminal_facts(
+            candidate_outcome,
+            runtime_state,
+            fresh_verification,
+        ):
+            raise ValueError("final verification reason contradicts safe facts")
+    evidence_errors = trace_body["evidence_errors"]
+    if not isinstance(evidence_errors, list) or any(
         not isinstance(error_code, str)
         or _FAILURE_TOKEN_PATTERN.fullmatch(error_code) is None
-        for error_code in trace_body["evidence_errors"]
+        for error_code in evidence_errors
     ):
         raise ValueError("failure evidence errors must be typed tokens")
+    if schema_version == 2:
+        if len(evidence_errors) != len(set(evidence_errors)):
+            raise ValueError("failure evidence errors must be unique")
+        if any(
+            error_code not in _FAILURE_EVIDENCE_ERRORS
+            for error_code in evidence_errors
+        ):
+            raise ValueError("failure evidence error is unsupported")
+        observed_error_phases = [
+            next(
+                phase_index
+                for phase_index, phase_errors in enumerate(
+                    _FAILURE_EVIDENCE_ERROR_PHASES
+                )
+                if error_code in phase_errors
+            )
+            for error_code in evidence_errors
+        ]
+        if observed_error_phases != sorted(observed_error_phases):
+            raise ValueError("failure evidence errors violate producer order")
+        observed_error_set = set(evidence_errors)
+        recovery_errors = _FAILURE_RECOVERY_REASONS.intersection(
+            observed_error_set
+        )
+        expected_recovery_errors = (
+            set()
+            if recovery["outcome"] in {"SUCCESS", "NOT_REQUIRED"}
+            else {recovery_reason}
+        )
+        if recovery_errors != expected_recovery_errors:
+            raise ValueError("failure recovery reason contradicts evidence errors")
+
+        # Active mark의 publication 오류는 completed recovery가 아니고 runtime gate가 닫힌 경우에만 가능하다.
+        scheduler_publication_failed = (
+            "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED"
+            in observed_error_set
+        )
+        if scheduler_publication_failed and (
+            recovery["outcome"] in {"SUCCESS", "NOT_REQUIRED"}
+            or runtime_state["application_status"] not in {"READY", "CLOSED"}
+            or runtime_state["trading_status"]
+            != "RECONCILIATION_REQUIRED"
+            or runtime_reconciliation is not True
+        ):
+            raise ValueError(
+                "scheduler publication error contradicts terminal evidence"
+            )
+        if scheduler_publication_failed and first_cause_category in {
+            ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED.value,
+            ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS.value,
+        }:
+            raise ValueError(
+                "permanent first cause cannot publish a scheduler gate"
+            )
+
+        # Nullable runtime truth와 owner별 unavailable code는 양방향 exact iff로 결속한다.
+        runtime_error_fields = {
+            "reconciliation_required": "RUNTIME_RECONCILIATION_UNAVAILABLE",
+            "position_quantity": "RUNTIME_POSITION_UNAVAILABLE",
+            "pending_order_count": "RUNTIME_PENDING_UNAVAILABLE",
+            "durable_trade_count": "RUNTIME_HISTORY_UNAVAILABLE",
+        }
+        for field_name, error_code in runtime_error_fields.items():
+            if (runtime_state[field_name] is None) != (
+                error_code in observed_error_set
+            ):
+                raise ValueError("runtime nullable truth lacks exact error code")
+
+        fresh_errors = _FAILURE_FRESH_REASONS.intersection(
+            observed_error_set
+        )
+        fresh_error_sequence = [
+            error_code
+            for error_code in evidence_errors
+            if error_code in _FAILURE_FRESH_REASONS
+        ]
+        if fresh_verification["status"] == "VERIFIED":
+            if fresh_errors:
+                raise ValueError("VERIFIED fresh evidence contains failure errors")
+        elif fresh_reason == "PRIMARY_RUNTIME_NOT_CLOSED":
+            if fresh_errors != {"PRIMARY_RUNTIME_NOT_CLOSED"}:
+                raise ValueError("primary runtime close truth is inconsistent")
+        else:
+            allowed_secondary_errors = (
+                _FAILURE_FRESH_ALLOWED_SECONDARY_BY_PRIMARY.get(
+                    fresh_reason,
+                    _FAILURE_FRESH_SECONDARY_REASONS,
+                )
+            )
+            if (
+                fresh_reason not in fresh_errors
+                or fresh_error_sequence[0] != fresh_reason
+                or not (fresh_errors - {fresh_reason}).issubset(
+                    allowed_secondary_errors
+                )
+                or "PRIMARY_RUNTIME_NOT_CLOSED" in fresh_errors
+            ):
+                raise ValueError(
+                    "fresh primary and secondary errors are inconsistent"
+                )
+
+        first_cause_status = trace_body["first_cause"]["status"]
+        expected_cause_error = {
+            ReconciliationCauseStatus.MISSING.value: (
+                "RECONCILIATION_CAUSE_MISSING"
+            ),
+            ReconciliationCauseStatus.DUPLICATE.value: (
+                "RECONCILIATION_CAUSE_DUPLICATE"
+            ),
+            ReconciliationCauseStatus.CONFLICT.value: (
+                "RECONCILIATION_CAUSE_CONFLICT"
+            ),
+        }.get(first_cause_status)
+        observed_cause_errors = _FAILURE_CAUSE_ERRORS.intersection(
+            evidence_errors
+        )
+        if expected_cause_error is None:
+            if observed_cause_errors:
+                raise ValueError("exact failure cause contradicts evidence errors")
+        elif observed_cause_errors != {expected_cause_error}:
+            raise ValueError("non-exact failure cause lacks its secondary error")
 
 
 def _seal_failure_evidence(
@@ -2145,7 +4069,12 @@ def _seal_failure_evidence(
         _canonical_failure_evidence_bytes(detached_body)
     ).hexdigest()
     sealed_trace = {**detached_body, "failure_sha256": failure_digest}
-    if set(sealed_trace) != _FAILURE_EVIDENCE_DOCUMENT_FIELDS:
+    expected_document_fields = (
+        _FAILURE_EVIDENCE_DOCUMENT_FIELDS_V2
+        if detached_body["schema_version"] == 2
+        else _FAILURE_EVIDENCE_DOCUMENT_FIELDS_V1
+    )
+    if set(sealed_trace) != expected_document_fields:
         raise AssertionError("sealed failure evidence fields changed unexpectedly")
     canonical_bytes = _canonical_failure_evidence_bytes(sealed_trace)
     _reject_failure_secret_material(
@@ -2154,6 +4083,56 @@ def _seal_failure_evidence(
     )
 
     return sealed_trace, canonical_bytes, failure_digest
+
+
+def _validate_failure_evidence_document(
+    trace_document: Mapping[str, object],
+    *,
+    forbidden_values: Sequence[str],
+) -> str:
+    """
+    함수 이름: _validate_failure_evidence_document()
+    기능: 보존 v1과 신규 v2 sealed document의 exact body digest를 필드 합성 없이 검증한다.
+    인자: trace_document -> failure_sha256를 포함한 failure evidence document
+        forbidden_values -> artifact에서 거부할 credential canary sequence
+    반환값: 검증된 lowercase body SHA-256
+    작성 날짜: 2026/08/31
+    """
+    if not isinstance(trace_document, Mapping):
+        raise TypeError("trace_document must be a mapping")
+    schema_version = trace_document.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (
+        _SUPPORTED_PHASE13_FAILURE_EVIDENCE_SCHEMA_VERSIONS
+    ):
+        raise ValueError("failure evidence schema version is unsupported")
+    expected_document_fields = (
+        _FAILURE_EVIDENCE_DOCUMENT_FIELDS_V2
+        if schema_version == 2
+        else _FAILURE_EVIDENCE_DOCUMENT_FIELDS_V1
+    )
+    if set(trace_document) != expected_document_fields:
+        raise ValueError("failure evidence document fields are not exact")
+    recorded_digest = trace_document["failure_sha256"]
+    if (
+        not isinstance(recorded_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", recorded_digest) is None
+    ):
+        raise ValueError("failure evidence digest is invalid")
+
+    # Version별 body를 그대로 떼어 다시 seal해 v1을 v2 의미로 채우는 implicit migration을 막는다.
+    trace_body = {
+        field_name: field_value
+        for field_name, field_value in trace_document.items()
+        if field_name != "failure_sha256"
+    }
+    sealed_trace, _, validated_digest = _seal_failure_evidence(
+        trace_body,
+        forbidden_values=forbidden_values,
+    )
+    if validated_digest != recorded_digest or sealed_trace != trace_document:
+        raise ValueError("failure evidence digest does not match its body")
+
+    return validated_digest  # Caller는 body나 credential 없이 검증된 digest만 사용한다.
 
 
 def _write_failure_evidence_artifact(
@@ -2171,6 +4150,12 @@ def _write_failure_evidence_artifact(
     반환값: durable failure artifact 경로와 canonical SHA-256 tuple
     작성 날짜: 2026/08/31
     """
+    if not isinstance(trace_body, Mapping):
+        raise TypeError("trace_body must be a mapping")
+    if trace_body.get("schema_version") != _PHASE13_FAILURE_EVIDENCE_SCHEMA_VERSION:
+        raise ValueError("failure artifact writer requires current schema v2")
+
+    # Offline validator는 v1을 읽지만 새 final 이름에는 current v2 bytes만 publish한다.
     _, canonical_bytes, failure_digest = _seal_failure_evidence(
         trace_body,
         forbidden_values=forbidden_values,
@@ -2279,6 +4264,7 @@ def _publish_new_artifact_bytes(
             not stat.S_ISREG(temporary_state.st_mode)
             or temporary_state.st_uid != os.geteuid()
             or temporary_state.st_mode & 0o777 != 0o600
+            or temporary_state.st_nlink != 1
             or temporary_state.st_size != len(canonical_bytes)
         ):
             raise RuntimeError("temporary artifact inode failed metadata validation")
@@ -2316,6 +4302,7 @@ def _publish_new_artifact_bytes(
                 not stat.S_ISREG(final_descriptor_state.st_mode)
                 or final_descriptor_state.st_uid != os.geteuid()
                 or final_descriptor_state.st_mode & 0o777 != 0o600
+                or final_descriptor_state.st_nlink != 1
                 or final_descriptor_state.st_size != len(canonical_bytes)
             ):
                 raise RuntimeError("published artifact metadata is not canonical")
@@ -2366,6 +4353,8 @@ def _publish_new_artifact_bytes(
             final_descriptor_state.st_ino,
         ):
             raise RuntimeError("artifact final path changed after publication")
+        if final_path_state.st_nlink != 1:
+            raise RuntimeError("artifact final path has an external hardlink")
     finally:
         if temporary_descriptor is not None:
             os.close(temporary_descriptor)
@@ -2442,48 +4431,104 @@ def _create_observed_market_event(
     runtime: ApplicationRuntime,
     *,
     sequence: int,
-) -> dict[str, object] | None:
+    after_market_version: int,
+) -> tuple[int, tuple[dict[str, object], ...]]:
     """
     함수 이름: _create_observed_market_event()
-    기능: 최신 MarketSnapshot version을 만든 public source Kline을 non-signal trace event로 정규화한다.
+    기능: 한 불변 시장 상태 상한 안의 실제 production 1L.1 trace만 정규화한다.
     인자: runtime -> 실제 public market runtime
-        sequence -> trace public market event 순서
-    반환값: source가 있는 normalized event 또는 REST-only snapshot이면 None
-    작성 날짜: 2026/08/31
+        sequence -> 첫 normalized public market event 순서
+        after_market_version -> 이미 수집한 마지막 production market version
+    반환값: 실제로 수집한 마지막 version과 normalized event tuple
+    작성 날짜: 2026/09/01
     """
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
     if type(sequence) is not int or sequence < 1:
         raise ValueError("sequence must be a positive integer")
-    source_klines = runtime.market_snapshot.update_source_klines
-    if not source_klines:
-        return None  # Startup REST merge는 public WebSocket signal 관찰로 승격하지 않는다.
+    if type(after_market_version) is not int or after_market_version < 0:
+        raise ValueError("after_market_version must be non-negative")
 
-    # Atomic boundary는 production과 동일한 component 순서를 유지하고 대표 30분 source를 parser로 선택한다.
-    source_event_id = (
-        _kline_source_component(source_klines[0])
-        if len(source_klines) == 1
-        else "kline-batch|"
-        + "|".join(_kline_source_component(kline) for kline in source_klines)
-    )
-    parsed_source = _parse_public_market_command_event(
-        f"market:{runtime.market_snapshot.version}:{source_event_id}"
-    )
-    return {
-        "sequence": sequence,
-        "message_id": "1L.1",
-        "event_type": "KLINE_OBSERVED",
-        "source_event_id": parsed_source["source_event_id"],
-        "source_kline_identity": parsed_source["source_kline_identity"],
-        "source_event_time": parsed_source["source_event_time"],
-        "market_version": parsed_source["market_version"],
-        "context_version": runtime.trading_controller.context.version,
-        "evaluation_id": None,
-        "regime": "TYPE_0",
-        "action_type": None,
-        "side": None,
-        "strategy": None,
-    }
+    # Application publication 경계에서 최신 시장 pointer, Context와 production trace를 한 번씩 고정한다.
+    with runtime.application_lock:
+        market_state = runtime.market_snapshot.get_snapshot()
+        context_version = runtime.trading_controller.context.version
+        boundary_trace = (
+            runtime.trading_controller.public_market_boundary_trace
+        )
+    if type(market_state) is not MarketStateSnapshot:
+        raise TypeError("market snapshot must return an exact state snapshot")
+    if type(context_version) is not int or context_version < 0:
+        raise TypeError("context version must be a non-negative integer")
+    if not isinstance(boundary_trace, tuple):
+        raise TypeError("public market boundary trace must be a tuple")
+
+    # Snapshot publish→1L.1 observer 사이 gap은 무시하고 Controller가 실제 기록한 신규 1L.1만 선택한다.
+    observed_boundaries: list[PublicMarketBoundaryTraceEntry] = []
+    for boundary_entry in boundary_trace:
+        if type(boundary_entry) is not PublicMarketBoundaryTraceEntry:
+            raise TypeError("public market boundary trace contains an invalid entry")
+        if (
+            boundary_entry.message_id == "1L.1"
+            and boundary_entry.market_version > after_market_version
+        ):
+            if (
+                boundary_entry.market_version > market_state.version
+                or boundary_entry.context_version > context_version
+            ):
+                raise RuntimeError(
+                    "public market boundary exceeds captured runtime state"
+                )
+            observed_boundaries.append(boundary_entry)
+
+    if not observed_boundaries:
+        return after_market_version, ()
+    if any(
+        current_entry.market_version <= previous_entry.market_version
+        for previous_entry, current_entry in zip(
+            observed_boundaries,
+            observed_boundaries[1:],
+        )
+    ):
+        raise RuntimeError("public market boundary versions must increase")
+
+    # Frozen production entry의 evaluation identity를 parser로 확인하고 NO_SIGNAL 전용 1L.1로만 축약한다.
+    normalized_events: list[dict[str, object]] = []
+    for event_offset, boundary_entry in enumerate(observed_boundaries):
+        parsed_source = _parse_public_market_command_event(
+            boundary_entry.evaluation_id
+        )
+        if (
+            boundary_entry.source_event_id
+            != parsed_source["source_event_id"]
+            or boundary_entry.market_version
+            != parsed_source["market_version"]
+        ):
+            raise RuntimeError("public market boundary provenance changed")
+        normalized_events.append(
+            {
+                "sequence": sequence + event_offset,
+                "message_id": boundary_entry.message_id,
+                "event_type": boundary_entry.event_type,
+                "source_event_id": parsed_source["source_event_id"],
+                "source_kline_identity": parsed_source[
+                    "source_kline_identity"
+                ],
+                "source_event_time": parsed_source["source_event_time"],
+                "market_version": parsed_source["market_version"],
+                "context_version": boundary_entry.context_version,
+                "evaluation_id": None,
+                "regime": boundary_entry.regime.value,
+                "action_type": None,
+                "side": None,
+                "strategy": None,
+            }
+        )
+
+    return (
+        observed_boundaries[-1].market_version,
+        tuple(normalized_events),
+    )  # Cursor는 snapshot version이 아니라 실제 공개된 마지막 1L.1 version만 따라간다.
 
 
 def _create_account_event_from_runtime(
@@ -2491,6 +4536,7 @@ def _create_account_event_from_runtime(
     *,
     run_id: str,
     sequence: int,
+    clock: Callable[[], datetime],
 ) -> dict[str, object]:
     """
     함수 이름: _create_account_event_from_runtime()
@@ -2498,17 +4544,31 @@ def _create_account_event_from_runtime(
     인자: runtime -> account READY actual Testnet runtime
         run_id -> source identity를 다른 run과 구분할 UUIDv4 문자열
         sequence -> trace public account event 순서
+        clock -> Account state 읽기 뒤 같은 application lock에서 호출할 run clock
     반환값: exact account event dictionary
-    작성 날짜: 2026/08/31
+    작성 날짜: 2026/09/01
     """
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
     if type(sequence) is not int or sequence < 1:
         raise ValueError("sequence must be a positive integer")
-    account = runtime.account
-    if not account.ready or account.updated_at is None or account.version < 1:
+    if not callable(clock):
+        raise TypeError("clock must be callable")
+
+    # Account pointer를 먼저 한 번 읽고 같은 application RLock에서 관찰 시각을 그 다음에 고정한다.
+    with runtime.application_lock:
+        account_state = runtime.account.get_snapshot()
+        observed_at = clock()
+    if type(account_state) is not AccountStateSnapshot:
+        raise TypeError("account must return an exact state snapshot")
+    observed_at_wire = _datetime_to_wire(observed_at)
+    if (
+        not account_state.ready
+        or account_state.updated_at is None
+        or account_state.version < 1
+    ):
         raise RuntimeError("account must be ready before trace capture")
-    eth_balance = account.balances.get("ETH")
+    eth_balance = account_state.balances.get("ETH")
     free_quantity = Decimal("0") if eth_balance is None else eth_balance.free
     locked_quantity = Decimal("0") if eth_balance is None else eth_balance.locked
 
@@ -2517,9 +4577,9 @@ def _create_account_event_from_runtime(
         "sequence": sequence,
         "message_id": "2",
         "event_type": "ACCOUNT_SNAPSHOT_APPLIED",
-        "source_event_id": f"startup-account-{run_id}-{account.version}",
-        "source_event_time": _datetime_to_wire(_utc_now()),
-        "account_version": account.version,
+        "source_event_id": f"startup-account-{run_id}-{account_state.version}",
+        "source_event_time": observed_at_wire,
+        "account_version": account_state.version,
         "asset": "ETH",
         "free_quantity": _decimal_to_wire(free_quantity),
         "locked_quantity": _decimal_to_wire(locked_quantity),
@@ -2540,7 +4600,18 @@ def _append_account_events_from_transport(
     """
     if not isinstance(account_events, list):
         raise TypeError("account_events must be a list")
-    observed_versions = {event["account_version"] for event in account_events}
+    existing_account_versions: list[int] = []
+    for account_event in account_events:
+        if not isinstance(account_event, Mapping):
+            raise TypeError("account_events must contain mappings")
+        account_version = account_event.get("account_version")
+        if type(account_version) is not int or account_version < 1:
+            raise ValueError("account event has an invalid account version")
+        existing_account_versions.append(account_version)
+    latest_observed_version = max(
+        existing_account_versions,
+        default=0,
+    )  # Producer가 만든 양의 정수 version만 replay 경계로 사용한다.
 
     # DTO mapper가 이미 Decimal/time을 wire 문자열로 바꿨으므로 raw account stream frame은 읽지 않는다.
     for event_dto in event_dtos:
@@ -2553,8 +4624,8 @@ def _append_account_events_from_transport(
         account_version = account_payload.get("version")
         if type(account_version) is not int or account_version < 1:
             raise ValueError("ACCOUNT_UPDATED has an invalid account version")
-        if account_version in observed_versions:
-            continue  # 같은 absolute Account version을 여러 transport 관찰로 부풀리지 않는다.
+        if account_version <= latest_observed_version:
+            continue  # Startup보다 오래된 buffered 행과 같은 version 재전송을 모두 제거한다.
         balance_rows = account_payload.get("balances")
         if not isinstance(balance_rows, list):
             raise ValueError("ACCOUNT_UPDATED balances must be a list")
@@ -2588,7 +4659,7 @@ def _append_account_events_from_transport(
                 "locked_quantity": locked_quantity,
             }
         )
-        observed_versions.add(account_version)
+        latest_observed_version = account_version  # 후속에는 더 큰 Account version만 연결한다.
 
 
 def _assert_atomic_trade_publications(event_dtos: Sequence[Mapping[str, object]]) -> None:
@@ -2679,6 +4750,93 @@ def _require_zero_market_buy_commission(
         raise AssertionError(_ZERO_MARKET_BUY_COMMISSION_FAILURE_MESSAGE)
 
     return None  # 성공 여부만 남기고 account-specific rate 원문은 출력하지 않는다.
+
+
+def _create_failure_v2_test_body() -> dict[str, object]:
+    """
+    함수 이름: _create_failure_v2_test_body()
+    기능: v2 schema 상관·drift 테스트가 공유할 exact INCOMPLETE body를 만든다.
+    인자: 없음
+    반환값: 두 ID field가 없고 timestamp·error truth가 일치하는 독립 mapping
+    작성 날짜: 2026/08/31
+    """
+    started_at = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    first_attempted_at = started_at + timedelta(seconds=10)
+    second_attempted_at = started_at + timedelta(seconds=20)
+    completed_at = started_at + timedelta(seconds=30)
+
+    # BUY→SELL 시간 순서는 포함하되 logical·exchange ID는 v2 mapping에 아예 생성하지 않는다.
+    return {
+        "schema_version": 2,
+        "record_type": _PHASE13_FAILURE_EVIDENCE_RECORD_TYPE,
+        "outcome": "FAILED",
+        "typed_reason": "ACTUAL_RUNTIME_FAILED",
+        "run_id": "00000000-0000-4000-8000-000000000041",
+        "timestamps": {
+            "started_at": _datetime_to_wire(started_at),
+            "completed_at": _datetime_to_wire(completed_at),
+        },
+        "mutation_guard": {
+            "mutation_started": True,
+            "submissions_blocked": True,
+            "submission_attempts": [
+                {
+                    "sequence": 1,
+                    "symbol": "ETHUSDT",
+                    "side": "BUY",
+                    "order_type": "MARKET",
+                    "submission_attempt": 0,
+                    "attempted_at": _datetime_to_wire(first_attempted_at),
+                },
+                {
+                    "sequence": 2,
+                    "symbol": "ETHUSDT",
+                    "side": "SELL",
+                    "order_type": "MARKET",
+                    "submission_attempt": 0,
+                    "attempted_at": _datetime_to_wire(second_attempted_at),
+                },
+            ],
+        },
+        "recovery": {
+            "attempted": False,
+            "outcome": "SKIPPED",
+            "typed_reason": "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+        },
+        "runtime_state": {
+            "application_status": "READY",
+            "trading_status": "RECONCILIATION_REQUIRED",
+            "reconciliation_required": True,
+            "position_quantity": "1",
+            "pending_order_count": 1,
+            "durable_trade_count": 1,
+        },
+        "fresh_verification": {
+            "status": "INCOMPLETE",
+            "typed_reason": "FRESH_VERIFICATION_FAILED",
+            "failure_stage": "RUNTIME_CREATION",
+            "verified_at": None,
+            "position_quantity": None,
+            "pending_order_count": None,
+            "reconciliation_required": None,
+            "matching_open_order_count": None,
+            "account_open_orders_empty": None,
+            "account_open_order_lists_empty": None,
+            "run_exchange_order_count": None,
+            "durable_trade_count": None,
+        },
+        "first_cause": {
+            "reconciliation_required": True,
+            "status": ReconciliationCauseStatus.EXACT.value,
+            "category": (
+                ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED.value
+            ),
+        },
+        "evidence_errors": [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+            "FRESH_VERIFICATION_FAILED",
+        ],
+    }
 
 
 class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
@@ -2798,6 +4956,9 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 harness.baseline_recent_exchange_order_ids = None
                 harness.public_account_events = []
                 harness.run_id = "00000000-0000-4000-8000-000000000041"
+                harness.evidence_clock = (
+                    lambda: canary_instant
+                )  # Preflight fixture도 actual run과 같은 시계 seam을 제공한다.
 
                 def run_production_actual_entry() -> None:
                     """
@@ -2936,8 +5097,8 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
         )
         batch_source = (
             "market:8:kline-batch|"
-            "kline:ETHUSDT:1m:2026-08-31T00:00:00Z:2026-08-31T00:01:00Z:closed|"
-            "kline:ETHUSDT:30m:2026-08-31T00:00:00Z:2026-08-31T00:01:01Z:open"
+            "kline:ETHUSDT:1m:2026-08-31T00:29:00Z:2026-08-31T00:30:00Z:closed|"
+            "kline:ETHUSDT:30m:2026-08-31T00:00:00Z:2026-08-31T00:30:01Z:closed"
         )
 
         # Batch의 첫 source가 1분이어도 Case 2 decision identity는 포함된 30분 source를 선택한다.
@@ -2950,7 +5111,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
         )
         self.assertEqual(8, parsed_batch["market_version"])
         self.assertEqual(
-            "2026-08-31T00:01:01Z",
+            "2026-08-31T00:30:01Z",
             parsed_batch["source_event_time"],
         )
 
@@ -3088,10 +5249,10 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
     def test_transport_dto_normalization_keeps_atomic_trade_pair_and_aggregate_versions(self) -> None:
         """
         함수 이름: test_transport_dto_normalization_keeps_atomic_trade_pair_and_aggregate_versions()
-        기능: envelope DTO만으로 ORDER/PERFORMANCE pair와 aggregate별 version을 보존하는지 검증한다.
+        기능: envelope DTO와 run 시계로 ORDER/PERFORMANCE pair, aggregate version 및 causal 시각을 보존하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/31
+        작성 날짜: 2026/09/01
         """
         transport_session_id = "00000000-0000-4000-8000-000000000031"
         event_dtos = [
@@ -3149,6 +5310,351 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
         self.assertEqual("trade-9001", normalized_events[2]["related_id"])
         self.assertEqual("ACCOUNT", normalized_events[3]["aggregate"])
         self.assertNotIn("payload", normalized_events[1])
+
+        # Wall UTC가 뒤로 바뀌어도 stream publication과 startup account source는 같은 run 구간을 사용한다.
+        anchor_utc = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        monotonic_values = iter(
+            (
+                1_000_000_000,
+                1_000_000_000,
+                1_002_000_000,
+                1_003_000_000,
+                1_004_000_000,
+            )
+        )
+        wall_clock = Mock(return_value=anchor_utc)
+        evidence_clock = _RunScopedEvidenceClock(
+            wall_clock=wall_clock,
+            monotonic_clock=lambda: next(monotonic_values),
+        )
+        started_at = evidence_clock()
+        wall_clock.return_value = anchor_utc - timedelta(seconds=20)
+        event_stream = BackendEventStream(clock=evidence_clock)
+        published_envelope = event_stream.publish(
+            "ACCOUNT_UPDATED",
+            {
+                "account": {
+                    "version": 1,
+                    "balances": [],
+                }
+            },
+            aggregate_version=1,
+        )
+        application_lock = RLock()
+        account = Account()
+        account.apply_initial_snapshot(
+            AccountSnapshot(
+                balances=(
+                    AssetBalance(
+                        asset="ETH",
+                        free=Decimal("0.001"),
+                        locked=Decimal("0"),
+                    ),
+                ),
+                updated_at=anchor_utc - timedelta(seconds=3),
+                is_full_snapshot=True,
+            ),
+            current_price=Decimal("4000"),
+        )
+        for seconds_before_anchor, free_quantity in (
+            (2, Decimal("0.002")),
+            (1, Decimal("0.003")),
+        ):
+            account.apply_stream_snapshot(
+                AccountSnapshot(
+                    balances=(
+                        AssetBalance(
+                            asset="ETH",
+                            free=free_quantity,
+                            locked=Decimal("0"),
+                        ),
+                    ),
+                    updated_at=(
+                        anchor_utc
+                        - timedelta(seconds=seconds_before_anchor)
+                    ),
+                    is_full_snapshot=False,
+                )
+            )
+
+        def advance_account_during_clock() -> datetime:
+            """
+            함수 이름: advance_account_during_clock()
+            기능: Account pointer 읽기 뒤 lock 내 clock 호출에서 후속 version을 적용한다.
+            인자: 없음
+            반환값: run-scoped clock이 만든 관찰 UTC 시각
+            작성 날짜: 2026/09/01
+            """
+            self.assertTrue(
+                getattr(application_lock, "_is_owned")()
+            )  # Clock은 Account state 읽기와 같은 application RLock에서 호출돼야 한다.
+            account.apply_stream_snapshot(
+                AccountSnapshot(
+                    balances=(
+                        AssetBalance(
+                            asset="ETH",
+                            free=Decimal("0.004"),
+                            locked=Decimal("0"),
+                        ),
+                    ),
+                    updated_at=anchor_utc,
+                    is_full_snapshot=False,
+                )
+            )
+
+            return evidence_clock()
+
+        runtime = object.__new__(ApplicationRuntime)
+        object.__setattr__(runtime, "application_lock", application_lock)
+        object.__setattr__(
+            runtime,
+            "account",
+            account,
+        )
+        startup_account_event = _create_account_event_from_runtime(
+            runtime,
+            run_id="00000000-0000-4000-8000-000000000031",
+            sequence=1,
+            clock=advance_account_during_clock,
+        )
+        completed_at = evidence_clock()
+
+        # 두 공개 시각을 다시 UTC로 해석해 started_at 이상 completed_at 이하의 causal window를 고정한다.
+        published_at = datetime.fromisoformat(
+            str(published_envelope.to_dto()["occurred_at"]).replace(
+                "Z",
+                "+00:00",
+            )
+        )
+        account_source_time = datetime.fromisoformat(
+            str(startup_account_event["source_event_time"]).replace(
+                "Z",
+                "+00:00",
+            )
+        )
+        self.assertLessEqual(started_at, published_at)
+        self.assertLessEqual(published_at, account_source_time)
+        self.assertLessEqual(account_source_time, completed_at)
+        self.assertEqual(3, startup_account_event["account_version"])
+        self.assertEqual("0.003", startup_account_event["free_quantity"])
+        self.assertEqual(4, account.get_snapshot().version)
+        wall_clock.assert_called_once_with()
+
+        # Snapshot publish 뒤 production 1L.1 기록 전 barrier에서는 시장 source를 NO_SIGNAL event로 합성하지 않는다.
+        captured_source_kline = Kline(
+            symbol="ETHUSDT",
+            interval=Interval.THIRTY_MINUTES,
+            open_time=anchor_utc - timedelta(minutes=30),
+            open=Decimal("3990"),
+            high=Decimal("4010"),
+            low=Decimal("3980"),
+            close=Decimal("4000"),
+            volume=Decimal("10"),
+            closed=True,
+            event_time=anchor_utc,
+        )
+        newer_source_kline = Kline(
+            symbol="ETHUSDT",
+            interval=Interval.FOUR_HOURS,
+            open_time=anchor_utc,
+            open=Decimal("4000"),
+            high=Decimal("4020"),
+            low=Decimal("3990"),
+            close=Decimal("4010"),
+            volume=Decimal("11"),
+            closed=False,
+            event_time=anchor_utc + timedelta(seconds=1),
+        )
+        captured_market_state = MarketStateSnapshot(
+            klines_by_interval=MappingProxyType(
+                {Interval.THIRTY_MINUTES: (captured_source_kline,)}
+            ),
+            current_eth_price=Decimal("4000"),
+            version=7,
+            updated_at=anchor_utc,
+            ready=True,
+            update_source_klines=(captured_source_kline,),
+        )
+        newer_market_state = MarketStateSnapshot(
+            klines_by_interval=MappingProxyType(
+                {Interval.FOUR_HOURS: (newer_source_kline,)}
+            ),
+            current_eth_price=Decimal("4010"),
+            version=8,
+            updated_at=anchor_utc + timedelta(seconds=1),
+            ready=True,
+            update_source_klines=(newer_source_kline,),
+        )
+        market_state_reads = iter(
+            (captured_market_state, newer_market_state)
+        )
+
+        def read_captured_market_state() -> MarketStateSnapshot:
+            """
+            함수 이름: read_captured_market_state()
+            기능: Application lock 소유를 확인하고 현재 불변 시장 state pointer를 한 번 반환한다.
+            인자: 없음
+            반환값: source와 version이 같이 고정된 불변 시장 state
+            작성 날짜: 2026/09/01
+            """
+            self.assertTrue(getattr(application_lock, "_is_owned")())
+
+            return next(market_state_reads)
+
+        market_snapshot = SimpleNamespace(
+            get_snapshot=Mock(side_effect=read_captured_market_state),
+            version=8,
+            update_source_klines=(newer_source_kline,),
+        )
+        object.__setattr__(runtime, "market_snapshot", market_snapshot)
+        trading_controller = SimpleNamespace(
+            context=SimpleNamespace(version=41),
+            public_market_boundary_trace=(),
+        )
+        object.__setattr__(
+            runtime,
+            "trading_controller",
+            trading_controller,
+        )
+        unchanged_market_version, missing_boundary_events = (
+            _create_observed_market_event(
+                runtime,
+                sequence=1,
+                after_market_version=6,
+            )
+        )
+        self.assertEqual(6, unchanged_market_version)
+        self.assertEqual((), missing_boundary_events)
+
+        # Controller trace가 실제로 추가된 뒤에만 그 frozen source/version/context를 새 event로 수집한다.
+        captured_source_event_id = _kline_source_component(
+            captured_source_kline
+        )
+        trading_controller.public_market_boundary_trace = (
+            PublicMarketBoundaryTraceEntry(
+                message_id="1L.1",
+                event_type="KLINE_OBSERVED",
+                source_event_id=captured_source_event_id,
+                evaluation_id=f"market:7:{captured_source_event_id}",
+                market_version=7,
+                context_version=40,
+                regime=RegimeType.TYPE_0,
+            ),
+        )
+        captured_market_version, observed_market_events = (
+            _create_observed_market_event(
+                runtime,
+                sequence=1,
+                after_market_version=6,
+            )
+        )
+        observed_market_event = observed_market_events[0]
+        self.assertEqual(7, captured_market_version)
+        self.assertEqual(1, len(observed_market_events))
+        self.assertEqual(7, observed_market_event["market_version"])
+        self.assertEqual(40, observed_market_event["context_version"])
+        self.assertEqual(
+            captured_source_event_id,
+            observed_market_event["source_event_id"],
+        )
+        self.assertIsNone(observed_market_event["evaluation_id"])
+        self.assertEqual(2, market_snapshot.get_snapshot.call_count)
+
+        # Collector는 helper가 반환한 frozen trace event tuple만 쓰고 mutable snapshot version을 별도로 다시 읽지 않는다.
+        collector_harness = (
+            BinanceTestnetPhaseThirteenPublicMarketCase2Tests(
+                "test_actual_public_market_case2_buy_and_exact_stop_recovery"
+            )
+        )
+        collector_harness.event_stream = SimpleNamespace(
+            wait_for_events=Mock(
+                return_value=SimpleNamespace(
+                    requires_resync=False,
+                    events=(),
+                )
+            )
+        )
+        collector_harness.runtime = SimpleNamespace(
+            market_snapshot=SimpleNamespace(version=object())
+        )
+        collector_harness.after_transport_sequence = 0
+        collector_harness.transport_event_dtos = []
+        collector_harness.public_account_events = []
+        collector_harness.public_market_events = []
+        collector_harness.last_market_version = 6
+        with patch(
+            f"{__name__}._create_observed_market_event",
+            return_value=(7, observed_market_events),
+        ) as capture_market_event:
+            collector_harness._collect_runtime_observations()
+
+        capture_market_event.assert_called_once_with(
+            collector_harness.runtime,
+            sequence=1,
+            after_market_version=6,
+        )
+        self.assertEqual(7, collector_harness.last_market_version)
+        self.assertEqual(
+            [observed_market_event],
+            collector_harness.public_market_events,
+        )
+
+        # Startup version 이하의 buffered/replayed Account DTO는 버리고 엄격히 더 큰 version만 후속 증거로 추가한다.
+        account_events = [startup_account_event]
+        replay_and_advance_dtos = [
+            {
+                "type": "ACCOUNT_UPDATED",
+                "event_id": "00000000-0000-4000-8000-000000000051",
+                "occurred_at": "2026-09-01T00:00:00.003000Z",
+                "payload": {
+                    "account": {
+                        "version": 2,
+                        "balances": [],
+                    }
+                },
+            },
+            {
+                "type": "ACCOUNT_UPDATED",
+                "event_id": "00000000-0000-4000-8000-000000000052",
+                "occurred_at": "2026-09-01T00:00:00.004000Z",
+                "payload": {
+                    "account": {
+                        "version": 3,
+                        "balances": [],
+                    }
+                },
+            },
+            {
+                "type": "ACCOUNT_UPDATED",
+                "event_id": "00000000-0000-4000-8000-000000000053",
+                "occurred_at": "2026-09-01T00:00:00.005000Z",
+                "payload": {
+                    "account": {
+                        "version": 4,
+                        "balances": [
+                            {
+                                "asset": "ETH",
+                                "free": "0.004",
+                                "locked": "0",
+                            }
+                        ],
+                    }
+                },
+            },
+        ]
+        _append_account_events_from_transport(
+            account_events,
+            replay_and_advance_dtos,
+        )
+
+        self.assertEqual(
+            [3, 4],
+            [event["account_version"] for event in account_events],
+        )
+        self.assertEqual(
+            replay_and_advance_dtos[2]["event_id"],
+            account_events[1]["source_event_id"],
+        )
 
     def test_transport_dto_normalization_rejects_orphan_performance_and_sequence_regression(self) -> None:
         """
@@ -3583,7 +6089,22 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             completed_at=started_at,
             preflight=preflight,
             market_events=[],
-            account_events=[],
+            account_events=[
+                {
+                    "sequence": 1,
+                    "message_id": "2",
+                    "event_type": "ACCOUNT_SNAPSHOT_APPLIED",
+                    "source_event_id": (
+                        "startup-account-"
+                        "00000000-0000-4000-8000-000000000031-1"
+                    ),
+                    "source_event_time": _datetime_to_wire(started_at),
+                    "account_version": 1,
+                    "asset": "ETH",
+                    "free_quantity": "0",
+                    "locked_quantity": "0",
+                }
+            ],  # Actual NO_SIGNAL도 preflight 전 startup Account absolute snapshot을 한 건 보존한다.
             transport_events={
                 "transport_session_id": (
                     "00000000-0000-4000-8000-000000000032"
@@ -3670,6 +6191,60 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 )
             self.assertEqual(collision_canary, trace_path.read_bytes())
             self.assertEqual((trace_path,), tuple(artifact_directory.iterdir()))
+
+        # Temp inode에 외부 hardlink가 끼면 final bytes가 같아도 단일-owner publication으로 인정하지 않는다.
+        with TemporaryDirectory() as temporary_directory:
+            artifact_directory = Path(temporary_directory)
+            real_link = os.link
+
+            def _publish_with_external_hardlink(
+                source_name: str,
+                destination_name: str,
+                *,
+                src_dir_fd: int,
+                dst_dir_fd: int,
+                follow_symlinks: bool,
+            ) -> None:
+                """
+                함수 이름: _publish_with_external_hardlink()
+                기능: 정상 final link 직전에 같은 temp inode의 공격자 alias를 하나 더 만든다.
+                인자: source_name -> publisher temp leaf
+                    destination_name -> publisher final leaf
+                    src_dir_fd -> pinned source directory descriptor
+                    dst_dir_fd -> pinned destination directory descriptor
+                    follow_symlinks -> publisher가 전달한 no-follow 옵션
+                반환값: 없음
+                작성 날짜: 2026/09/01
+                """
+                real_link(
+                    source_name,
+                    "external-hardlink.json",
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                    follow_symlinks=follow_symlinks,
+                )
+                real_link(
+                    source_name,
+                    destination_name,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                    follow_symlinks=follow_symlinks,
+                )
+
+            with patch.object(
+                os,
+                "link",
+                side_effect=_publish_with_external_hardlink,
+            ):
+                with self.assertRaises(RuntimeError):
+                    _write_trace_artifact(
+                        artifact_directory,
+                        trace_body,
+                        forbidden_values=redaction_canaries,
+                    )
+            self.assertTrue(
+                (artifact_directory / "external-hardlink.json").exists()
+            )
 
         # Publish 뒤 directory fsync가 실패해도 final은 항상 완전한 canonical inode이며 temp 이름은 없다.
         with TemporaryDirectory() as temporary_directory:
@@ -3805,10 +6380,8 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                         "symbol": "ETHUSDT",
                         "side": "BUY",
                         "order_type": "MARKET",
-                        "intent_id": "intent-1",
                         "submission_attempt": 0,
                         "attempted_at": _datetime_to_wire(observed_at),
-                        "client_order_id": "bat-p13-client-1",
                     }
                 ],
             },
@@ -3827,16 +6400,30 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             },
             "fresh_verification": {
                 "status": "INCOMPLETE",
-                "typed_reason": "FRESH_VERIFICATION_INCOMPLETE",
+                "typed_reason": "FRESH_VERIFICATION_FAILED",
+                "failure_stage": "STARTUP_APPLICATION",
                 "verified_at": None,
                 "position_quantity": None,
                 "pending_order_count": None,
                 "reconciliation_required": None,
                 "matching_open_order_count": None,
+                "account_open_orders_empty": None,
+                "account_open_order_lists_empty": None,
                 "run_exchange_order_count": None,
                 "durable_trade_count": None,
             },
-            "evidence_errors": ["FRESH_VERIFICATION_FAILED"],
+            "first_cause": {
+                "reconciliation_required": True,
+                "status": ReconciliationCauseStatus.EXACT.value,
+                "category": (
+                    ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED.value
+                ),
+            },
+            "evidence_errors": [
+                "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+                "RUNTIME_POSITION_UNAVAILABLE",
+                "FRESH_VERIFICATION_FAILED",
+            ],
         }
 
         # 원 exception text를 받는 field가 없고 canonical digest만 final document에 추가된다.
@@ -3872,8 +6459,6 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             {
                 "sequence": 2,
                 "side": "SELL",
-                "intent_id": "intent-2",
-                "client_order_id": "bat-p13-client-2",
             }
         )
         completed_recovery_body["mutation_guard"][
@@ -3884,6 +6469,9 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             "outcome": "SUCCESS",
             "typed_reason": None,
         }
+        completed_recovery_body["first_cause"]["category"] = (
+            ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS.value
+        )
         completed_recovery_body["runtime_state"].update(
             {
                 "trading_status": "TERMINATED",
@@ -3897,11 +6485,14 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             {
                 "status": "VERIFIED",
                 "typed_reason": None,
+                "failure_stage": None,
                 "verified_at": _datetime_to_wire(observed_at),
                 "position_quantity": "0",
                 "pending_order_count": 0,
                 "reconciliation_required": False,
                 "matching_open_order_count": 0,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
                 "run_exchange_order_count": 2,
                 "durable_trade_count": 2,
             }
@@ -3935,6 +6526,51 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             json.dumps(completed_recovery_body)
         )
         missing_verified_at_body["fresh_verification"]["verified_at"] = None
+        completed_with_publication_error = json.loads(
+            json.dumps(completed_recovery_body)
+        )
+        completed_with_publication_error["evidence_errors"].append(
+            "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED"
+        )
+        permanent_cause_with_completed_recovery = json.loads(
+            json.dumps(completed_recovery_body)
+        )
+        permanent_cause_with_completed_recovery["first_cause"]["category"] = (
+            ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED.value
+        )
+        false_not_required_single_buy = json.loads(
+            json.dumps(completed_recovery_body)
+        )
+        false_not_required_single_buy["mutation_guard"][
+            "submission_attempts"
+        ] = false_not_required_single_buy["mutation_guard"][
+            "submission_attempts"
+        ][:1]
+        false_not_required_single_buy["recovery"] = {
+            "attempted": False,
+            "outcome": "NOT_REQUIRED",
+            "typed_reason": None,
+        }
+        false_not_required_single_buy["runtime_state"][
+            "durable_trade_count"
+        ] = 1
+        false_not_required_single_buy["fresh_verification"].update(
+            {
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        nonterminal_not_required_round_trip = json.loads(
+            json.dumps(completed_recovery_body)
+        )
+        nonterminal_not_required_round_trip["recovery"] = {
+            "attempted": False,
+            "outcome": "NOT_REQUIRED",
+            "typed_reason": None,
+        }
+        nonterminal_not_required_round_trip["runtime_state"][
+            "trading_status"
+        ] = "NOT_STARTED"
         contradictory_not_required_body = json.loads(json.dumps(failure_body))
         contradictory_not_required_body["recovery"] = {
             "attempted": False,
@@ -3942,10 +6578,26 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             "typed_reason": None,
         }
 
-        # Completed claim의 nonzero/UNKNOWN facts와 timestamp 없는 VERIFIED는 각각 독립 거부한다.
+        # Completed claim의 nonzero/UNKNOWN, timestamp 누락과 생성 불가 publication error를 독립 거부한다.
         for case_name, invalid_body in (
             ("contradictory-success", contradictory_success_body),
             ("missing-verified-at", missing_verified_at_body),
+            (
+                "completed-with-publication-error",
+                completed_with_publication_error,
+            ),
+            (
+                "permanent-cause-with-completed-recovery",
+                permanent_cause_with_completed_recovery,
+            ),
+            (
+                "false-not-required-single-buy",
+                false_not_required_single_buy,
+            ),
+            (
+                "nonterminal-not-required-round-trip",
+                nonterminal_not_required_round_trip,
+            ),
             ("contradictory-not-required", contradictory_not_required_body),
         ):
             with self.subTest(case_name=case_name):
@@ -3965,48 +6617,2716 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             self.assertEqual(canonical_bytes, failure_path.read_bytes())
             self.assertEqual(0o600, failure_path.stat().st_mode & 0o777)
 
-        # 실제 canary가 identifier field에 섞이면 publish bytes 생성 전 재귀 scan이 거부한다.
-        secret_body = json.loads(_canonical_failure_evidence_bytes(failure_body))
-        secret_body["mutation_guard"]["submission_attempts"][0][
-            "intent_id"
-        ] = redaction_canaries[1]
+        # V2 attempt는 ID field 자체를 허용하지 않으므로 safe token과 secret canary를 독립 거부한다.
+        for field_name, field_value in (
+            ("intent_id", "safe-looking-intent"),
+            ("client_order_id", redaction_canaries[1]),
+        ):
+            with self.subTest(field_name=field_name):
+                identifier_body = json.loads(
+                    _canonical_failure_evidence_bytes(failure_body)
+                )
+                identifier_body["mutation_guard"][
+                    "submission_attempts"
+                ][0][field_name] = field_value
+                with self.assertRaises(ValueError):
+                    _seal_failure_evidence(
+                        identifier_body,
+                        forbidden_values=redaction_canaries,
+                    )
+
+    def test_preserved_failure_schema_v1_remains_byte_exact(self) -> None:
+        """
+        함수 이름: test_preserved_failure_schema_v1_remains_byte_exact()
+        기능: v2 writer 도입 뒤에도 보존 FAILED v1의 schema·body/file digest와 canonical bytes를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        preserved_path = _ARTIFACT_ROOT / (
+            "phase13-public-case2-20260831T095958280425Z-"
+            "b2c3cd9008584a539acf71703050c743"
+        ) / "phase13-public-case2-failed.json"
+        preserved_bytes = preserved_path.read_bytes()
+        preserved_document = json.loads(
+            preserved_bytes,
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        redaction_canaries = (
+            "preserved-v1-key-canary-31c8dcb0",
+            "preserved-v1-secret-canary-5f498c2a",
+        )
+
+        # V1에는 v2 cause/stage field를 합성하지 않고 원 body와 완성 문서를 각각 재해시한다.
+        validated_digest = _validate_failure_evidence_document(
+            preserved_document,
+            forbidden_values=redaction_canaries,
+        )
+        preserved_body = {
+            field_name: field_value
+            for field_name, field_value in preserved_document.items()
+            if field_name != "failure_sha256"
+        }
+        self.assertEqual(1, preserved_document["schema_version"])
+        self.assertNotIn("first_cause", preserved_document)
+        self.assertNotIn(
+            "failure_stage",
+            preserved_document["fresh_verification"],
+        )
+        self.assertEqual(
+            "3a3fd9475099dfab5f5ef75397470d9d3fb2acb8591af2bbf96679db999ba029",
+            validated_digest,
+        )
+        self.assertEqual(
+            "c177ddd6f16d4a53285c42d962b97e47416de37cc39e436e0b61cd06519b6e90",
+            hashlib.sha256(preserved_bytes).hexdigest(),
+        )
+        self.assertEqual(
+            validated_digest,
+            hashlib.sha256(
+                _canonical_failure_evidence_bytes(preserved_body)
+            ).hexdigest(),
+        )
+        self.assertEqual(
+            preserved_bytes,
+            _canonical_failure_evidence_bytes(preserved_document),
+        )
+        with self.assertRaises(ValueError):
+            _write_failure_evidence_artifact(
+                preserved_path.parent,
+                preserved_body,
+                forbidden_values=redaction_canaries,
+            )  # Reader만 v1을 지원하고 current writer는 final path 접근 전에 v1을 거부한다.
+
+    def test_failure_schema_v2_dispatch_rejects_cause_and_stage_drift(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_failure_schema_v2_dispatch_rejects_cause_and_stage_drift()
+        기능: explicit v1→v2 fixture에서 exact cause/stage allowlist와 version field 분리를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        preserved_path = _ARTIFACT_ROOT / (
+            "phase13-public-case2-20260831T095958280425Z-"
+            "b2c3cd9008584a539acf71703050c743"
+        ) / "phase13-public-case2-failed.json"
+        preserved_document = json.loads(
+            preserved_path.read_bytes(),
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        failure_body = {
+            field_name: field_value
+            for field_name, field_value in preserved_document.items()
+            if field_name != "failure_sha256"
+        }
+        failure_body["schema_version"] = 2
+        failure_body["first_cause"] = {
+            "reconciliation_required": True,
+            "status": ReconciliationCauseStatus.EXACT.value,
+            "category": (
+                ReconciliationCauseCategory.PREPARE_FILTER_OR_CAP_REJECTED.value
+            ),
+        }
+        failure_body["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_VERIFICATION_FAILED",
+                "failure_stage": "STARTUP_APPLICATION",
+                "account_open_orders_empty": None,
+                "account_open_order_lists_empty": None,
+            }
+        )
+        failure_body["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+            "FRESH_VERIFICATION_FAILED",
+        ]
+        redaction_canaries = (
+            "schema-v2-key-canary-31c8dcb0",
+            "schema-v2-secret-canary-5f498c2a",
+        )
+
+        # Production enum 확장이 v2 allowlist를 묵시적으로 넓히지 못하고 schema bump 검토를 강제한다.
+        self.assertEqual(
+            frozenset(
+                cause_status.value
+                for cause_status in ReconciliationCauseStatus
+            ),
+            _FAILURE_FIRST_CAUSE_STATUSES,
+        )
+        self.assertEqual(
+            frozenset(
+                cause_category.value
+                for cause_category in ReconciliationCauseCategory
+            ),
+            _FAILURE_FIRST_CAUSE_CATEGORIES,
+        )
+        self.assertEqual(
+            frozenset(status.name for status in ApplicationStatus),
+            _FAILURE_APPLICATION_STATUSES,
+        )
+        self.assertEqual(
+            frozenset(status.name for status in TradingSessionStatus),
+            _FAILURE_TRADING_STATUSES,
+        )
+        self.assertEqual(
+            frozenset(
+                failure_code.value for failure_code in StartupFailureCode
+            ),
+            _FAILURE_STARTUP_REASONS,
+        )
+        self.assertEqual(
+            frozenset(StartupStage),
+            frozenset(_STARTUP_STAGE_TO_FAILURE_STAGE),
+        )
+        _seal_failure_evidence(
+            failure_body,
+            forbidden_values=redaction_canaries,
+        )
+        resolved_latch_body = json.loads(json.dumps(failure_body))
+        resolved_latch_body["first_cause"]["reconciliation_required"] = False
+        _seal_failure_evidence(
+            resolved_latch_body,
+            forbidden_values=redaction_canaries,
+        )  # Process-lifetime EXACT latch와 현재 해소된 reconciliation bool은 서로 독립한 truth다.
+
+        # Unsupported version, mixed field 집합과 unknown cause/stage/reason은 모두 digest 전에 거부한다.
+        invalid_bodies: list[tuple[str, dict[str, object]]] = []
+        boolean_version = json.loads(json.dumps(failure_body))
+        boolean_version["schema_version"] = True
+        invalid_bodies.append(("boolean-version", boolean_version))
+        unsupported_version = json.loads(json.dumps(failure_body))
+        unsupported_version["schema_version"] = 3
+        invalid_bodies.append(("unsupported-version", unsupported_version))
+        v1_with_v2_fields = json.loads(json.dumps(failure_body))
+        v1_with_v2_fields["schema_version"] = 1
+        invalid_bodies.append(("v1-with-v2-fields", v1_with_v2_fields))
+        missing_first_cause = json.loads(json.dumps(failure_body))
+        del missing_first_cause["first_cause"]
+        invalid_bodies.append(("missing-first-cause", missing_first_cause))
+        unknown_category = json.loads(json.dumps(failure_body))
+        unknown_category["first_cause"]["category"] = "UNKNOWN_CAUSE"
+        invalid_bodies.append(("unknown-category", unknown_category))
+        unknown_cause_status = json.loads(json.dumps(failure_body))
+        unknown_cause_status["first_cause"]["status"] = "UNKNOWN_STATUS"
+        invalid_bodies.append(("unknown-cause-status", unknown_cause_status))
+        non_exact_category = json.loads(json.dumps(failure_body))
+        non_exact_category["first_cause"]["status"] = (
+            ReconciliationCauseStatus.CONFLICT.value
+        )
+        non_exact_category["first_cause"]["category"] = (
+            ReconciliationCauseCategory.PREPARE_FILTER_OR_CAP_REJECTED.value
+        )
+        invalid_bodies.append(("non-exact-category", non_exact_category))
+        for permanent_category in (
+            ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
+            ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS,
+        ):
+            resolved_permanent_cause = json.loads(json.dumps(failure_body))
+            resolved_permanent_cause["first_cause"].update(
+                {
+                    "reconciliation_required": False,
+                    "category": permanent_category.value,
+                }
+            )
+            invalid_bodies.append(
+                (
+                    f"resolved-{permanent_category.value.lower()}",
+                    resolved_permanent_cause,
+                )
+            )
+        unknown_stage = json.loads(json.dumps(failure_body))
+        unknown_stage["fresh_verification"]["failure_stage"] = "UNKNOWN_STAGE"
+        invalid_bodies.append(("unknown-stage", unknown_stage))
+        unknown_reason = json.loads(json.dumps(failure_body))
+        unknown_reason["fresh_verification"]["typed_reason"] = "UNKNOWN_REASON"
+        invalid_bodies.append(("unknown-reason", unknown_reason))
+        unknown_runtime_status = json.loads(json.dumps(failure_body))
+        unknown_runtime_status["runtime_state"]["application_status"] = (
+            "UNKNOWN_STATUS"
+        )
+        invalid_bodies.append(("unknown-runtime-status", unknown_runtime_status))
+        for impossible_attempt_application_status in (
+            "CREATED",
+            "STARTING",
+            "FAILED",
+            "SHUTTING_DOWN",
+        ):
+            attempts_outside_observable_application = (
+                _create_failure_v2_test_body()
+            )
+            attempts_outside_observable_application["runtime_state"][
+                "application_status"
+            ] = impossible_attempt_application_status
+            invalid_bodies.append(
+                (
+                    f"attempts-during-{impossible_attempt_application_status.lower()}",
+                    attempts_outside_observable_application,
+                )
+            )
+        for active_status in ("RUNNING", "STOPPING"):
+            active_runtime_status = json.loads(json.dumps(failure_body))
+            active_runtime_status["runtime_state"]["trading_status"] = (
+                active_status
+            )
+            invalid_bodies.append(
+                (f"active-runtime-{active_status.lower()}", active_runtime_status)
+            )
+        unknown_recovery_reason = json.loads(json.dumps(failure_body))
+        unknown_recovery_reason["recovery"]["typed_reason"] = "UNKNOWN_REASON"
+        invalid_bodies.append(("unknown-recovery-reason", unknown_recovery_reason))
+        unknown_evidence_error = json.loads(json.dumps(failure_body))
+        unknown_evidence_error["evidence_errors"] = ["UNKNOWN_ERROR"]
+        invalid_bodies.append(("unknown-evidence-error", unknown_evidence_error))
+        duplicate_evidence_error = json.loads(json.dumps(failure_body))
+        duplicate_evidence_error["evidence_errors"] *= 2
+        invalid_bodies.append(
+            ("duplicate-evidence-error", duplicate_evidence_error)
+        )
+        reversed_evidence_error = json.loads(json.dumps(failure_body))
+        reversed_evidence_error["evidence_errors"].reverse()
+        invalid_bodies.append(
+            ("reversed-evidence-error", reversed_evidence_error)
+        )  # Set이 같아도 producer가 생성할 수 없는 fresh→recovery 순서는 거부한다.
+        for case_name, invalid_body in invalid_bodies:
+            with self.subTest(case_name=case_name):
+                with self.assertRaises((TypeError, ValueError)):
+                    _seal_failure_evidence(
+                        invalid_body,
+                        forbidden_values=redaction_canaries,
+                    )
+
+    def test_failure_schema_v2_binds_stage_reason_and_error_truth(self) -> None:
+        """
+        함수 이름: test_failure_schema_v2_binds_stage_reason_and_error_truth()
+        기능: 15 stage의 생성 가능 reason과 recovery·runtime·fresh error iff를 exact 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        redaction_canaries = (
+            "stage-reason-key-canary-31c8dcb0",
+            "stage-reason-secret-canary-5f498c2a",
+        )
+
+        # 모든 producer pair는 통과하고 각 stage에 다른 stage reason을 주입하면 거부한다.
+        all_stage_reasons = tuple(
+            reason
+            for allowed_reasons in _FAILURE_FRESH_STAGE_ALLOWED_REASONS.values()
+            for reason in allowed_reasons
+        )
+        for failure_stage, allowed_reasons in (
+            _FAILURE_FRESH_STAGE_ALLOWED_REASONS.items()
+        ):
+            for fresh_reason in allowed_reasons:
+                with self.subTest(
+                    case_name="positive-pair",
+                    failure_stage=failure_stage,
+                    fresh_reason=fresh_reason,
+                ):
+                    valid_body = _create_failure_v2_test_body()
+                    valid_body["fresh_verification"].update(
+                        {
+                            "failure_stage": failure_stage,
+                            "typed_reason": fresh_reason,
+                        }
+                    )
+                    if failure_stage == "LOCAL_STATE":
+                        valid_body["fresh_verification"].update(
+                            {
+                                "position_quantity": "1",
+                                "pending_order_count": 1,
+                                "reconciliation_required": False,
+                            }
+                        )
+                    elif failure_stage == "OPEN_ORDERS":
+                        valid_body["fresh_verification"].update(
+                            {
+                                "position_quantity": "1",
+                                "pending_order_count": 0,
+                                "reconciliation_required": False,
+                                "account_open_orders_empty": False,
+                                "matching_open_order_count": 0,
+                            }
+                        )
+                        if fresh_reason == "FRESH_OPEN_ORDERS_CHANGED":
+                            valid_body["fresh_verification"].update(
+                                {
+                                    "account_open_orders_empty": True,
+                                    "account_open_order_lists_empty": True,
+                                    "run_exchange_order_count": 1,
+                                    "durable_trade_count": 1,
+                                }
+                            )
+                    elif failure_stage == "OPEN_ORDER_LISTS":
+                        valid_body["fresh_verification"].update(
+                            {
+                                "position_quantity": "1",
+                                "pending_order_count": 0,
+                                "reconciliation_required": False,
+                                "account_open_orders_empty": True,
+                                "matching_open_order_count": 0,
+                                "account_open_order_lists_empty": False,
+                            }
+                        )
+                    elif failure_stage == "RECENT_ORDERS":
+                        valid_body["fresh_verification"].update(
+                            {
+                                "position_quantity": "1",
+                                "pending_order_count": 0,
+                                "reconciliation_required": False,
+                                "account_open_orders_empty": True,
+                                "matching_open_order_count": 0,
+                                "account_open_order_lists_empty": True,
+                            }
+                        )
+                        if fresh_reason == "FRESH_RECENT_ORDERS_CHANGED":
+                            valid_body["fresh_verification"][
+                                "durable_trade_count"
+                            ] = 1
+                    if (failure_stage, fresh_reason) in {
+                        ("CLEANUP", "FRESH_RUNTIME_CLOSE_FAILED"),
+                        ("CLEANUP", "FRESH_SNAPSHOT_CLEANUP_FAILED"),
+                    }:
+                        valid_body["fresh_verification"].update(
+                            {
+                                "verified_at": "2026-08-31T12:00:25.000000Z",
+                                "position_quantity": "1",
+                                "pending_order_count": 0,
+                                "reconciliation_required": False,
+                                "matching_open_order_count": 0,
+                                "account_open_orders_empty": True,
+                                "account_open_order_lists_empty": True,
+                                "run_exchange_order_count": 1,
+                                "durable_trade_count": 1,
+                            }
+                        )  # Primary cleanup 오류는 VERIFIED 직전 complete truth 뒤에만 생성된다.
+                    valid_body["evidence_errors"] = [
+                        "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+                        fresh_reason,
+                    ]
+                    _seal_failure_evidence(
+                        valid_body,
+                        forbidden_values=redaction_canaries,
+                    )
+                    if fresh_reason == "FRESH_RECENT_ORDERS_CHANGED":
+                        recent_read_failed_body = deepcopy(valid_body)
+                        recent_read_failed_body["fresh_verification"][
+                            "run_exchange_order_count"
+                        ] = 1
+                        _seal_failure_evidence(
+                            recent_read_failed_body,
+                            forbidden_values=redaction_canaries,
+                        )  # Final recent GET·exact 검증 예외는 직전 concrete count를 보존한다.
+            mismatched_reason = next(
+                reason
+                for reason in all_stage_reasons
+                if reason not in allowed_reasons
+            )
+            mismatched_body = _create_failure_v2_test_body()
+            mismatched_body["fresh_verification"].update(
+                {
+                    "failure_stage": failure_stage,
+                    "typed_reason": mismatched_reason,
+                }
+            )
+            mismatched_body["evidence_errors"] = [
+                "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+                mismatched_reason,
+            ]
+            with self.subTest(
+                case_name="negative-pair",
+                failure_stage=failure_stage,
+            ):
+                with self.assertRaises(ValueError):
+                    _seal_failure_evidence(
+                        mismatched_body,
+                        forbidden_values=redaction_canaries,
+                    )
+
+        expected_startup_pairs = {
+            StartupStage.APPLICATION: frozenset(
+                {
+                    StartupFailureCode.APPLICATION_ALREADY_STARTING,
+                    StartupFailureCode.APPLICATION_CLOSED,
+                }
+            ),
+            StartupStage.MARKET: frozenset(
+                {
+                    StartupFailureCode.MARKET_INITIALIZATION_FAILED,
+                    StartupFailureCode.MARKET_NOT_READY,
+                }
+            ),
+            StartupStage.REGIME: frozenset(
+                {StartupFailureCode.REGIME_NOT_READY}
+            ),
+            StartupStage.ACCOUNT: frozenset(
+                {
+                    StartupFailureCode.ACCOUNT_INITIALIZATION_FAILED,
+                    StartupFailureCode.ACCOUNT_NOT_READY,
+                }
+            ),
+            StartupStage.HISTORY: frozenset(
+                {StartupFailureCode.HISTORY_INITIALIZATION_FAILED}
+            ),
+            StartupStage.RECONCILIATION: frozenset(
+                {
+                    StartupFailureCode.ORDER_RECONCILIATION_FAILED,
+                    StartupFailureCode.ORDER_RECONCILIATION_NOT_READY,
+                }
+            ),
+        }
+        self.assertEqual(
+            expected_startup_pairs,
+            _STARTUP_STAGE_ALLOWED_FAILURE_CODES,
+        )  # Enum 추가나 stage/code 재배치는 자동 허용하지 않는다.
+
+        valid_attempted_final_verification = _create_failure_v2_test_body()
+        valid_attempted_final_verification["runtime_state"].update(
+            {
+                "application_status": "READY",
+                "trading_status": "TERMINATED",
+                "reconciliation_required": False,
+                "position_quantity": "0",
+                "pending_order_count": 0,
+                "durable_trade_count": 2,
+            }
+        )
+        valid_attempted_final_verification["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+        }
+        valid_attempted_final_verification["first_cause"]["category"] = (
+            ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS.value
+        )
+        valid_attempted_final_verification["evidence_errors"] = [
+            "FRESH_VERIFICATION_FAILED",
+            "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+        ]
+        _seal_failure_evidence(
+            valid_attempted_final_verification,
+            forbidden_values=redaction_canaries,
+        )  # STOP recovery 자체의 exact terminal truth와 별개로 fresh runtime 생성은 실패할 수 있다.
+        valid_nullable_runtime_after_recovery = deepcopy(
+            valid_attempted_final_verification
+        )
+        valid_nullable_runtime_after_recovery["runtime_state"][
+            "reconciliation_required"
+        ] = None
+        valid_nullable_runtime_after_recovery["evidence_errors"].insert(
+            0,
+            "RUNTIME_RECONCILIATION_UNAVAILABLE",
+        )
+        _seal_failure_evidence(
+            valid_nullable_runtime_after_recovery,
+            forbidden_values=redaction_canaries,
+        )  # Recovery 성공 뒤 독립 runtime getter 하나가 실패해도 exact unavailable code로 봉인한다.
+        valid_reblocked_runtime_after_recovery = deepcopy(
+            valid_attempted_final_verification
+        )
+        valid_reblocked_runtime_after_recovery["runtime_state"][
+            "reconciliation_required"
+        ] = True
+        _seal_failure_evidence(
+            valid_reblocked_runtime_after_recovery,
+            forbidden_values=redaction_canaries,
+        )  # Terminal recovery 직후 stream callback이 blocker를 다시 세워도 immutable 거래 사실은 유지된다.
+        valid_closed_scheduler_publication_failure = (
+            _create_failure_v2_test_body()
+        )
+        valid_closed_scheduler_publication_failure["runtime_state"][
+            "application_status"
+        ] = "CLOSED"
+        valid_closed_scheduler_publication_failure["first_cause"][
+            "category"
+        ] = ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS.value
+        valid_closed_scheduler_publication_failure["evidence_errors"].insert(
+            1,
+            "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED",
+        )
+        _seal_failure_evidence(
+            valid_closed_scheduler_publication_failure,
+            forbidden_values=redaction_canaries,
+        )  # tearDown은 runtime CLOSED 뒤에도 남은 active status gate를 원자적으로 닫을 수 있다.
+
+        # Primary omission·irrelevant fresh code·recovery drift와 runtime None/code 불일치를 각각 거부한다.
+        invalid_bodies: list[tuple[str, dict[str, object]]] = []
+        missing_primary = _create_failure_v2_test_body()
+        missing_primary["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS"
+        ]
+        invalid_bodies.append(("missing-fresh-primary", missing_primary))
+        irrelevant_fresh = _create_failure_v2_test_body()
+        irrelevant_fresh["evidence_errors"].append("FRESH_FILTER_REJECTED")
+        invalid_bodies.append(("irrelevant-fresh-reason", irrelevant_fresh))
+        missing_recovery = _create_failure_v2_test_body()
+        missing_recovery["evidence_errors"].remove(
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS"
+        )
+        invalid_bodies.append(("missing-recovery-reason", missing_recovery))
+        extra_recovery = _create_failure_v2_test_body()
+        extra_recovery["evidence_errors"].append(
+            "FAILURE_RECOVERY_STATE_CHANGED"
+        )
+        invalid_bodies.append(("extra-recovery-reason", extra_recovery))
+
+        # Baseline zero 상태에서 attempt가 없으면 history 관찰 실패와 무관하게 새 Position·matching은 0이다.
+        no_attempt_runtime_position = _create_failure_v2_test_body()
+        no_attempt_runtime_position["mutation_guard"].update(
+            {
+                "mutation_started": False,
+                "submission_attempts": [],
+            }
+        )
+        no_attempt_runtime_position["runtime_state"].update(
+            {
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "durable_trade_count": None,
+            }
+        )
+        no_attempt_runtime_position["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+            "RUNTIME_HISTORY_UNAVAILABLE",
+            "FRESH_VERIFICATION_FAILED",
+        ]
+        invalid_bodies.append(
+            ("no-attempt-runtime-position", no_attempt_runtime_position)
+        )
+        no_attempt_fresh_position = deepcopy(no_attempt_runtime_position)
+        no_attempt_fresh_position["runtime_state"].update(
+            {
+                "position_quantity": "0",
+                "durable_trade_count": 0,
+            }
+        )
+        no_attempt_fresh_position["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_LOCAL_STATE_INCOMPLETE",
+                "failure_stage": "LOCAL_STATE",
+                "position_quantity": "1",
+                "pending_order_count": 1,
+                "reconciliation_required": False,
+            }
+        )
+        no_attempt_fresh_position["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+            "FRESH_LOCAL_STATE_INCOMPLETE",
+        ]
+        invalid_bodies.append(
+            ("no-attempt-fresh-position", no_attempt_fresh_position)
+        )
+        no_attempt_matching_order = deepcopy(no_attempt_fresh_position)
+        no_attempt_matching_order["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_OPEN_ORDERS_NOT_EMPTY",
+                "failure_stage": "OPEN_ORDERS",
+                "position_quantity": "0",
+                "pending_order_count": 0,
+                "account_open_orders_empty": False,
+                "matching_open_order_count": 1,
+            }
+        )
+        no_attempt_matching_order["evidence_errors"][-1] = (
+            "FRESH_OPEN_ORDERS_NOT_EMPTY"
+        )
+        invalid_bodies.append(
+            ("no-attempt-matching-open-order", no_attempt_matching_order)
+        )
+        inflated_runtime_pending = _create_failure_v2_test_body()
+        inflated_runtime_pending["runtime_state"]["pending_order_count"] = 2
+        invalid_bodies.append(
+            ("inflated-runtime-pending", inflated_runtime_pending)
+        )
+        inflated_fresh_pending = _create_failure_v2_test_body()
+        inflated_fresh_pending["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_LOCAL_STATE_INCOMPLETE",
+                "failure_stage": "LOCAL_STATE",
+                "position_quantity": "1",
+                "pending_order_count": 2,
+                "reconciliation_required": False,
+            }
+        )
+        inflated_fresh_pending["evidence_errors"][-1] = (
+            "FRESH_LOCAL_STATE_INCOMPLETE"
+        )
+        invalid_bodies.append(
+            ("inflated-fresh-pending", inflated_fresh_pending)
+        )
+        failed_with_pre_attempt_reason = _create_failure_v2_test_body()
+        failed_with_pre_attempt_reason["recovery"].update(
+            {
+                "attempted": True,
+                "outcome": "FAILED",
+            }
+        )
+        failed_with_pre_attempt_reason["runtime_state"][
+            "application_status"
+        ] = "READY"
+        invalid_bodies.append(
+            ("failed-with-pre-attempt-reason", failed_with_pre_attempt_reason)
+        )
+        attempted_recovery_without_buy = _create_failure_v2_test_body()
+        attempted_recovery_without_buy["mutation_guard"].update(
+            {
+                "mutation_started": False,
+                "submission_attempts": [],
+            }
+        )
+        attempted_recovery_without_buy["runtime_state"].update(
+            {
+                "application_status": "READY",
+                "position_quantity": "0",
+                "pending_order_count": 0,
+                "durable_trade_count": 0,
+            }
+        )
+        attempted_recovery_without_buy["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_RUNTIME_FAILED",
+        }
+        attempted_recovery_without_buy["evidence_errors"][0] = (
+            "FAILURE_RECOVERY_RUNTIME_FAILED"
+        )
+        invalid_bodies.append(
+            ("attempted-recovery-without-buy", attempted_recovery_without_buy)
+        )
+        attempted_recovery_without_runtime_buy = _create_failure_v2_test_body()
+        attempted_recovery_without_runtime_buy["mutation_guard"][
+            "submission_attempts"
+        ] = attempted_recovery_without_runtime_buy["mutation_guard"][
+            "submission_attempts"
+        ][:1]
+        attempted_recovery_without_runtime_buy["runtime_state"][
+            "application_status"
+        ] = "READY"
+        attempted_recovery_without_runtime_buy["runtime_state"][
+            "durable_trade_count"
+        ] = 0
+        attempted_recovery_without_runtime_buy["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_RUNTIME_FAILED",
+        }
+        attempted_recovery_without_runtime_buy["evidence_errors"][0] = (
+            "FAILURE_RECOVERY_RUNTIME_FAILED"
+        )
+        invalid_bodies.append(
+            (
+                "attempted-recovery-without-runtime-buy",
+                attempted_recovery_without_runtime_buy,
+            )
+        )
+        attempted_recovery_without_fresh_buy = _create_failure_v2_test_body()
+        attempted_recovery_without_fresh_buy["mutation_guard"][
+            "submission_attempts"
+        ] = attempted_recovery_without_fresh_buy["mutation_guard"][
+            "submission_attempts"
+        ][:1]
+        attempted_recovery_without_fresh_buy["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_RUNTIME_FAILED",
+        }
+        attempted_recovery_without_fresh_buy["runtime_state"][
+            "application_status"
+        ] = "READY"
+        attempted_recovery_without_fresh_buy["fresh_verification"].update(
+            {
+                "run_exchange_order_count": 0,
+                "durable_trade_count": 0,
+            }
+        )
+        attempted_recovery_without_fresh_buy["evidence_errors"][0] = (
+            "FAILURE_RECOVERY_RUNTIME_FAILED"
+        )
+        invalid_bodies.append(
+            (
+                "attempted-recovery-without-fresh-buy",
+                attempted_recovery_without_fresh_buy,
+            )
+        )
+        attempted_recovery_without_ready = _create_failure_v2_test_body()
+        attempted_recovery_without_ready["runtime_state"][
+            "application_status"
+        ] = "FAILED"
+        attempted_recovery_without_ready["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_RUNTIME_FAILED",
+        }
+        attempted_recovery_without_ready["evidence_errors"][0] = (
+            "FAILURE_RECOVERY_RUNTIME_FAILED"
+        )
+        invalid_bodies.append(
+            ("attempted-recovery-without-ready", attempted_recovery_without_ready)
+        )
+        attempted_recovery_without_active_session = (
+            _create_failure_v2_test_body()
+        )
+        attempted_recovery_without_active_session["runtime_state"].update(
+            {
+                "application_status": "READY",
+                "trading_status": "NOT_STARTED",
+            }
+        )
+        attempted_recovery_without_active_session["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_RUNTIME_FAILED",
+        }
+        attempted_recovery_without_active_session["evidence_errors"][0] = (
+            "FAILURE_RECOVERY_RUNTIME_FAILED"
+        )
+        invalid_bodies.append(
+            (
+                "attempted-recovery-without-active-session",
+                attempted_recovery_without_active_session,
+            )
+        )
+        skipped_recovery_without_active_session = (
+            _create_failure_v2_test_body()
+        )
+        skipped_recovery_without_active_session["runtime_state"][
+            "trading_status"
+        ] = "NOT_STARTED"
+        invalid_bodies.append(
+            (
+                "skipped-recovery-without-active-session",
+                skipped_recovery_without_active_session,
+            )
+        )
+        attempted_final_verification_without_sell = (
+            _create_failure_v2_test_body()
+        )
+        attempted_final_verification_without_sell["mutation_guard"][
+            "submission_attempts"
+        ] = attempted_final_verification_without_sell["mutation_guard"][
+            "submission_attempts"
+        ][:1]
+        attempted_final_verification_without_sell["runtime_state"][
+            "application_status"
+        ] = "READY"
+        attempted_final_verification_without_sell["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+        }
+        attempted_final_verification_without_sell["evidence_errors"][0] = (
+            "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE"
+        )
+        attempted_final_verification_without_sell["first_cause"][
+            "category"
+        ] = ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS.value
+        invalid_bodies.append(
+            (
+                "attempted-final-verification-without-sell",
+                attempted_final_verification_without_sell,
+            )
+        )
+        attempted_final_verification_without_terminal_runtime = (
+            _create_failure_v2_test_body()
+        )
+        attempted_final_verification_without_terminal_runtime[
+            "runtime_state"
+        ]["application_status"] = "READY"
+        attempted_final_verification_without_terminal_runtime["recovery"] = {
+            "attempted": True,
+            "outcome": "FAILED",
+            "typed_reason": "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+        }
+        attempted_final_verification_without_terminal_runtime[
+            "evidence_errors"
+        ][0] = "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE"
+        attempted_final_verification_without_terminal_runtime["first_cause"][
+            "category"
+        ] = ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS.value
+        invalid_bodies.append(
+            (
+                "attempted-final-verification-without-terminal-runtime",
+                attempted_final_verification_without_terminal_runtime,
+            )
+        )
+        for late_skip_reason in (
+            "FAILURE_RECOVERY_EFFECTIVE_FREE_UNCONFIRMED",
+            "FAILURE_RECOVERY_STATE_CHANGED",
+        ):
+            late_skip_without_buy = _create_failure_v2_test_body()
+            late_skip_without_buy["mutation_guard"].update(
+                {
+                    "mutation_started": False,
+                    "submission_attempts": [],
+                }
+            )
+            late_skip_without_buy["runtime_state"].update(
+                {
+                    "position_quantity": "0",
+                    "durable_trade_count": 0,
+                }
+            )
+            late_skip_without_buy["recovery"] = {
+                "attempted": False,
+                "outcome": "SKIPPED",
+                "typed_reason": late_skip_reason,
+            }
+            late_skip_without_buy["evidence_errors"][0] = late_skip_reason
+            invalid_bodies.append(
+                (
+                    f"{late_skip_reason.lower()}-without-buy",
+                    late_skip_without_buy,
+                )
+            )
+        late_skip_without_ready = _create_failure_v2_test_body()
+        late_skip_without_ready["runtime_state"][
+            "application_status"
+        ] = "FAILED"
+        late_skip_without_ready["mutation_guard"]["submission_attempts"] = (
+            late_skip_without_ready["mutation_guard"]["submission_attempts"][
+                :1
+            ]
+        )
+        late_skip_without_ready["recovery"] = {
+            "attempted": False,
+            "outcome": "SKIPPED",
+            "typed_reason": "FAILURE_RECOVERY_STATE_CHANGED",
+        }
+        late_skip_without_ready["evidence_errors"][0] = (
+            "FAILURE_RECOVERY_STATE_CHANGED"
+        )
+        invalid_bodies.append(
+            ("late-skip-without-ready", late_skip_without_ready)
+        )
+        publication_error_without_reconciliation = (
+            _create_failure_v2_test_body()
+        )
+        publication_error_without_reconciliation["runtime_state"][
+            "trading_status"
+        ] = "TERMINATED"
+        publication_error_without_reconciliation["evidence_errors"].append(
+            "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED"
+        )
+        invalid_bodies.append(
+            (
+                "publication-error-without-reconciliation-status",
+                publication_error_without_reconciliation,
+            )
+        )
+        reconciliation_status_without_blocker = _create_failure_v2_test_body()
+        reconciliation_status_without_blocker["runtime_state"][
+            "reconciliation_required"
+        ] = False
+        invalid_bodies.append(
+            (
+                "reconciliation-status-without-blocker",
+                reconciliation_status_without_blocker,
+            )
+        )
+        permanent_cause_without_runtime_blocker = (
+            _create_failure_v2_test_body()
+        )
+        permanent_cause_without_runtime_blocker["runtime_state"].update(
+            {
+                "trading_status": "TERMINATED",
+                "reconciliation_required": False,
+            }
+        )
+        invalid_bodies.append(
+            (
+                "permanent-cause-without-runtime-blocker",
+                permanent_cause_without_runtime_blocker,
+            )
+        )
+        for impossible_permanent_reason in (
+            "FAILURE_RECOVERY_EFFECTIVE_FREE_UNCONFIRMED",
+            "FAILURE_RECOVERY_STATE_CHANGED",
+            "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+        ):
+            permanent_cause_with_late_recovery = (
+                _create_failure_v2_test_body()
+            )
+            permanent_cause_with_late_recovery["recovery"][
+                "typed_reason"
+            ] = impossible_permanent_reason
+            permanent_cause_with_late_recovery["evidence_errors"][0] = (
+                impossible_permanent_reason
+            )
+            invalid_bodies.append(
+                (
+                    f"permanent-cause-with-{impossible_permanent_reason.lower()}",
+                    permanent_cause_with_late_recovery,
+                )
+            )
+        publication_error_without_concrete_blocker = (
+            _create_failure_v2_test_body()
+        )
+        publication_error_without_concrete_blocker["runtime_state"][
+            "reconciliation_required"
+        ] = None
+        publication_error_without_concrete_blocker["evidence_errors"].extend(
+            (
+                "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED",
+                "RUNTIME_RECONCILIATION_UNAVAILABLE",
+            )
+        )
+        invalid_bodies.append(
+            (
+                "publication-error-without-concrete-blocker",
+                publication_error_without_concrete_blocker,
+            )
+        )
+        publication_error_without_ready = _create_failure_v2_test_body()
+        publication_error_without_ready["runtime_state"].update(
+            {
+                "application_status": "FAILED",
+                "trading_status": "RECONCILIATION_REQUIRED",
+                "reconciliation_required": True,
+            }
+        )
+        publication_error_without_ready["evidence_errors"].append(
+            "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED"
+        )
+        invalid_bodies.append(
+            ("publication-error-without-ready", publication_error_without_ready)
+        )
+        runtime_durable_over_attempts = _create_failure_v2_test_body()
+        runtime_durable_over_attempts["runtime_state"][
+            "durable_trade_count"
+        ] = 999
+        invalid_bodies.append(
+            ("runtime-durable-over-attempts", runtime_durable_over_attempts)
+        )
+        sell_attempt_without_runtime_buy = _create_failure_v2_test_body()
+        sell_attempt_without_runtime_buy["runtime_state"][
+            "durable_trade_count"
+        ] = 0
+        invalid_bodies.append(
+            ("sell-attempt-without-runtime-buy", sell_attempt_without_runtime_buy)
+        )
+        sell_attempt_without_fresh_buy = _create_failure_v2_test_body()
+        sell_attempt_without_fresh_buy["fresh_verification"].update(
+            {
+                "run_exchange_order_count": 0,
+                "durable_trade_count": 0,
+            }
+        )
+        invalid_bodies.append(
+            ("sell-attempt-without-fresh-buy", sell_attempt_without_fresh_buy)
+        )
+        one_fresh_buy_with_zero_position = _create_failure_v2_test_body()
+        one_fresh_buy_with_zero_position["fresh_verification"].update(
+            {
+                "status": "VERIFIED",
+                "typed_reason": None,
+                "failure_stage": None,
+                "verified_at": "2026-08-31T12:00:25.000000Z",
+                "position_quantity": "0",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "matching_open_order_count": 0,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        one_fresh_buy_with_zero_position["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS"
+        ]
+        invalid_bodies.append(
+            (
+                "one-fresh-buy-with-zero-position",
+                one_fresh_buy_with_zero_position,
+            )
+        )
+        regressed_fresh_durable_history = _create_failure_v2_test_body()
+        regressed_fresh_durable_history["runtime_state"].update(
+            {
+                "trading_status": "TERMINATED",
+                "reconciliation_required": False,
+                "position_quantity": "0",
+                "pending_order_count": 0,
+                "durable_trade_count": 2,
+            }
+        )
+        regressed_fresh_durable_history["fresh_verification"].update(
+            {
+                "status": "VERIFIED",
+                "typed_reason": None,
+                "failure_stage": None,
+                "verified_at": "2026-08-31T12:00:25.000000Z",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "matching_open_order_count": 0,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        regressed_fresh_durable_history["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS"
+        ]
+        invalid_bodies.append(
+            ("regressed-fresh-durable-history", regressed_fresh_durable_history)
+        )
+        runtime_position_without_attempt = _create_failure_v2_test_body()
+        runtime_position_without_attempt["mutation_guard"].update(
+            {
+                "mutation_started": False,
+                "submission_attempts": [],
+            }
+        )
+        runtime_position_without_attempt["runtime_state"].update(
+            {
+                "position_quantity": "7.5",
+                "durable_trade_count": 0,
+            }
+        )
+        invalid_bodies.append(
+            ("runtime-position-without-attempt", runtime_position_without_attempt)
+        )
+        incomplete_count_mismatch = _create_failure_v2_test_body()
+        incomplete_count_mismatch["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_STREAM_NOT_READY",
+                "failure_stage": "STREAM",
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 2,
+            }
+        )
+        incomplete_count_mismatch["evidence_errors"][1] = (
+            "FRESH_STREAM_NOT_READY"
+        )
+        invalid_bodies.append(
+            ("incomplete-count-mismatch", incomplete_count_mismatch)
+        )
+        partial_local_group = _create_failure_v2_test_body()
+        partial_local_group["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_LOCAL_STATE_INCOMPLETE",
+                "failure_stage": "LOCAL_STATE",
+                "position_quantity": "1",
+            }
+        )
+        partial_local_group["evidence_errors"][1] = (
+            "FRESH_LOCAL_STATE_INCOMPLETE"
+        )
+        invalid_bodies.append(("partial-local-group", partial_local_group))
+        complete_local_group = _create_failure_v2_test_body()
+        complete_local_group["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_LOCAL_STATE_INCOMPLETE",
+                "failure_stage": "LOCAL_STATE",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+            }
+        )
+        complete_local_group["evidence_errors"][1] = (
+            "FRESH_LOCAL_STATE_INCOMPLETE"
+        )
+        invalid_bodies.append(("complete-local-group", complete_local_group))
+        open_list_without_prefix = _create_failure_v2_test_body()
+        open_list_without_prefix["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY",
+                "failure_stage": "OPEN_ORDER_LISTS",
+                "account_open_order_lists_empty": True,
+            }
+        )
+        open_list_without_prefix["evidence_errors"][1] = (
+            "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY"
+        )
+        invalid_bodies.append(
+            ("open-list-without-prefix", open_list_without_prefix)
+        )
+        open_list_counts_without_flag = _create_failure_v2_test_body()
+        open_list_counts_without_flag["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY",
+                "failure_stage": "OPEN_ORDER_LISTS",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "account_open_orders_empty": True,
+                "matching_open_order_count": 0,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        open_list_counts_without_flag["evidence_errors"][1] = (
+            "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY"
+        )
+        invalid_bodies.append(
+            ("open-list-counts-without-flag", open_list_counts_without_flag)
+        )
+        open_list_initial_empty_without_counts = (
+            _create_failure_v2_test_body()
+        )
+        open_list_initial_empty_without_counts["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY",
+                "failure_stage": "OPEN_ORDER_LISTS",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "account_open_orders_empty": True,
+                "matching_open_order_count": 0,
+                "account_open_order_lists_empty": True,
+            }
+        )
+        open_list_initial_empty_without_counts["evidence_errors"][1] = (
+            "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY"
+        )
+        invalid_bodies.append(
+            (
+                "open-list-initial-empty-without-counts",
+                open_list_initial_empty_without_counts,
+            )
+        )
+        changed_open_orders_with_nonempty_flag = _create_failure_v2_test_body()
+        changed_open_orders_with_nonempty_flag["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_OPEN_ORDERS_CHANGED",
+                "failure_stage": "OPEN_ORDERS",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "account_open_orders_empty": False,
+                "matching_open_order_count": 0,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        changed_open_orders_with_nonempty_flag["evidence_errors"][1] = (
+            "FRESH_OPEN_ORDERS_CHANGED"
+        )
+        invalid_bodies.append(
+            (
+                "changed-open-orders-with-nonempty-flag",
+                changed_open_orders_with_nonempty_flag,
+            )
+        )
+        changed_open_orders_without_matching_count = (
+            _create_failure_v2_test_body()
+        )
+        changed_open_orders_without_matching_count[
+            "fresh_verification"
+        ].update(
+            {
+                "typed_reason": "FRESH_OPEN_ORDERS_CHANGED",
+                "failure_stage": "OPEN_ORDERS",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        changed_open_orders_without_matching_count["evidence_errors"][1] = (
+            "FRESH_OPEN_ORDERS_CHANGED"
+        )
+        invalid_bodies.append(
+            (
+                "changed-open-orders-without-matching-count",
+                changed_open_orders_without_matching_count,
+            )
+        )
+        final_open_orders_not_empty_with_matching = (
+            _create_failure_v2_test_body()
+        )
+        final_open_orders_not_empty_with_matching["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_OPEN_ORDERS_NOT_EMPTY",
+                "failure_stage": "OPEN_ORDERS",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "account_open_orders_empty": True,
+                "matching_open_order_count": 2,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        final_open_orders_not_empty_with_matching["evidence_errors"][1] = (
+            "FRESH_OPEN_ORDERS_NOT_EMPTY"
+        )
+        invalid_bodies.append(
+            (
+                "final-open-orders-not-empty-with-matching",
+                final_open_orders_not_empty_with_matching,
+            )
+        )
+        for retained_account_flag in (None, False):
+            final_open_orders_without_matching = _create_failure_v2_test_body()
+            final_open_orders_without_matching["fresh_verification"].update(
+                {
+                    "typed_reason": "FRESH_OPEN_ORDERS_NOT_EMPTY",
+                    "failure_stage": "OPEN_ORDERS",
+                    "position_quantity": "1",
+                    "pending_order_count": 0,
+                    "reconciliation_required": False,
+                    "account_open_orders_empty": retained_account_flag,
+                    "account_open_order_lists_empty": True,
+                    "run_exchange_order_count": 1,
+                    "durable_trade_count": 1,
+                }
+            )
+            final_open_orders_without_matching["evidence_errors"][1] = (
+                "FRESH_OPEN_ORDERS_NOT_EMPTY"
+            )
+            invalid_bodies.append(
+                (
+                    f"final-open-orders-{retained_account_flag}-without-matching",
+                    final_open_orders_without_matching,
+                )
+            )
+        recent_without_prefix = _create_failure_v2_test_body()
+        recent_without_prefix["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_RECENT_ORDERS_CHANGED",
+                "failure_stage": "RECENT_ORDERS",
+                "durable_trade_count": 1,
+            }
+        )
+        recent_without_prefix["evidence_errors"][1] = (
+            "FRESH_RECENT_ORDERS_CHANGED"
+        )
+        invalid_bodies.append(("recent-without-prefix", recent_without_prefix))
+        early_stage_with_verified_at = _create_failure_v2_test_body()
+        early_stage_with_verified_at["fresh_verification"]["verified_at"] = (
+            "2026-08-31T12:00:25.000000Z"
+        )
+        invalid_bodies.append(
+            ("early-stage-with-verified-at", early_stage_with_verified_at)
+        )
+        for early_stage in ("RUNTIME_CREATION", "STARTUP_APPLICATION"):
+            early_stage_with_downstream_truth = _create_failure_v2_test_body()
+            early_stage_with_downstream_truth["fresh_verification"].update(
+                {
+                    "failure_stage": early_stage,
+                    "position_quantity": "1",
+                    "pending_order_count": 0,
+                    "reconciliation_required": False,
+                    "matching_open_order_count": 0,
+                    "account_open_orders_empty": True,
+                    "account_open_order_lists_empty": True,
+                    "run_exchange_order_count": 1,
+                    "durable_trade_count": 1,
+                }
+            )
+            invalid_bodies.append(
+                (
+                    f"{early_stage.lower()}-with-downstream-truth",
+                    early_stage_with_downstream_truth,
+                )
+            )
+        primary_close_with_observation = _create_failure_v2_test_body()
+        primary_close_with_observation["fresh_verification"].update(
+            {
+                "typed_reason": "PRIMARY_RUNTIME_NOT_CLOSED",
+                "failure_stage": "CLEANUP",
+                "position_quantity": "0",
+            }
+        )
+        primary_close_with_observation["evidence_errors"][1] = (
+            "PRIMARY_RUNTIME_NOT_CLOSED"
+        )
+        invalid_bodies.append(
+            ("primary-close-with-observation", primary_close_with_observation)
+        )
+        cleanup_without_complete_truth = _create_failure_v2_test_body()
+        cleanup_without_complete_truth["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_RUNTIME_CLOSE_FAILED",
+                "failure_stage": "CLEANUP",
+            }
+        )
+        cleanup_without_complete_truth["evidence_errors"][1] = (
+            "FRESH_RUNTIME_CLOSE_FAILED"
+        )
+        invalid_bodies.append(
+            ("cleanup-without-complete-truth", cleanup_without_complete_truth)
+        )
+        snapshot_primary_after_close_error = _create_failure_v2_test_body()
+        snapshot_primary_after_close_error["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_SNAPSHOT_CLEANUP_FAILED",
+                "failure_stage": "CLEANUP",
+                "verified_at": "2026-08-31T12:00:25.000000Z",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "matching_open_order_count": 0,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        snapshot_primary_after_close_error["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+            "FRESH_SNAPSHOT_CLEANUP_FAILED",
+            "FRESH_RUNTIME_CLOSE_FAILED",
+        ]
+        invalid_bodies.append(
+            (
+                "snapshot-primary-after-close-error",
+                snapshot_primary_after_close_error,
+            )
+        )
+        durability_primary_after_close_error = _create_failure_v2_test_body()
+        durability_primary_after_close_error["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_DURABILITY_CHANGED",
+                "failure_stage": "DURABILITY",
+            }
+        )
+        durability_primary_after_close_error["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS",
+            "FRESH_DURABILITY_CHANGED",
+            "FRESH_RUNTIME_CLOSE_FAILED",
+        ]
+        invalid_bodies.append(
+            (
+                "durability-primary-after-close-error",
+                durability_primary_after_close_error,
+            )
+        )
+        false_final_verification_reason = _create_failure_v2_test_body()
+        false_final_verification_reason["mutation_guard"].update(
+            {
+                "mutation_started": False,
+                "submission_attempts": [],
+            }
+        )
+        false_final_verification_reason["recovery"] = {
+            "attempted": False,
+            "outcome": "SKIPPED",
+            "typed_reason": "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE",
+        }
+        false_final_verification_reason["runtime_state"].update(
+            {
+                "trading_status": "NOT_STARTED",
+                "reconciliation_required": False,
+                "position_quantity": "0",
+                "pending_order_count": 0,
+                "durable_trade_count": 0,
+            }
+        )
+        false_final_verification_reason["fresh_verification"].update(
+            {
+                "status": "VERIFIED",
+                "typed_reason": None,
+                "failure_stage": None,
+                "verified_at": "2026-08-31T12:00:25.000000Z",
+                "position_quantity": "0",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "matching_open_order_count": 0,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 0,
+                "durable_trade_count": 0,
+            }
+        )
+        false_final_verification_reason["evidence_errors"] = [
+            "FAILURE_RECOVERY_FINAL_VERIFICATION_INCOMPLETE"
+        ]
+        invalid_bodies.append(
+            ("false-final-verification-reason", false_final_verification_reason)
+        )
+        runtime_error_fields = {
+            "reconciliation_required": "RUNTIME_RECONCILIATION_UNAVAILABLE",
+            "position_quantity": "RUNTIME_POSITION_UNAVAILABLE",
+            "pending_order_count": "RUNTIME_PENDING_UNAVAILABLE",
+            "durable_trade_count": "RUNTIME_HISTORY_UNAVAILABLE",
+        }
+        for field_name, error_code in runtime_error_fields.items():
+            missing_runtime_error = _create_failure_v2_test_body()
+            missing_runtime_error["runtime_state"][field_name] = None
+            invalid_bodies.append(
+                (f"missing-{error_code}", missing_runtime_error)
+            )
+            irrelevant_runtime_error = _create_failure_v2_test_body()
+            irrelevant_runtime_error["evidence_errors"].append(error_code)
+            invalid_bodies.append(
+                (f"irrelevant-{error_code}", irrelevant_runtime_error)
+            )
+        for case_name, invalid_body in invalid_bodies:
+            with self.subTest(case_name=case_name):
+                with self.assertRaises(ValueError):
+                    _seal_failure_evidence(
+                        invalid_body,
+                        forbidden_values=redaction_canaries,
+                    )
+
+        # Producer가 첫 실패 뒤 관찰할 수 있는 durability·cleanup 후속 error만 추가 허용한다.
+        valid_secondary_body = _create_failure_v2_test_body()
+        valid_secondary_body["evidence_errors"].extend(
+            (
+                "FRESH_RUNTIME_CLOSE_FAILED",
+                "FRESH_DURABILITY_CHANGED",
+                "FRESH_SNAPSHOT_CLEANUP_FAILED",
+            )
+        )
+        _seal_failure_evidence(
+            valid_secondary_body,
+            forbidden_values=redaction_canaries,
+        )
+        valid_late_durability = _create_failure_v2_test_body()
+        valid_late_durability["fresh_verification"].update(
+            {
+                "typed_reason": "FRESH_DURABILITY_CHANGED",
+                "failure_stage": "DURABILITY",
+                "verified_at": "2026-08-31T12:00:25.000000Z",
+                "position_quantity": "1",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "matching_open_order_count": 0,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        valid_late_durability["evidence_errors"][1] = (
+            "FRESH_DURABILITY_CHANGED"
+        )
+        _seal_failure_evidence(
+            valid_late_durability,
+            forbidden_values=redaction_canaries,
+        )  # VERIFIED 뒤 source fingerprint drift는 complete truth를 보존한 DURABILITY primary다.
+
+    def test_failure_schema_v2_binds_verified_truth_and_timestamps(self) -> None:
+        """
+        함수 이름: test_failure_schema_v2_binds_verified_truth_and_timestamps()
+        기능: VERIFIED terminal truth와 run·attempt·verification 시간 순서의 exact 불변식을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        redaction_canaries = (
+            "verified-key-canary-31c8dcb0",
+            "verified-secret-canary-5f498c2a",
+        )
+        verified_body = _create_failure_v2_test_body()
+        verified_body["fresh_verification"].update(
+            {
+                "status": "VERIFIED",
+                "typed_reason": None,
+                "failure_stage": None,
+                "verified_at": "2026-08-31T12:00:25.000000Z",
+                "position_quantity": "7.5",
+                "pending_order_count": 0,
+                "reconciliation_required": False,
+                "matching_open_order_count": 0,
+                "account_open_orders_empty": True,
+                "account_open_order_lists_empty": True,
+                "run_exchange_order_count": 1,
+                "durable_trade_count": 1,
+            }
+        )
+        verified_body["evidence_errors"] = [
+            "FAILURE_RECOVERY_STATE_AMBIGUOUS"
+        ]
+        _seal_failure_evidence(
+            verified_body,
+            forbidden_values=redaction_canaries,
+        )  # Failure artifact의 complete observation은 nonzero position을 숨기지 않고 허용한다.
+
+        verified_drifts = {
+            "pending": ("pending_order_count", 1),
+            "reconciliation": ("reconciliation_required", True),
+            "matching-open": ("matching_open_order_count", 1),
+            "account-open": ("account_open_orders_empty", False),
+            "account-list": ("account_open_order_lists_empty", False),
+            "exchange-durable": ("run_exchange_order_count", 2),
+            "position-unavailable": ("position_quantity", None),
+        }
+        for case_name, (field_name, field_value) in verified_drifts.items():
+            invalid_body = json.loads(json.dumps(verified_body))
+            invalid_body["fresh_verification"][field_name] = field_value
+            with self.subTest(case_name=case_name):
+                with self.assertRaises(ValueError):
+                    _seal_failure_evidence(
+                        invalid_body,
+                        forbidden_values=redaction_canaries,
+                    )
+        inflated_run_counts = json.loads(json.dumps(verified_body))
+        inflated_run_counts["fresh_verification"].update(
+            {
+                "run_exchange_order_count": 999,
+                "durable_trade_count": 999,
+            }
+        )
         with self.assertRaises(ValueError):
             _seal_failure_evidence(
-                secret_body,
+                inflated_run_counts,
+                forbidden_values=redaction_canaries,
+            )  # Equal count도 이번 run의 최대 submission attempt 수를 넘으면 생성 불가다.
+        nonzero_position_without_durable_trade = json.loads(
+            json.dumps(verified_body)
+        )
+        nonzero_position_without_durable_trade["mutation_guard"].update(
+            {
+                "mutation_started": False,
+                "submission_attempts": [],
+            }
+        )
+        nonzero_position_without_durable_trade["runtime_state"][
+            "durable_trade_count"
+        ] = 0
+        nonzero_position_without_durable_trade["fresh_verification"].update(
+            {
+                "run_exchange_order_count": 0,
+                "durable_trade_count": 0,
+            }
+        )
+        with self.assertRaises(ValueError):
+            _seal_failure_evidence(
+                nonzero_position_without_durable_trade,
+                forbidden_values=redaction_canaries,
+            )  # Verified baseline에서 durable suffix가 0이면 새 nonzero Position을 만들 수 없다.
+        zero_position_after_single_buy = json.loads(json.dumps(verified_body))
+        zero_position_after_single_buy["mutation_guard"][
+            "submission_attempts"
+        ] = zero_position_after_single_buy["mutation_guard"][
+            "submission_attempts"
+        ][:1]
+        zero_position_after_single_buy["runtime_state"][
+            "position_quantity"
+        ] = "0"
+        zero_position_after_single_buy["fresh_verification"][
+            "position_quantity"
+        ] = "0"
+        with self.assertRaises(ValueError):
+            _seal_failure_evidence(
+                zero_position_after_single_buy,
+                forbidden_values=redaction_canaries,
+            )  # SELL attempt 없는 단일 durable BUY는 두 concrete Position을 zero로 만들 수 없다.
+        verified_with_fresh_error = json.loads(json.dumps(verified_body))
+        verified_with_fresh_error["evidence_errors"].append(
+            "FRESH_RUNTIME_CLOSE_FAILED"
+        )
+        with self.assertRaises(ValueError):
+            _seal_failure_evidence(
+                verified_with_fresh_error,
                 forbidden_values=redaction_canaries,
             )
+
+        timestamp_drifts: list[tuple[str, dict[str, object]]] = []
+        attempted_before = _create_failure_v2_test_body()
+        attempted_before["mutation_guard"]["submission_attempts"][0][
+            "attempted_at"
+        ] = "2026-08-31T11:59:59.000000Z"
+        timestamp_drifts.append(("attempt-before-run", attempted_before))
+        attempted_after = _create_failure_v2_test_body()
+        attempted_after["mutation_guard"]["submission_attempts"][1][
+            "attempted_at"
+        ] = "2026-08-31T12:00:31.000000Z"
+        timestamp_drifts.append(("attempt-after-run", attempted_after))
+        reversed_attempts = _create_failure_v2_test_body()
+        reversed_attempts["mutation_guard"]["submission_attempts"][0][
+            "attempted_at"
+        ] = "2026-08-31T12:00:21.000000Z"
+        timestamp_drifts.append(("attempt-order-reversed", reversed_attempts))
+        verified_before = json.loads(json.dumps(verified_body))
+        verified_before["fresh_verification"]["verified_at"] = (
+            "2026-08-31T11:59:59.000000Z"
+        )
+        timestamp_drifts.append(("verified-before-run", verified_before))
+        verified_before_last_attempt = json.loads(json.dumps(verified_body))
+        verified_before_last_attempt["fresh_verification"]["verified_at"] = (
+            "2026-08-31T12:00:15.000000Z"
+        )
+        timestamp_drifts.append(
+            ("verified-before-last-attempt", verified_before_last_attempt)
+        )
+        verified_after = json.loads(json.dumps(verified_body))
+        verified_after["fresh_verification"]["verified_at"] = (
+            "2026-08-31T12:00:31.000000Z"
+        )
+        timestamp_drifts.append(("verified-after-run", verified_after))
+        for case_name, invalid_body in timestamp_drifts:
+            with self.subTest(case_name=case_name):
+                with self.assertRaises(ValueError):
+                    _seal_failure_evidence(
+                        invalid_body,
+                        forbidden_values=redaction_canaries,
+                    )
+
+    def test_non_exact_first_causes_are_null_and_fail_closed(self) -> None:
+        """
+        함수 이름: test_non_exact_first_causes_are_null_and_fail_closed()
+        기능: missing·동일 duplicate·서로 다른 conflict snapshot이 category 없이 secondary error를 남긴다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        cases = (
+            (
+                ReconciliationCauseStatus.MISSING,
+                False,
+                "RECONCILIATION_CAUSE_MISSING",
+            ),
+            (
+                ReconciliationCauseStatus.DUPLICATE,
+                True,
+                "RECONCILIATION_CAUSE_DUPLICATE",
+            ),
+            (
+                ReconciliationCauseStatus.CONFLICT,
+                True,
+                "RECONCILIATION_CAUSE_CONFLICT",
+            ),
+        )
+        for cause_status, reconciliation_required, expected_error in cases:
+            with self.subTest(cause_status=cause_status.value):
+                evidence_errors: list[str] = []
+                first_cause = _normalize_failure_first_cause(
+                    ReconciliationCauseSnapshot(
+                        reconciliation_required=reconciliation_required,
+                        status=cause_status,
+                        category=None,
+                    ),
+                    evidence_errors,
+                )
+                self.assertEqual(cause_status.value, first_cause["status"])
+                self.assertIsNone(first_cause["category"])
+                self.assertEqual([expected_error], evidence_errors)
+
+        # Cause latch는 process-lifetime이므로 해소된 현재 bool이 false여도 최초 exact category를 유지한다.
+        resolved_errors: list[str] = []
+        resolved_exact = _normalize_failure_first_cause(
+            ReconciliationCauseSnapshot(
+                reconciliation_required=False,
+                status=ReconciliationCauseStatus.EXACT,
+                category=(
+                    ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
+                ),
+            ),
+            resolved_errors,
+        )
+        self.assertEqual(
+            {
+                "reconciliation_required": False,
+                "status": ReconciliationCauseStatus.EXACT.value,
+                "category": (
+                    ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS.value
+                ),
+            },
+            resolved_exact,
+        )
+        self.assertEqual([], resolved_errors)
+
+    def test_fresh_failure_stage_is_first_failure_wins(self) -> None:
+        """
+        함수 이름: test_fresh_failure_stage_is_first_failure_wins()
+        기능: 최초 stage는 cleanup에 덮어쓰지 않고 VERIFIED cleanup 실패는 CLEANUP으로 강등됨을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        first_failure = _create_incomplete_fresh_verification()
+        first_errors: list[str] = []
+        _set_fresh_verification_failure(
+            first_failure,
+            "LOCAL_STATE",
+            "FRESH_LOCAL_STATE_INCOMPLETE",
+            first_errors,
+        )
+        _set_fresh_verification_failure(
+            first_failure,
+            "CLEANUP",
+            "FRESH_RUNTIME_CLOSE_FAILED",
+            first_errors,
+        )
+        self.assertEqual("LOCAL_STATE", first_failure["failure_stage"])
+        self.assertEqual(
+            "FRESH_LOCAL_STATE_INCOMPLETE",
+            first_failure["typed_reason"],
+        )
+        self.assertEqual(
+            [
+                "FRESH_LOCAL_STATE_INCOMPLETE",
+                "FRESH_RUNTIME_CLOSE_FAILED",
+            ],
+            first_errors,
+        )
+
+        # 본 검증이 완료된 mapping은 cleanup 실패 순간 성공 주장을 유지하지 않는다.
+        verified_then_cleanup = _create_incomplete_fresh_verification()
+        verified_then_cleanup.update(
+            {
+                "status": "VERIFIED",
+                "typed_reason": None,
+                "verified_at": _datetime_to_wire(_utc_now()),
+            }
+        )
+        cleanup_errors: list[str] = []
+        _set_fresh_verification_failure(
+            verified_then_cleanup,
+            "CLEANUP",
+            "FRESH_SNAPSHOT_CLEANUP_FAILED",
+            cleanup_errors,
+        )
+        self.assertEqual("INCOMPLETE", verified_then_cleanup["status"])
+        self.assertEqual("CLEANUP", verified_then_cleanup["failure_stage"])
+        self.assertEqual(
+            "FRESH_SNAPSHOT_CLEANUP_FAILED",
+            verified_then_cleanup["typed_reason"],
+        )
+
+    def test_fresh_setup_and_typed_startup_failures_are_stage_safe(self) -> None:
+        """
+        함수 이름: test_fresh_setup_and_typed_startup_failures_are_stage_safe()
+        기능: temporary copy 생성 실패와 typed startup failure가 raw 문구 없이 exact stage·code로 남는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        with TemporaryDirectory() as root:
+            source_history_path = Path(root) / "trades.jsonl"
+            source_history_path.write_bytes(b"")
+            os.chmod(source_history_path, 0o600)
+            harness = object.__new__(
+                BinanceTestnetPhaseThirteenPublicMarketCase2Tests
+            )
+            harness.history_path = source_history_path
+            harness.configuration = SimpleNamespace()
+            harness.baseline_recent_exchange_order_ids = frozenset()
+            harness.baseline_trades = ()
+            harness.evidence_clock = lambda: datetime(
+                2026,
+                9,
+                1,
+                tzinfo=timezone.utc,
+            )
+
+            # TemporaryDirectory 생성 자체가 실패해도 runtime factory에 도달하지 않고 DURABILITY로 고정한다.
+            directory_errors: list[str] = []
+            with patch(
+                f"{__name__}.TemporaryDirectory",
+                side_effect=PermissionError("raw directory detail"),
+            ), patch(
+                f"{__name__}.create_testnet_application_runtime"
+            ) as create_runtime:
+                directory_failure = (
+                    harness._capture_fresh_failure_verification(
+                        frozenset(),
+                        directory_errors,
+                    )
+                )
+            self.assertEqual("DURABILITY", directory_failure["failure_stage"])
+            self.assertEqual(
+                "FRESH_DURABILITY_CHANGED",
+                directory_failure["typed_reason"],
+            )
+            self.assertEqual(
+                ["FRESH_DURABILITY_CHANGED"],
+                directory_errors,
+            )
+            create_runtime.assert_not_called()
+
+            runtime = SimpleNamespace()
+            startup_failure = ApplicationStartupError(
+                StartupFailure(
+                    stage=StartupStage.ACCOUNT,
+                    code=StartupFailureCode.ACCOUNT_INITIALIZATION_FAILED,
+                    message="raw credential-like startup detail",
+                )
+            )
+            startup_errors: list[str] = []
+            with patch(
+                f"{__name__}.create_testnet_application_runtime",
+                return_value=runtime,
+            ), patch(
+                f"{__name__}.start_application",
+                side_effect=startup_failure,
+            ), patch(
+                f"{__name__}.close_application",
+                return_value=ApplicationStateSnapshot(
+                    status=ApplicationStatus.CLOSED,
+                    version=1,
+                    failure=None,
+                    startup_trace=(),
+                ),
+            ) as close_runtime, patch(
+                f"{__name__}._create_read_only_testnet_environment",
+                return_value={},
+            ):
+                startup_verification = (
+                    harness._capture_fresh_failure_verification(
+                        frozenset(),
+                        startup_errors,
+                    )
+                )
+            self.assertEqual(
+                "ACCOUNT",
+                startup_verification["failure_stage"],
+            )
+            self.assertEqual(
+                StartupFailureCode.ACCOUNT_INITIALIZATION_FAILED.value,
+                startup_verification["typed_reason"],
+            )
+            self.assertEqual(
+                [StartupFailureCode.ACCOUNT_INITIALIZATION_FAILED.value],
+                startup_errors,
+            )
+            self.assertNotIn(
+                "raw credential-like startup detail",
+                json.dumps(
+                    [startup_verification, startup_errors],
+                    sort_keys=True,
+                ),
+            )
+            close_runtime.assert_called_once_with(runtime)
+
+    def test_failure_durability_snapshot_is_descriptor_bound_and_fsynced(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_failure_durability_snapshot_is_descriptor_bound_and_fsynced()
+        기능: distinct inode copy와 link·inode/content ABA·drift·fsync 실패 차단을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/01
+        """
+        with TemporaryDirectory() as root:
+            root_path = Path(root)
+            source_directory = root_path / "source"
+            source_directory.mkdir(mode=0o700)
+            source_history_path = source_directory / "history.jsonl"
+            for file_suffix, file_bytes in zip(
+                _FAILURE_DURABILITY_FILE_SUFFIXES,
+                (b"history\n", b"pending\n", b"manual\n"),
+                strict=True,
+            ):
+                source_leaf = source_history_path.with_name(
+                    f"{source_history_path.name}{file_suffix}"
+                )
+                source_leaf.write_bytes(file_bytes)
+                os.chmod(source_leaf, 0o600)
+
+            copy_directory = root_path / "copy"
+            copy_directory.mkdir(mode=0o700)
+            snapshot_handle = _copy_failure_durability_snapshot(
+                source_history_path,
+                copy_directory,
+            )
+            isolated_history_path = snapshot_handle.history_path
+            snapshot_handle.verify()
+            source_fingerprints = _capture_failure_durability_fingerprint(
+                source_history_path
+            )
+            copy_fingerprints = _capture_failure_durability_fingerprint(
+                isolated_history_path
+            )
+            _require_failure_durability_snapshot_equivalence(
+                source_fingerprints,
+                copy_fingerprints,
+            )
+            self.assertTrue(all(item.exists for item in source_fingerprints))
+            self.assertTrue(
+                all(
+                    item.mode == 0o600
+                    and item.user_id == os.geteuid()
+                    and item.link_count == 1
+                    and item.device is not None
+                    and item.inode is not None
+                    and item.change_time_ns is not None
+                    and item.modification_time_ns is not None
+                    and item.sha256 is not None
+                    for item in source_fingerprints
+                )
+            )
+
+            # 같은 inode의 bytes와 mtime까지 복원해도 owner가 되돌릴 수 없는 ctime drift는 남는다.
+            content_aba_before = _capture_failure_durability_fingerprint(
+                isolated_history_path
+            )
+            original_copy_bytes = isolated_history_path.read_bytes()
+            original_copy_state = os.stat(
+                isolated_history_path,
+                follow_symlinks=False,
+            )
+            isolated_history_path.write_bytes(b"x" * len(original_copy_bytes))
+            isolated_history_path.write_bytes(original_copy_bytes)
+            os.chmod(isolated_history_path, 0o600)
+            os.utime(
+                isolated_history_path,
+                ns=(
+                    original_copy_state.st_atime_ns,
+                    original_copy_state.st_mtime_ns,
+                ),
+                follow_symlinks=False,
+            )
+            snapshot_handle.verify()
+            content_aba_after = _capture_failure_durability_fingerprint(
+                isolated_history_path
+            )
+            self.assertEqual(
+                (
+                    content_aba_before[0].inode,
+                    content_aba_before[0].size,
+                    content_aba_before[0].modification_time_ns,
+                    content_aba_before[0].sha256,
+                ),
+                (
+                    content_aba_after[0].inode,
+                    content_aba_after[0].size,
+                    content_aba_after[0].modification_time_ns,
+                    content_aba_after[0].sha256,
+                ),
+            )
+            self.assertNotEqual(
+                content_aba_before[0].change_time_ns,
+                content_aba_after[0].change_time_ns,
+            )
+            self.assertNotEqual(content_aba_before, content_aba_after)
+
+            # Same-byte path replacement은 SHA가 같아도 inode identity 변경으로 감지한다.
+            original_fingerprint = _capture_failure_durability_fingerprint(
+                source_history_path
+            )
+            replacement_path = source_directory / "replacement.jsonl"
+            replacement_path.write_bytes(source_history_path.read_bytes())
+            os.chmod(replacement_path, 0o600)
+            os.replace(replacement_path, source_history_path)
+            replaced_fingerprint = _capture_failure_durability_fingerprint(
+                source_history_path
+            )
+            self.assertEqual(
+                original_fingerprint[0].sha256,
+                replaced_fingerprint[0].sha256,
+            )
+            self.assertNotEqual(
+                original_fingerprint[0].inode,
+                replaced_fingerprint[0].inode,
+            )
+            self.assertNotEqual(
+                original_fingerprint,
+                replaced_fingerprint,
+            )
+
+            # Source와 isolated copy의 content 변조도 각 before fingerprint와 exact 다르다.
+            source_before_mutation = replaced_fingerprint
+            source_history_path.write_bytes(b"changed-source\n")
+            os.chmod(source_history_path, 0o600)
+            self.assertNotEqual(
+                source_before_mutation,
+                _capture_failure_durability_fingerprint(source_history_path),
+            )
+            copy_before_mutation = copy_fingerprints
+            isolated_history_path.write_bytes(b"changed-copy\n")
+            os.chmod(isolated_history_path, 0o600)
+            self.assertNotEqual(
+                copy_before_mutation,
+                _capture_failure_durability_fingerprint(isolated_history_path),
+            )
+
+            symlink_target = root_path / "symlink-target.jsonl"
+            symlink_target.write_bytes(b"target\n")
+            os.chmod(symlink_target, 0o600)
+            symlink_directory = root_path / "symlink-source"
+            symlink_directory.mkdir(mode=0o700)
+            os.symlink(symlink_target, symlink_directory / "history.jsonl")
+            with self.assertRaises(PermissionError):
+                _capture_failure_durability_fingerprint(
+                    symlink_directory / "history.jsonl"
+                )
+
+            hardlink_directory = root_path / "hardlink-source"
+            hardlink_directory.mkdir(mode=0o700)
+            hardlink_history = hardlink_directory / "history.jsonl"
+            hardlink_history.write_bytes(b"hardlink\n")
+            os.chmod(hardlink_history, 0o600)
+            os.link(hardlink_history, hardlink_directory / "alias.jsonl")
+            with self.assertRaises(PermissionError):
+                _capture_failure_durability_fingerprint(hardlink_history)
+            snapshot_handle.close()
+
+            # 중간 symlink와 group-writable source parent는 leaf가 안전해도 descriptor walk 전에 거부한다.
+            real_intermediate = root_path / "real-intermediate"
+            real_intermediate.mkdir(mode=0o700)
+            intermediate_history = real_intermediate / "history.jsonl"
+            intermediate_history.write_bytes(b"intermediate\n")
+            os.chmod(intermediate_history, 0o600)
+            intermediate_alias = root_path / "intermediate-alias"
+            intermediate_alias.symlink_to(
+                real_intermediate,
+                target_is_directory=True,
+            )
+            with self.assertRaises(OSError):
+                _capture_failure_durability_fingerprint(
+                    intermediate_alias / "history.jsonl"
+                )
+            writable_source = root_path / "writable-source"
+            writable_source.mkdir(mode=0o700)
+            writable_history = writable_source / "history.jsonl"
+            writable_history.write_bytes(b"writable\n")
+            os.chmod(writable_history, 0o600)
+            os.chmod(writable_source, 0o770)
+            with self.assertRaises(PermissionError):
+                _capture_failure_durability_fingerprint(writable_history)
+
+            # Directory를 다른 inode로 바꿨다가 되돌려도 pinned inode ctime이 달라져 handoff가 실패한다.
+            aba_directory = root_path / "aba-copy"
+            aba_directory.mkdir(mode=0o700)
+            aba_handle = _copy_failure_durability_snapshot(
+                source_history_path,
+                aba_directory,
+            )
+            parked_aba_directory = root_path / "aba-copy-parked"
+            replacement_aba_directory = root_path / "aba-copy-replacement"
+            aba_directory.rename(parked_aba_directory)
+            aba_directory.mkdir(mode=0o700)
+            aba_directory.rename(replacement_aba_directory)
+            parked_aba_directory.rename(aba_directory)
+            with self.assertRaises(RuntimeError):
+                aba_handle.verify()
+            aba_handle.close()
+
+            # Source의 absent sidecar를 만들었다 지워 leaf tuple이 복원돼도 parent ctime은 복원되지 않는다.
+            source_aba_directory = root_path / "source-entry-aba"
+            source_aba_directory.mkdir(mode=0o700)
+            source_aba_history = source_aba_directory / "history.jsonl"
+            source_aba_history.write_bytes(b"source-entry\n")
+            os.chmod(source_aba_history, 0o600)
+            source_aba_copy = root_path / "source-entry-aba-copy"
+            source_aba_copy.mkdir(mode=0o700)
+            source_aba_handle = _copy_failure_durability_snapshot(
+                source_aba_history,
+                source_aba_copy,
+            )
+            source_aba_before = _capture_failure_durability_fingerprint(
+                source_aba_history
+            )
+            transient_pending = source_aba_history.with_name(
+                f"{source_aba_history.name}.pending-orders.jsonl"
+            )
+            transient_pending.write_bytes(b"transient\n")
+            os.chmod(transient_pending, 0o600)
+            transient_pending.unlink()
+            source_aba_after = _capture_failure_durability_fingerprint(
+                source_aba_history
+            )
+            self.assertEqual(source_aba_before, source_aba_after)
+            with self.assertRaises(RuntimeError):
+                source_aba_handle.verify()
+            source_aba_handle.close()
+
+            # Final directory는 그대로 복원하더라도 source/copy 중간 ancestor의 rename ABA는 chain ctime에 남는다.
+            for ancestor_owner in ("source", "copy"):
+                with self.subTest(ancestor_owner=ancestor_owner):
+                    ancestor_directory = (
+                        root_path / f"{ancestor_owner}-ancestor-owner"
+                    )
+                    ancestor_directory.mkdir(mode=0o700)
+                    mutable_parent = ancestor_directory / "stable-parent"
+                    mutable_parent.mkdir(mode=0o700)
+                    mutable_ancestor = mutable_parent / "mutable-ancestor"
+                    mutable_ancestor.mkdir(mode=0o700)
+                    nested_directory = mutable_ancestor / "nested"
+                    nested_directory.mkdir(mode=0o700)
+                    peer_directory = (
+                        root_path / f"{ancestor_owner}-ancestor-peer"
+                    )
+                    peer_directory.mkdir(mode=0o700)
+                    if ancestor_owner == "source":
+                        ancestor_source_directory = nested_directory
+                        ancestor_copy_directory = peer_directory
+                    else:
+                        ancestor_source_directory = peer_directory
+                        ancestor_copy_directory = nested_directory
+                    ancestor_history = (
+                        ancestor_source_directory / "history.jsonl"
+                    )
+                    ancestor_history.write_bytes(b"ancestor-chain\n")
+                    os.chmod(ancestor_history, 0o600)
+                    ancestor_handle = _copy_failure_durability_snapshot(
+                        ancestor_history,
+                        ancestor_copy_directory,
+                    )
+                    watched_final_directory = (
+                        ancestor_source_directory
+                        if ancestor_owner == "source"
+                        else ancestor_copy_directory
+                    )
+                    watched_state_before = os.stat(
+                        watched_final_directory,
+                        follow_symlinks=False,
+                    )
+                    watched_identity_before = (
+                        watched_state_before.st_dev,
+                        watched_state_before.st_ino,
+                        watched_state_before.st_ctime_ns,
+                    )
+                    parked_ancestor = mutable_parent / "parked-ancestor"
+                    try:
+                        mutable_ancestor.rename(parked_ancestor)
+                        mutable_ancestor.mkdir(mode=0o700)
+                        mutable_ancestor.rmdir()
+                        parked_ancestor.rename(mutable_ancestor)
+                        watched_state_after = os.stat(
+                            watched_final_directory,
+                            follow_symlinks=False,
+                        )
+                        self.assertEqual(
+                            watched_identity_before,
+                            (
+                                watched_state_after.st_dev,
+                                watched_state_after.st_ino,
+                                watched_state_after.st_ctime_ns,
+                            ),
+                        )
+                        with self.assertRaises(RuntimeError):
+                            ancestor_handle.verify()
+                    finally:
+                        ancestor_handle.close()
+
+            # Destination file·directory fsync 어느 경계라도 실패하면 snapshot을 공개하지 않는다.
+            fsync_file_directory = root_path / "fsync-file"
+            fsync_file_directory.mkdir(mode=0o700)
+            with patch.object(
+                os,
+                "fsync",
+                side_effect=OSError("raw file fsync detail"),
+            ):
+                with self.assertRaises(OSError):
+                    _copy_failure_durability_snapshot(
+                        source_history_path,
+                        fsync_file_directory,
+                    )
+
+            real_fsync = os.fsync
+
+            def reject_directory_fsync(file_descriptor: int) -> None:
+                """
+                함수 이름: reject_directory_fsync()
+                기능: regular file publish는 허용하고 destination directory fsync만 실패시킨다.
+                인자: file_descriptor -> helper가 fsync할 pinned descriptor
+                반환값: regular file은 실제 fsync 완료, directory는 OSError
+                작성 날짜: 2026/08/31
+                """
+                if stat.S_ISDIR(os.fstat(file_descriptor).st_mode):
+                    raise OSError("raw directory fsync detail")
+                real_fsync(file_descriptor)
+
+            fsync_directory = root_path / "fsync-directory"
+            fsync_directory.mkdir(mode=0o700)
+            with patch.object(
+                os,
+                "fsync",
+                side_effect=reject_directory_fsync,
+            ):
+                with self.assertRaises(OSError):
+                    _copy_failure_durability_snapshot(
+                        source_history_path,
+                        fsync_directory,
+                    )
+
+    def test_fresh_verification_uses_isolated_durability_and_rest_sandwich(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_fresh_verification_uses_isolated_durability_and_rest_sandwich()
+        기능: source 복제 경계와 final REST drift·copy mutation의 exact 최초 stage를 무네트워크 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        drift_order = SimpleNamespace(
+            client_order_id="fresh-rest-drift",
+            exchange_order_id="9001",
+        )
+        closed_snapshot = ApplicationStateSnapshot(
+            status=ApplicationStatus.CLOSED,
+            version=1,
+            failure=None,
+            startup_trace=(),
+        )
+        failed_snapshot = ApplicationStateSnapshot(
+            status=ApplicationStatus.FAILED,
+            version=2,
+            failure=StartupFailure(
+                stage=StartupStage.APPLICATION,
+                code=StartupFailureCode.APPLICATION_CLOSED,
+                message="safe typed close fixture",
+            ),
+            startup_trace=(),
+        )
+        shutting_down_snapshot = ApplicationStateSnapshot(
+            status=ApplicationStatus.SHUTTING_DOWN,
+            version=2,
+            failure=None,
+            startup_trace=(),
+        )
+        cases = (
+            (
+                "stable",
+                (False, False),
+                (False, False),
+                ((), ()),
+                False,
+                False,
+                "VERIFIED",
+                None,
+                None,
+                closed_snapshot,
+            ),
+            (
+                "open-orders-drift",
+                (False, True),
+                (False, False),
+                ((), ()),
+                False,
+                False,
+                "INCOMPLETE",
+                "OPEN_ORDERS",
+                "FRESH_OPEN_ORDERS_NOT_EMPTY",
+                closed_snapshot,
+            ),
+            (
+                "open-order-lists-drift",
+                (False, False),
+                (False, True),
+                ((), ()),
+                False,
+                False,
+                "INCOMPLETE",
+                "OPEN_ORDER_LISTS",
+                "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY",
+                closed_snapshot,
+            ),
+            (
+                "recent-orders-drift",
+                (False, False),
+                (False, False),
+                ((), (drift_order,)),
+                False,
+                False,
+                "INCOMPLETE",
+                "RECENT_ORDERS",
+                "FRESH_RECENT_ORDERS_CHANGED",
+                closed_snapshot,
+            ),
+            (
+                "isolated-copy-mutation",
+                (False, False),
+                (False, False),
+                ((), ()),
+                True,
+                False,
+                "INCOMPLETE",
+                "DURABILITY",
+                "FRESH_DURABILITY_CHANGED",
+                closed_snapshot,
+            ),
+            (
+                "final-absent-sidecar-aba",
+                (False, False),
+                (False, False),
+                ((), ()),
+                False,
+                True,
+                "INCOMPLETE",
+                "DURABILITY",
+                "FRESH_DURABILITY_CHANGED",
+                closed_snapshot,
+            ),
+            (
+                "close-failed",
+                (False, False),
+                (False, False),
+                ((), ()),
+                False,
+                False,
+                "INCOMPLETE",
+                "CLEANUP",
+                "FRESH_RUNTIME_CLOSE_FAILED",
+                failed_snapshot,
+            ),
+            (
+                "close-shutting-down",
+                (False, False),
+                (False, False),
+                ((), ()),
+                False,
+                False,
+                "INCOMPLETE",
+                "CLEANUP",
+                "FRESH_RUNTIME_CLOSE_FAILED",
+                shutting_down_snapshot,
+            ),
+            (
+                "close-non-exact",
+                (False, False),
+                (False, False),
+                ((), ()),
+                False,
+                False,
+                "INCOMPLETE",
+                "CLEANUP",
+                "FRESH_RUNTIME_CLOSE_FAILED",
+                SimpleNamespace(status=ApplicationStatus.CLOSED),
+            ),
+            (
+                "close-exception",
+                (False, False),
+                (False, False),
+                ((), ()),
+                False,
+                False,
+                "INCOMPLETE",
+                "CLEANUP",
+                "FRESH_RUNTIME_CLOSE_FAILED",
+                RuntimeError("raw close detail"),
+            ),
+        )
+        for (
+            case_name,
+            open_order_states,
+            open_order_list_states,
+            recent_order_states,
+            mutate_isolated_copy,
+            mutate_final_absent_sidecar,
+            expected_status,
+            expected_stage,
+            expected_reason,
+            close_outcome,
+        ) in cases:
+            with self.subTest(case_name=case_name), TemporaryDirectory() as root:
+                source_history_path = Path(root) / "trades.jsonl"
+                source_leaves = {
+                    source_history_path: b'{"history":"source"}\n',
+                    source_history_path.with_name(
+                        f"{source_history_path.name}.pending-orders.jsonl"
+                    ): b'{"pending":"source"}\n',
+                    source_history_path.with_name(
+                        f"{source_history_path.name}.manual-kill-control.jsonl"
+                    ): b'{"manual_kill":"source"}\n',
+                }
+                if mutate_final_absent_sidecar:
+                    source_leaves.pop(
+                        source_history_path.with_name(
+                            f"{source_history_path.name}.manual-kill-control.jsonl"
+                        )
+                    )  # Final fingerprint 중 create→delete할 leaf는 initial snapshot에서 absent다.
+                for source_path, source_bytes in source_leaves.items():
+                    source_path.write_bytes(source_bytes)
+                    os.chmod(source_path, 0o600)
+                source_bytes_before = {
+                    source_path: source_path.read_bytes()
+                    for source_path in source_leaves
+                }
+
+                gateway = Mock()
+                gateway.fetch_account_relevant_filters.return_value = (
+                    SimpleNamespace(symbol="ETHUSDT")
+                )
+                gateway.fetch_symbol_trading_rules.return_value = SimpleNamespace(
+                    symbol="ETHUSDT",
+                    base_asset_precision=8,
+                    lot_size=SimpleNamespace(
+                        minimum_quantity=Decimal("0.001"),
+                        step_size=Decimal("0.001"),
+                    ),
+                    market_lot_size=SimpleNamespace(
+                        minimum_quantity=Decimal("0.001"),
+                        step_size=Decimal("0.001"),
+                    ),
+                )
+                gateway.fetch_reference_price.return_value = SimpleNamespace(
+                    symbol="ETHUSDT",
+                    price=Decimal("2500"),
+                )
+                gateway.has_any_exchange_open_orders.side_effect = (
+                    open_order_states
+                )
+                gateway.list_all_open_order_results.side_effect = ((), ())
+                gateway.has_any_exchange_open_order_lists.side_effect = (
+                    open_order_list_states
+                )
+                gateway.list_all_recent_order_results.side_effect = (
+                    recent_order_states
+                )
+                runtime = SimpleNamespace(
+                    api_gateway=gateway,
+                    web_socket_gateway=SimpleNamespace(
+                        account_ready=True,
+                        kline_live_ready=True,
+                    ),
+                    trading_controller=SimpleNamespace(
+                        position=SimpleNamespace(quantity=Decimal("0")),
+                        reconciliation_required=False,
+                    ),
+                    trade_history_controller=SimpleNamespace(
+                        get_pending_orders=Mock(return_value=())
+                    ),
+                    trade_history=SimpleNamespace(trades=()),
+                )
+                harness = object.__new__(
+                    BinanceTestnetPhaseThirteenPublicMarketCase2Tests
+                )
+                harness.history_path = source_history_path
+                harness.configuration = SimpleNamespace()
+                harness.baseline_recent_exchange_order_ids = frozenset()
+                harness.baseline_trades = ()
+                harness.evidence_clock = lambda: datetime(
+                    2026,
+                    9,
+                    1,
+                    tzinfo=timezone.utc,
+                )
+                isolated_paths: list[Path] = []
+
+                def create_runtime_from_snapshot(
+                    *observers: object,
+                    history_path: Path,
+                    environment: Mapping[str, object],
+                    clock: Callable[[], datetime],
+                ) -> object:
+                    """
+                    함수 이름: create_runtime_from_snapshot()
+                    기능: runtime factory에 source가 아닌 owner-only isolated history가 전달되었는지 고정한다.
+                    인자: observers -> fresh transport observer tuple
+                        history_path -> harness가 선택한 durability copy path
+                        environment -> read-only Testnet environment mapping
+                        clock -> run-scoped evidence clock
+                    반환값: local fake ApplicationRuntime
+                    작성 날짜: 2026/08/31
+                    """
+                    if (
+                        not observers
+                        or not isinstance(environment, Mapping)
+                        or clock is not harness.evidence_clock
+                    ):
+                        raise AssertionError("fresh runtime inputs are incomplete")
+                    if history_path == source_history_path:
+                        raise AssertionError("fresh runtime received source history")
+                    if history_path.stat().st_mode & 0o777 != 0o600:
+                        raise AssertionError("fresh history copy is not owner-only")
+                    isolated_paths.append(history_path)
+                    return runtime
+
+                def start_runtime_from_snapshot(
+                    selected_runtime: object,
+                ) -> object:
+                    """
+                    함수 이름: start_runtime_from_snapshot()
+                    기능: 선택 case에서 isolated manual-kill copy만 변경한 뒤 READY를 반환한다.
+                    인자: selected_runtime -> factory가 반환한 local fake runtime
+                    반환값: READY status object
+                    작성 날짜: 2026/08/31
+                    """
+                    if selected_runtime is not runtime or not isolated_paths:
+                        raise AssertionError("fresh runtime identity is invalid")
+                    if mutate_isolated_copy:
+                        isolated_manual_path = isolated_paths[0].with_name(
+                            f"{isolated_paths[0].name}.manual-kill-control.jsonl"
+                        )
+                        isolated_manual_path.write_bytes(
+                            b'{"manual_kill":"changed-copy"}\n'
+                        )
+                        os.chmod(isolated_manual_path, 0o600)
+                    return SimpleNamespace(status=ApplicationStatus.READY)
+
+                def close_runtime_from_snapshot(
+                    selected_runtime: object,
+                ) -> object:
+                    """
+                    함수 이름: close_runtime_from_snapshot()
+                    기능: exact CLOSED, non-CLOSED, type drift와 close 예외을 결정적으로 반환한다.
+                    인자: selected_runtime -> 회수할 fresh fake runtime
+                    반환값: case가 지정한 close publication 또는 예외
+                    작성 날짜: 2026/08/31
+                    """
+                    if selected_runtime is not runtime:
+                        raise AssertionError("fresh close runtime changed")
+                    if isinstance(close_outcome, Exception):
+                        raise close_outcome
+                    return close_outcome
+
+                evidence_errors: list[str] = []
+                real_capture_durability_fingerprint = (
+                    _capture_failure_durability_fingerprint
+                )
+                fingerprint_call_count = 0
+
+                def capture_with_final_absent_sidecar_aba(
+                    selected_history_path: Path,
+                ) -> tuple[_FailureDurabilityFileFingerprint, ...]:
+                    """
+                    함수 이름: capture_with_final_absent_sidecar_aba()
+                    기능: final source fingerprint 직전에 absent sidecar create·delete ABA를 삽입한다.
+                    인자: selected_history_path -> fingerprint할 history path
+                    반환값: 실제 helper가 만든 세 leaf fingerprint tuple
+                    작성 날짜: 2026/09/01
+                    """
+                    nonlocal fingerprint_call_count
+                    fingerprint_call_count += 1
+                    if (
+                        mutate_final_absent_sidecar
+                        and fingerprint_call_count == 4
+                    ):
+                        transient_sidecar = source_history_path.with_name(
+                            f"{source_history_path.name}.manual-kill-control.jsonl"
+                        )
+                        transient_sidecar.write_bytes(b"transient-final-aba\n")
+                        os.chmod(transient_sidecar, 0o600)
+                        transient_sidecar.unlink()
+
+                    return real_capture_durability_fingerprint(
+                        selected_history_path
+                    )  # Leaf tuple은 initial absent 상태로 복원되지만 parent ctime은 복원되지 않는다.
+
+                with patch(
+                    f"{__name__}.create_testnet_application_runtime",
+                    side_effect=create_runtime_from_snapshot,
+                ), patch(
+                    f"{__name__}.start_application",
+                    side_effect=start_runtime_from_snapshot,
+                ), patch(
+                    f"{__name__}.close_application",
+                    side_effect=close_runtime_from_snapshot,
+                ) as close_runtime, patch(
+                    f"{__name__}._create_read_only_testnet_environment",
+                    return_value={},
+                ), patch(
+                    f"{__name__}.AccountRelevantFilters",
+                    SimpleNamespace,
+                ), patch(
+                    f"{__name__}.SymbolTradingRules",
+                    SimpleNamespace,
+                ), patch(
+                    f"{__name__}.ReferencePrice",
+                    SimpleNamespace,
+                ), patch(
+                    f"{__name__}.validate_account_relevant_filters",
+                ), patch(
+                    f"{__name__}.verify_exact_recent_order_baseline",
+                ) as verify_recent, patch(
+                    f"{__name__}._capture_failure_durability_fingerprint",
+                    side_effect=capture_with_final_absent_sidecar_aba,
+                ):
+                    verification = harness._capture_fresh_failure_verification(
+                        frozenset(),
+                        evidence_errors,
+                    )
+
+                self.assertEqual(expected_status, verification["status"])
+                self.assertEqual(expected_stage, verification["failure_stage"])
+                self.assertEqual(expected_reason, verification["typed_reason"])
+                self.assertEqual(
+                    [] if expected_reason is None else [expected_reason],
+                    evidence_errors,
+                )
+                self.assertEqual(
+                    2
+                    if case_name
+                    in {
+                        "stable",
+                        "isolated-copy-mutation",
+                        "final-absent-sidecar-aba",
+                        "close-failed",
+                        "close-shutting-down",
+                        "close-non-exact",
+                        "close-exception",
+                    }
+                    else 1,
+                    verify_recent.call_count,
+                )
+                self.assertEqual(1, len(isolated_paths))
+                self.assertNotEqual(source_history_path, isolated_paths[0])
+                close_runtime.assert_called_once_with(runtime)
+                for source_path, source_bytes in source_bytes_before.items():
+                    self.assertEqual(
+                        source_bytes,
+                        source_path.read_bytes(),
+                    )  # Startup fault도 authoritative source의 3개 leaf를 한 byte도 변경하지 못한다.
 
     def test_actual_failure_finalizer_recovers_then_blocks_and_preserves_error(
         self,
     ) -> None:
         """
         함수 이름: test_actual_failure_finalizer_recovers_then_blocks_and_preserves_error()
-        기능: recovery 판정 뒤 제출·scheduler를 닫고 원 TimeoutError에 sealed path만 추가하는지 검증한다.
+        기능: terminal recovery와 wall-clock 역행에도 제출 차단·FAILED artifact를 보존하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/31
+        작성 날짜: 2026/09/01
         """
         observed_at = _utc_now()
-        submission_attempt = Phase13OrderSubmissionAttempt(
+        monotonic_values = iter((100, 100, 101))
+        wall_clock = Mock(return_value=observed_at)
+        evidence_clock = _RunScopedEvidenceClock(
+            wall_clock=wall_clock,
+            monotonic_clock=lambda: next(monotonic_values),
+        )
+        started_at = evidence_clock()
+        buy_attempt = Phase13OrderSubmissionAttempt(
             symbol="ETHUSDT",
             side=OrderSide.BUY,
             order_type="MARKET",
-            intent_id="intent-1",
+            intent_id="intent-buy-1",
             submission_attempt=0,
             attempted_at=observed_at,
-            client_order_id="bat-p13-client-1",
+            client_order_id="bat-p13-client-buy-1",
+        )
+        sell_attempt = Phase13OrderSubmissionAttempt(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            order_type="MARKET",
+            intent_id="intent-sell-1",
+            submission_attempt=0,
+            attempted_at=observed_at,
+            client_order_id="bat-p13-client-sell-1",
         )
         guard_snapshot = Phase13OrderSubmissionGuardSnapshot(
             mutation_started=True,
             submissions_blocked=True,
-            attempts=(submission_attempt,),
+            attempts=(buy_attempt, sell_attempt),
         )
         gateway = Mock()
         gateway.get_phase13_order_submission_guard_snapshot.return_value = (
             guard_snapshot
         )
         controller = Mock()
-        controller.status = TradingSessionStatus.RECONCILIATION_REQUIRED
+        controller.status = TradingSessionStatus.TERMINATED
+        controller.reconciliation_required = False
+        controller.reconciliation_cause_snapshot = ReconciliationCauseSnapshot(
+            reconciliation_required=False,
+            status=ReconciliationCauseStatus.EXACT,
+            category=(
+                ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+            ),
+        )
+
+        def reopen_terminal_reconciliation() -> None:
+            """
+            함수 이름: reopen_terminal_reconciliation()
+            기능: 과거 무조건 mark 구현이 terminal recovery를 다시 blocker로 바꾸는 production 부작용을 모사한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/08/31
+            """
+            controller.reconciliation_required = True
+
+        controller.mark_event_runtime_failed.side_effect = (
+            reopen_terminal_reconciliation
+        )
+        controller.seal_event_runtime_failure_gate.return_value = False
         runtime = SimpleNamespace(
             api_gateway=gateway,
             trading_controller=controller,
@@ -4023,73 +9343,327 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 api_secret="unit-testnet-secret-canary-finalizer-5f498c2a",
             )
             harness.run_id = "00000000-0000-4000-8000-000000000031"
-            harness.started_at = observed_at
+            harness.started_at = started_at
+            harness.evidence_clock = evidence_clock
             harness.artifact_directory = Path(temporary_directory)
             harness.failure_handling_started = False
             harness.mutation_started = False
             harness.failure_artifact_path = None
             harness._collect_runtime_observations = Mock()
+
+            def capture_successful_recovery(
+                selected_guard: Phase13OrderSubmissionGuardSnapshot,
+                evidence_errors: list[str],
+            ) -> dict[str, object]:
+                """
+                함수 이름: capture_successful_recovery()
+                기능: exact BUY·STOP SELL terminal recovery를 finalizer fixture에 고정한다.
+                인자: selected_guard -> finalizer가 전달한 frozen guard
+                    evidence_errors -> 비어 있어야 하는 error 목록
+                반환값: successful recovery mapping
+                작성 날짜: 2026/08/31
+                """
+                if selected_guard is not guard_snapshot or evidence_errors:
+                    raise AssertionError("failure guard identity changed")
+                return {
+                    "attempted": True,
+                    "outcome": "SUCCESS",
+                    "typed_reason": None,
+                }
+
+            def capture_terminal_runtime(
+                evidence_errors: list[str],
+            ) -> dict[str, object]:
+                """
+                함수 이름: capture_terminal_runtime()
+                기능: mark 부작용이 있으면 즉시 드러나는 first-runtime terminal truth를 읽는다.
+                인자: evidence_errors -> 비어 있어야 하는 error 목록
+                반환값: completed recovery runtime state mapping
+                작성 날짜: 2026/08/31
+                """
+                if evidence_errors:
+                    raise AssertionError("terminal runtime gained an error")
+                return {
+                    "application_status": "READY",
+                    "trading_status": controller.status.name,
+                    "reconciliation_required": (
+                        controller.reconciliation_required
+                    ),
+                    "position_quantity": "0",
+                    "pending_order_count": 0,
+                    "durable_trade_count": 2,
+                }
+
+            def capture_verified_fresh(
+                run_client_order_ids: frozenset[str],
+                evidence_errors: list[str],
+            ) -> dict[str, object]:
+                """
+                함수 이름: capture_verified_fresh()
+                기능: recovered BUY·SELL을 internal ID로만 맞춘 fresh zero-exposure truth를 반환한다.
+                인자: run_client_order_ids -> fresh matching에만 쓰는 internal ID 집합
+                    evidence_errors -> 비어 있어야 하는 error 목록
+                반환값: VERIFIED fresh verification mapping
+                작성 날짜: 2026/08/31
+                """
+                if run_client_order_ids != frozenset(
+                    {
+                        "bat-p13-client-buy-1",
+                        "bat-p13-client-sell-1",
+                    }
+                ) or evidence_errors:
+                    raise AssertionError("fresh internal client IDs changed")
+                return {
+                    "status": "VERIFIED",
+                    "typed_reason": None,
+                    "failure_stage": None,
+                    "verified_at": _datetime_to_wire(observed_at),
+                    "position_quantity": "0",
+                    "pending_order_count": 0,
+                    "reconciliation_required": False,
+                    "matching_open_order_count": 0,
+                    "account_open_orders_empty": True,
+                    "account_open_order_lists_empty": True,
+                    "run_exchange_order_count": 2,
+                    "durable_trade_count": 2,
+                }
+
             harness._attempt_known_safe_failure_recovery = Mock(
-                return_value={
+                side_effect=capture_successful_recovery
+            )
+            harness._capture_failure_runtime_state = Mock(
+                side_effect=capture_terminal_runtime
+            )
+            harness._capture_fresh_failure_verification = Mock(
+                side_effect=capture_verified_fresh
+            )
+
+            # close/fresh network 경계는 local typed fakes로 바꾸고 terminal truth 보존 순서만 검증한다.
+            with patch(
+                f"{__name__}.close_application",
+                return_value=SimpleNamespace(status=ApplicationStatus.CLOSED),
+            ), patch(
+                f"{__name__}._utc_now",
+                return_value=observed_at - timedelta(seconds=20),
+            ):
+                harness._record_actual_failure_evidence(original_error)
+
+            gateway.block_phase13_order_submissions.assert_called_once_with()
+            controller.seal_event_runtime_failure_gate.assert_called_once_with()
+            controller.mark_event_runtime_failed.assert_not_called()
+            self.assertEqual(
+                1,
+                harness._attempt_known_safe_failure_recovery.call_count,
+            )
+            self.assertEqual(
+                1,
+                harness._capture_fresh_failure_verification.call_count,
+            )
+            self.assertIsInstance(original_error, TimeoutError)
+            self.assertTrue(harness.failure_artifact_path.is_file())
+            artifact_bytes = harness.failure_artifact_path.read_bytes()
+            failure_document = json.loads(
+                artifact_bytes,
+                object_pairs_hook=_strict_json_object,
+                parse_constant=_reject_json_constant,
+            )
+            self.assertLessEqual(
+                failure_document["timestamps"]["started_at"],
+                failure_document["timestamps"]["completed_at"],
+            )
+            wall_clock.assert_called_once_with()
+            self.assertNotIn(b"secret-bearing detail", artifact_bytes)
+            self.assertNotIn(b"intent-buy-1", artifact_bytes)
+            self.assertNotIn(b"intent-sell-1", artifact_bytes)
+            self.assertNotIn(b"bat-p13-client-buy-1", artifact_bytes)
+            self.assertNotIn(b"bat-p13-client-sell-1", artifact_bytes)
+            self.assertIn(b'"outcome":"FAILED"', artifact_bytes)
+            self.assertIn(
+                b'"recovery":{"attempted":true,"outcome":"SUCCESS",'
+                b'"typed_reason":null}',
+                artifact_bytes,
+            )
+            self.assertTrue(
+                any("sealed FAILED evidence" in note for note in original_error.__notes__)
+            )
+
+    def test_failure_finalizer_seals_cause_mismatch_before_its_own_mutation(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_failure_finalizer_seals_cause_mismatch_before_its_own_mutation()
+        기능: exception frozen cause와 finalizer 진입 snapshot의 차이를 mark 전 CONFLICT/null로 고정한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        observed_at = _utc_now()
+        guard_snapshot = Phase13OrderSubmissionGuardSnapshot(
+            mutation_started=False,
+            submissions_blocked=True,
+            attempts=(),
+        )
+        frozen_snapshot = ReconciliationCauseSnapshot(
+            reconciliation_required=True,
+            status=ReconciliationCauseStatus.EXACT,
+            category=(
+                ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+            ),
+        )
+        current_snapshot = ReconciliationCauseSnapshot(
+            reconciliation_required=True,
+            status=ReconciliationCauseStatus.EXACT,
+            category=ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
+        )
+        gateway = Mock()
+        gateway.get_phase13_order_submission_guard_snapshot.return_value = (
+            guard_snapshot
+        )
+        controller = Mock()
+        controller.status = TradingSessionStatus.RUNNING
+        controller.reconciliation_cause_snapshot = current_snapshot
+
+        # mark side effect와 뒤 snapshot은 frozen과 같게 만들어 대조 시점이 뒤면 테스트가 반드시 실패한다.
+        def mutate_active_scheduler_gate() -> None:
+            """
+            함수 이름: mutate_active_scheduler_gate()
+            기능: active mark가 gate를 먼저 닫고 Context publication에서 실패하는 production 순서를 모사한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/08/31
+            """
+            controller.status = TradingSessionStatus.RECONCILIATION_REQUIRED
+            controller.reconciliation_cause_snapshot = frozen_snapshot
+            raise RuntimeError("controlled-finalizer-publication-failure")
+
+        controller.seal_event_runtime_failure_gate.side_effect = (
+            mutate_active_scheduler_gate
+        )
+        runtime = SimpleNamespace(
+            api_gateway=gateway,
+            trading_controller=controller,
+        )
+        original_error = _PhaseThirteenReconciliationFailure(frozen_snapshot)
+
+        with TemporaryDirectory() as temporary_directory:
+            harness = object.__new__(
+                BinanceTestnetPhaseThirteenPublicMarketCase2Tests
+            )
+            harness.runtime = runtime
+            harness.configuration = SimpleNamespace(
+                api_key="cause-toctou-key-canary-31c8dcb0",
+                api_secret="cause-toctou-secret-canary-5f498c2a",
+            )
+            harness.run_id = "00000000-0000-4000-8000-000000000032"
+            harness.started_at = observed_at
+            harness.evidence_clock = lambda: observed_at
+            harness.artifact_directory = Path(temporary_directory)
+            harness.failure_handling_started = False
+            harness.mutation_started = False
+            harness.failure_artifact_path = None
+            harness._collect_runtime_observations = Mock()
+
+            def capture_conflict_recovery(
+                selected_guard: Phase13OrderSubmissionGuardSnapshot,
+                evidence_errors: list[str],
+            ) -> dict[str, object]:
+                """
+                함수 이름: capture_conflict_recovery()
+                기능: cause TOCTOU fixture의 recovery reason과 error code를 exact 결속한다.
+                인자: selected_guard -> finalizer가 전달한 frozen guard
+                    evidence_errors -> producer가 갱신할 error 목록
+                반환값: ambiguous recovery mapping
+                작성 날짜: 2026/08/31
+                """
+                if selected_guard is not guard_snapshot:
+                    raise AssertionError("conflict guard identity changed")
+                evidence_errors.append("FAILURE_RECOVERY_STATE_AMBIGUOUS")
+                return {
                     "attempted": False,
                     "outcome": "SKIPPED",
                     "typed_reason": "FAILURE_RECOVERY_STATE_AMBIGUOUS",
                 }
-            )
-            harness._capture_failure_runtime_state = Mock(
-                return_value={
+
+            def capture_conflict_runtime(
+                evidence_errors: list[str],
+            ) -> dict[str, object]:
+                """
+                함수 이름: capture_conflict_runtime()
+                기능: cause TOCTOU fixture의 None position과 unavailable code를 결속한다.
+                인자: evidence_errors -> producer가 갱신할 error 목록
+                반환값: partial runtime state mapping
+                작성 날짜: 2026/08/31
+                """
+                evidence_errors.append("RUNTIME_POSITION_UNAVAILABLE")
+                return {
                     "application_status": "READY",
                     "trading_status": "RECONCILIATION_REQUIRED",
                     "reconciliation_required": True,
                     "position_quantity": None,
-                    "pending_order_count": 1,
+                    "pending_order_count": 0,
                     "durable_trade_count": 0,
                 }
+
+            def capture_conflict_fresh(
+                _run_client_order_ids: frozenset[str],
+                evidence_errors: list[str],
+            ) -> dict[str, object]:
+                """
+                함수 이름: capture_conflict_fresh()
+                기능: cause TOCTOU fixture의 fresh primary reason과 error code를 결속한다.
+                인자: _run_client_order_ids -> 빈 internal ID 집합
+                    evidence_errors -> producer가 갱신할 error 목록
+                반환값: incomplete fresh verification mapping
+                작성 날짜: 2026/08/31
+                """
+                evidence_errors.append("FRESH_VERIFICATION_FAILED")
+                fresh_mapping = _create_incomplete_fresh_verification()
+                fresh_mapping["failure_stage"] = "STARTUP_APPLICATION"
+                return fresh_mapping
+
+            harness._attempt_known_safe_failure_recovery = Mock(
+                side_effect=capture_conflict_recovery
+            )
+            harness._capture_failure_runtime_state = Mock(
+                side_effect=capture_conflict_runtime
             )
             harness._capture_fresh_failure_verification = Mock(
-                return_value={
-                    "status": "INCOMPLETE",
-                    "typed_reason": "FRESH_VERIFICATION_INCOMPLETE",
-                    "verified_at": None,
-                    "position_quantity": None,
-                    "pending_order_count": None,
-                    "reconciliation_required": None,
-                    "matching_open_order_count": None,
-                    "run_exchange_order_count": None,
-                    "durable_trade_count": None,
-                }
+                side_effect=capture_conflict_fresh
             )
 
-            # close/fresh network 경계는 local typed fakes로 바꾸고 finalizer의 ordering state만 검증한다.
             with patch(
                 f"{__name__}.close_application",
                 return_value=SimpleNamespace(status=ApplicationStatus.CLOSED),
             ):
                 harness._record_actual_failure_evidence(original_error)
 
-            gateway.block_phase13_order_submissions.assert_called_once_with()
-            controller.mark_event_runtime_failed.assert_called_once_with()
-            harness._attempt_known_safe_failure_recovery.assert_called_once_with(
-                guard_snapshot,
-                [],
+            failure_document = json.loads(
+                harness.failure_artifact_path.read_bytes(),
+                object_pairs_hook=_strict_json_object,
+                parse_constant=_reject_json_constant,
             )
-            harness._capture_fresh_failure_verification.assert_called_once_with(
-                frozenset({"bat-p13-client-1"}),
-                [],
+            self.assertEqual(
+                {
+                    "reconciliation_required": True,
+                    "status": ReconciliationCauseStatus.CONFLICT.value,
+                    "category": None,
+                },
+                failure_document["first_cause"],
             )
-            self.assertIsInstance(original_error, TimeoutError)
-            self.assertTrue(harness.failure_artifact_path.is_file())
-            artifact_bytes = harness.failure_artifact_path.read_bytes()
-            self.assertNotIn(b"secret-bearing detail", artifact_bytes)
-            self.assertIn(b'"outcome":"FAILED"', artifact_bytes)
             self.assertIn(
-                b'"recovery":{"attempted":false,"outcome":"SKIPPED",'
-                b'"typed_reason":"FAILURE_RECOVERY_STATE_AMBIGUOUS"}',
-                artifact_bytes,
+                "RECONCILIATION_CAUSE_CONFLICT",
+                failure_document["evidence_errors"],
             )
-            self.assertTrue(
-                any("sealed FAILED evidence" in note for note in original_error.__notes__)
+            self.assertIn(
+                "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED",
+                failure_document["evidence_errors"],
             )
+            controller.seal_event_runtime_failure_gate.assert_called_once_with()
+            controller.mark_event_runtime_failed.assert_not_called()
+            self.assertIs(
+                frozen_snapshot,
+                controller.reconciliation_cause_snapshot,
+            )  # Mark 후 snapshot은 exact로 돌아왔어도 sealed first cause를 역으로 바꾸지 못한다.
 
     def test_failure_recovery_submits_one_stop_only_for_exact_durable_buy(
         self,
@@ -4352,7 +9926,10 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             },
             recovery,
         )
-        self.assertEqual([], evidence_errors)
+        self.assertEqual(
+            ["FAILURE_RECOVERY_STATE_AMBIGUOUS"],
+            evidence_errors,
+        )  # Skip reason은 recovery mapping과 evidence_errors에 동일하게 결속된다.
         stop_trading.assert_not_called()
         harness._wait_for_effective_free_eth.assert_not_called()
         harness._wait_for_session_termination.assert_not_called()
@@ -4430,7 +10007,8 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             self.process_lease_descriptor,
         )  # Cleanup은 tearDown 뒤 실행되어 recovery와 fresh verification 전체 동안 lease를 유지한다.
         self.run_id = str(uuid4())
-        self.started_at = _utc_now()
+        self.evidence_clock = _RunScopedEvidenceClock()
+        self.started_at = self.evidence_clock()
         run_timestamp = self.started_at.strftime("%Y%m%dT%H%M%S%fZ")
         self.artifact_directory = _ARTIFACT_ROOT / (
             f"phase13-public-case2-{run_timestamp}-{self.run_id.replace('-', '')}"
@@ -4451,7 +10029,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             self.configuration,
             self.maximum_notional,
         )
-        self.event_stream = BackendEventStream()
+        self.event_stream = BackendEventStream(clock=self.evidence_clock)
         self.runtime = create_testnet_application_runtime(
             create_account_update_observer(self.event_stream),
             create_trade_history_update_observer(self.event_stream),
@@ -4459,6 +10037,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             history_path=self.history_path,
             environment=self.testnet_environment,
             risk_policy_state=_create_actual_risk_policy(self.maximum_notional),
+            clock=self.evidence_clock,
         )
 
         # 모든 buffer는 normalized domain/DTO 값만 보존하며 environment나 client 객체를 절대 추가하지 않는다.
@@ -4542,30 +10121,35 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             new_event_dtos,
         )
 
-        # Snapshot version당 한 번만 source Kline을 저장하고 bounded trace가 오래된 event를 무한히 보존하지 않게 한다.
-        current_market_version = self.runtime.market_snapshot.version
-        if current_market_version > self.last_market_version:
-            market_event = _create_observed_market_event(
-                self.runtime,
-                sequence=len(self.public_market_events) + 1,
-            )
-            if market_event is not None:
-                self.public_market_events.append(market_event)
-                if len(self.public_market_events) > _MAXIMUM_RECORDED_MARKET_EVENTS:
-                    self.public_market_events.pop(0)
-                    for sequence, retained_event in enumerate(
-                        self.public_market_events,
-                        start=1,
-                    ):
-                        retained_event["sequence"] = sequence
-            self.last_market_version = current_market_version
+        # 불변 state에서 version과 source event를 같이 읽어 별도 current-version 조회와의 혼합을 막는다.
+        captured_market_version, market_events = _create_observed_market_event(
+            self.runtime,
+            sequence=len(self.public_market_events) + 1,
+            after_market_version=self.last_market_version,
+        )
+        if captured_market_version > self.last_market_version:
+            if not market_events:
+                raise AssertionError(
+                    "market cursor advanced without a production boundary"
+                )
+            self.public_market_events.extend(market_events)
+            if len(self.public_market_events) > _MAXIMUM_RECORDED_MARKET_EVENTS:
+                self.public_market_events = self.public_market_events[
+                    -_MAXIMUM_RECORDED_MARKET_EVENTS:
+                ]
+            for sequence, retained_event in enumerate(
+                self.public_market_events,
+                start=1,
+            ):
+                retained_event["sequence"] = sequence
+            self.last_market_version = captured_market_version
 
     def _read_phase13_submission_guard(
         self,
     ) -> tuple[Phase13OrderSubmissionGuardSnapshot, list[dict[str, object]]]:
         """
         함수 이름: _read_phase13_submission_guard()
-        기능: permission REST 경계의 frozen logical submit snapshot을 exact secret-free evidence로 정규화한다.
+        기능: permission REST 경계의 frozen snapshot과 ID 없는 current v2 attempt evidence를 분리한다.
         인자: 없음
         반환값: 원 frozen snapshot과 contiguous normalized attempt 목록 tuple
         작성 날짜: 2026/08/31
@@ -4576,17 +10160,15 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         if type(snapshot) is not Phase13OrderSubmissionGuardSnapshot:
             raise TypeError("Phase 13 gateway returned an invalid guard snapshot")
 
-        # Raw request parameter 없이 permission layer가 승인한 logical identity와 시각만 복제한다.
+        # Recovery는 frozen snapshot의 ID를 내부에서만 쓰고 artifact mapping은 identity field를 절대 복사하지 않는다.
         normalized_attempts = [
             {
                 "sequence": sequence,
                 "symbol": attempt.symbol,
                 "side": attempt.side.value,
                 "order_type": attempt.order_type,
-                "intent_id": attempt.intent_id,
                 "submission_attempt": attempt.submission_attempt,
                 "attempted_at": _datetime_to_wire(attempt.attempted_at),
-                "client_order_id": attempt.client_order_id,
             }
             for sequence, attempt in enumerate(snapshot.attempts, start=1)
         ]
@@ -4644,10 +10226,13 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                         "public Case 2 must expose one BUY before any autonomous SELL"
                     )
                 return buy_trades[0]
-            if self.runtime.trading_controller.reconciliation_required:
-                raise AssertionError(
-                    "public Case 2 entered reconciliation before a durable BUY"
-                )
+            cause_snapshot = (
+                self.runtime.trading_controller.reconciliation_cause_snapshot
+            )
+            if cause_snapshot.reconciliation_required:
+                raise _PhaseThirteenReconciliationFailure(
+                    cause_snapshot
+                )  # 한 lock snapshot을 예외에 고정해 finalizer 자체 fail-close가 원인을 바꾸지 못한다.
 
         return None  # NO_SIGNAL은 private trigger로 우회하지 않고 실제 주문 0을 별도 증거화한다.
 
@@ -4741,13 +10326,14 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         read_only_environment = _create_read_only_testnet_environment(
             self.configuration
         )
-        fresh_event_stream = BackendEventStream()
+        fresh_event_stream = BackendEventStream(clock=self.evidence_clock)
         fresh_runtime = create_testnet_application_runtime(
             create_account_update_observer(fresh_event_stream),
             create_trade_history_update_observer(fresh_event_stream),
             create_trading_session_update_observer(fresh_event_stream),
             history_path=self.history_path,
             environment=read_only_environment,
+            clock=self.evidence_clock,
         )
         try:
             ready_state = start_application(fresh_runtime)
@@ -4768,13 +10354,17 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             )
 
             # Fresh read-only restart에서는 application·manual client ID 전체 open order가 0이어야 한다.
-            open_results = fresh_runtime.api_gateway.list_all_open_order_results(
-                "ETHUSDT"
+            open_results = tuple(
+                fresh_runtime.api_gateway.list_all_open_order_results(
+                    "ETHUSDT"
+                )
             )
             require_empty_all_client_open_orders(open_results)
-            recent_results = fresh_runtime.api_gateway.list_all_recent_order_results(
-                "ETHUSDT",
-                limit=1000,
+            recent_results = tuple(
+                fresh_runtime.api_gateway.list_all_recent_order_results(
+                    "ETHUSDT",
+                    limit=1000,
+                )
             )
             if self.baseline_recent_exchange_order_ids is None:
                 raise AssertionError("exchange recent-order baseline was not captured")
@@ -4823,7 +10413,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 len({trade.order_id for trade in fresh_trades}),
             )
 
-            verified_at = _utc_now()
+            verified_at = self.evidence_clock()
             return (
                 fresh_trades,
                 fresh_runtime.performance,
@@ -4859,13 +10449,16 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         # 각 owner를 독립 읽어 한 실패가 다른 이미 관찰 가능한 truth까지 지우지 않게 한다.
         try:
             reconciliation_required = controller.reconciliation_required
+            if type(reconciliation_required) is not bool:
+                raise TypeError("runtime reconciliation must be bool")
         except Exception:
             evidence_errors.append("RUNTIME_RECONCILIATION_UNAVAILABLE")
+            reconciliation_required = None
         try:
             position = controller.position
-            position_quantity = (
-                None if position is None else _decimal_to_wire(position.quantity)
-            )
+            if position is None:
+                raise RuntimeError("runtime position is unavailable")
+            position_quantity = _decimal_to_wire(position.quantity)
         except Exception:
             evidence_errors.append("RUNTIME_POSITION_UNAVAILABLE")
         try:
@@ -4898,41 +10491,108 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
     ) -> dict[str, object]:
         """
         함수 이름: _capture_fresh_failure_verification()
-        기능: 주문 권한 없는 별도 runtime에서 가능한 final truth를 읽고 실패하면 null로 정직하게 남긴다.
+        기능: 주문 권한 없는 별도 runtime의 단계별 final truth와 durability 불변을 exact stage로 기록한다.
         인자: run_client_order_ids -> permission guard가 관찰한 이번 run client identity 집합
             evidence_errors -> fresh startup/cleanup 오류의 typed code를 추가할 mutable 목록
         반환값: VERIFIED 또는 INCOMPLETE exact fresh_verification mapping
         작성 날짜: 2026/08/31
         """
-        incomplete_verification: dict[str, object] = {
-            "status": "INCOMPLETE",
-            "typed_reason": "FRESH_VERIFICATION_INCOMPLETE",
-            "verified_at": None,
-            "position_quantity": None,
-            "pending_order_count": None,
-            "reconciliation_required": None,
-            "matching_open_order_count": None,
-            "run_exchange_order_count": None,
-            "durable_trade_count": None,
-        }
-        fresh_event_stream = BackendEventStream()
+        fresh_verification = _create_incomplete_fresh_verification()
+        active_stage = "DURABILITY"
+        active_reason = "FRESH_DURABILITY_CHANGED"
+        source_durability_before: tuple[
+            _FailureDurabilityFileFingerprint, ...
+        ] | None = None
+        copy_durability_before: tuple[
+            _FailureDurabilityFileFingerprint, ...
+        ] | None = None
+        snapshot_handle: _FailureDurabilitySnapshotHandle | None = None
+        isolated_history_path: Path | None = None
+        snapshot_directory_owner: TemporaryDirectory | None = None
+        fresh_event_stream: BackendEventStream | None = None
         fresh_runtime: ApplicationRuntime | None = None
         try:
+            snapshot_directory_owner = TemporaryDirectory(
+                prefix="phase13-failure-fresh-"
+            )
+            source_durability_before = _capture_failure_durability_fingerprint(
+                self.history_path
+            )
+            snapshot_handle = _copy_failure_durability_snapshot(
+                self.history_path,
+                Path(snapshot_directory_owner.name),
+            )
+            isolated_history_path = snapshot_handle.history_path
+            snapshot_handle.verify()
+            source_durability_after_copy = (
+                _capture_failure_durability_fingerprint(self.history_path)
+            )
+            copy_durability_before = _capture_failure_durability_fingerprint(
+                isolated_history_path
+            )
+            if source_durability_after_copy != source_durability_before:
+                raise RuntimeError("durability source changed after copy")
+            _require_failure_durability_snapshot_equivalence(
+                source_durability_after_copy,
+                copy_durability_before,
+            )
+            active_stage = "RUNTIME_CREATION"
+            active_reason = "FRESH_VERIFICATION_FAILED"
+            fresh_event_stream = BackendEventStream(clock=self.evidence_clock)
+
             # Third flag와 cap을 제거한 별도 client만 사용해 failure evidence 수집이 mutation을 만들지 않게 한다.
             fresh_runtime = create_testnet_application_runtime(
                 create_account_update_observer(fresh_event_stream),
                 create_trade_history_update_observer(fresh_event_stream),
                 create_trading_session_update_observer(fresh_event_stream),
-                history_path=self.history_path,
+                history_path=isolated_history_path,
                 environment=_create_read_only_testnet_environment(
                     self.configuration
                 ),
+                clock=self.evidence_clock,
             )
+            active_stage = "STARTUP_APPLICATION"
             ready_state = start_application(fresh_runtime)
+            snapshot_handle.verify()  # Runtime path open 전후 directory ABA가 있으면 startup truth를 사용하지 않는다.
             if ready_state.status is not ApplicationStatus.READY:
-                evidence_errors.append("FRESH_RUNTIME_NOT_READY")
-                return incomplete_verification
+                active_reason = "FRESH_RUNTIME_NOT_READY"
+                raise RuntimeError("fresh runtime did not reach READY")
 
+            # READY 직후 두 stream의 현재 세대가 모두 caught-up인지 별도 단계로 다시 확인한다.
+            active_stage = "STREAM"
+            active_reason = "FRESH_STREAM_NOT_READY"
+            if (
+                fresh_runtime.web_socket_gateway.account_ready is not True
+                or fresh_runtime.web_socket_gateway.kline_live_ready is not True
+            ):
+                raise RuntimeError("fresh stream readiness is incomplete")
+
+            # Composite filter 입력은 raw payload 없이 exact DTO만 보존하고 empty-state 확인 뒤 평가한다.
+            active_stage = "FILTER"
+            active_reason = "FRESH_FILTER_REJECTED"
+            account_filters = (
+                fresh_runtime.api_gateway.fetch_account_relevant_filters(
+                    "ETHUSDT"
+                )
+            )
+            symbol_rules = fresh_runtime.api_gateway.fetch_symbol_trading_rules(
+                "ETHUSDT"
+            )
+            reference_price = fresh_runtime.api_gateway.fetch_reference_price(
+                "ETHUSDT"
+            )
+            if (
+                type(account_filters) is not AccountRelevantFilters
+                or type(symbol_rules) is not SymbolTradingRules
+                or type(reference_price) is not ReferencePrice
+                or account_filters.symbol != "ETHUSDT"
+                or symbol_rules.symbol != "ETHUSDT"
+                or reference_price.symbol != "ETHUSDT"
+            ):
+                raise TypeError("fresh filter DTO identity is invalid")
+
+            active_stage = "LOCAL_STATE"
+            active_reason = "FRESH_LOCAL_STATE_INCOMPLETE"
             position = fresh_runtime.trading_controller.position
             position_quantity = (
                 None if position is None else _decimal_to_wire(position.quantity)
@@ -4943,16 +10603,87 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             reconciliation_required = (
                 fresh_runtime.trading_controller.reconciliation_required
             )
-            open_results = fresh_runtime.api_gateway.list_all_open_order_results(
-                "ETHUSDT"
+            fresh_verification.update(
+                {
+                    "position_quantity": position_quantity,
+                    "pending_order_count": pending_order_count,
+                    "reconciliation_required": reconciliation_required,
+                }
+            )
+            if (
+                position_quantity is None
+                or pending_order_count != 0
+                or reconciliation_required is not False
+            ):
+                raise RuntimeError("fresh local state is incomplete")
+
+            # Account-wide openOrders와 symbol 전체 client 결과를 각각 empty로 확인한다.
+            active_stage = "OPEN_ORDERS"
+            active_reason = "FRESH_OPEN_ORDERS_NOT_EMPTY"
+            has_any_open_orders = (
+                fresh_runtime.api_gateway.has_any_exchange_open_orders()
+            )
+            if type(has_any_open_orders) is not bool:
+                raise TypeError("fresh account open-order state must be bool")
+            fresh_verification["account_open_orders_empty"] = (
+                not has_any_open_orders
+            )
+            open_results = tuple(
+                fresh_runtime.api_gateway.list_all_open_order_results(
+                    "ETHUSDT"
+                )
             )
             matching_open_order_count = sum(
                 result.client_order_id in run_client_order_ids
                 for result in open_results
             )
-            recent_results = fresh_runtime.api_gateway.list_all_recent_order_results(
-                "ETHUSDT",
-                limit=1000,
+            fresh_verification["matching_open_order_count"] = (
+                matching_open_order_count
+            )
+            if has_any_open_orders:
+                raise RuntimeError("fresh account has open orders")
+            require_empty_all_client_open_orders(open_results)
+
+            # Order-list child ID를 기록하지 않고 account-wide boolean만 exact empty로 축약한다.
+            active_stage = "OPEN_ORDER_LISTS"
+            active_reason = "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY"
+            has_any_open_order_lists = (
+                fresh_runtime.api_gateway.has_any_exchange_open_order_lists()
+            )
+            if type(has_any_open_order_lists) is not bool:
+                raise TypeError("fresh open-order-list state must be bool")
+            fresh_verification["account_open_order_lists_empty"] = (
+                not has_any_open_order_lists
+            )
+            if has_any_open_order_lists:
+                raise RuntimeError("fresh account has open order lists")
+
+            # 두 account-wide empty snapshot 뒤에만 candidate composite evaluator를 통과시킨다.
+            active_stage = "FILTER"
+            active_reason = "FRESH_FILTER_REJECTED"
+            minimum_candidate_quantity = max(
+                Decimal("1").scaleb(-symbol_rules.base_asset_precision),
+                symbol_rules.lot_size.minimum_quantity,
+                symbol_rules.market_lot_size.minimum_quantity,
+                symbol_rules.lot_size.step_size,
+                symbol_rules.market_lot_size.step_size,
+            )
+            validate_account_relevant_filters(
+                minimum_candidate_quantity,
+                reference_price.price,
+                symbol_rules,
+                account_filters,
+                side=OrderSide.BUY,
+                account_open_state_verified_empty=True,
+            )
+
+            active_stage = "RECENT_ORDERS"
+            active_reason = "FRESH_EXCHANGE_BASELINE_UNAVAILABLE"
+            recent_results = tuple(
+                fresh_runtime.api_gateway.list_all_recent_order_results(
+                    "ETHUSDT",
+                    limit=1000,
+                )
             )
             run_exchange_order_count: int | None = None
             if self.baseline_recent_exchange_order_ids is not None and all(
@@ -4964,44 +10695,215 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                     for result in recent_results
                 )
             else:
-                evidence_errors.append("FRESH_EXCHANGE_BASELINE_UNAVAILABLE")
+                raise RuntimeError("fresh exchange baseline is unavailable")
+            fresh_trades = fresh_runtime.trade_history.trades
+            verify_exact_recent_order_baseline(fresh_trades, recent_results)
+            fresh_verification["run_exchange_order_count"] = (
+                run_exchange_order_count
+            )
+            fresh_verification["durable_trade_count"] = max(
+                0,
+                len(fresh_trades) - len(self.baseline_trades),
+            )
 
-            fresh_status = "VERIFIED"
-            fresh_reason: str | None = None
-            if position_quantity is None:
-                evidence_errors.append("FRESH_POSITION_UNAVAILABLE")
-                fresh_status = "INCOMPLETE"
-                fresh_reason = "FRESH_POSITION_UNAVAILABLE"
-            elif run_exchange_order_count is None:
-                fresh_status = "INCOMPLETE"
-                fresh_reason = "FRESH_EXCHANGE_BASELINE_UNAVAILABLE"
+            # Publication 직전 account-wide·symbol open truth를 다시 읽어 REST 사이 TOCTOU를 닫는다.
+            active_stage = "OPEN_ORDERS"
+            active_reason = "FRESH_OPEN_ORDERS_NOT_EMPTY"
+            final_has_any_open_orders = (
+                fresh_runtime.api_gateway.has_any_exchange_open_orders()
+            )
+            if type(final_has_any_open_orders) is not bool:
+                raise TypeError("final account open-order state must be bool")
+            final_open_results = tuple(
+                fresh_runtime.api_gateway.list_all_open_order_results(
+                    "ETHUSDT"
+                )
+            )
+            fresh_verification["account_open_orders_empty"] = (
+                not final_has_any_open_orders
+            )
+            fresh_verification["matching_open_order_count"] = sum(
+                result.client_order_id in run_client_order_ids
+                for result in final_open_results
+            )
+            if final_has_any_open_orders:
+                raise RuntimeError("fresh final open-order state changed")
+            if final_open_results != open_results:
+                active_reason = "FRESH_OPEN_ORDERS_CHANGED"
+                raise RuntimeError("fresh final open-order results changed")
+            require_empty_all_client_open_orders(final_open_results)
 
-            # VERIFIED는 success 판정이 아니라 required 관찰값을 모두 concrete하게 읽었다는 뜻이다.
-            return {
-                "status": fresh_status,
-                "typed_reason": fresh_reason,
-                "verified_at": _datetime_to_wire(_utc_now()),
-                "position_quantity": position_quantity,
-                "pending_order_count": pending_order_count,
-                "reconciliation_required": reconciliation_required,
-                "matching_open_order_count": matching_open_order_count,
-                "run_exchange_order_count": run_exchange_order_count,
-                "durable_trade_count": max(
-                    0,
-                    len(fresh_runtime.trade_history.trades)
-                    - len(self.baseline_trades),
-                ),
-            }
+            active_stage = "OPEN_ORDER_LISTS"
+            active_reason = "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY"
+            final_has_any_open_order_lists = (
+                fresh_runtime.api_gateway.has_any_exchange_open_order_lists()
+            )
+            if type(final_has_any_open_order_lists) is not bool:
+                raise TypeError("final open-order-list state must be bool")
+            fresh_verification["account_open_order_lists_empty"] = (
+                not final_has_any_open_order_lists
+            )
+            if (
+                final_has_any_open_order_lists
+                or final_has_any_open_order_lists != has_any_open_order_lists
+            ):
+                raise RuntimeError("fresh final open-order-list state changed")
+
+            # Recent order tuple과 durable baseline도 같은 runtime에서 두 번 읽어 drift를 숨기지 않는다.
+            active_stage = "RECENT_ORDERS"
+            active_reason = "FRESH_RECENT_ORDERS_CHANGED"
+            final_recent_results = tuple(
+                fresh_runtime.api_gateway.list_all_recent_order_results(
+                    "ETHUSDT",
+                    limit=1000,
+                )
+            )
+            if final_recent_results != recent_results:
+                fresh_verification["run_exchange_order_count"] = None
+                raise RuntimeError("fresh recent orders changed")
+            verify_exact_recent_order_baseline(
+                fresh_trades,
+                final_recent_results,
+            )
+
+            # 최종 publication 직전 stream과 reconciliation을 재검사해 앞 snapshot의 TOCTOU를 닫는다.
+            active_stage = "STREAM"
+            active_reason = "FRESH_STREAM_NOT_READY"
+            if (
+                fresh_runtime.web_socket_gateway.account_ready is not True
+                or fresh_runtime.web_socket_gateway.kline_live_ready is not True
+                or fresh_runtime.trading_controller.reconciliation_required
+                is not False
+            ):
+                raise RuntimeError("fresh final stream state is incomplete")
+            fresh_verification.update(
+                {
+                    "status": "VERIFIED",
+                    "typed_reason": None,
+                    "failure_stage": None,
+                    "verified_at": _datetime_to_wire(
+                        self.evidence_clock()
+                    ),
+                }
+            )  # VERIFIED는 성공 판정이 아니라 모든 required read-only truth가 concrete하다는 뜻이다.
+        except ApplicationStartupError as startup_error:
+            allowed_startup_codes = _STARTUP_STAGE_ALLOWED_FAILURE_CODES.get(
+                startup_error.stage,
+                frozenset(),
+            )
+            if startup_error.code in allowed_startup_codes:
+                startup_stage = _STARTUP_STAGE_TO_FAILURE_STAGE[
+                    startup_error.stage
+                ]
+                startup_reason = startup_error.code.value
+            else:
+                startup_stage = "STARTUP_APPLICATION"
+                startup_reason = "FRESH_VERIFICATION_FAILED"
+            _set_fresh_verification_failure(
+                fresh_verification,
+                startup_stage,
+                startup_reason,
+                evidence_errors,
+            )
         except Exception:
-            evidence_errors.append("FRESH_VERIFICATION_FAILED")
-            return incomplete_verification
+            _set_fresh_verification_failure(
+                fresh_verification,
+                active_stage,
+                active_reason,
+                evidence_errors,
+            )
         finally:
             if fresh_runtime is not None:
                 try:
-                    close_application(fresh_runtime)
+                    fresh_closed_state = close_application(fresh_runtime)
+                    if (
+                        type(fresh_closed_state) is not ApplicationStateSnapshot
+                        or fresh_closed_state.status is not ApplicationStatus.CLOSED
+                    ):
+                        raise RuntimeError(
+                            "fresh runtime close did not publish CLOSED"
+                        )
                 except Exception:
-                    evidence_errors.append("FRESH_RUNTIME_CLOSE_FAILED")
-            fresh_event_stream.close()  # Fresh observer waiter는 startup 성공 여부와 무관하게 항상 회수한다.
+                    _set_fresh_verification_failure(
+                        fresh_verification,
+                        "CLEANUP",
+                        "FRESH_RUNTIME_CLOSE_FAILED",
+                        evidence_errors,
+                    )
+            if fresh_event_stream is not None:
+                try:
+                    fresh_event_stream.close()
+                except Exception:
+                    _set_fresh_verification_failure(
+                        fresh_verification,
+                        "CLEANUP",
+                        "FRESH_RUNTIME_CLOSE_FAILED",
+                        evidence_errors,
+                    )
+
+            # Source와 isolated 세 durable leaf 중 하나라도 변하면 VERIFIED를 강등한다.
+            try:
+                if snapshot_handle is None:
+                    raise RuntimeError("durability snapshot handle is unavailable")
+                snapshot_handle.verify()
+                source_durability_after = (
+                    _capture_failure_durability_fingerprint(
+                        self.history_path
+                    )
+                )
+                copy_durability_after = (
+                    None
+                    if isolated_history_path is None
+                    else _capture_failure_durability_fingerprint(
+                        isolated_history_path
+                    )
+                )
+                # Path fingerprint 중 absent sidecar ABA도 final pinned-parent barrier에서 다시 잡는다.
+                snapshot_handle.verify()
+                durability_changed = (
+                    source_durability_before is None
+                    or source_durability_after != source_durability_before
+                    or copy_durability_before is None
+                    or copy_durability_after != copy_durability_before
+                )
+                if durability_changed:
+                    _set_fresh_verification_failure(
+                        fresh_verification,
+                        "DURABILITY",
+                        "FRESH_DURABILITY_CHANGED",
+                        evidence_errors,
+                    )
+            except Exception:
+                _set_fresh_verification_failure(
+                    fresh_verification,
+                    "DURABILITY",
+                    "FRESH_DURABILITY_CHANGED",
+                    evidence_errors,
+                )
+
+            # Pinned descriptor를 fingerprint 검사 뒤 닫고 그 다음에만 임시 directory를 파기한다.
+            if snapshot_handle is not None:
+                try:
+                    snapshot_handle.close()
+                except Exception:
+                    _set_fresh_verification_failure(
+                        fresh_verification,
+                        "CLEANUP",
+                        "FRESH_SNAPSHOT_CLEANUP_FAILED",
+                        evidence_errors,
+                    )
+            if snapshot_directory_owner is not None:
+                try:
+                    snapshot_directory_owner.cleanup()
+                except Exception:
+                    _set_fresh_verification_failure(
+                        fresh_verification,
+                        "CLEANUP",
+                        "FRESH_SNAPSHOT_CLEANUP_FAILED",
+                        evidence_errors,
+                    )
+
+        return fresh_verification  # Partial truth와 최초 failure stage를 cleanup 뒤 최종 mapping으로 반환한다.
 
     def _attempt_known_safe_failure_recovery(
         self,
@@ -5084,6 +10986,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             and durable_buy.executed_quantity == position_quantity
         )
         if not exact_known_safe_state:
+            evidence_errors.append("FAILURE_RECOVERY_STATE_AMBIGUOUS")
             return {
                 "attempted": False,
                 "outcome": "SKIPPED",
@@ -5134,6 +11037,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         except Exception:
             refreshed_state_is_exact = False
         if not refreshed_state_is_exact:
+            evidence_errors.append("FAILURE_RECOVERY_STATE_CHANGED")
             return {
                 "attempted": False,
                 "outcome": "SKIPPED",
@@ -5216,8 +11120,44 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         """
         if not isinstance(original_error, Exception):
             raise TypeError("original_error must be an Exception")
+
+        # Finalizer mutation 전 현재 snapshot을 한 번만 읽어 exception-bound 최초 cause와 TOCTOU 대조한다.
+        try:
+            current_cause_snapshot = (
+                self.runtime.trading_controller.reconciliation_cause_snapshot
+            )
+        except Exception:
+            current_cause_snapshot = object()
+        if isinstance(original_error, _PhaseThirteenReconciliationFailure):
+            frozen_cause_snapshot = original_error.cause_snapshot
+            if (
+                type(current_cause_snapshot) is ReconciliationCauseSnapshot
+                and current_cause_snapshot == frozen_cause_snapshot
+            ):
+                cause_snapshot = frozen_cause_snapshot
+            else:
+                current_reconciliation_required = (
+                    current_cause_snapshot.reconciliation_required
+                    if type(current_cause_snapshot)
+                    is ReconciliationCauseSnapshot
+                    else False
+                )
+                cause_snapshot = ReconciliationCauseSnapshot(
+                    reconciliation_required=(
+                        frozen_cause_snapshot.reconciliation_required
+                        or current_reconciliation_required
+                    ),
+                    status=ReconciliationCauseStatus.CONFLICT,
+                    category=None,
+                )  # Mismatch에서 category를 선택하지 않고 typed secondary conflict로 fail-close한다.
+        else:
+            cause_snapshot = current_cause_snapshot
         self.failure_handling_started = True
         evidence_errors: list[str] = []
+        first_cause = _normalize_failure_first_cause(
+            cause_snapshot,
+            evidence_errors,
+        )
 
         # Permission proxy가 exact next STOP SELL만 허용하는 동안 known-safe 단일 BUY exposure를 먼저 회수한다.
         try:
@@ -5246,17 +11186,27 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         if not guard_snapshot.submissions_blocked:
             raise AssertionError("Phase 13 failure finalizer did not close submissions")
         self.mutation_started = self.mutation_started or guard_snapshot.mutation_started
-        self.runtime.trading_controller.mark_event_runtime_failed()
-        if self.runtime.trading_controller.status in (
+        controller = self.runtime.trading_controller
+
+        # Terminal check와 active/reconciliation blocker commit을 Controller의 같은 session lock에서 수행한다.
+        try:
+            controller.seal_event_runtime_failure_gate()
+        except Exception:
+            evidence_errors.append(
+                "FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED"
+            )  # Production은 status/event blocker를 Context publication보다 먼저 commit한다.
+        if controller.status in (
             TradingSessionStatus.RUNNING,
             TradingSessionStatus.STOPPING,
         ):
-            raise AssertionError("Phase 13 failure finalizer left the scheduler gate open")
+            raise AssertionError(
+                "Phase 13 failure finalizer left the scheduler gate open"
+            )  # Production mark는 Context publication보다 먼저 공개 status를 닫아야 한다.
 
         try:
             self._collect_runtime_observations()
         except Exception:
-            evidence_errors.append("RUNTIME_OBSERVATION_INCOMPLETE")
+            pass  # 각 authoritative runtime field는 아래에서 독립 iff error로 다시 읽는다.
         runtime_state = self._capture_failure_runtime_state(evidence_errors)
 
         # Block가 닫힌 뒤 worker와 stream을 먼저 멈춰 fresh reader가 같은 history와 동시에 변경되지 않게 한다.
@@ -5265,25 +11215,17 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             closed_state = close_application(self.runtime)
             runtime_closed = closed_state.status is ApplicationStatus.CLOSED
         except Exception:
-            evidence_errors.append("PRIMARY_RUNTIME_CLOSE_FAILED")
+            runtime_closed = False
         if not runtime_closed:
             evidence_errors.append("PRIMARY_RUNTIME_NOT_CLOSED")
-            fresh_verification = {
-                "status": "INCOMPLETE",
-                "typed_reason": "PRIMARY_RUNTIME_NOT_CLOSED",
-                "verified_at": None,
-                "position_quantity": None,
-                "pending_order_count": None,
-                "reconciliation_required": None,
-                "matching_open_order_count": None,
-                "run_exchange_order_count": None,
-                "durable_trade_count": None,
-            }
+            fresh_verification = _create_incomplete_fresh_verification()
+            fresh_verification["typed_reason"] = "PRIMARY_RUNTIME_NOT_CLOSED"
+            fresh_verification["failure_stage"] = "CLEANUP"
         else:
             run_client_order_ids = frozenset(
-                str(attempt["client_order_id"])
-                for attempt in submission_attempts
-            )
+                attempt.client_order_id
+                for attempt in guard_snapshot.attempts
+            )  # Sensitive logical ID는 fresh matching에만 사용하고 v2 mapping으로 넘기지 않는다.
             fresh_verification = self._capture_fresh_failure_verification(
                 run_client_order_ids,
                 evidence_errors,
@@ -5318,7 +11260,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             "run_id": self.run_id,
             "timestamps": {
                 "started_at": _datetime_to_wire(self.started_at),
-                "completed_at": _datetime_to_wire(_utc_now()),
+                "completed_at": _datetime_to_wire(self.evidence_clock()),
             },
             "mutation_guard": {
                 "mutation_started": guard_snapshot.mutation_started,
@@ -5328,6 +11270,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             "recovery": recovery_evidence,
             "runtime_state": runtime_state,
             "fresh_verification": fresh_verification,
+            "first_cause": first_cause,
             "evidence_errors": list(dict.fromkeys(evidence_errors)),
         }
         failure_path, failure_digest = _write_failure_evidence_artifact(
@@ -5347,12 +11290,21 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
     def _record_non_signal_and_fail(self) -> None:
         """
         함수 이름: _record_non_signal_and_fail()
-        기능: 주문 0과 fresh zero exposure를 seal한 뒤 NO_SIGNAL/BLOCKED를 성공으로 승격하지 않고 실패한다.
+        기능: 주문 0과 fresh zero exposure를 seal한 뒤 NO_SIGNAL을 성공으로 승격하지 않고 실패한다.
         인자: 없음
         반환값: 정상 반환하지 않음
         작성 날짜: 2026/08/31
         """
         controller = self.runtime.trading_controller
+        public_boundary_trace = controller.public_market_boundary_trace
+        public_action_observed = any(
+            boundary_entry.message_id == "1L.3"
+            for boundary_entry in public_boundary_trace
+        )
+        if controller.order_execution_trace or public_action_observed:
+            raise RuntimeError(
+                "public action without a terminal order requires failure evidence"
+            )  # Action 이후 blocker는 원인을 버린 full trace가 아니라 outer failure v2로 보존한다.
         self.assertEqual(
             len(self.baseline_trades),
             len(self.runtime.trade_history.trades),
@@ -5384,20 +11336,14 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             raise AssertionError(
                 "NO_SIGNAL fresh verification found unexpected run orders"
             )  # Fresh OrderResult identity와 fill은 고정 문장 뒤에 숨긴다.
-        outcome = (
-            "BLOCKED" if controller.order_execution_trace else "NO_SIGNAL"
-        )
-        typed_reason = (
-            "PUBLIC_ACTION_BLOCKED" if outcome == "BLOCKED" else None
-        )
         if self.preflight is None:
             raise AssertionError("actual trace requires completed preflight evidence")
         trace_body = _create_non_mutating_trace_body(
-            outcome=outcome,
-            typed_reason=typed_reason,
+            outcome="NO_SIGNAL",
+            typed_reason=None,
             run_id=self.run_id,
             started_at=self.started_at,
-            completed_at=_utc_now(),
+            completed_at=self.evidence_clock(),
             preflight=self.preflight,
             market_events=self.public_market_events,
             account_events=self.public_account_events,
@@ -5422,7 +11368,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         )
 
         raise _PhaseThirteenRecordedOutcomeFailure(
-            f"{outcome}: no actual order was submitted; "
+            "NO_SIGNAL: no actual order was submitted; "
             f"trace={trace_path}; sha256={trace_digest}"
         )  # Signal 부재를 skip/PASS로 바꾸지 않아 Phase 13 readiness를 계속 잠근다.
 
@@ -5882,7 +11828,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             "run_id": self.run_id,
             "timestamps": {
                 "started_at": _datetime_to_wire(self.started_at),
-                "completed_at": _datetime_to_wire(_utc_now()),
+                "completed_at": _datetime_to_wire(self.evidence_clock()),
             },
             "preflight": dict(self.preflight),
             "immutable_decision_fingerprint": immutable_decision_fingerprint,
@@ -5945,7 +11891,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         try:
             self._execute_actual_public_market_case2()
         except _PhaseThirteenRecordedOutcomeFailure:
-            raise  # NO_SIGNAL/BLOCKED는 이미 full normalized trace를 fsync했으므로 이중 FAILED를 만들지 않는다.
+            raise  # NO_SIGNAL은 이미 full normalized trace를 fsync했으므로 이중 FAILED를 만들지 않는다.
         except Exception as original_error:
             try:
                 self._record_actual_failure_evidence(original_error)
@@ -5978,6 +11924,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 self.runtime,
                 run_id=self.run_id,
                 sequence=1,
+                clock=self.evidence_clock,
             )
         )
         self.last_market_version = self.runtime.market_snapshot.version
@@ -6027,7 +11974,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 "ETHUSDT"
             )
         )
-        account_filters_observed_at = _utc_now()
+        account_filters_observed_at = self.evidence_clock()
         self.assertIs(type(account_filters), AccountRelevantFilters)
         self.assertEqual("ETHUSDT", account_filters.symbol)
         self.assertTrue(
@@ -6039,23 +11986,23 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         symbol_rules = self.runtime.api_gateway.fetch_symbol_trading_rules(
             "ETHUSDT"
         )
-        filters_observed_at = _utc_now()
+        filters_observed_at = self.evidence_clock()
 
         # EXCHANGE_* count와 account 격리를 symbol 생략 signed snapshot 두 개의 exact empty로 증명한다.
         if self.runtime.api_gateway.has_any_exchange_open_orders():
             raise AssertionError(
                 "Phase 13 preflight requires zero exchange-wide open orders"
             )
-        account_open_orders_observed_at = _utc_now()
+        account_open_orders_observed_at = self.evidence_clock()
         if self.runtime.api_gateway.has_any_exchange_open_order_lists():
             raise AssertionError(
                 "Phase 13 preflight requires zero exchange-wide open order lists"
             )
-        account_open_order_lists_observed_at = _utc_now()
+        account_open_order_lists_observed_at = self.evidence_clock()
         reference_price = self.runtime.api_gateway.fetch_reference_price(
             "ETHUSDT"
         )
-        reference_price_observed_at = _utc_now()
+        reference_price_observed_at = self.evidence_clock()
         self.assertEqual("ETHUSDT", symbol_rules.symbol)
         self.assertEqual("TRADING", symbol_rules.status)
         self.assertTrue(symbol_rules.is_spot_trading_allowed)
@@ -6085,7 +12032,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         )
         self.preflight = _create_preflight_evidence(
             account_version=self.runtime.account.version,
-            verified_at=_utc_now(),
+            verified_at=self.evidence_clock(),
             commission_policy=commission_policy,
             symbol_rules=symbol_rules,
             filters_observed_at=filters_observed_at,

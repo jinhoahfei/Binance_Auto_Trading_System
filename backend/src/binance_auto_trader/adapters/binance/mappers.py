@@ -1736,29 +1736,23 @@ def milliseconds_to_utc(value: object, field_name: str) -> datetime:
 
 def _read_order_processed_at(
     payload: Mapping[object, object],
-    fallback_processed_at: datetime,
 ) -> datetime:
     """
     함수 이름: _read_order_processed_at()
-    기능: 주문 응답의 가장 구체적인 처리 시각을 읽고 없으면 주입 UTC 시각을 사용한다.
+    기능: 공식 주문 응답의 필수 처리 시각을 읽어 UTC로 정규화한다.
     인자: payload -> 공식 order response object
-        fallback_processed_at -> timestamp 필드가 없을 때 사용할 UTC 시각
     반환값: 정규화된 처리 시각
-    작성 날짜: 2026/08/22
+    작성 날짜: 2026/09/01
     """
-    if (
-        not isinstance(fallback_processed_at, datetime)
-        or fallback_processed_at.tzinfo is None
-        or fallback_processed_at.utcoffset() is None
-    ):
-        raise ValueError("fallback_processed_at must be timezone-aware")
-
     # Matching Engine transactTime을 우선하고 query의 updateTime·time 순으로 대체한다.
     for field_name in ("transactTime", "updateTime", "time"):
         if field_name in payload:
             return milliseconds_to_utc(payload[field_name], field_name)
 
-    return fallback_processed_at.astimezone(timezone.utc)  # 외부 offset은 UTC로 통일한다.
+    # 공식 응답 시각을 로컬 clock으로 추정하지 않고 재조정 경계로 닫는다.
+    raise BinancePayloadError(
+        "order payload must contain transactTime, updateTime, or time"
+    )
 
 
 def map_fill_payloads(
@@ -1800,10 +1794,16 @@ def map_fill_payloads(
         if not isinstance(payload, Mapping):
             raise BinancePayloadError("each fill payload must be an object")
 
-        # FULL 응답은 tradeId를, myTrades는 id를 사용하므로 두 공식 schema를 구분한다.
+        # FULL의 tradeId와 myTrades의 id를 구분하고 공식 non-negative 거래 ID만 수용한다.
         trade_id_value = payload.get("tradeId", payload.get("id"))
-        if isinstance(trade_id_value, bool) or not isinstance(trade_id_value, int):
-            raise BinancePayloadError("fill trade id must be an integer")
+        if (
+            isinstance(trade_id_value, bool)
+            or not isinstance(trade_id_value, int)
+            or trade_id_value < 0
+        ):
+            raise BinancePayloadError(
+                "fill trade id must be a non-negative integer"
+            )
         trade_id = str(trade_id_value)
         payload_order_id = payload.get("orderId")
         if payload_order_id is not None and str(payload_order_id) != exchange_order_id:
@@ -1870,7 +1870,6 @@ def map_order_result(
     expected_symbol: str,
     expected_client_order_id: str,
     fills: tuple[Fill, ...],
-    fallback_processed_at: datetime,
     failure_reason: str | None = None,
     retry_after: timedelta | None = None,
 ) -> OrderResult:
@@ -1881,11 +1880,10 @@ def map_order_result(
         expected_symbol -> 호출자가 요청한 symbol
         expected_client_order_id -> 원 주문의 client order ID
         fills -> FULL 또는 myTrades에서 정규화한 누적 fill
-        fallback_processed_at -> 응답 timestamp가 없을 때 사용할 UTC 시각
         failure_reason -> transport 밖에서 추가할 안전한 실패 사유
         retry_after -> rate limit 대기 시간
     반환값: 식별자와 누적 fill이 검증된 OrderResult
-    작성 날짜: 2026/08/22
+    작성 날짜: 2026/09/01
     """
     if not isinstance(payload, Mapping):
         raise BinancePayloadError("order payload must be an object")
@@ -1952,7 +1950,7 @@ def map_order_result(
         symbol=selected_symbol,
         client_order_id=expected_client_order_id,
         status=status,
-        processed_at=_read_order_processed_at(payload, fallback_processed_at),
+        processed_at=_read_order_processed_at(payload),
         exchange_order_id=exchange_order_id,
         fills=fills,
         failure_reason=selected_failure_reason,

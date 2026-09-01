@@ -115,11 +115,11 @@ def _validate_klines_at_snapshot_time(
 
 
 @dataclass(frozen=True, slots=True)
-class _MarketSnapshotState:
+class MarketStateSnapshot:
     """
-    클래스 이름: _MarketSnapshotState
-    기능: 한 version의 MarketSnapshot 공개 상태를 단일 불변 값으로 묶는다.
-    작성 날짜: 2026/08/20
+    클래스 이름: MarketStateSnapshot
+    기능: 한 version의 MarketSnapshot 공개 상태와 source Kline을 단일 불변 값으로 묶는다.
+    작성 날짜: 2026/09/01
     """
 
     klines_by_interval: Mapping[Interval, tuple[Kline, ...]]
@@ -170,7 +170,7 @@ class MarketSnapshot:
         }
         self._symbol = symbol
         self._clock = selected_clock
-        self._state = _MarketSnapshotState(
+        self._state = MarketStateSnapshot(
             klines_by_interval=MappingProxyType(empty_klines),
             current_eth_price=None,
             version=0,
@@ -255,6 +255,16 @@ class MarketSnapshot:
         작성 날짜: 2026/08/29
         """
         return self._state.update_source_klines
+
+    def get_snapshot(self) -> MarketStateSnapshot:
+        """
+        함수 이름: get_snapshot()
+        기능: 한 mutation version의 전체 시장 상태와 source를 불변 snapshot으로 반환한다.
+        인자: 없음
+        반환값: 후속 mutation으로 변경되지 않는 MarketStateSnapshot
+        작성 날짜: 2026/09/01
+        """
+        return self._state  # 단일 불변 pointer로 version과 원인 Kline을 같이 고정한다.
 
     def update(
         self,
@@ -374,7 +384,7 @@ class MarketSnapshot:
             Interval.FOUR_HOURS
         ][-1].close
         next_read_only_klines = MappingProxyType(next_klines_by_interval)
-        next_state = _MarketSnapshotState(
+        next_state = MarketStateSnapshot(
             klines_by_interval=next_read_only_klines,
             current_eth_price=next_current_eth_price,
             version=self._state.version + 1,

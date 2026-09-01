@@ -28,6 +28,8 @@ from binance_auto_trader.application.trade_history_controller import (
 from binance_auto_trader.application.trading_controller import (
     OrderExecutionFailureCode,
     OrderExecutionTraceResult,
+    ReconciliationCauseCategory,
+    ReconciliationCauseStatus,
     TradingController,
     TradingSessionStatus,
 )
@@ -431,6 +433,20 @@ class Phase13OrderCapFlowTests(unittest.TestCase):
             self.assertIs(
                 terminal_trace.failure_code,
                 OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+            )
+
+            # Filter 또는 cap 거부 origin은 raw 예외 없이 정확한 stable category 하나만 공개한다.
+            cause_snapshot = (
+                public_case2.trading_controller.reconciliation_cause_snapshot
+            )
+            self.assertTrue(cause_snapshot.reconciliation_required)
+            self.assertIs(
+                cause_snapshot.status,
+                ReconciliationCauseStatus.EXACT,
+            )
+            self.assertIs(
+                cause_snapshot.category,
+                ReconciliationCauseCategory.PREPARE_FILTER_OR_CAP_REJECTED,
             )
 
 

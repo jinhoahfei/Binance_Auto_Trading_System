@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 import hashlib
 import json
@@ -36,6 +36,20 @@ _UTC_TIMESTAMP_PATTERN = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
     r"[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]{3,6})?Z\Z"
+)
+_KLINE_SOURCE_PATTERN = re.compile(
+    r"kline:(?P<symbol>[A-Z0-9]+):(?P<interval>[0-9A-Za-z]+):"
+    r"(?P<open_time>[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z):"
+    r"(?P<event_time>[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z):"
+    r"(?P<close_state>open|closed)\Z"
+)
+_PHASE13_CLIENT_ORDER_ID_PATTERN = re.compile(
+    r"bat-[0-9a-f]{24}-0\Z"
+)
+_CANONICAL_NONNEGATIVE_INTEGER_PATTERN = re.compile(
+    r"(?:0|[1-9][0-9]*)\Z"
 )
 _SECRET_KEY_FRAGMENT_PATTERN = re.compile(
     r"(?:api[_-]?(?:key|secret)|credential|private[_-]?key|signature|"
@@ -751,6 +765,156 @@ def _require_uuid4(value: object, location: str) -> str:
         )
 
     return uuid_text  # UUID text를 새 값으로 교체하지 않아 artifact identity가 그대로 유지된다.
+
+
+def _parse_public_market_command_event(
+    command_event_id: str,
+) -> dict[str, object]:
+    """
+    함수 이름: _parse_public_market_command_event()
+    기능: production public market command ID의 version과 Kline provenance를 exact parsing한다.
+    인자: command_event_id -> `market:version:source` canonical identity
+    반환값: source event, 대표 Kline identity/time과 market version mapping
+    작성 날짜: 2026/09/01
+    """
+    if not isinstance(command_event_id, str) or not command_event_id:
+        raise TypeError("public market command identity is invalid")
+    command_parts = command_event_id.split(":", 2)
+    if len(command_parts) != 3 or command_parts[0] != "market":
+        raise ValueError("public market command identity is invalid")
+    try:
+        market_version = int(command_parts[1])
+    except ValueError as error:
+        raise ValueError("public market version is invalid") from error
+    if market_version < 1 or str(market_version) != command_parts[1]:
+        raise ValueError("public market version is invalid")
+
+    # Atomic boundary는 batch prefix 뒤의 모든 Kline component를 독립 exact parser로 확인한다.
+    source_event_id = command_parts[2]
+    is_batch = source_event_id.startswith("kline-batch|")
+    source_components = (
+        source_event_id.split("|")[1:]
+        if is_batch
+        else [source_event_id]
+    )
+    if (
+        not source_components
+        or any(not component for component in source_components)
+        or (is_batch and len(source_components) < 2)
+        or len(set(source_components)) != len(source_components)
+    ):
+        raise ValueError("public market source list is invalid")
+    interval_durations = {
+        "1m": timedelta(minutes=1),
+        "30m": timedelta(minutes=30),
+        "4h": timedelta(hours=4),
+        "1d": timedelta(days=1),
+    }
+    parsed_components: list[dict[str, object]] = []
+    for source_component in source_components:
+        component_match = _KLINE_SOURCE_PATTERN.fullmatch(source_component)
+        if component_match is None:
+            raise ValueError("public market Kline source is invalid")
+        parsed_component = component_match.groupdict()
+        interval = parsed_component["interval"]
+        if (
+            parsed_component["symbol"] != "ETHUSDT"
+            or interval not in interval_durations
+        ):
+            raise ValueError("public market Kline scope is invalid")
+        try:
+            open_time = datetime.fromisoformat(
+                parsed_component["open_time"].replace("Z", "+00:00")
+            )
+            event_time = datetime.fromisoformat(
+                parsed_component["event_time"].replace("Z", "+00:00")
+            )
+        except ValueError as error:
+            raise ValueError("public market Kline time is invalid") from error
+        close_boundary = open_time + interval_durations[interval]
+        if event_time < open_time or (
+            parsed_component["close_state"] == "closed"
+            and event_time < close_boundary
+        ):
+            raise ValueError("public market Kline time is not causal")
+        parsed_components.append(
+            {
+                **parsed_component,
+                "open_timestamp": open_time,
+                "event_timestamp": event_time,
+                "close_boundary": close_boundary,
+            }
+        )
+
+    # Production batch는 1m/30m close 뒤 UTC 경계에 필요한 4H·1D close/open pair만 붙인다.
+    if is_batch:
+        if len(parsed_components) not in {2, 4, 6}:
+            raise ValueError("public market batch length is invalid")
+        component_shapes = tuple(
+            (component["interval"], component["close_state"])
+            for component in parsed_components
+        )
+        expected_shapes = (("1m", "closed"), ("30m", "closed"))
+        if len(parsed_components) >= 4:
+            expected_shapes += (("4h", "closed"), ("4h", "open"))
+        if len(parsed_components) == 6:
+            expected_shapes += (("1d", "closed"), ("1d", "open"))
+        if component_shapes != expected_shapes:
+            raise ValueError("public market batch order is invalid")
+
+        # 두 strategy close가 공유하는 30분 UTC 경계가 upper pair의 close/open에도 그대로 이어져야 한다.
+        shared_boundary = parsed_components[0]["close_boundary"]
+        if not isinstance(shared_boundary, datetime):
+            raise AssertionError("parsed market boundary lost its datetime type")
+        if (
+            shared_boundary != parsed_components[1]["close_boundary"]
+            or shared_boundary.minute not in {0, 30}
+            or shared_boundary.second != 0
+            or shared_boundary.microsecond != 0
+        ):
+            raise ValueError("public market batch boundary is invalid")
+        four_hour_boundary = (
+            shared_boundary.hour % 4 == 0
+            and shared_boundary.minute == 0
+        )
+        one_day_boundary = (
+            shared_boundary.hour == 0
+            and shared_boundary.minute == 0
+        )
+        expected_component_count = (
+            6 if one_day_boundary else 4 if four_hour_boundary else 2
+        )
+        if len(parsed_components) != expected_component_count:
+            raise ValueError("public market batch omits a required UTC pair")
+        for component_index in range(2, len(parsed_components), 2):
+            closed_component = parsed_components[component_index]
+            open_component = parsed_components[component_index + 1]
+            if (
+                closed_component["close_boundary"] != shared_boundary
+                or open_component["open_timestamp"] != shared_boundary
+                or closed_component["event_timestamp"] < shared_boundary
+                or open_component["event_timestamp"] < shared_boundary
+            ):
+                raise ValueError("public market upper boundary pair is invalid")
+    # Case 2 primary 30분봉이 있으면 대표 identity로 선택하고 없으면 첫 source를 쓴다.
+    selected_component = next(
+        (
+            component
+            for component in parsed_components
+            if component["interval"] == "30m"
+        ),
+        parsed_components[0],
+    )
+    return {
+        "source_event_id": source_event_id,
+        "source_kline_identity": (
+            f"{selected_component['symbol']}:"
+            f"{selected_component['interval']}:"
+            f"{selected_component['open_time']}"
+        ),
+        "source_event_time": selected_component["event_time"],
+        "market_version": market_version,
+    }  # Raw frame을 보존하지 않고 production normalized identity만 반환한다.
 
 
 def _require_nonnegative_integer(value: object, location: str) -> int:
@@ -1892,11 +2056,11 @@ def _validate_preflight(
 ) -> Mapping[str, object]:
     """
     함수 이름: _validate_preflight()
-    기능: fixed Spot Testnet endpoint, readiness와 mutation 전 exact zero-state를 검증한다.
+    기능: fixed Spot Testnet endpoint, readiness, local fetch order와 mutation 전 exact zero-state를 검증한다.
     인자: value -> preflight JSON object
         schema_version -> top-level trace schema version
     반환값: 검증된 preflight mapping
-    작성 날짜: 2026/08/31
+    작성 날짜: 2026/09/01
     """
     # V2는 보존 artifact의 asset-only schema, v3는 full filter와 account-wide state schema를 쓴다.
     expected_fields = (
@@ -1969,7 +2133,7 @@ def _validate_preflight(
         location="preflight reference price",
     )
 
-    # Signed account filter와 public reference price 응답은 preflight 완료 이후가 될 수 없다.
+    # Top-level 관찰 시각은 각 REST 반환 직후 harness local clock이 찍으므로 verified_at과 함께 비교한다.
     verified_at = _require_utc_timestamp(
         preflight["verified_at"],
         "preflight verified_at",
@@ -2184,11 +2348,16 @@ def _validate_market_events(
 
 def _validate_account_events(
     value: object,
+    *,
+    schema_version: int,
+    run_id: str,
 ) -> tuple[Mapping[str, object], ...]:
     """
     함수 이름: _validate_account_events()
-    기능: public account snapshot·stream event의 exact schema와 잔액 Decimal을 검증한다.
+    기능: public account snapshot·stream event의 exact schema, 생성 순서와 잔액 Decimal을 검증한다.
     인자: value -> public account event JSON array
+        schema_version -> top-level trace schema version
+        run_id -> startup account source를 결속할 run UUIDv4
     반환값: 검증된 account event tuple
     작성 날짜: 2026/08/31
     """
@@ -2197,12 +2366,23 @@ def _validate_account_events(
         _ACCOUNT_EVENT_FIELDS,
         "public account events",
     )
-    for entry in entries:
+    previous_source_event_time: datetime | None = None
+    previous_account_version: int | None = None
+    for entry_index, entry in enumerate(entries):
         _require_canonical_text(entry["message_id"], "account message_id")
         _require_identifier(entry["event_type"], "account event_type")
-        _require_canonical_text(entry["source_event_id"], "account source_event_id")
-        _require_utc_timestamp(entry["source_event_time"], "account source_event_time")
-        _require_nonnegative_integer(entry["account_version"], "account version")
+        source_event_id = _require_canonical_text(
+            entry["source_event_id"],
+            "account source_event_id",
+        )
+        source_event_time = _require_utc_timestamp(
+            entry["source_event_time"],
+            "account source_event_time",
+        )
+        account_version = _require_nonnegative_integer(
+            entry["account_version"],
+            "account version",
+        )
         _require_identifier(entry["asset"], "account asset")
         for field_name in ("free_quantity", "locked_quantity"):
             _require_plain_decimal(
@@ -2210,6 +2390,50 @@ def _validate_account_events(
                 f"account {field_name}",
                 minimum=Decimal("0"),
             )
+
+        # Shared run clock과 Account aggregate는 도착 순서대로 시각·version을 전진시킨다.
+        if (
+            previous_source_event_time is not None
+            and source_event_time < previous_source_event_time
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "account event times must be monotonic"
+            )
+        if (
+            previous_account_version is not None
+            and account_version <= previous_account_version
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "account event versions must strictly increase"
+            )
+        previous_source_event_time = source_event_time
+        previous_account_version = account_version
+
+        # V3의 첫 행은 startup runtime snapshot이고 후속 행은 Backend envelope에서만 생성된다.
+        if schema_version == 3 and entry_index == 0:
+            expected_source_event_id = (
+                f"startup-account-{run_id}-{account_version}"
+            )
+            if (
+                account_version < 1
+                or entry["message_id"] != "2"
+                or entry["event_type"] != "ACCOUNT_SNAPSHOT_APPLIED"
+                or source_event_id != expected_source_event_id
+                or entry["asset"] != "ETH"
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "v3 startup account event does not match its run snapshot"
+                )
+        elif schema_version == 3:
+            if (
+                entry["message_id"] != "2.2.1"
+                or entry["event_type"] != "ACCOUNT_POSITION_APPLIED"
+                or entry["asset"] != "ETH"
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "v3 account stream event has invalid production provenance"
+                )
+            _require_uuid4(source_event_id, "account source_event_id")
 
     return entries  # 전체 balance payload 대신 필요한 absolute asset 사실만 남긴다.
 
@@ -2592,9 +2816,36 @@ def _validate_order_execution_traces(
                 tuple(message_ids),
                 side=str(side),
             )
+            # Production submit prefix는 message 1에서 v를 읽고 message 2가 정확히 v→v+1 mutation한다.
+            initial_entry = trace_entries[0]
+            mutation_entry = trace_entries[1]
+            initial_version = int(initial_entry["context_version_before"])
+            if (
+                int(initial_entry["context_version_after"])
+                != initial_version
+                or int(mutation_entry["context_version_before"])
+                != initial_version
+                or int(mutation_entry["context_version_after"])
+                != initial_version + 1
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "successful order trace does not contain the exact submit mutation"
+                )
             if trace_entries[0]["command_event_id"] != attempt["evaluation_id"]:
                 raise PhaseThirteenPublicTraceValidationError(
                     "order trace source event does not match attempt evaluation"
+                )
+            allowed_command_event_ids = {
+                attempt["evaluation_id"],
+                attempt["intent_id"],
+            }
+            if any(
+                trace_entry["command_event_id"]
+                not in allowed_command_event_ids
+                for trace_entry in trace_entries[:-1]
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "successful order trace contains a foreign producer event"
                 )
 
     return trace_groups  # Canonical group와 entry 순서는 digest에 기록된 그대로 유지한다.
@@ -2774,7 +3025,7 @@ def _validate_incremental_fill(
     작성 날짜: 2026/08/31
     """
     fill = _require_exact_mapping(value, _FILL_FIELDS, "incremental fill")
-    _require_canonical_text(fill["fill_id"], "fill fill_id")
+    fill_id = _require_canonical_text(fill["fill_id"], "fill fill_id")
     _require_canonical_text(fill["durable_trade_id"], "fill durable_trade_id")
     _require_utc_timestamp(fill["event_time"], "fill event_time")
     price = _require_plain_decimal(
@@ -2797,13 +3048,24 @@ def _validate_incremental_fill(
         "fill fee_amount",
         minimum=Decimal("0"),
     )
-    _require_plain_decimal(
+    fee_quote_amount = _require_plain_decimal(
         fill["fee_quote_amount"],
         "fill fee_quote_amount",
         minimum=Decimal("0"),
     )
-    if price is None or quantity is None or quote_amount is None:
+    if (
+        fill_id is None
+        or price is None
+        or quantity is None
+        or quote_amount is None
+        or fee_amount is None
+        or fee_quote_amount is None
+    ):
         raise AssertionError("required fill decimal unexpectedly resolved to None")
+    if _CANONICAL_NONNEGATIVE_INTEGER_PATTERN.fullmatch(fill_id) is None:
+        raise PhaseThirteenPublicTraceValidationError(
+            "fill ID must be a canonical non-negative integer string"
+        )
     if _multiply_decimal128(price, quantity) != quote_amount:
         raise PhaseThirteenPublicTraceValidationError(
             "fill quote amount does not match price and quantity"
@@ -2811,11 +3073,21 @@ def _validate_incremental_fill(
     fee_asset = _require_identifier(
         fill["fee_asset"],
         "fill fee_asset",
-        allow_none=True,
     )
-    if fee_amount is not None and fee_amount > Decimal("0") and fee_asset is None:
+    if fee_asset not in {"ETH", "USDT"}:
         raise PhaseThirteenPublicTraceValidationError(
-            "positive fill fee requires an asset"
+            "fill fee asset must be ETH or USDT"
+        )
+
+    # Domain Fill과 같은 Decimal128 환산을 재실행해 quote fee 위조를 차단한다.
+    expected_fee_quote_amount = (
+        fee_amount
+        if fee_asset == "USDT"
+        else _multiply_decimal128(fee_amount, price)
+    )
+    if fee_quote_amount != expected_fee_quote_amount:
+        raise PhaseThirteenPublicTraceValidationError(
+            "fill quote fee does not match its asset conversion"
         )
 
     return fill  # Raw execution payload 없이 accounting에 필요한 normalized 사실만 반환한다.
@@ -2824,12 +3096,15 @@ def _validate_incremental_fill(
 def _validate_order_results(
     value: object,
     attempts: tuple[Mapping[str, object], ...],
+    *,
+    schema_version: int,
 ) -> tuple[Mapping[str, object], ...]:
     """
     함수 이름: _validate_order_results()
     기능: terminal-monotonic result, global exchange identity와 final fill aggregate를 검증한다.
     인자: value -> order result JSON array
         attempts -> 먼저 검증한 order attempt tuple
+        schema_version -> top-level trace schema version
     반환값: 검증된 order result tuple
     작성 날짜: 2026/08/31
     """
@@ -2947,6 +3222,7 @@ def _validate_order_results(
             entry["incremental_fills"],
             "incremental fills",
         )
+        previous_incremental_fill_key: tuple[datetime, int] | None = None
         for fill_value in incremental_fills:
             fill = _validate_incremental_fill(fill_value)
             fill_event_time = _require_utc_timestamp(
@@ -2961,6 +3237,19 @@ def _validate_order_results(
                 raise PhaseThirteenPublicTraceValidationError(
                     "incremental fill lies outside its attempt and observation"
                 )
+            incremental_fill_key = (
+                fill_event_time,
+                int(str(fill["fill_id"])),
+            )
+            if (
+                schema_version == 3
+                and previous_incremental_fill_key is not None
+                and incremental_fill_key <= previous_incremental_fill_key
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "v3 incremental fills must strictly follow exchange order"
+                )
+            previous_incremental_fill_key = incremental_fill_key
             fill_key = (client_order_id, str(fill["fill_id"]))
             if fill_key in observed_fill_keys:
                 raise PhaseThirteenPublicTraceValidationError(
@@ -3000,11 +3289,14 @@ def _validate_order_results(
 
 def _validate_transport_ui_events(
     value: object,
+    *,
+    schema_version: int,
 ) -> tuple[str, tuple[Mapping[str, object], ...]]:
     """
     함수 이름: _validate_transport_ui_events()
     기능: 실제 envelope session/event/sequence와 atomic Trade publication truth를 검증한다.
     인자: value -> transport_session_id와 event array를 가진 exact batch object
+        schema_version -> top-level trace schema version
     반환값: transport session UUID와 검증된 event tuple
     작성 날짜: 2026/08/31
     """
@@ -3028,6 +3320,9 @@ def _validate_transport_ui_events(
     )
     observed_event_ids: set[str] = set()
     previous_transport_sequence = 0
+    previous_published_at: datetime | None = None
+    latest_version_by_aggregate: dict[str, int] = {}
+    trading_session_related_id: str | None = None
     for entry in entries:
         event_id = _require_uuid4(entry["event_id"], "transport event_id")
         if event_id in observed_event_ids:
@@ -3044,6 +3339,10 @@ def _validate_transport_ui_events(
                 "transport sequences must strictly increase"
             )
         previous_transport_sequence = transport_sequence
+        if schema_version == 3 and transport_sequence != len(observed_event_ids):
+            raise PhaseThirteenPublicTraceValidationError(
+                "v3 transport sequences must be contiguous from one"
+            )
         aggregate = _require_identifier(entry["aggregate"], "UI aggregate")
         if aggregate is None:
             raise AssertionError("required UI aggregate unexpectedly resolved to None")
@@ -3062,10 +3361,23 @@ def _validate_transport_ui_events(
                     "atomic Trade events must not synthesize aggregate versions"
                 )
         else:
-            _require_nonnegative_integer(
+            normalized_aggregate_version = _require_nonnegative_integer(
                 aggregate_version,
                 "transport aggregate_version",
             )
+            previous_aggregate_version = latest_version_by_aggregate.get(
+                aggregate
+            )
+            if (
+                previous_aggregate_version is not None
+                and normalized_aggregate_version < previous_aggregate_version
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "transport aggregate versions must not regress"
+                )
+            latest_version_by_aggregate[aggregate] = (
+                normalized_aggregate_version
+            )  # 동일 version의 recovery 재발행은 허용하되 감소는 차단한다.
         related_id = _require_canonical_text(
             entry["related_id"],
             "UI related_id",
@@ -3077,11 +3389,35 @@ def _validate_transport_ui_events(
             raise PhaseThirteenPublicTraceValidationError(
                 "atomic Trade events require a durable Trade ID"
             )
-        # Envelope sequence가 ordering truth이며 지연 event의 원 발생 시각은 전역 단조일 필요가 없다.
-        _require_utc_timestamp(
+        if event_type == "ACCOUNT_UPDATED" and related_id is not None:
+            raise PhaseThirteenPublicTraceValidationError(
+                "ACCOUNT_UPDATED must not contain a related identity"
+            )
+        if event_type == "TRADING_SESSION_UPDATED":
+            if related_id is None:
+                raise PhaseThirteenPublicTraceValidationError(
+                    "TRADING_SESSION_UPDATED requires a session identity"
+                )
+            _require_uuid4(related_id, "trading session related_id")
+            if trading_session_related_id is None:
+                trading_session_related_id = related_id
+            elif related_id != trading_session_related_id:
+                raise PhaseThirteenPublicTraceValidationError(
+                    "transport events changed trading session identity"
+                )
+        # Case 2 observer는 shared clock과 publication lock 안에서 sequence·published_at을 함께 고정한다.
+        published_at = _require_utc_timestamp(
             entry["published_at"],
             "UI published_at",
         )
+        if (
+            previous_published_at is not None
+            and published_at < previous_published_at
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "transport publication times must be monotonic"
+            )
+        previous_published_at = published_at
 
     # ORDER_EXECUTED와 PERFORMANCE_UPDATED는 N/N+1, 같은 occurred_at과 같은 Trade ID여야 한다.
     for event_index, entry in enumerate(entries):
@@ -3251,6 +3587,10 @@ def _validate_run_durable_trades(
             raise PhaseThirteenPublicTraceValidationError(
                 "Trade exchange order ID must be a positive canonical integer string"
             )
+        if trade["trade_id"] != f"trade-{exchange_order_id}":
+            raise PhaseThirteenPublicTraceValidationError(
+                "Trade identity must derive from its exchange order ID"
+            )
         if trade["symbol"] != "ETHUSDT":
             raise PhaseThirteenPublicTraceValidationError(
                 "run durable Trade symbol must be ETHUSDT"
@@ -3309,6 +3649,10 @@ def _validate_run_durable_trades(
         ) != average_fill_price:
             raise PhaseThirteenPublicTraceValidationError(
                 "Trade amount does not match average price and quantity"
+            )
+        if fee_asset not in {"ETH", "USDT"}:
+            raise PhaseThirteenPublicTraceValidationError(
+                "Trade fee asset must be ETH or USDT"
             )
         if fee_asset == "USDT" and fee_quote_amount != fee_amount:
             raise PhaseThirteenPublicTraceValidationError(
@@ -3465,6 +3809,13 @@ def _validate_final_state(
         )
     ):
         raise AssertionError("required Performance value unexpectedly resolved to None")
+    if baseline_history_count == 0 and (
+        baseline_realized != Decimal("0")
+        or baseline_fee != Decimal("0")
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "empty baseline history must have zero Performance totals"
+        )
     calculated_run_realized = _sum_decimal128(
         tuple(
             Decimal(str(trade["realized_profit_loss"]))
@@ -3490,8 +3841,381 @@ def _validate_final_state(
     return final_state  # Fresh restart와 durable history 산술을 같은 artifact에서 독립 검증한다.
 
 
+def _derive_phase13_client_order_id(
+    session_id: str,
+    intent_id: str,
+) -> str:
+    """
+    함수 이름: _derive_phase13_client_order_id()
+    기능: production Controller와 같은 session·intent SHA-256로 최초 client order ID를 만든다.
+    인자: session_id -> 실제 TradingSession UUID
+        intent_id -> BUY 또는 force-sell 주문 의도 ID
+    반환값: submission attempt 0의 canonical Binance client order ID
+    작성 날짜: 2026/09/01
+    """
+    digest_input = f"{session_id}\x00{intent_id}".encode("utf-8")
+    digest = hashlib.sha256(digest_input).hexdigest()[:24]
+
+    return f"bat-{digest}-0"  # Phase 13은 intent별 최초 제출 한 번만 허용한다.
+
+
+def _validate_v3_public_market_provenance(
+    fingerprint: Mapping[str, object] | None,
+    market_events: tuple[Mapping[str, object], ...],
+) -> None:
+    """
+    함수 이름: _validate_v3_public_market_provenance()
+    기능: 실제 Kline command identity와 V3 SUCCESS/NO_SIGNAL public boundary를 exact 결속한다.
+    인자: fingerprint -> 성공 BUY decision fingerprint 또는 None
+        market_events -> 검증된 public market event tuple
+    반환값: 없음
+    작성 날짜: 2026/09/01
+    """
+    if fingerprint is None:
+        previous_market_version = 0
+        previous_context_version = -1
+        for market_event in market_events:
+            market_version = int(market_event["market_version"])
+            context_version = int(market_event["context_version"])
+            if (
+                market_event["message_id"] != "1L.1"
+                or market_event["event_type"] != "KLINE_OBSERVED"
+                or market_event["regime"] != "TYPE_0"
+                or any(
+                    market_event[field_name] is not None
+                    for field_name in (
+                        "evaluation_id",
+                        "action_type",
+                        "side",
+                        "strategy",
+                    )
+                )
+                or market_version <= previous_market_version
+                or context_version < previous_context_version
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "v3 NO_SIGNAL market evidence is not an observed Kline snapshot"
+                )
+
+            # NO_SIGNAL에는 evaluation ID가 없으므로 production 형식을 재구성해 source를 parsing한다.
+            reconstructed_command_id = (
+                f"market:{market_version}:{market_event['source_event_id']}"
+            )
+            try:
+                parsed_source = _parse_public_market_command_event(
+                    reconstructed_command_id
+                )
+            except (TypeError, ValueError) as error:
+                raise PhaseThirteenPublicTraceValidationError(
+                    "v3 NO_SIGNAL market source is not a production Kline identity"
+                ) from error
+            if any(
+                market_event[field_name] != parsed_source[field_name]
+                for field_name in (
+                    "source_event_id",
+                    "source_kline_identity",
+                    "source_event_time",
+                    "market_version",
+                )
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "v3 NO_SIGNAL market source fields disagree"
+                )
+            previous_market_version = market_version
+            previous_context_version = context_version
+        return  # Kline이 전혀 도착하지 않은 timeout도 실제 NO_SIGNAL로 보존한다.
+
+    # SUCCESS evaluation은 실제 market:version:Kline source 문법과 네 파생 필드가 같아야 한다.
+    try:
+        parsed_source = _parse_public_market_command_event(
+            str(fingerprint["evaluation_id"])
+        )
+    except (TypeError, ValueError) as error:
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 decision source is not a production Kline identity"
+        ) from error
+    if any(
+        fingerprint[field_name] != parsed_source[field_name]
+        for field_name in (
+            "source_event_id",
+            "source_kline_identity",
+            "source_event_time",
+            "market_version",
+        )
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 decision source fields disagree with its evaluation identity"
+        )
+
+    # Action producer는 30분 source, closed 1분 source 또는 canonical atomic batch에서만 BUY를 낸다.
+    source_event_id = str(fingerprint["source_event_id"])
+    if not source_event_id.startswith("kline-batch|"):
+        source_match = _KLINE_SOURCE_PATTERN.fullmatch(source_event_id)
+        if source_match is None:
+            raise AssertionError("validated decision source lost its Kline shape")
+        source_fields = source_match.groupdict()
+        if not (
+            source_fields["interval"] == "30m"
+            or (
+                source_fields["interval"] == "1m"
+                and source_fields["close_state"] == "closed"
+            )
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "v3 decision source cannot produce a public Case 2 Action"
+            )
+
+
+def _validate_v3_success_producer_contract(
+    run_id: str,
+    preflight: Mapping[str, object],
+    fingerprint: Mapping[str, object],
+    account_events: tuple[Mapping[str, object], ...],
+    attempts: tuple[Mapping[str, object], ...],
+    results: tuple[Mapping[str, object], ...],
+    order_execution_traces: tuple[Mapping[str, object], ...],
+    run_trades: tuple[Mapping[str, object], ...],
+    ui_events: tuple[Mapping[str, object], ...],
+    recovery: Mapping[str, object],
+) -> None:
+    """
+    함수 이름: _validate_v3_success_producer_contract()
+    기능: V3 성공 증거를 실제 Case 2 주문·회계·worker publication 순서와 exact 결속한다.
+    인자: run_id -> STOP command provenance를 결속할 top-level run UUID
+        preflight -> mutation 전 account snapshot
+        fingerprint -> public CASE_C BUY decision
+        account_events -> startup 및 stream account snapshot tuple
+        attempts -> 실제 BUY/STOP SELL attempt tuple
+        results -> fresh query의 exact terminal result tuple
+        order_execution_traces -> 두 주문의 Communication trace tuple
+        run_trades -> 이번 run durable Trade tuple
+        ui_events -> Backend transport publication tuple
+        recovery -> same-run recovery evidence
+    반환값: 없음
+    작성 날짜: 2026/09/01
+    """
+    if len(attempts) != 2 or len(results) != 2 or len(run_trades) != 2:
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS requires exactly two attempts, results, and Trades"
+        )
+    buy_attempt, sell_attempt = attempts
+    buy_result, sell_result = results
+    buy_trade, sell_trade = run_trades
+    buy_trace, sell_trace = order_execution_traces
+
+    # 모든 worker publication이 공유한 실제 TradingSession UUID가 주문 identity derivation의 유일한 seed다.
+    session_events = tuple(
+        event
+        for event in ui_events
+        if event["event_type"] == "TRADING_SESSION_UPDATED"
+    )
+    session_identities = {
+        str(event["related_id"]) for event in session_events
+    }
+    if not session_events or len(session_identities) != 1:
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS lacks one consistent trading session publication"
+        )
+    trading_session_id = next(iter(session_identities))
+
+    # Phase 13 actual permission은 TYPE_0, policy 13과 한 configured cap만 허용한다.
+    expected_cap = fingerprint["configured_cap"]
+    if (
+        fingerprint["regime"] != "TYPE_0"
+        or fingerprint["policy_version"] != 13
+        or any(attempt["regime"] != "TYPE_0" for attempt in attempts)
+        or any(attempt["policy_version"] != 13 for attempt in attempts)
+        or any(attempt["configured_cap"] != expected_cap for attempt in attempts)
+        or any(trade["regime"] != "TYPE_0" for trade in run_trades)
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS changed the approved TYPE_0 policy or configured cap"
+        )
+    for client_order_id in (
+        fingerprint["client_order_id"],
+        *(attempt["client_order_id"] for attempt in attempts),
+    ):
+        if (
+            not isinstance(client_order_id, str)
+            or _PHASE13_CLIENT_ORDER_ID_PATTERN.fullmatch(client_order_id)
+            is None
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "v3 SUCCESS client order ID is not production-derived"
+            )
+
+    # BUY는 public intent를, STOP SELL은 session 고유 force intent와 실제 stop command를 그대로 사용한다.
+    expected_buy_client_order_id = _derive_phase13_client_order_id(
+        trading_session_id,
+        str(fingerprint["intent_id"]),
+    )
+    expected_sell_intent_id = f"force-sell:{trading_session_id}"
+    expected_sell_client_order_id = _derive_phase13_client_order_id(
+        trading_session_id,
+        expected_sell_intent_id,
+    )
+    expected_stop_evaluation_id = (
+        f"stop-{trading_session_id}-phase13-stop-{run_id}"
+    )
+    buy_trace_entries = tuple(buy_trace["entries"])
+    sell_trace_entries = tuple(sell_trace["entries"])
+    expected_buy_outcome_id = (
+        f"order-outcome-{expected_buy_client_order_id}-"
+        "CASE_C_POSITION_OPENED"
+    )
+    expected_sell_outcome_id = (
+        f"order-outcome-{expected_sell_client_order_id}-"
+        "FORCE_SELL_FINISHED"
+    )
+    if (
+        buy_attempt["intent_id"] != fingerprint["intent_id"]
+        or buy_attempt["evaluation_id"] != fingerprint["evaluation_id"]
+        or fingerprint["client_order_id"] != expected_buy_client_order_id
+        or buy_attempt["client_order_id"] != expected_buy_client_order_id
+        or buy_trace["intent_id"] != fingerprint["intent_id"]
+        or buy_trace["client_order_id"] != expected_buy_client_order_id
+        or buy_trace_entries[0]["command_event_id"]
+        != fingerprint["evaluation_id"]
+        or buy_trace_entries[-1]["command_event_id"]
+        != expected_buy_outcome_id
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS BUY identity is not derived from its session and decision"
+        )
+    if (
+        sell_attempt["intent_id"] != expected_sell_intent_id
+        or sell_attempt["evaluation_id"] != expected_stop_evaluation_id
+        or sell_attempt["client_order_id"] != expected_sell_client_order_id
+        or sell_trace["intent_id"] != expected_sell_intent_id
+        or sell_trace["client_order_id"] != expected_sell_client_order_id
+        or sell_trace_entries[0]["command_event_id"]
+        != expected_stop_evaluation_id
+        or sell_trace_entries[-1]["command_event_id"]
+        != expected_sell_outcome_id
+        or recovery["intent_id"] != expected_sell_intent_id
+        or recovery["client_order_id"] != expected_sell_client_order_id
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS STOP identity is not derived from its session and run"
+        )
+
+    # Fresh query 결과와 durable Trade는 attempt의 BUY→SELL 순서를 그대로 보존해야 한다.
+    for attempt, result, trade in zip(
+        attempts,
+        results,
+        run_trades,
+        strict=True,
+    ):
+        if (
+            result["sequence"] != attempt["sequence"]
+            or result["intent_id"] != attempt["intent_id"]
+            or result["client_order_id"] != attempt["client_order_id"]
+            or result["status"] != "FILLED"
+            or result["failure_code"] is not None
+            or trade["client_order_id"] != attempt["client_order_id"]
+            or trade["side"] != attempt["side"]
+            or trade["exchange_order_id"] != result["exchange_order_id"]
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "v3 SUCCESS result or Trade order differs from its attempt"
+            )
+
+    # Preflight/fingerprint account version과 recovery free 수량은 공개 snapshot에서 증명한다.
+    required_account_version = max(
+        int(preflight["account_version"]),
+        int(fingerprint["account_version"]),
+    )
+    effective_free_quantity = Decimal(
+        str(recovery["effective_free_quantity"])
+    )
+    if not any(
+        int(account_event["account_version"]) >= required_account_version
+        and Decimal(str(account_event["free_quantity"]))
+        >= effective_free_quantity
+        for account_event in account_events
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS recovery free quantity lacks public account evidence"
+        )
+
+    # Single BUY/full-close SELL의 Position 원가와 realized PnL을 domain Decimal128 공식으로 재계산한다.
+    if (
+        sell_trade["fee_asset"] == "ETH"
+        and Decimal(str(sell_trade["fee_amount"])) > Decimal("0")
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS cannot apply a positive base-asset SELL fee"
+        )
+    buy_fee_quote = Decimal(str(buy_trade["fee_quote_amount"]))
+    buy_cost_basis = Decimal(str(buy_trade["executed_amount"]))
+    if buy_trade["fee_asset"] != "ETH":
+        buy_cost_basis = _sum_decimal128((buy_cost_basis, buy_fee_quote))
+    buy_acquired_quantity = Decimal(str(buy_trade["executed_quantity"]))
+    if buy_trade["fee_asset"] == "ETH":
+        buy_acquired_quantity -= Decimal(str(buy_trade["fee_amount"]))
+    if (
+        buy_acquired_quantity <= Decimal("0")
+        or Decimal(str(sell_trade["executed_quantity"]))
+        != buy_acquired_quantity
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS SELL quantity does not full-close its BUY acquisition"
+        )
+    expected_realized = _sum_decimal128(
+        (
+            Decimal(str(sell_trade["executed_amount"])),
+            -Decimal(str(sell_trade["fee_quote_amount"])),
+            -buy_cost_basis,
+        )
+    )
+    if Decimal(str(sell_trade["realized_profit_loss"])) != expected_realized:
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS realized PnL does not match net proceeds and BUY cost"
+        )
+
+    # 각 atomic Trade pair 뒤 다음 Trade 전 worker session publication과 충분한 Context version을 요구한다.
+    order_event_indices = tuple(
+        event_index
+        for event_index, event in enumerate(ui_events)
+        if event["event_type"] == "ORDER_EXECUTED"
+    )
+    if tuple(
+        ui_events[event_index]["related_id"]
+        for event_index in order_event_indices
+    ) != tuple(trade["trade_id"] for trade in run_trades):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS Trade publications are outside durable order"
+        )
+    for trace_index, (order_event_index, trace_group) in enumerate(
+        zip(order_event_indices, order_execution_traces, strict=True)
+    ):
+        next_order_index = (
+            order_event_indices[trace_index + 1]
+            if trace_index + 1 < len(order_event_indices)
+            else len(ui_events)
+        )
+        following_session_events = tuple(
+            event
+            for event in ui_events[order_event_index + 2 : next_order_index]
+            if event["event_type"] == "TRADING_SESSION_UPDATED"
+        )
+        maximum_trace_version = max(
+            int(entry["context_version_after"])
+            for entry in trace_group["entries"]
+        )
+        if (
+            not following_session_events
+            or int(following_session_events[0]["aggregate_version"])
+            < maximum_trace_version
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "v3 SUCCESS Trade cycle lacks its authoritative session update"
+            )
+
+
 def _validate_cross_trace_contract(
     schema_version: int,
+    run_id: str,
     outcome: str,
     typed_reason: str | None,
     started_at: datetime,
@@ -3503,6 +4227,7 @@ def _validate_cross_trace_contract(
     attempts: tuple[Mapping[str, object], ...],
     submit_time_filter_evidence: tuple[Mapping[str, object], ...],
     results: tuple[Mapping[str, object], ...],
+    order_execution_traces: tuple[Mapping[str, object], ...],
     baseline_history_count: int,
     run_trades: tuple[Mapping[str, object], ...],
     transport_session_id: str,
@@ -3512,8 +4237,9 @@ def _validate_cross_trace_contract(
 ) -> None:
     """
     함수 이름: _validate_cross_trace_contract()
-    기능: preflight→1L path→order/fill→Trade/transport→fresh final 전체 provenance를 결속한다.
+    기능: local run clock과 Binance server/exchange clock을 분리해 전체 provenance와 각 축 인과를 결속한다.
     인자: schema_version -> top-level trace schema version
+        run_id -> top-level run UUID
         outcome -> top-level normalized outcome
         typed_reason -> BLOCKED/FAILED의 safe typed reason 또는 None
         started_at -> run 시작 UTC 시각
@@ -3525,6 +4251,7 @@ def _validate_cross_trace_contract(
         attempts -> 검증된 order attempt tuple
         submit_time_filter_evidence -> attempt별 production prepare-time rule 관찰 tuple
         results -> 검증된 order result tuple
+        order_execution_traces -> 주문별 검증된 Communication trace tuple
         baseline_history_count -> 별도 검증한 baseline Trade 수
         run_trades -> 이번 run의 normalized durable Trade tuple
         transport_session_id -> 실제 BackendEventStream session UUID
@@ -3532,7 +4259,7 @@ def _validate_cross_trace_contract(
         recovery -> 검증된 recovery mapping
         final_state -> 검증된 final state mapping
     반환값: 없음
-    작성 날짜: 2026/08/31
+    작성 날짜: 2026/09/01
     """
     # Outcome별 typed reason은 성공·신호 부재와 운영상 blocker/failure를 혼동하지 않게 고정한다.
     if outcome in {"SUCCESS", "NO_SIGNAL"} and typed_reason is not None:
@@ -3572,7 +4299,7 @@ def _validate_cross_trace_contract(
             "recovery and final duplicate counts do not match"
         )
 
-    # V3의 두 account-wide state 관찰도 다른 signed/public safety evidence와 같은 run window에 둔다.
+    # V3 top-level account-wide state 관찰은 각 REST 반환 뒤 harness가 찍은 local 시각이다.
     preflight_account_state_timestamps: tuple[datetime, ...] = ()
     submit_time_account_state_timestamp_fields: tuple[str, ...] = ()
     if schema_version == 3:
@@ -3591,8 +4318,8 @@ def _validate_cross_trace_contract(
             "account_open_order_lists_observed_at",
         )
 
-    # Preflight, event, attempt, result, fill, Trade, transport와 final verification을 run window에 둔다.
-    causal_timestamps = [
+    # Local run window에는 harness가 직접 찍은 완료·account·transport 시각만 두고 server/exchange 축은 제외한다.
+    local_causal_timestamps = [
         _require_utc_timestamp(preflight["verified_at"], "preflight verified_at"),
         _require_utc_timestamp(
             preflight["fresh_filters"]["observed_at"],
@@ -3610,46 +4337,9 @@ def _validate_cross_trace_contract(
         *(
             _require_utc_timestamp(
                 event["source_event_time"],
-                "market source_event_time",
-            )
-            for event in market_events
-        ),
-        *(
-            _require_utc_timestamp(
-                event["source_event_time"],
                 "account source_event_time",
             )
             for event in account_events
-        ),
-        *(
-            _require_utc_timestamp(attempt["attempted_at"], "order attempted_at")
-            for attempt in attempts
-        ),
-        *(
-            _require_utc_timestamp(
-                evidence[field_name],
-                f"submit-time {field_name}",
-            )
-            for evidence in submit_time_filter_evidence
-            for field_name in (
-                "observed_at",
-                "account_filters_observed_at",
-                "reference_price_observed_at",
-                *submit_time_account_state_timestamp_fields,
-            )
-        ),
-        *(
-            _require_utc_timestamp(result["observed_at"], "result observed_at")
-            for result in results
-        ),
-        *(
-            _require_utc_timestamp(fill["event_time"], "fill event_time")
-            for result in results
-            for fill in result["incremental_fills"]
-        ),
-        *(
-            _require_utc_timestamp(trade["executed_at"], "Trade executed_at")
-            for trade in run_trades
         ),
         *(
             _require_utc_timestamp(event["published_at"], "UI published_at")
@@ -3659,10 +4349,10 @@ def _validate_cross_trace_contract(
     ]
     if any(
         timestamp < started_at or timestamp > completed_at
-        for timestamp in causal_timestamps
+        for timestamp in local_causal_timestamps
     ):
         raise PhaseThirteenPublicTraceValidationError(
-            "trace evidence lies outside the run time window"
+            "local trace evidence lies outside the run time window"
         )
     preflight_verified_at = _require_utc_timestamp(
         preflight["verified_at"],
@@ -3680,6 +4370,7 @@ def _validate_cross_trace_contract(
         preflight["reference_price_observed_at"],
         "preflight reference price observed_at",
     )
+    # Top-level preflight 관찰은 local verified_at보다 늦을 수 없고 server attempt와는 직접 비교하지 않는다.
     if max(
         filter_observed_at,
         account_filters_observed_at,
@@ -3689,12 +4380,83 @@ def _validate_cross_trace_contract(
         raise PhaseThirteenPublicTraceValidationError(
             "fresh safety observation follows preflight verification"
         )
-    if attempts and preflight_verified_at > _require_utc_timestamp(
-        attempts[0]["attempted_at"],
-        "first order attempted_at",
+
+    # V3 startup Account는 start_application 반환 직후에 생성되며 후속 행만 transport envelope를 복사한다.
+    if schema_version == 3:
+        account_ui_events = tuple(
+            event
+            for event in ui_events
+            if event["event_type"] == "ACCOUNT_UPDATED"
+        )
+        if not account_events:
+            raise PhaseThirteenPublicTraceValidationError(
+                "v3 trace lacks its startup account snapshot"
+            )
+        startup_account_event = account_events[0]
+        startup_account_time = _require_utc_timestamp(
+            startup_account_event["source_event_time"],
+            "startup account source_event_time",
+        )
+        first_preflight_observation = min(
+            filter_observed_at,
+            account_filters_observed_at,
+            reference_price_observed_at,
+            *preflight_account_state_timestamps,
+        )
+        if startup_account_time > first_preflight_observation:
+            raise PhaseThirteenPublicTraceValidationError(
+                "startup account snapshot is outside its production order"
+            )
+        if not any(
+            account_event["account_version"] == preflight["account_version"]
+            for account_event in account_events
+        ):
+            raise PhaseThirteenPublicTraceValidationError(
+                "v3 preflight account version lacks public snapshot evidence"
+            )
+
+        # Producer처럼 startup version 이하를 건너뛰고 이후 전진 ACCOUNT_UPDATED를 하나도 빠짐없이 복사한다.
+        latest_captured_account_version = int(
+            startup_account_event["account_version"]
+        )
+        expected_account_provenance: list[tuple[object, object, object]] = []
+        for account_ui_event in account_ui_events:
+            account_ui_version = int(account_ui_event["aggregate_version"])
+            if account_ui_version <= latest_captured_account_version:
+                continue
+            expected_account_provenance.append(
+                (
+                    account_ui_event["event_id"],
+                    account_ui_event["published_at"],
+                    account_ui_event["aggregate_version"],
+                )
+            )
+            latest_captured_account_version = account_ui_version
+        actual_account_provenance = [
+            (
+                account_event["source_event_id"],
+                account_event["source_event_time"],
+                account_event["account_version"],
+            )
+            for account_event in account_events[1:]
+        ]
+        if actual_account_provenance != expected_account_provenance:
+            raise PhaseThirteenPublicTraceValidationError(
+                "account stream evidence is not the exact advancing transport sequence"
+            )
+
+    # Order/Performance publication은 preflight가 mutation 허용을 연 뒤에만 발행될 수 있다.
+    if any(
+        event["event_type"] in {"ORDER_EXECUTED", "PERFORMANCE_UPDATED"}
+        and _require_utc_timestamp(
+            event["published_at"],
+            "order UI published_at",
+        )
+        < preflight_verified_at
+        for event in ui_events
     ):
         raise PhaseThirteenPublicTraceValidationError(
-            "order attempt precedes its preflight"
+            "order publication precedes preflight verification"
         )
     attempts_by_client_id = {
         str(attempt["client_order_id"]): attempt for attempt in attempts
@@ -3712,28 +4474,28 @@ def _validate_cross_trace_contract(
                 "order result precedes its attempt"
             )
 
-    # Final fresh runtime은 evidence publication 뒤 검증되고 원 transport session을 재사용하지 않는다.
+    # Final fresh runtime은 local publication 뒤 검증되고 원 transport session을 재사용하지 않는다.
     final_verified_at = _require_utc_timestamp(
         final_state["verified_at"],
         "final verified_at",
     )
-    publication_end_times = [
+    local_publication_end_times = [
+        preflight_verified_at,
         *(
-            _require_utc_timestamp(result["observed_at"], "result observed_at")
-            for result in results
-        ),
-        *(
-            _require_utc_timestamp(trade["executed_at"], "Trade executed_at")
-            for trade in run_trades
+            _require_utc_timestamp(
+                event["source_event_time"],
+                "account source_event_time",
+            )
+            for event in account_events
         ),
         *(
             _require_utc_timestamp(event["published_at"], "UI published_at")
             for event in ui_events
         ),
     ]
-    if publication_end_times and final_verified_at < max(publication_end_times):
+    if final_verified_at < max(local_publication_end_times):
         raise PhaseThirteenPublicTraceValidationError(
-            "fresh final verification precedes run evidence"
+            "fresh final verification precedes local run evidence"
         )
     if final_state["fresh_runtime_session_id"] == transport_session_id:
         raise PhaseThirteenPublicTraceValidationError(
@@ -3789,6 +4551,45 @@ def _validate_cross_trace_contract(
         if sell_attempt_time < buy_result_time:
             raise PhaseThirteenPublicTraceValidationError(
                 "STOP SELL attempt precedes authoritative BUY terminal state"
+            )
+
+        # Position을 만든 BUY terminal 후에만 STOP SELL의 신규 composite safety fetch가 시작된다.
+        sell_filter_evidence = tuple(
+            evidence
+            for evidence in submit_time_filter_evidence
+            if evidence["client_order_id"] == sell_attempt["client_order_id"]
+        )
+        if len(sell_filter_evidence) != 1:
+            raise PhaseThirteenPublicTraceValidationError(
+                "STOP SELL lacks one submit-time safety observation"
+            )
+        selected_sell_filter_evidence = sell_filter_evidence[0]
+        sell_safety_observations = [
+            _require_utc_timestamp(
+                selected_sell_filter_evidence["account_filters_observed_at"],
+                "STOP SELL account filters observed_at",
+            ),
+            _require_utc_timestamp(
+                selected_sell_filter_evidence["observed_at"],
+                "STOP SELL filters observed_at",
+            ),
+        ]
+        sell_safety_observations.extend(
+            _require_utc_timestamp(
+                selected_sell_filter_evidence[field_name],
+                f"STOP SELL {field_name}",
+            )
+            for field_name in submit_time_account_state_timestamp_fields
+        )
+        sell_safety_observations.append(
+            _require_utc_timestamp(
+                selected_sell_filter_evidence["reference_price_observed_at"],
+                "STOP SELL reference price observed_at",
+            )
+        )
+        if min(sell_safety_observations) < buy_result_time:
+            raise PhaseThirteenPublicTraceValidationError(
+                "STOP SELL safety observation precedes authoritative BUY terminal state"
             )
         if (
             not recovery["required"]
@@ -3886,7 +4687,12 @@ def _validate_cross_trace_contract(
         )
 
     if fingerprint is None:
+        if schema_version == 3:
+            _validate_v3_public_market_provenance(None, market_events)
         return  # FAILED/BLOCKED/NO_SIGNAL은 decision 이전에도 종료될 수 있다.
+
+    if schema_version == 3:
+        _validate_v3_public_market_provenance(fingerprint, market_events)
 
     # Action을 낸 모든 outcome은 exact 1L.1→1L.2→1L.3와 마지막 CASE_C BUY를 사용한다.
     if (
@@ -4098,17 +4904,28 @@ def _validate_cross_trace_contract(
         str(trade["trade_id"]): trade
         for trade in run_trades
     }
-    for event in ui_events:
-        if event["event_type"] != "ORDER_EXECUTED":
-            continue
-        trade = trades_by_id[str(event["related_id"])]
-        if _require_utc_timestamp(
-            event["published_at"],
-            "ORDER_EXECUTED published_at",
-        ) < _require_utc_timestamp(trade["executed_at"], "Trade executed_at"):
-            raise PhaseThirteenPublicTraceValidationError(
-                "ORDER_EXECUTED publication precedes its durable Trade"
-            )
+    # UI publication은 local run clock, Trade execution은 exchange clock이므로 identity만 결속한다.
+    if any(
+        str(event["related_id"]) not in trades_by_id
+        for event in ui_events
+        if event["event_type"] == "ORDER_EXECUTED"
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "ORDER_EXECUTED publication lacks its durable Trade"
+        )
+    if schema_version == 3 and outcome == "SUCCESS":
+        _validate_v3_success_producer_contract(
+            run_id,
+            preflight,
+            fingerprint,
+            account_events,
+            attempts,
+            results,
+            order_execution_traces,
+            run_trades,
+            ui_events,
+            recovery,
+        )
 
 
 def _validate_trace_body(
@@ -4142,6 +4959,10 @@ def _validate_trace_body(
         raise PhaseThirteenPublicTraceValidationError(
             "trace outcome is unsupported"
         )
+    if schema_version == 3 and outcome not in {"SUCCESS", "NO_SIGNAL"}:
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 full trace supports only SUCCESS or NO_SIGNAL"
+        )
     typed_reason = _require_identifier(
         trace["typed_reason"],
         "trace typed_reason",
@@ -4149,7 +4970,7 @@ def _validate_trace_body(
     )
 
     # UUIDv4 run identity와 bounded run timestamps는 artifact끼리의 accidental 합성을 막는다.
-    _require_uuid4(trace["run_id"], "trace run_id")
+    run_id = _require_uuid4(trace["run_id"], "trace run_id")
     started_at, completed_at = _validate_timestamps(trace["timestamps"])
     preflight = _validate_preflight(
         trace["preflight"],
@@ -4182,15 +5003,23 @@ def _validate_trace_body(
         trace["immutable_decision_fingerprint"]
     )
     market_events = _validate_market_events(trace["public_market_events"])
-    account_events = _validate_account_events(trace["public_account_events"])
+    account_events = _validate_account_events(
+        trace["public_account_events"],
+        schema_version=schema_version,
+        run_id=run_id,
+    )
     attempts = _validate_order_attempts(trace["order_attempts"])
     submit_time_filter_evidence = _validate_submit_time_filter_evidence(
         trace["submit_time_filter_evidence"],
         attempts,
         schema_version=schema_version,
     )
-    results = _validate_order_results(trace["order_results"], attempts)
-    _validate_order_execution_traces(
+    results = _validate_order_results(
+        trace["order_results"],
+        attempts,
+        schema_version=schema_version,
+    )
+    order_execution_traces = _validate_order_execution_traces(
         trace["order_execution_traces"],
         attempts,
         results,
@@ -4198,7 +5027,8 @@ def _validate_trace_body(
     )
     run_trades = _validate_run_durable_trades(trace["run_durable_trades"])
     transport_session_id, ui_events = _validate_transport_ui_events(
-        trace["transport_ui_event_batch"]
+        trace["transport_ui_event_batch"],
+        schema_version=schema_version,
     )
     recovery = _validate_recovery(trace["recovery"])
     final_state = _validate_final_state(
@@ -4209,6 +5039,7 @@ def _validate_trace_body(
     )
     _validate_cross_trace_contract(
         schema_version,
+        run_id,
         str(outcome),
         typed_reason,
         started_at,
@@ -4220,6 +5051,7 @@ def _validate_trace_body(
         attempts,
         submit_time_filter_evidence,
         results,
+        order_execution_traces,
         baseline_history_count,
         run_trades,
         transport_session_id,

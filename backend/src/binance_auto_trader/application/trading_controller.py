@@ -300,6 +300,77 @@ class TradingSessionStatus(str, Enum):
     TERMINATED = "terminated"
 
 
+class ReconciliationCauseCategory(str, Enum):
+    """
+    클래스 이름: ReconciliationCauseCategory
+    기능: Phase 13 실패 증거에 공개할 secret 없는 재조정 원인 범주를 정의한다.
+    작성 날짜: 2026/08/31
+    """
+
+    ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION = (
+        "ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION"
+    )
+    PREPARE_FILTER_OR_CAP_REJECTED = "PREPARE_FILTER_OR_CAP_REJECTED"
+    EVENT_WORKER_OR_RUNTIME_FAILED = "EVENT_WORKER_OR_RUNTIME_FAILED"
+    MARKET_STREAM_FAILED = "MARKET_STREAM_FAILED"
+    ORDER_OR_PERSISTENCE_AMBIGUOUS = "ORDER_OR_PERSISTENCE_AMBIGUOUS"
+    PROCESS_OWNERSHIP_AMBIGUOUS = "PROCESS_OWNERSHIP_AMBIGUOUS"
+
+
+class ReconciliationCauseStatus(str, Enum):
+    """
+    클래스 이름: ReconciliationCauseStatus
+    기능: 단일 원인 latch의 미기록, 정확한 기록과 다중 기록 실패 상태를 정의한다.
+    작성 날짜: 2026/08/31
+    """
+
+    MISSING = "MISSING"
+    EXACT = "EXACT"
+    DUPLICATE = "DUPLICATE"
+    CONFLICT = "CONFLICT"
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationCauseSnapshot:
+    """
+    클래스 이름: ReconciliationCauseSnapshot
+    기능: 재조정 필요 여부와 단일 원인 latch 상태를 한 lock 시점의 불변 값으로 보존한다.
+    작성 날짜: 2026/08/31
+    """
+
+    reconciliation_required: bool
+    status: ReconciliationCauseStatus
+    category: ReconciliationCauseCategory | None
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: EXACT만 원인 범주를 공개하는 fail-closed snapshot 불변식을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # bool subclass나 임의 enum 유사값이 production 증거 schema에 섞이지 않게 한다.
+        if type(self.reconciliation_required) is not bool:
+            raise TypeError("reconciliation_required must be an exact bool")
+        if not isinstance(self.status, ReconciliationCauseStatus):
+            raise TypeError("status must be a ReconciliationCauseStatus")
+        if self.category is not None and not isinstance(
+            self.category,
+            ReconciliationCauseCategory,
+        ):
+            raise TypeError(
+                "category must be a ReconciliationCauseCategory or None"
+            )
+
+        # 정확히 한 번 기록된 경우에만 범주를 노출하고 나머지는 모호성으로 닫는다.
+        if self.status is ReconciliationCauseStatus.EXACT:
+            if self.category is None:
+                raise ValueError("EXACT status requires a category")
+        elif self.category is not None:
+            raise ValueError("non-EXACT status must not expose a category")
+
+
 class TradingSessionFailureCode(str, Enum):
     """
     클래스 이름: TradingSessionFailureCode
@@ -1180,6 +1251,12 @@ class TradingController:
         self._latest_market_evaluation_version = 0
         self._event_runtime_failed = False  # 이 process에서는 worker failure 뒤 command gate를 다시 열지 않는다.
         self._process_ownership_ambiguous = False  # Parent/runtime identity 손실은 fresh process 전까지 해제하지 않는다.
+        # 비소유 주문 execution은 fresh process의 전계정 검증 전까지 자동 복구하지 않는다.
+        self._external_execution_reconciliation_required = False
+        self._reconciliation_cause_status = ReconciliationCauseStatus.MISSING
+        self._reconciliation_cause_category: (
+            ReconciliationCauseCategory | None
+        ) = None  # Fresh Controller만 새 Phase 13 원인 latch를 시작하며 session 안에서는 reset하지 않는다.
         self._startup_reconciliation_complete = False
         self._startup_reconciliation_blocked = False
         self._recovered_position_liquidation_session = False  # 일반 stop과 복구 청산의 멱등 namespace를 구분한다.
@@ -1324,6 +1401,7 @@ class TradingController:
             and not self._market_stream_interrupted_running_session
             and not self._event_runtime_failed
             and not self._process_ownership_ambiguous
+            and not self._external_execution_reconciliation_required
             and (
                 not self._pending_order_recovery_enabled
                 or self._startup_reconciliation_complete
@@ -1344,21 +1422,88 @@ class TradingController:
         """
         # 공개 lifecycle과 중단 provenance, startup, stream 및 worker gate를 같은 session lock에서 판정한다.
         with self._session_lock:
-            return (
-                self._stream_reconciliation_required
-                or self._market_stream_reconciliation_required
-                or self._market_stream_interrupted_running_session
-                or self._event_runtime_failed
-                or self._process_ownership_ambiguous
-                or self._startup_reconciliation_blocked
-                or not self._startup_reconciliation_complete
-                or (
-                    self._requires_manual_kill_cleanup_locked()
-                    and not self._manual_kill_cleanup_verified
-                )
-                or self._status
-                is TradingSessionStatus.RECONCILIATION_REQUIRED
-            )  # Fresh open order만 남아도 cleanup bool을 통해 shutdown owner가 안전하게 차단한다.
+            return self._reconciliation_required_locked()
+
+    @property
+    def reconciliation_cause_snapshot(self) -> ReconciliationCauseSnapshot:
+        """
+        함수 이름: reconciliation_cause_snapshot()
+        기능: 재조정 필요 여부와 원인 latch를 같은 session lock에서 불변 snapshot으로 반환한다.
+        인자: 없음
+        반환값: EXACT 외에는 원인 범주를 숨기는 ReconciliationCauseSnapshot
+        작성 날짜: 2026/08/31
+        """
+        with self._session_lock:
+            # bool과 원인 상태 사이에 다른 callback이 끼어들 수 없도록 한 임계구역에서 복사한다.
+            return ReconciliationCauseSnapshot(
+                reconciliation_required=self._reconciliation_required_locked(),
+                status=self._reconciliation_cause_status,
+                category=(
+                    self._reconciliation_cause_category
+                    if self._reconciliation_cause_status
+                    is ReconciliationCauseStatus.EXACT
+                    else None
+                ),
+            )
+
+    def _reconciliation_required_locked(self) -> bool:
+        """
+        함수 이름: _reconciliation_required_locked()
+        기능: 호출자가 보유한 session lock 아래 모든 재조정 blocker를 한 번에 판정한다.
+        인자: 없음
+        반환값: 미해결 재조정 상태가 하나라도 있으면 True
+        작성 날짜: 2026/08/31
+        """
+        # Fresh open order만 남아도 cleanup bool을 포함해 shutdown owner를 안전하게 차단한다.
+        return (
+            self._stream_reconciliation_required
+            or self._market_stream_reconciliation_required
+            or self._market_stream_interrupted_running_session
+            or self._event_runtime_failed
+            or self._process_ownership_ambiguous
+            or self._external_execution_reconciliation_required
+            or self._startup_reconciliation_blocked
+            or not self._startup_reconciliation_complete
+            or (
+                self._requires_manual_kill_cleanup_locked()
+                and not self._manual_kill_cleanup_verified
+            )
+            or self._status
+            is TradingSessionStatus.RECONCILIATION_REQUIRED
+        )
+
+    def _record_reconciliation_cause_locked(
+        self,
+        category: ReconciliationCauseCategory,
+    ) -> None:
+        """
+        함수 이름: _record_reconciliation_cause_locked()
+        기능: session lock 아래 최초 원인만 EXACT로 기록하고 후속 기록을 영구 모호성으로 잠근다.
+        인자: category -> secret 없는 안정적 재조정 원인 범주
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        if not isinstance(category, ReconciliationCauseCategory):
+            raise TypeError("category must be a ReconciliationCauseCategory")
+
+        # 이미 모호해진 latch는 후속 callback 순서와 무관하게 같은 fail-closed 상태를 유지한다.
+        if self._reconciliation_cause_status in (
+            ReconciliationCauseStatus.DUPLICATE,
+            ReconciliationCauseStatus.CONFLICT,
+        ):
+            return
+        if self._reconciliation_cause_status is ReconciliationCauseStatus.MISSING:
+            self._reconciliation_cause_status = ReconciliationCauseStatus.EXACT
+            self._reconciliation_cause_category = category
+            return
+
+        # 두 번째 기록은 같은 범주도 단일 원인 증거가 아니므로 category를 즉시 폐기한다.
+        self._reconciliation_cause_status = (
+            ReconciliationCauseStatus.DUPLICATE
+            if self._reconciliation_cause_category is category
+            else ReconciliationCauseStatus.CONFLICT
+        )
+        self._reconciliation_cause_category = None
 
     @property
     def market_stream_reconciliation_required(self) -> bool:
@@ -1371,6 +1516,19 @@ class TradingController:
         """
         with self._session_lock:
             return self._market_stream_reconciliation_required
+
+    @property
+    def external_execution_reconciliation_required(self) -> bool:
+        """
+        함수 이름: external_execution_reconciliation_required()
+        기능: 현재 process에서 관찰한 비소유 주문 execution의 영구 재조정 blocker를 반환한다.
+        인자: 없음
+        반환값: fresh process의 전계정 검증이 필요하면 True
+        작성 날짜: 2026/09/01
+        """
+        # 비소유 execution은 app 주문 전용 reconnect가 증명할 수 없으므로 process 안에서 해제하지 않는다.
+        with self._session_lock:
+            return self._external_execution_reconciliation_required
 
     @property
     def _market_stream_ready(self) -> bool:
@@ -1583,8 +1741,32 @@ class TradingController:
                     if active:
                         self._manual_kill_active = True
                     self._manual_kill_control_persistence_ambiguous = True
+                    self._record_reconciliation_cause_locked(
+                        ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS
+                    )
                     self._process_ownership_ambiguous = True
                     self._stream_reconciliation_required = True
+                    if self._status in (
+                        TradingSessionStatus.RUNNING,
+                        TradingSessionStatus.STOPPING,
+                    ):
+                        self._status = (
+                            TradingSessionStatus.RECONCILIATION_REQUIRED
+                        )
+                    if self._context.initialized:
+                        try:
+                            self._context.apply_runtime_patch(
+                                patch(
+                                    trading_phase=(
+                                        TradingPhase.RECONCILIATION_REQUIRED
+                                    )
+                                )
+                            )
+                        except Exception:
+                            pass  # 원 fsync 예외를 보존하되 이미 닫힌 공개 status는 되돌리지 않는다.
+                    self._scheduler.clear()
+                    if self._event_queue is not None:
+                        self._event_queue.clear()
                     raise
             previous_cleanup_verified = self._manual_kill_cleanup_verified
             self._manual_kill_active = active
@@ -1729,12 +1911,22 @@ class TradingController:
                     )
         except Exception:
             # Receipt와 거래소 사실은 되돌리지 않고 operator-visible reconciliation 상태를 유지한다.
+            self._record_reconciliation_cause_locked(
+                ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
+            )
             self._manual_kill_cleanup_verified = False
             if self._context.initialized:
-                self._context.apply_runtime_patch(
-                    patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
-                )
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+                try:
+                    self._context.apply_runtime_patch(
+                        patch(
+                            trading_phase=(
+                                TradingPhase.RECONCILIATION_REQUIRED
+                            )
+                        )
+                    )
+                except Exception:
+                    pass  # Cleanup 원 예외와 먼저 닫힌 공개 status를 모두 보존한다.
             else:
                 self._startup_reconciliation_blocked = True
             return
@@ -1878,6 +2070,7 @@ class TradingController:
             and self._web_socket_gateway.account_ready
             and not self._event_runtime_failed
             and not self._process_ownership_ambiguous
+            and not self._external_execution_reconciliation_required
             and (
                 not self._pending_order_recovery_enabled
                 or self._startup_reconciliation_complete
@@ -1906,6 +2099,7 @@ class TradingController:
             and not self._market_stream_interrupted_running_session
             and not self._event_runtime_failed
             and not self._process_ownership_ambiguous
+            and not self._external_execution_reconciliation_required
             and (
                 not self._pending_order_recovery_enabled
                 or self._startup_reconciliation_complete
@@ -1997,19 +2191,23 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/08/29
         """
+        # Fresh REST·journal·memory·Context 중 미해결 owner를 주문·영속성 범주로 먼저 고정한다.
+        self._record_reconciliation_cause_locked(
+            ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
+        )
         self._manual_kill_cleanup_verified = False
         if not self._context.initialized:
             self._startup_reconciliation_blocked = True
             return  # 시작 전에는 Context 대신 startup gate가 READY publication을 차단한다.
 
         # 이미 같은 phase면 version을 불필요하게 올리지 않고 공개 status만 다시 고정한다.
+        self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
         if self._context.runtime.trading_phase is not (
             TradingPhase.RECONCILIATION_REQUIRED
         ):
             self._context.apply_runtime_patch(
                 patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
             )
-        self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
 
     def mark_process_ownership_ambiguous(self, reason: str) -> None:
         """
@@ -2026,22 +2224,28 @@ class TradingController:
             raise ValueError("reason must be non-empty without outer whitespace")
 
         with self._session_lock:
+            self._record_reconciliation_cause_locked(
+                ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS
+            )
             self._process_ownership_ambiguous = True
             self._stream_reconciliation_required = True
 
-            # Active STM과 주문 identity는 보존하고 자동 market/order effect만 reconciliation 상태로 잠근다.
-            if self._context.initialized:
-                self._context.apply_runtime_patch(
-                    patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
-                )
+            # Context publication 실패보다 먼저 공개 status를 닫아 active effect가 재개되지 않게 한다.
             if self._status in (
                 TradingSessionStatus.RUNNING,
                 TradingSessionStatus.STOPPING,
             ):
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
-            self._scheduler.clear()
-            if self._event_queue is not None:
-                self._event_queue.clear()
+            try:
+                if self._context.initialized:
+                    self._context.apply_runtime_patch(
+                        patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
+                    )
+            finally:
+                self._scheduler.clear()
+                if self._event_queue is not None:
+                    self._event_queue.clear()
+                # Publication 예외도 queued effect cleanup과 status commit을 되돌리지 못한다.
 
     @property
     def _mode_command_enabled(self) -> bool:
@@ -2820,6 +3024,9 @@ class TradingController:
                     expected_version=expected_version,
                 ) from error
             except Exception:
+                self._record_reconciliation_cause_locked(
+                    ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
+                )
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
                 raise  # 예상 밖 effect 실패도 NOT_STARTED로 위장하지 않고 operator 복구를 요구한다.
             finally:
@@ -3739,6 +3946,27 @@ class TradingController:
             raise TypeError("result must be an OrderResult")
 
         with self._session_lock:
+            # Prefixless execution은 exchange ID가 앱 주문과 충돌해도 app-owned 결과로 승격하지 않는다.
+            if not result.client_order_id.startswith(
+                APP_CLIENT_ORDER_ID_PREFIX
+            ):
+                self._stream_reconciliation_required = True
+                self._external_execution_reconciliation_required = True
+                if self._is_active_locked():
+                    self._enter_order_reconciliation(
+                        None,
+                        OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
+                        message_id=None,
+                        cause_category=(
+                            ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                        ),
+                    )
+                else:
+                    self._record_reconciliation_cause_locked(
+                        ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                    )
+                return False  # Fresh process만 account-wide 외부 실행 사실을 다시 검증할 수 있다.
+
             # Client ID를 우선 사용하고 exchange ID는 cancel replace 상관관계 보조로만 사용한다.
             state = self._order_states_by_client_id.get(result.client_order_id)
             if state is None and result.exchange_order_id is not None:
@@ -3746,10 +3974,25 @@ class TradingController:
                     result.exchange_order_id
                 )
             if state is None:
-                if result.client_order_id.startswith("bat-"):
-                    self._stream_reconciliation_required = True
+                self._stream_reconciliation_required = True
+                if self._is_active_locked():
+                    self._enter_order_reconciliation(
+                        None,
+                        OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
+                        message_id=None,
+                        cause_category=(
+                            ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                        ),
+                    )
+                else:
+                    self._record_reconciliation_cause_locked(
+                        ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                    )
                 return False  # 알 수 없는 앱 주문은 새 aggregate를 추측하지 않고 REST 재조정을 요구한다.
             if not self._context.initialized:
+                self._record_reconciliation_cause_locked(
+                    ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                )
                 self._stream_reconciliation_required = True
                 return False  # startup 중 event는 history를 읽은 뒤 REST authoritative query로 복구한다.
 
@@ -3785,7 +4028,14 @@ class TradingController:
                     None,
                     OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
                     message_id=None,
+                    cause_category=(
+                        ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                    ),
                 )  # 실행 중 disconnect는 Context와 공개 status도 동시에 잠근다.
+            else:
+                self._record_reconciliation_cause_locked(
+                    ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                )  # 시작 전 blocker도 원인 없는 MISSING으로 남기지 않는다.
 
     def mark_market_stream_reconciliation_required(self, reason: str) -> None:
         """
@@ -3816,7 +4066,12 @@ class TradingController:
                     None,
                     OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
                     message_id=None,
+                    cause_category=ReconciliationCauseCategory.MARKET_STREAM_FAILED,
                 )
+            else:
+                self._record_reconciliation_cause_locked(
+                    ReconciliationCauseCategory.MARKET_STREAM_FAILED
+                )  # 시작 전 또는 이미 잠긴 session의 새 시장 원인도 단일 latch에 기록한다.
 
             # 전략 timer는 폐기하되 이미 수신한 주문 outcome은 position·history 복구를 위해 보존한다.
             self._scheduler.clear()
@@ -4491,6 +4746,9 @@ class TradingController:
         self._order_states_by_client_id[order.client_order_id] = state
         if order.exchange_order_id is not None:
             self._order_states_by_order_id[order.exchange_order_id] = state
+        self._record_reconciliation_cause_locked(
+            ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
+        )
         self._startup_reconciliation_blocked = True
 
     def _publish_restored_position_snapshot(self, position: Position) -> None:
@@ -4585,6 +4843,10 @@ class TradingController:
                 raise AccountStreamRecoveryBlockedError(
                     "process ownership is ambiguous"
                 )
+            if self._external_execution_reconciliation_required:
+                raise AccountStreamRecoveryBlockedError(
+                    "external account execution requires fresh-process reconciliation"
+                )  # App-prefix 조회만 수행하는 자동 recovery로 외부 주문을 설명했다고 주장하지 않는다.
 
             # Reconnect operation 전체에서 command gate를 닫고 REST full snapshot부터 다시 적용한다.
             self._stream_reconciliation_required = True
@@ -5055,6 +5317,7 @@ class TradingController:
             or not self._market_stream_ready
             or self._event_runtime_failed
             or self._process_ownership_ambiguous
+            or self._external_execution_reconciliation_required
         ):
             raise TradingSessionError(
                 TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
@@ -5537,6 +5800,7 @@ class TradingController:
             and self._market_stream_ready
             and not self._event_runtime_failed
             and not self._process_ownership_ambiguous
+            and not self._external_execution_reconciliation_required
             and (
                 not self._pending_order_recovery_enabled
                 or self._startup_reconciliation_complete
@@ -6042,6 +6306,9 @@ class TradingController:
                 state,
                 OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
                 message_id=None,
+                cause_category=(
+                    ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
+                ),
             )
             return ()  # Durable PREPARED journal을 유지해 재시작에도 미확정 주문을 숨기지 않는다.
 
@@ -7599,16 +7866,17 @@ class TradingController:
             OrderAttemptKind.INITIAL if attempt == 0 else OrderAttemptKind.RETRY
         )
 
-        # Force sell도 일반 pending Context 필드를 채워 same-order query와 STOP Guard를 공유한다.
-        self._context.apply_runtime_patch(
-            patch(
-                pending_strategy=owner,
-                pending_order_side=OrderSide.SELL,
-                pending_order_attempt_kind=attempt_kind,
-                pending_intent_id=intent_id,
-                trading_phase=TradingPhase.STOPPING,
-            )
+        # Force sell도 일반 주문과 같은 message 1→Context patch→message 2 경계를 보존한다.
+        pending_patch = patch(
+            pending_strategy=owner,
+            pending_order_side=OrderSide.SELL,
+            pending_order_attempt_kind=attempt_kind,
+            pending_intent_id=intent_id,
+            trading_phase=TradingPhase.STOPPING,
         )
+        trace_identity = self._prepare_order_patch_trace(pending_patch)
+        self._context.apply_runtime_patch(pending_patch)
+        self._complete_order_patch_trace(trace_identity)
         submit_action = SubmitOrder(
             strategy=owner,
             side=OrderSide.SELL,
@@ -7800,6 +8068,7 @@ class TradingController:
         failure_code: OrderExecutionFailureCode,
         *,
         message_id: str | None,
+        cause_category: ReconciliationCauseCategory | None = None,
     ) -> None:
         """
         함수 이름: _enter_order_reconciliation()
@@ -7807,6 +8076,7 @@ class TradingController:
         인자: state -> 관련 Order state 또는 생성 전이면 None
             failure_code -> typed reconciliation 사유
             message_id -> 실제 실패가 관찰된 Communication message ID 또는 policy lock이면 None
+            cause_category -> 호출 origin이 구분한 재조정 원인 범주 또는 자동 mapping이면 None
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -7816,26 +8086,51 @@ class TradingController:
             not isinstance(message_id, str) or not message_id.strip()
         ):
             raise ValueError("message_id must be a non-empty string or None")
+        if cause_category is not None and not isinstance(
+            cause_category,
+            ReconciliationCauseCategory,
+        ):
+            raise TypeError(
+                "cause_category must be a ReconciliationCauseCategory or None"
+            )
 
-        # Context phase와 공개 session status를 같은 application lock 안에서 fail closed한다.
-        version_before = self._context.version
-        if self._context.initialized:
-            self._context.apply_runtime_patch(
-                patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
-            )
-        self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
-        if state is not None:
-            self._scheduled_order_queries.pop(
-                state.order.client_order_id,
-                None,
-            )
-        if state is not None and message_id is not None:
-            self._append_order_trace(
-                state.order,
-                message_id,
-                version_before,
-                failure_code=failure_code,
-            )
+        with self._session_lock:
+            # 명시 origin이 없으면 failure code를 안정적인 공개 범주로 보수적으로 축약한다.
+            selected_cause_category = cause_category
+            if selected_cause_category is None:
+                if failure_code is OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED:
+                    selected_cause_category = (
+                        ReconciliationCauseCategory.PREPARE_FILTER_OR_CAP_REJECTED
+                    )
+                elif failure_code is OrderExecutionFailureCode.EVENT_RUNTIME_FAILED:
+                    selected_cause_category = (
+                        ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED
+                    )
+                else:
+                    selected_cause_category = (
+                        ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
+                    )
+            self._record_reconciliation_cause_locked(selected_cause_category)
+            self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+
+            # 공개 status를 먼저 잠가 Context patch 실패도 신규 effect 허용 상태로 완화하지 않는다.
+            version_before = self._context.version
+            if self._context.initialized:
+                self._context.apply_runtime_patch(
+                    patch(trading_phase=TradingPhase.RECONCILIATION_REQUIRED)
+                )
+            if state is not None:
+                self._scheduled_order_queries.pop(
+                    state.order.client_order_id,
+                    None,
+                )
+            if state is not None and message_id is not None:
+                self._append_order_trace(
+                    state.order,
+                    message_id,
+                    version_before,
+                    failure_code=failure_code,
+                )
 
     def mark_event_runtime_failed(self) -> None:
         """
@@ -7854,6 +8149,9 @@ class TradingController:
                 TradingSessionStatus.STOPPING,
                 TradingSessionStatus.RECONCILIATION_REQUIRED,
             ):
+                self._record_reconciliation_cause_locked(
+                    ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED
+                )
                 return
 
             self._enter_order_reconciliation(
@@ -7861,6 +8159,34 @@ class TradingController:
                 OrderExecutionFailureCode.EVENT_RUNTIME_FAILED,
                 message_id=None,
             )  # Queue, pending journal과 same-ID state는 보존하고 신규 주문 gate만 닫는다.
+
+    def seal_event_runtime_failure_gate(self) -> bool:
+        """
+        함수 이름: seal_event_runtime_failure_gate()
+        기능: failure finalizer가 terminal truth를 보존하며 active/reconciliation scheduler gate를 원자적으로 봉인한다.
+        인자: 없음
+        반환값: RUNNING 또는 STOPPING을 새 event reconciliation으로 전이했으면 True
+        작성 날짜: 2026/08/31
+        """
+        with self._session_lock:
+            # Completed recovery와 시작 전 failure는 새 event blocker로 오염시키지 않는다.
+            if self._status in (
+                TradingSessionStatus.NOT_STARTED,
+                TradingSessionStatus.TERMINATED,
+            ):
+                return False
+
+            # 기존 reconciliation은 원인 latch를 다시 기록하지 않고 future reconnect만 계속 닫는다.
+            self._event_runtime_failed = True
+            if self._status is TradingSessionStatus.RECONCILIATION_REQUIRED:
+                return False
+
+            self._enter_order_reconciliation(
+                None,
+                OrderExecutionFailureCode.EVENT_RUNTIME_FAILED,
+                message_id=None,
+            )
+            return True  # Status check와 blocker commit은 같은 reentrant session lock에서 완료된다.
 
     def _record_order_finished_trace(
         self,
@@ -8119,6 +8445,7 @@ class TradingController:
             or self._market_stream_interrupted_running_session
             or self._event_runtime_failed
             or self._process_ownership_ambiguous
+            or self._external_execution_reconciliation_required
             or self._startup_reconciliation_blocked
         )
         if (
@@ -8132,6 +8459,9 @@ class TradingController:
             self._selected_stm = None  # 다음 start는 정상 stop 뒤 새 REGIME 선택을 반드시 요구한다.
         elif root_state is RootState.STOPPING:
             if runtime.pending_order_id is not None:
+                self._record_reconciliation_cause_locked(
+                    ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
+                )
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
             else:
                 self._status = TradingSessionStatus.STOPPING

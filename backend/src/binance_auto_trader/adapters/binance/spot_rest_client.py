@@ -1872,7 +1872,7 @@ class BinanceSpotRESTClient:
         order_id = payload.get("orderId")
         if isinstance(order_id, bool) or not isinstance(order_id, int) or order_id <= 0:
             raise BinancePayloadError("orderId must be a positive integer")
-        processed_at = self._result_time()
+        processed_at = self._payload_processed_time(payload)
 
         # FULL response fills를 우선 사용하고 query/cancel/list 응답은 myTrades로 보강한다.
         direct_fill_payloads = payload.get("fills")
@@ -1884,10 +1884,7 @@ class BinanceSpotRESTClient:
                 exchange_order_id=str(order_id),
                 base_asset=rules.base_asset,
                 quote_asset=rules.quote_asset,
-                fallback_executed_at=self._payload_processed_time(
-                    payload,
-                    processed_at,
-                ),
+                fallback_executed_at=processed_at,
             )
         elif hydrate_fills and self._payload_has_executions(payload):
             fills = self._load_order_fills(
@@ -1903,7 +1900,6 @@ class BinanceSpotRESTClient:
             expected_symbol=order.symbol,
             expected_client_order_id=order.client_order_id,
             fills=fills,
-            fallback_processed_at=processed_at,
         )  # mapper가 executedQty와 fill 합계를 마지막으로 검증한다.
 
     def _map_order_collection(
@@ -1945,7 +1941,7 @@ class BinanceSpotRESTClient:
                 raise BinancePayloadError("orderId must be a positive integer")
 
             # Query/list 응답은 fill 배열이 없으므로 executedQty 양수일 때 myTrades를 조회한다.
-            processed_at = self._result_time()
+            processed_at = self._payload_processed_time(order_payload)
             fills = (
                 self._load_order_fills(
                     symbol=expected_symbol,
@@ -1961,7 +1957,6 @@ class BinanceSpotRESTClient:
                     expected_symbol=expected_symbol,
                     expected_client_order_id=client_order_id,
                     fills=fills,
-                    fallback_processed_at=processed_at,
                 )
             )
 
@@ -2051,15 +2046,13 @@ class BinanceSpotRESTClient:
     def _payload_processed_time(
         self,
         payload: Mapping[object, object],
-        fallback_time: datetime,
     ) -> datetime:
         """
         함수 이름: _payload_processed_time()
-        기능: FULL fill fallback에 사용할 order transact/update/time을 UTC로 변환한다.
+        기능: FULL·query 주문의 필수 transact/update/time을 UTC로 변환한다.
         인자: payload -> 공식 order response object
-            fallback_time -> 공식 timestamp가 없을 때 사용할 UTC 시각
         반환값: UTC 처리 시각
-        작성 날짜: 2026/08/22
+        작성 날짜: 2026/09/01
         """
         for field_name in ("transactTime", "updateTime", "time"):
             if field_name not in payload:
@@ -2073,7 +2066,10 @@ class BinanceSpotRESTClient:
                 raise BinancePayloadError(f"{field_name} must be a non-negative integer")
             return _UNIX_EPOCH + timedelta(milliseconds=timestamp_value)
 
-        return fallback_time.astimezone(timezone.utc)  # timestamp 없는 payload만 주입 시각을 사용한다.
+        # 거래소 시각이 없으면 성공 결과를 확정하지 않고 조정을 요구한다.
+        raise BinancePayloadError(
+            "order payload must contain transactTime, updateTime, or time"
+        )
 
     def _rules_for_fee_assets(self, symbol: str) -> tuple[str, str]:
         """

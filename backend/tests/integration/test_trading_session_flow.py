@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta
 from decimal import Decimal
+from threading import Barrier, Thread
 import unittest
 from unittest.mock import PropertyMock, patch
 
@@ -14,6 +17,8 @@ from binance_auto_trader.adapters.binance.websocket_gateway import (
 )
 from binance_auto_trader.application.regime_controller import RegimeController
 from binance_auto_trader.application.trading_controller import (
+    ReconciliationCauseCategory,
+    ReconciliationCauseStatus,
     TradingController,
     TradingSessionError,
     TradingSessionFailureCode,
@@ -1487,6 +1492,456 @@ class TradingSessionStopTests(unittest.TestCase):
         return TradingEvent.create(
             TradingEventType.MARKET_DATA_UPDATED,
             occurred_at=MARKET_UPDATED_AT,
+        )
+
+
+class ReconciliationCauseLatchTests(unittest.TestCase):
+    """
+    클래스 이름: ReconciliationCauseLatchTests
+    기능: Controller 재조정 원인의 최초 기록과 중복·충돌 흡수 상태를 검증한다.
+    작성 날짜: 2026/08/31
+    """
+
+    def _start_controller(self) -> TradingController:
+        """
+        함수 이름: _start_controller()
+        기능: 재조정 origin을 호출할 RUNNING Controller를 결정론적으로 준비한다.
+        인자: 없음
+        반환값: TYPE_0 세션을 시작한 TradingController
+        작성 날짜: 2026/08/31
+        """
+        # 기존 ready fixture로 account·market 조건을 맞춘 뒤 같은 version에서 세션을 시작한다.
+        controller, regime_controller, _ = _create_ready_controller()
+        selection = regime_controller.set_regime_type(
+            RegimeType.TYPE_0,
+            command_id="select-reconciliation-cause",
+            expected_version=controller.context.version,
+        )
+        controller.start_trading(
+            command_id="start-reconciliation-cause",
+            expected_version=selection.version,
+        )
+        return controller
+
+    @staticmethod
+    def _run_after_barrier(
+        barrier: Barrier,
+        operation: Callable[[], None],
+    ) -> None:
+        """
+        함수 이름: _run_after_barrier()
+        기능: 두 cause origin을 같은 결정론적 시작 경계 뒤 별도 thread에서 호출한다.
+        인자: barrier -> main과 두 worker가 공유할 시작 Barrier
+            operation -> Barrier 통과 뒤 한 번 호출할 원인 기록 Operation
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        # 모든 participant가 준비될 때까지 기다린 뒤 production 공개 경계를 정확히 한 번 호출한다.
+        barrier.wait()
+        operation()
+
+    def test_initial_snapshot_reports_missing_without_category(self) -> None:
+        """
+        함수 이름: test_initial_snapshot_reports_missing_without_category()
+        기능: 원인을 기록하지 않은 Controller가 범주를 추측하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller, _, _ = _create_ready_controller()
+
+        # Startup blocker 여부와 무관하게 기록되지 않은 원인은 MISSING과 None으로만 공개한다.
+        snapshot = controller.reconciliation_cause_snapshot
+        self.assertIs(snapshot.status, ReconciliationCauseStatus.MISSING)
+        self.assertIsNone(snapshot.category)
+        self.assertEqual(
+            controller.reconciliation_required,
+            snapshot.reconciliation_required,
+        )
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.status = ReconciliationCauseStatus.EXACT  # type: ignore[misc]
+
+    def test_account_stream_origin_records_exact_category_once(self) -> None:
+        """
+        함수 이름: test_account_stream_origin_records_exact_category_once()
+        기능: RUNNING account stream 장애가 지정된 단일 원인 범주로 기록되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+
+        # Credential 없는 typed 사유를 실제 공개 origin에 전달해 atomic snapshot을 읽는다.
+        controller.mark_account_stream_reconciliation_required(
+            "account_stream_disconnected"
+        )
+        snapshot = controller.reconciliation_cause_snapshot
+        self.assertTrue(snapshot.reconciliation_required)
+        self.assertIs(snapshot.status, ReconciliationCauseStatus.EXACT)
+        self.assertIs(
+            snapshot.category,
+            ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION,
+        )
+
+    def test_not_started_public_origins_do_not_leave_missing_cause(self) -> None:
+        """
+        함수 이름: test_not_started_public_origins_do_not_leave_missing_cause()
+        기능: NOT_STARTED의 account·market·event blocker도 정확한 원인 하나를 남기는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        cause_cases: tuple[
+            tuple[
+                str,
+                Callable[[TradingController], None],
+                ReconciliationCauseCategory,
+            ],
+            ...,
+        ] = (
+            (
+                "account",
+                lambda controller: controller.mark_account_stream_reconciliation_required(
+                    "account_stream_disconnected"
+                ),
+                ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION,
+            ),
+            (
+                "market",
+                lambda controller: controller.mark_market_stream_reconciliation_required(
+                    "market_stream_disconnected"
+                ),
+                ReconciliationCauseCategory.MARKET_STREAM_FAILED,
+            ),
+            (
+                "event",
+                lambda controller: controller.mark_event_runtime_failed(),
+                ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
+            ),
+        )
+
+        # 각 public origin은 세션을 시작하지 않은 별도 ready Controller에서 독립 검증한다.
+        for label, operation, expected_category in cause_cases:
+            with self.subTest(origin=label):
+                controller, _, _ = _create_ready_controller()
+                operation(controller)
+                snapshot = controller.reconciliation_cause_snapshot
+                self.assertTrue(snapshot.reconciliation_required)
+                self.assertIs(snapshot.status, ReconciliationCauseStatus.EXACT)
+                self.assertIs(snapshot.category, expected_category)
+
+    def test_same_category_second_record_latches_duplicate(self) -> None:
+        """
+        함수 이름: test_same_category_second_record_latches_duplicate()
+        기능: 같은 origin의 두 번째 기록이 범주를 숨긴 DUPLICATE 흡수 상태가 되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+        controller.mark_account_stream_reconciliation_required(
+            "account_stream_disconnected"
+        )
+        controller.mark_account_stream_reconciliation_required(
+            "account_stream_callback_failed"
+        )
+
+        # 중복을 단일 원인으로 완화하지 않고 이후 다른 origin도 최초 모호성 상태를 바꾸지 않는다.
+        duplicate_snapshot = controller.reconciliation_cause_snapshot
+        self.assertIs(
+            duplicate_snapshot.status,
+            ReconciliationCauseStatus.DUPLICATE,
+        )
+        self.assertIsNone(duplicate_snapshot.category)
+        controller.mark_process_ownership_ambiguous("parent_identity_lost")
+        self.assertEqual(
+            duplicate_snapshot,
+            controller.reconciliation_cause_snapshot,
+        )
+
+    def test_different_category_second_record_latches_conflict(self) -> None:
+        """
+        함수 이름: test_different_category_second_record_latches_conflict()
+        기능: 서로 다른 두 origin이 category 없는 CONFLICT 흡수 상태가 되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+        controller.mark_account_stream_reconciliation_required(
+            "account_stream_disconnected"
+        )
+        controller.mark_event_runtime_failed()
+
+        # 두 category의 도착 순서와 무관하게 외부에는 모호한 상태만 공개한다.
+        conflict_snapshot = controller.reconciliation_cause_snapshot
+        self.assertTrue(conflict_snapshot.reconciliation_required)
+        self.assertIs(
+            conflict_snapshot.status,
+            ReconciliationCauseStatus.CONFLICT,
+        )
+        self.assertIsNone(conflict_snapshot.category)
+        controller.mark_account_stream_reconciliation_required(
+            "account_stream_callback_failed"
+        )
+        self.assertEqual(
+            conflict_snapshot,
+            controller.reconciliation_cause_snapshot,
+        )
+
+    def test_account_and_event_origin_race_latches_conflict(self) -> None:
+        """
+        함수 이름: test_account_and_event_origin_race_latches_conflict()
+        기능: account와 event origin의 동시 도착이 순서와 무관하게 CONFLICT로 닫히는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+        start_barrier = Barrier(3)
+        account_thread = Thread(
+            target=self._run_after_barrier,
+            args=(
+                start_barrier,
+                lambda: controller.mark_account_stream_reconciliation_required(
+                    "account_stream_disconnected"
+                ),
+            ),
+        )
+        event_thread = Thread(
+            target=self._run_after_barrier,
+            args=(start_barrier, controller.mark_event_runtime_failed),
+        )
+
+        # Main도 같은 Barrier를 통과시킨 뒤 두 callback이 session lock에서 직렬화될 때까지 기다린다.
+        account_thread.start()
+        event_thread.start()
+        start_barrier.wait()
+        account_thread.join(timeout=2)
+        event_thread.join(timeout=2)
+        self.assertFalse(account_thread.is_alive())
+        self.assertFalse(event_thread.is_alive())
+
+        # 어느 origin이 lock을 먼저 얻어도 두 번째 category는 외부 범주를 숨긴 충돌로 고정한다.
+        snapshot = controller.reconciliation_cause_snapshot
+        self.assertTrue(snapshot.reconciliation_required)
+        self.assertIs(snapshot.status, ReconciliationCauseStatus.CONFLICT)
+        self.assertIsNone(snapshot.category)
+
+    def test_event_runtime_origin_records_exact_category(self) -> None:
+        """
+        함수 이름: test_event_runtime_origin_records_exact_category()
+        기능: worker가 호출하는 runtime failure origin이 안정된 단일 범주를 남기는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+
+        # 실제 worker 공개 경계와 같은 Operation을 한 번 호출해 secret 없는 category를 검증한다.
+        controller.mark_event_runtime_failed()
+        snapshot = controller.reconciliation_cause_snapshot
+        self.assertIs(snapshot.status, ReconciliationCauseStatus.EXACT)
+        self.assertIs(
+            snapshot.category,
+            ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
+        )
+
+    def test_context_patch_failure_keeps_reconciliation_status_and_cause(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_context_patch_failure_keeps_reconciliation_status_and_cause()
+        기능: 재조정 Context patch 예외 뒤에도 공개 status와 최초 원인이 닫힌 채 유지되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+
+        # Context writer 실패를 실제 event origin에 주입해 status commit 이후 예외가 전파되게 한다.
+        with patch.object(
+            TradingContext,
+            "apply_runtime_patch",
+            side_effect=RuntimeError("controlled-reconciliation-patch-failure"),
+        ):
+            with self.assertRaises(RuntimeError):
+                controller.mark_event_runtime_failed()
+
+        # Context phase 전이가 실패해도 신규 command의 공개 blocker와 stable cause는 보존한다.
+        self.assertIs(
+            controller.status,
+            TradingSessionStatus.RECONCILIATION_REQUIRED,
+        )
+        snapshot = controller.reconciliation_cause_snapshot
+        self.assertTrue(snapshot.reconciliation_required)
+        self.assertIs(snapshot.status, ReconciliationCauseStatus.EXACT)
+        self.assertIs(
+            snapshot.category,
+            ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
+        )
+
+    def test_failure_finalizer_gate_is_atomic_with_terminal_stop(self) -> None:
+        """
+        함수 이름: test_failure_finalizer_gate_is_atomic_with_terminal_stop()
+        기능: finalizer gate와 zero-position STOP 경합이 terminal poison이나 cause latch 오염을 만들지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        terminal_controller = self._start_controller()
+        terminal_controller.stop_trading(
+            command_id="terminal-before-finalizer-gate",
+            expected_version=terminal_controller.context.version,
+        )
+        terminal_snapshot_before_seal = (
+            terminal_controller.reconciliation_cause_snapshot
+        )
+
+        # 이미 완결된 zero-exposure terminal은 event blocker와 cause를 새로 만들지 않는다.
+        self.assertFalse(
+            terminal_controller.seal_event_runtime_failure_gate()
+        )
+        terminal_snapshot = terminal_controller.reconciliation_cause_snapshot
+        self.assertIs(
+            terminal_controller.status,
+            TradingSessionStatus.TERMINATED,
+        )
+        self.assertEqual(
+            terminal_snapshot_before_seal,
+            terminal_snapshot,
+        )
+
+        reconciliation_controller = self._start_controller()
+        reconciliation_controller.mark_account_stream_reconciliation_required(
+            "account_stream_disconnected"
+        )
+        cause_before_seal = (
+            reconciliation_controller.reconciliation_cause_snapshot
+        )
+
+        # 이미 닫힌 session은 future reconnect만 event flag로 막고 최초 account cause는 그대로 보존한다.
+        self.assertFalse(
+            reconciliation_controller.seal_event_runtime_failure_gate()
+        )
+        self.assertEqual(
+            cause_before_seal,
+            reconciliation_controller.reconciliation_cause_snapshot,
+        )
+
+        for race_index in range(16):
+            controller = self._start_controller()
+            initial_race_snapshot = controller.reconciliation_cause_snapshot
+            start_barrier = Barrier(3)
+            unexpected_errors: list[Exception] = []
+
+            def seal_gate_after_barrier() -> None:
+                """
+                함수 이름: seal_gate_after_barrier()
+                기능: main·STOP worker와 같은 시작 경계 뒤 atomic finalizer gate를 호출한다.
+                인자: 없음
+                반환값: 없음
+                작성 날짜: 2026/08/31
+                """
+                start_barrier.wait()
+                try:
+                    controller.seal_event_runtime_failure_gate()
+                except Exception as error:
+                    unexpected_errors.append(error)
+
+            def stop_after_barrier() -> None:
+                """
+                함수 이름: stop_after_barrier()
+                기능: finalizer gate와 같은 시작 경계 뒤 zero-position STOP을 호출한다.
+                인자: 없음
+                반환값: 없음
+                작성 날짜: 2026/08/31
+                """
+                start_barrier.wait()
+                try:
+                    controller.stop_trading(
+                        command_id=f"atomic-finalizer-stop-{race_index}",
+                        expected_version=controller.context.version,
+                    )
+                except TradingSessionError:
+                    if (
+                        controller.status
+                        is not TradingSessionStatus.RECONCILIATION_REQUIRED
+                    ):
+                        unexpected_errors.append(
+                            AssertionError(
+                                "atomic finalizer race raised outside reconciliation"
+                            )
+                        )
+
+            seal_thread = Thread(target=seal_gate_after_barrier)
+            stop_thread = Thread(target=stop_after_barrier)
+            seal_thread.start()
+            stop_thread.start()
+            start_barrier.wait()
+            seal_thread.join(timeout=2)
+            stop_thread.join(timeout=2)
+
+            # Lock 획득 순서와 무관하게 terminal+event blocker의 불가능한 혼합 상태는 나오지 않는다.
+            self.assertFalse(seal_thread.is_alive())
+            self.assertFalse(stop_thread.is_alive())
+            self.assertEqual([], unexpected_errors)
+            race_snapshot = controller.reconciliation_cause_snapshot
+            if controller.status is TradingSessionStatus.TERMINATED:
+                self.assertEqual(initial_race_snapshot, race_snapshot)
+            else:
+                self.assertIs(
+                    controller.status,
+                    TradingSessionStatus.RECONCILIATION_REQUIRED,
+                )
+                self.assertTrue(race_snapshot.reconciliation_required)
+                self.assertIs(
+                    race_snapshot.status,
+                    ReconciliationCauseStatus.EXACT,
+                )
+                self.assertIs(
+                    race_snapshot.category,
+                    ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
+                )
+
+    def test_market_stream_origin_records_exact_category(self) -> None:
+        """
+        함수 이름: test_market_stream_origin_records_exact_category()
+        기능: RUNNING Kline stream 장애가 account 장애와 구분된 범주를 남기는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+
+        # 실제 MarketDataController callback 경계와 같은 공개 Operation을 한 번 호출한다.
+        controller.mark_market_stream_reconciliation_required(
+            "market_stream_disconnected"
+        )
+        snapshot = controller.reconciliation_cause_snapshot
+        self.assertIs(snapshot.status, ReconciliationCauseStatus.EXACT)
+        self.assertIs(
+            snapshot.category,
+            ReconciliationCauseCategory.MARKET_STREAM_FAILED,
+        )
+
+    def test_process_ownership_origin_records_exact_category(self) -> None:
+        """
+        함수 이름: test_process_ownership_origin_records_exact_category()
+        기능: runtime ownership 손실이 stream 장애와 구분된 영구 원인을 남기는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/08/31
+        """
+        controller = self._start_controller()
+
+        # Parent identity 상실 공개 Operation은 raw process 정보 없이 안정된 범주만 남긴다.
+        controller.mark_process_ownership_ambiguous("parent_identity_lost")
+        snapshot = controller.reconciliation_cause_snapshot
+        self.assertIs(snapshot.status, ReconciliationCauseStatus.EXACT)
+        self.assertIs(
+            snapshot.category,
+            ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS,
         )
 
 

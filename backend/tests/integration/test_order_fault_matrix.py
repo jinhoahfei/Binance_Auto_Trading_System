@@ -24,6 +24,8 @@ from binance_auto_trader.application.trade_history_controller import (
 )
 from binance_auto_trader.application.trading_controller import (
     OrderExecutionFailureCode,
+    ReconciliationCauseCategory,
+    ReconciliationCauseStatus,
     TradingController,
     TradingSessionStatus,
 )
@@ -1038,6 +1040,18 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
         self.assertIs(
             fixture.controller.status,
             TradingSessionStatus.RECONCILIATION_REQUIRED,
+        )
+
+        # Position 반영 실패는 더 세부 사실을 추측하지 않고 주문·영속성 모호성 하나로 고정한다.
+        cause_snapshot = fixture.controller.reconciliation_cause_snapshot
+        self.assertTrue(cause_snapshot.reconciliation_required)
+        self.assertIs(
+            cause_snapshot.status,
+            ReconciliationCauseStatus.EXACT,
+        )
+        self.assertIs(
+            cause_snapshot.category,
+            ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS,
         )
 
         # trace는 Position failure code를 남기고 history 13·outcome 14 성공 단계를 남기지 않는다.

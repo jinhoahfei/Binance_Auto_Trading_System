@@ -11,11 +11,16 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from binance_auto_trader.application import (
     AccountStreamRecoveryBlockedError,
+    ReconciliationCauseCategory,
+    ReconciliationCauseStatus,
     TradingController,
     TradingSessionStatus,
 )
 from binance_auto_trader.application.market_evaluation_builder import (
     ThirtyMinuteMarketEvaluationBuilder,
+)
+from binance_auto_trader.application.trading_controller import (
+    _OrderExecutionState,
 )
 from binance_auto_trader.bootstrap import (
     ApplicationStatus,
@@ -26,9 +31,13 @@ from binance_auto_trader.bootstrap import (
 )
 from binance_auto_trader.bootstrap.application import _FAKE_ORDER_CAPABILITY
 from binance_auto_trader.domain.trading import (
+    Order,
     OrderResult,
+    OrderSide,
     OrderStatus,
+    RegimeType,
     RiskPolicyUnavailable,
+    StrategyType,
 )
 
 
@@ -652,6 +661,115 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
                     )
                 ],
             )
+        finally:
+            close_application(runtime)
+
+    def test_unknown_external_order_result_requires_fresh_process_reconciliation(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_unknown_external_order_result_requires_fresh_process_reconciliation()
+        기능: app prefix가 없는 executionReport를 자동 복구 없이 fresh-process blocker로 유지하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/01
+        """
+        runtime = self._create_ready_testnet_runtime()
+        recovery_worker = runtime._account_stream_recovery_worker
+        if recovery_worker is None:
+            raise AssertionError("testnet runtime must compose a recovery worker")
+        with runtime.application_lock:
+            runtime.trading_controller._status = TradingSessionStatus.RUNNING
+            # 외부 client ID가 app 주문의 숫자 exchange ID를 재사용해도 fallback lookup에 흡수되지 않아야 한다.
+            app_order = Order(
+                intent_id="known-runtime-intent",
+                client_order_id="bat-known-runtime-order",
+                submission_attempt=0,
+                symbol="ETHUSDT",
+                side=OrderSide.BUY,
+                strategy=StrategyType.CASE_C,
+                regime_type=RegimeType.TYPE_0,
+                requested_quantity=Decimal("0.004"),
+                submitted_quantity=Decimal("0.004"),
+                market_price_at_decision=Decimal("2500"),
+            )
+            app_order.apply_order_result(
+                OrderResult(
+                    symbol="ETHUSDT",
+                    client_order_id="bat-known-runtime-order",
+                    exchange_order_id="92002",
+                    status=OrderStatus.NEW,
+                    processed_at=FIXED_TIME,
+                )
+            )
+            app_state = _OrderExecutionState(
+                order=app_order,
+                force_sell=False,
+            )
+            runtime.trading_controller._order_states_by_client_id[
+                app_order.client_order_id
+            ] = app_state
+            runtime.trading_controller._order_states_by_order_id[
+                "92002"
+            ] = app_state
+        external_result = OrderResult(
+            symbol="ETHUSDT",
+            client_order_id="manual-external-runtime-order",
+            exchange_order_id="92002",
+            status=OrderStatus.NEW,
+            processed_at=FIXED_TIME,
+        )
+        order_callback = runtime.web_socket_gateway._order_result_callback
+        if order_callback is None:
+            raise AssertionError("runtime must compose an order-result callback")
+
+        try:
+            # App 전용 REST recovery가 외부 주문을 숨기지 않도록 worker wake 자체를 허용하지 않는다.
+            with patch.object(
+                recovery_worker,
+                "request_recovery",
+                return_value=True,
+            ) as request_recovery:
+                result_accepted = order_callback(external_result)
+
+            self.assertFalse(result_accepted)
+            request_recovery.assert_not_called()
+            self.assertIs(
+                runtime.trading_controller.status,
+                TradingSessionStatus.RECONCILIATION_REQUIRED,
+            )
+            self.assertFalse(runtime.trading_controller.command_enabled)
+            self.assertTrue(
+                runtime.trading_controller.external_execution_reconciliation_required
+            )
+            cause_snapshot = (
+                runtime.trading_controller.reconciliation_cause_snapshot
+            )
+            self.assertIs(
+                cause_snapshot.status,
+                ReconciliationCauseStatus.EXACT,
+            )
+            self.assertIs(
+                cause_snapshot.category,
+                ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION,
+            )
+
+            # Direct caller도 REST account 조회나 새 stream 구독 전에 같은 영구 blocker로 거부한다.
+            with patch.object(
+                runtime.trading_controller._api_gateway,
+                "fetch_account_snapshot",
+                wraps=runtime.trading_controller._api_gateway.fetch_account_snapshot,
+            ) as fetch_account_snapshot, patch.object(
+                runtime.web_socket_gateway,
+                "start_account_info_stream",
+                wraps=runtime.web_socket_gateway.start_account_info_stream,
+            ) as start_account_info_stream:
+                with self.assertRaises(AccountStreamRecoveryBlockedError):
+                    runtime.trading_controller.reconnect_account_stream_after_reconciliation()
+
+            fetch_account_snapshot.assert_not_called()
+            start_account_info_stream.assert_not_called()
+            self.assertFalse(runtime.trading_controller.command_enabled)
         finally:
             close_application(runtime)
 

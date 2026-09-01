@@ -286,19 +286,131 @@ ID는 처음 관찰된 뒤 `None`으로 후퇴할 수 없고 terminal fill·dura
 `context_version_before`는 직전 `context_version_after` 이상이어야 하므로 겹치는 version 후퇴도
 성공 trace에 포함할 수 없다.
 
+Reconciliation으로 들어가는 production origin은 credential·ID·filter value·balance·price·
+exception repr 없이 account stream unknown/external execution, prepare filter/cap reject,
+event worker/runtime failure, market stream failure, order/persistence ambiguity, process ownership
+ambiguity의 여섯 category로 축약한다. Controller의 process-lifetime latch는 최초 원인만
+`EXACT`로 보존한다. 두 번째 같은 category는 `DUPLICATE`, 다른 category는 `CONFLICT`로
+영구 잠그고 category를 숨기며, 기록 전은 `MISSING`이다. 공개 snapshot은 같은 session
+lock에서 현재 `reconciliation_required`와 latch status/category를 함께 복사한다. 복구 가능한
+일반 account disconnect·app-prefix unknown과 market/prepare/order blocker가 해소돼 bool이 `false`로
+바뀐 뒤에도 latch는 보존되므로 이 origin의 `false + EXACT + category`는 유효하다. Prefixless
+external execution은 app-owned recovery로 귀속할 수 없어 worker wake와 direct reconnect를 모두
+차단하는 process-lifetime flag를 세운다. External execution, event-runtime과 process-ownership은
+process-lifetime blocker이므로 concrete `false`와 결합하지 않는다.
+
 Actual 실행 중 예외가 durable BUY 뒤 발생하면 failure finalizer는 제출을 닫기 전에 단 한 번만
 recovery 가능성을 판정한다. 이번 run의 durable Trade가 정확히 BUY 한 건이고, guard가 BUY permit
 한 건만 소비했으며, pending/UNKNOWN·reconciliation이 없고, authoritative Position이 BUY 체결량과
 같으며, account stream에서 effective free ETH가 같은 수량 이상임을 확인한 경우에만 public STOP을
 발행해 terminal SELL과 zero Position을 기다린다. Account 확인 중 guard·Position·pending 상태가
 바뀌면 SELL을 만들지 않는다. 모호한 상태, 이미 소비된 SELL permit 또는 `UNKNOWN`에서는 중복
-mutation보다 관찰 가능한 exposure 보존을 우선한다. 그 뒤 성공·skip·실패와 무관하게 제출 permit과
-scheduler를 닫고 primary runtime을 종료한 뒤 fresh read-only snapshot을 수집한다. 원 예외의 type,
+mutation보다 관찰 가능한 exposure 보존을 우선한다. 그 뒤 성공·skip·실패와 무관하게 제출 permit을
+닫고 atomic Controller seal이 terminal check와 active/reconciliation blocker commit을 같은 lock에서
+수행한다. `TERMINATED/NOT_STARTED`에는 event blocker를 만들지 않고 기존 reconciliation cause도 다시
+기록하지 않아 완결된 recovery truth와 first-cause latch를 보존한다. 이어 primary runtime을 종료한 뒤
+fresh read-only snapshot을 수집한다. Active seal의 Context publication이 status commit 뒤 실패해도
+`FAILURE_SCHEDULER_GATE_PUBLICATION_FAILED`만 기록하고 close·fresh·artifact 봉인을 계속한다. 원 예외의 type,
 message와 traceback은 bare re-raise로 보존하고, 별도 `FAILED` artifact에는 stable typed reason과
 recovery outcome만 기록한다. Guard의 BUY/SELL client ID는 각각 durable Trade client ID와 정확히
 결속한다. `SUCCESS/NOT_REQUIRED`는 first runtime과 canonical timestamp·모든 필수 field가 concrete한
 fresh runtime의 Position/pending/reconciliation/open-order zero 사실에 교차 결속하며, 최종 확인이
 불완전하면 각각 `FAILED/SKIPPED`로 낮춘다.
+
+새 failure writer는 schema v2만 쓰고, exception-bound frozen cause snapshot과 finalizer 시작
+직전 current snapshot이 다르면 `CONFLICT`로 봉인한다. `first_cause`는
+`reconciliation_required`, latch status, `EXACT`일 때만 non-null인 category를 담는다.
+V2 submission attempt는 raw intent/client ID를 빼고 sequence·symbol·side·order type·attempt number·
+timestamp만 봉인하며, ID는 same-run recovery와 fresh matching의 in-memory frozen snapshot에서만 쓴다.
+Actual Testnet factory는 explicit evidence clock을 REST adapter의 `clock`·`result_clock`, permission
+proxy와 runtime/event stream에 같은 객체 identity로 주입한다. 이 clock은 run 시작 시 wall UTC를
+한 번만 anchor하고 `monotonic_ns` 경과를 더하므로 OS wall clock 역행에도 후퇴하지 않는다. 각 REST
+호출 직후 harness가 찍는 top-level preflight 다섯 `observed_at`, permission attempt,
+runtime/account/UI, failure·`NO_SIGNAL`·`SUCCESS` final timestamp와 startup account source는 local
+run-scoped 축이며 local `[started_at, completed_at]`와 축 내부 causal order를 강제한다.
+
+`submit_time_filter_evidence`, Binance Kline source, server-aligned order attempted/result와 fill/Trade는
+별도 Binance server/exchange 축이다. Local run window나 UI/final timestamp와 cross-axis 대소를
+비교하지 않고, 그 축 내부 fetch order·30초 freshness·attempt → fill → result/Trade identity 인과만
+강제한다. `SUCCESS`와 `NO_SIGNAL`의 server/exchange timestamp를 모두 ±60초 coherent shift하는 회귀도
+통과한다. 이 분리는 [Binance Spot REST Timing security](https://developers.binance.com/en/docs/products/spot/rest-api#timing-security)가
+signed `timestamp`를 `serverTime`·`recvWindow`로 판정하는 공식 계약과 일치한다. Wall-clock
+backward-regression 회귀는 trace의 local timestamp 범위를 보존하고 failure artifact seal을 검증한다.
+V3 account provenance는 run UUID·startup version에 결속한 첫
+`ACCOUNT_SNAPSHOT_APPLIED`를 둔다. Startup version은 `1` 이상이고 source 시각은 다섯 preflight
+observation 중 가장 이른 시각보다 늦을 수 없다. Preflight Account version과 같은 public row가
+반드시 있어야 하며, `SUCCESS` recovery effective free quantity는 fingerprint version 또는 그 이후
+row의 free quantity 이하임을 증명한다. 후속 `ACCOUNT_POSITION_APPLIED`의
+source time·version을 단조 전진시킨다. 후속 행은 원 `ACCOUNT_UPDATED` envelope의
+event ID·publication time·aggregate version과 exact이며 startup maximum 이하 replay는 producer가
+버린다. Startup 뒤 전진한 모든 `ACCOUNT_UPDATED`와 public account row는 exact subsequence로
+양방향 일치해야 한다. UI publication time은 transport sequence에 따라 전역 단조이고 aggregate version은
+감소하지 않으며, order/performance publication은 preflight 후에만 허용한다.
+
+Account와 Market controller는 version·immutable state·source provenance를 함께 반환하는 state
+pointer/snapshot을 소유한다. Startup account evidence는 application lock 안에서 state를 한 번 읽은
+뒤 evidence clock을 읽는 state → clock atomic capture다. Market observer도 같은 lock에서 state와
+evaluation context를 한 번 freeze한다. `NO_SIGNAL` collector는 synthetic snapshot을 만들지 않고
+production `1L.1 / KLINE_OBSERVED` frozen event만 수집하며 captured market version으로만 cursor를
+전진시킨다.
+
+Current full trace schema v3는 `SUCCESS`와 `NO_SIGNAL`만 허용한다. Public Action 뒤 blocker,
+`BLOCKED`, `UNKNOWN`과 `FAILED`는 shape가 불완전한 full trace로 만들지 않고 failure evidence v2로
+봉인한다. V3 `NO_SIGNAL`은 `TYPE_0` production `1L.1` row이고
+action/evaluation/side/strategy가 모두 null이어야 한다. `SUCCESS` evaluation ID
+`market:{market_version}:{source_event_id}`는 parsed source identity/time과 exact 결속한다. Action
+단일 source는 30m open/closed 또는 closed 1m이고, atomic batch는 `(1m closed, 30m closed)` 뒤 동일
+UTC 경계에 필요한 4h·1d closed/open pair를 붙인 정확한 2/4/6개다. `NO_SIGNAL`은 production single
+4h/1d 관찰도 허용한다. Market version은 엄격 증가하고 context version은 감소하지 않는다.
+
+V3 `SUCCESS`는 policy version `13`, 모든 regime `TYPE_0`, BUY/SELL 동일 configured cap과
+`bat-{sha256(session_id + NUL + intent_id)[:24]}-0` client order ID를 강제한다. SELL intent는
+`force-sell:{session_id}`, STOP evaluation은 `stop-{session_id}-phase13-stop-{run_id}`다. Order trace
+message 1은 `v→v`, message 2는 같은 before에서 `v→v+1`, message 14는 exact client outcome이며,
+나머지 command ID도 해당 attempt의 evaluation/intent origin 집합에 속해야 한다. Result와 durable
+Trade는 attempt와 zip된 exact BUY → SELL이고 extra `UNKNOWN`을 허용하지 않는다. Trade ID는
+`trade-{exchange_order_id}`이며 각 result fill은 `(event_time, canonical integer tradeId)` strict
+ascending이고 Binance `tradeId`는 non-negative다. 이는 allocation과 trade를 구분하는 공식
+[Binance SOR FAQ](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/sor_faq.md)의
+계약을 따른다. Fee asset은 `ETH` 또는 `USDT`만 허용하고 quote fee는 USDT fee 자체 또는 Decimal
+precision 34의 `ETH fee * price`다. Fill fee 합, BUY cost basis, SELL net proceeds와 exact quantity
+allocation에서 domain realized PnL을 다시 계산해 Trade·Performance run/total과 결속한다. Empty
+baseline의 realized PnL과 fee는 모두 zero다. Production Position이 표현하지 못하는 양수 ETH
+base-fee SELL은 산술을 맞춰도 SUCCESS로 봉인하지 않는다.
+
+V3 transport sequence는 `1..N` 연속이다. Account event interleave는 허용하되
+`ACCOUNT_UPDATED.related_id`는 null이고, 두 Trade cycle의
+`TRADING_SESSION_UPDATED.related_id`는 같은 canonical UUIDv4다. Durable Trade와 같은 순서로
+adjacent `ORDER_EXECUTED` → `PERFORMANCE_UPDATED` pair가 나와야 하며, 각 pair 뒤 다음 order 전에는
+trace context version 이상인 session update가 있어야 한다.
+Server/exchange 축 안에서 STOP SELL composite safety fetch의 첫 관찰은 BUY terminal result보다
+이를 수 없다. 공식 FULL/order-query response의 `transactTime`/`updateTime`/`time`이 모두
+없으면 성공을 local result clock으로 합성하지 않고 `UNKNOWN` reconciliation으로 닫는다. 이 timestamp
+계약은 공식 [Binance Spot New Order](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#new-order-trade)와
+[All Orders](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#all-orders-user_data)를
+따른다.
+Fresh verification은 runtime creation, startup application, market, regime, account, history,
+reconciliation, stream, filter, local state, open orders, open order lists, recent orders,
+durability, cleanup의 15개 stable stage 중 최초 실패를 보존한다. Fresh runtime에는 source
+history·pending·manual-kill control이 아닌 filesystem root부터 final parent까지 모든 component를
+`O_NOFOLLOW`로 연 owner-only source/destination `0700` FD·identity·ctime chain과 `0600` isolated
+copy만 전달한다. 두 ancestor chain은 fresh runtime 종료까지 함께 pin·재검증한다. Source/copy leaf의 device·inode·owner·mode·link·size·
+SHA·ctime·mtime before-after fingerprint과 account-wide open order/list, symbol open result, recent
+baseline과 stream/reconciliation의 final reread로 mutation·TOCTOU를 fail closed한다. Final
+source/copy fingerprint 뒤 ancestor chain을 다시 검증하며, 같은 inode의 content restore, absent
+sidecar 생성·삭제와 ancestor rename/restore ABA도 metadata drift로 거부한다.
+V2 runtime snapshot은 finalizer가 닫지 못한 `RUNNING/STOPPING`을 거부하고, fresh `verified_at`은
+마지막 submission attempt보다 빠를 수 없다. Runtime durable count는 guard attempt 수 이하이고,
+`RECONCILIATION_REQUIRED` status에 concrete blocker `false`를 허용하지 않는다. `VERIFIED`의 run
+exchange/durable count도 서로 같으면서 attempt 수 이하이며, durable suffix가 0이면 Position도
+zero여야 한다. Scheduler publication secondary error는 completed recovery와 함께 봉인할 수 없고
+runtime status와 blocker가 모두 concrete reconciliation인 경우에만 결속한다. No-attempt
+runtime/fresh Position과 matching-open count는 concrete이면 zero이고, serial Case 2 runtime/fresh
+pending count는 한 건을 넘지 않는다. `evidence_errors`는 cause·recovery·seal·runtime·fresh·final
+downgrade의 producer 순서와 fresh cleanup의 runtime-close → durability → snapshot-cleanup 순서를
+그대로 보존한다.
+Historical schema v1 FAILED artifact와 preserved trace v2는 각자의 기존 exact validator로
+검증하며 v2 field를 소급 추가하지 않는다.
 
 현재 Kline generation의 disconnect, gap, parse 또는 observer 실패는 한 번만 full-resync owner에
 전달한다. 복구 worker는 새 generation buffering → 전체 REST Kline 조회 → 동일 handle의
@@ -431,6 +543,11 @@ local cache 부재는 fail closed한다. 실제 local-only vulnerability/license
   transport `before_send`가 order POST 직전에 freshness와 최초 attempt evidence를 같은 시각으로
   결속한다. Trace v3의 별도 `public_relevant_filters` projection도 signed/public overlap과 같은
   30초 인과관계를 증명해야 한다.
+- Reconciliation first cause는 여섯 secret-free category와 monotonic
+  `MISSING|EXACT|DUPLICATE|CONFLICT` latch로 보존한다. Failure evidence schema v2는
+  exception-bound `first_cause`, 최초 fresh failure stage, account-wide empty truth와 isolated
+  durability snapshot 검증을 결속한다. Non-exact cause는 category를 추정하지 않고,
+  historical schema v1 FAILED artifact에 v2 의미를 소급 대입하지 않는다.
 - 프로젝트 자체는 비공개·개인용이며 Python/npm/Cargo의 license·publish metadata와
   repository notice로 강제한다. 제3자 dependency 의무는 별도로 준수한다.
 - 외부 OSV 서비스 전송은 영구 불허이며 OS network deny·offline cached DB만 허용한다.
@@ -444,11 +561,20 @@ app-attributable submission attempt·order POST delegate·BUY·STOP SELL·durabl
 runtime Position/pending도 0이지만, 별도 fresh verification은 `INCOMPLETE`다. 따라서 동일 account의
 독립 외부 mutation 부재나 종료 후 fresh zero exposure를 주장하지 않는다.
 
-이후 보강한 current tree는 Backend `940/940`, scripts `183/183`, secure runner `14/14`, current
-집중 `102` OK·external `4` safe skip, Communication `126/126`을 통과했지만 signed external target과
-새로 결속하지 않았다. 다음 작업은 Keychain·Binance network·주문 없이 reconciliation 원인과 fresh
-verification 실패 stage를 stable secret-free enum으로 먼저 분리하고 deterministic test로 닫는 것이다.
-그 뒤 external 재실행이 필요하면 세 범위를 새로 명시 승인받으며 어떤 실패도 자동 재시도하지 않는다.
+30초/trace, first-cause/failure-v2, immutable snapshot과 exact V3 producer/ancestor-chain 보강 뒤
+current tree는 credential/order environment를 제거하고 Backend `Ran 962 tests in 32.223s`,
+`OK (skipped=8)`, scripts `Ran 183 tests in 33.050s`, secure runner
+`14/14`, cause 관련 integration `50/50`, Case 2 helper `29/29`·external actual `1` safe skip,
+convention `2/2`, Communication `126/126`을 통과했다. Keychain·Binance network·주문은
+실행하지 않았다. Current tree는 아직 signed external target과 새로 결속하지 않았으며
+historical FAILED의 first cause/stage를 소급 확정하지 않는다. External 재실행이 필요하면
+세 범위를 새로 명시 승인받으며 어떤 실패도 자동 재시도하지 않는다.
+
+Immutable state pointer, atomic startup Account state → clock capture, production-only NO_SIGNAL event
+수집과 exact V3 chronology/accounting/outcome routing은 위 최종 local suite에 포함된다. 이번 추가
+작업의 Keychain lookup, Binance signed/public target, Testnet
+diagnostic/actual, submission attempt, order POST, BUY·STOP SELL과 durable Trade는 모두 `0`건이다.
+External binding은 미완료이고 P13-04, Phase 13 master와 live는 계속 `GAP`/`NO_GO`/disabled다.
 
 Configured-unbounded domain·wire·UI gate와 `CANCEL_AND_LIQUIDATE`의 receipt-first cleanup,
 restart resume, exact activation replay, active-epoch provenance와 authoritative completion boolean은

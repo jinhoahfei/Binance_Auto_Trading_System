@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta
 import hashlib
 import json
 import unittest
@@ -11,6 +12,7 @@ from tests.testnet._phase13_trace import (
     PHASE13_PUBLIC_TRACE_RECORD_TYPE,
     PHASE13_PUBLIC_TRACE_SCHEMA_VERSION,
     PhaseThirteenPublicTraceValidationError,
+    _parse_public_market_command_event,
     canonical_actual_phase13_public_trace_bytes,
     canonical_phase13_public_trace_bytes,
     seal_actual_phase13_public_trace,
@@ -94,7 +96,12 @@ def _create_success_order_execution_trace(
     else:
         raise ValueError("side must be BUY or SELL")
 
-    # Message 7 전에는 exchange ID가 아직 없고 이후에는 terminal result와 같은 ID만 기록한다.
+    # Message 1/2는 submit mutation을, 14는 concrete outcome event를 기록하고 나머지는 같은 fixture 축을 쓴다.
+    outcome_event_id = (
+        f"order-outcome-{client_order_id}-CASE_C_POSITION_OPENED"
+        if side == "BUY"
+        else f"order-outcome-{client_order_id}-FORCE_SELL_FINISHED"
+    )
     return {
         "sequence": sequence,
         "intent_id": intent_id,
@@ -104,14 +111,24 @@ def _create_success_order_execution_trace(
             {
                 "sequence": entry_sequence,
                 "message_id": message_id,
-                "command_event_id": evaluation_id,
+                "command_event_id": (
+                    outcome_event_id if message_id == "14" else evaluation_id
+                ),
                 "order_id": (
                     exchange_order_id
                     if message_ids.index(message_id) >= message_ids.index("7")
                     else None
                 ),
-                "context_version_before": context_version,
-                "context_version_after": context_version,
+                "context_version_before": (
+                    context_version - 1
+                    if message_id in {"1", "2"}
+                    else context_version
+                ),
+                "context_version_after": (
+                    context_version - 1
+                    if message_id == "1"
+                    else context_version
+                ),
                 "result": "SUCCESS",
                 "failure_code": None,
             }
@@ -136,21 +153,38 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         작성 날짜: 2026/08/31
         """
         # 한 source Kline과 version chain을 decision, BUY attempt와 public event에 반복해 결속한다.
+        source_event_id = (
+            "kline:ETHUSDT:30m:2026-08-30T23:30:00.000Z:"
+            "2026-08-31T00:00:00.000Z:closed"
+        )
+        source_kline_identity = (
+            "ETHUSDT:30m:2026-08-30T23:30:00.000Z"
+        )
+        evaluation_id = f"market:7:{source_event_id}"
+        run_id = "00000000-0000-4000-8000-000000000013"
+        trading_session_id = "00000000-0000-4000-8000-000000000300"
+        buy_intent_id = "case2-buy-intent-0001"
+        sell_intent_id = f"force-sell:{trading_session_id}"
+        sell_evaluation_id = (
+            f"stop-{trading_session_id}-phase13-stop-{run_id}"
+        )
+        buy_client_order_id = "bat-47433b92f280cc3e87953aad-0"
+        sell_client_order_id = "bat-5b5400567eac4bac2f2eb885-0"
         decision_fingerprint = {
-            "source_event_id": "kline-event-0001",
-            "source_kline_identity": "ETHUSDT:30m:1788134400000",
+            "source_event_id": source_event_id,
+            "source_kline_identity": source_kline_identity,
             "source_event_time": "2026-08-31T00:00:00.000Z",
-            "evaluation_id": "evaluation-0001",
+            "evaluation_id": evaluation_id,
             "market_version": 7,
             "account_version": 3,
             "context_version": 12,
-            "policy_version": 2,
+            "policy_version": 13,
             "regime": "TYPE_0",
             "action_type": "SUBMIT_ORDER",
             "side": "BUY",
             "strategy": "CASE_C",
-            "intent_id": "case2-buy-intent-0001",
-            "client_order_id": "bat-phase13-buy-0001",
+            "intent_id": buy_intent_id,
+            "client_order_id": buy_client_order_id,
             "decision_price": "2500",
             "final_submitted_quantity": "0.004",
             "final_notional": "10.000",
@@ -168,12 +202,12 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                     "sequence": sequence,
                     "message_id": message_id,
                     "event_type": event_type,
-                    "source_event_id": "kline-event-0001",
-                    "source_kline_identity": "ETHUSDT:30m:1788134400000",
+                    "source_event_id": source_event_id,
+                    "source_kline_identity": source_kline_identity,
                     "source_event_time": "2026-08-31T00:00:00.000Z",
                     "market_version": 7,
                     "context_version": 12,
-                    "evaluation_id": "evaluation-0001",
+                    "evaluation_id": evaluation_id,
                     "regime": "TYPE_0",
                     "action_type": "SUBMIT_ORDER" if action_event else None,
                     "side": "BUY" if action_event else None,
@@ -183,15 +217,31 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         public_account_events = [
             {
                 "sequence": 1,
-                "message_id": "2.2.1",
-                "event_type": "ACCOUNT_POSITION_APPLIED",
-                "source_event_id": "account-event-0001",
-                "source_event_time": "2026-08-31T00:00:00.100Z",
+                "message_id": "2",
+                "event_type": "ACCOUNT_SNAPSHOT_APPLIED",
+                "source_event_id": (
+                    "startup-account-"
+                    "00000000-0000-4000-8000-000000000013-3"
+                ),
+                "source_event_time": "2026-08-31T00:00:00.020Z",
                 "account_version": 3,
                 "asset": "ETH",
                 "free_quantity": "1.004",
                 "locked_quantity": "0",
-            }
+            },
+            {
+                "sequence": 2,
+                "message_id": "2.2.1",
+                "event_type": "ACCOUNT_POSITION_APPLIED",
+                "source_event_id": (
+                    "00000000-0000-4000-8000-000000000108"
+                ),
+                "source_event_time": "2026-08-31T00:00:24.000Z",
+                "account_version": 4,
+                "asset": "ETH",
+                "free_quantity": "1.004",
+                "locked_quantity": "0",
+            },
         ]
 
         # Attempt에는 filter 뒤 최종 수량과 Decimal notional만 남기고 signed request는 남기지 않는다.
@@ -199,9 +249,9 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             {
                 "sequence": 1,
                 "attempted_at": "2026-08-31T00:00:01.000Z",
-                "evaluation_id": "evaluation-0001",
-                "intent_id": "case2-buy-intent-0001",
-                "client_order_id": "bat-phase13-buy-0001",
+                "evaluation_id": evaluation_id,
+                "intent_id": buy_intent_id,
+                "client_order_id": buy_client_order_id,
                 "submission_attempt": 0,
                 "symbol": "ETHUSDT",
                 "regime": "TYPE_0",
@@ -213,14 +263,14 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                 "final_submitted_quantity": "0.004",
                 "final_notional": "10.000",
                 "configured_cap": "100",
-                "policy_version": 2,
+                "policy_version": 13,
             },
             {
                 "sequence": 2,
                 "attempted_at": "2026-08-31T00:00:20.000Z",
-                "evaluation_id": "recovery-evaluation-0001",
-                "intent_id": "recovery-sell-intent-0001",
-                "client_order_id": "bat-phase13-sell-0001",
+                "evaluation_id": sell_evaluation_id,
+                "intent_id": sell_intent_id,
+                "client_order_id": sell_client_order_id,
                 "submission_attempt": 0,
                 "symbol": "ETHUSDT",
                 "regime": "TYPE_0",
@@ -232,22 +282,22 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                 "final_submitted_quantity": "0.004",
                 "final_notional": "10.020",
                 "configured_cap": "100",
-                "policy_version": 2,
+                "policy_version": 13,
             },
         ]
         order_results = [
             {
                 "sequence": 1,
                 "observed_at": "2026-08-31T00:00:02.000Z",
-                "intent_id": "case2-buy-intent-0001",
-                "client_order_id": "bat-phase13-buy-0001",
+                "intent_id": buy_intent_id,
+                "client_order_id": buy_client_order_id,
                 "exchange_order_id": "9100001",
                 "status": "FILLED",
                 "failure_code": None,
                 "incremental_fills": [
                     {
                         "fill_id": "7100001",
-                        "durable_trade_id": "trade-buy-0001",
+                        "durable_trade_id": "trade-9100001",
                         "event_time": "2026-08-31T00:00:01.500Z",
                         "price": "2500",
                         "quantity": "0.004",
@@ -261,15 +311,15 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             {
                 "sequence": 2,
                 "observed_at": "2026-08-31T00:00:21.000Z",
-                "intent_id": "recovery-sell-intent-0001",
-                "client_order_id": "bat-phase13-sell-0001",
+                "intent_id": sell_intent_id,
+                "client_order_id": sell_client_order_id,
                 "exchange_order_id": "9100002",
                 "status": "FILLED",
                 "failure_code": None,
                 "incremental_fills": [
                     {
                         "fill_id": "7100002",
-                        "durable_trade_id": "trade-sell-0001",
+                        "durable_trade_id": "trade-9100002",
                         "event_time": "2026-08-31T00:00:20.500Z",
                         "price": "2505",
                         "quantity": "0.004",
@@ -286,57 +336,75 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "events": [
                 {
                     "event_id": "00000000-0000-4000-8000-000000000101",
-                    "transport_sequence": 9,
+                    "transport_sequence": 1,
                     "aggregate": "ACCOUNT",
                     "event_type": "ACCOUNT_UPDATED",
                     "aggregate_version": 3,
                     "related_id": None,
-                    "published_at": "2026-08-31T00:00:00.200Z",
+                    "published_at": "2026-08-31T00:00:00.010Z",
                 },
                 {
                     "event_id": "00000000-0000-4000-8000-000000000102",
-                    "transport_sequence": 10,
+                    "transport_sequence": 2,
                     "aggregate": "TRADE_HISTORY",
                     "event_type": "ORDER_EXECUTED",
                     "aggregate_version": None,
-                    "related_id": "trade-buy-0001",
+                    "related_id": "trade-9100001",
                     "published_at": "2026-08-31T00:00:03.000Z",
                 },
                 {
                     "event_id": "00000000-0000-4000-8000-000000000103",
-                    "transport_sequence": 11,
+                    "transport_sequence": 3,
                     "aggregate": "TRADE_HISTORY",
                     "event_type": "PERFORMANCE_UPDATED",
                     "aggregate_version": None,
-                    "related_id": "trade-buy-0001",
+                    "related_id": "trade-9100001",
                     "published_at": "2026-08-31T00:00:03.000Z",
                 },
                 {
                     "event_id": "00000000-0000-4000-8000-000000000104",
-                    "transport_sequence": 12,
-                    "aggregate": "TRADE_HISTORY",
-                    "event_type": "ORDER_EXECUTED",
-                    "aggregate_version": None,
-                    "related_id": "trade-sell-0001",
-                    "published_at": "2026-08-31T00:00:22.000Z",
+                    "transport_sequence": 4,
+                    "aggregate": "TRADING_SESSION",
+                    "event_type": "TRADING_SESSION_UPDATED",
+                    "aggregate_version": 12,
+                    "related_id": trading_session_id,
+                    "published_at": "2026-08-31T00:00:04.000Z",
                 },
                 {
                     "event_id": "00000000-0000-4000-8000-000000000105",
-                    "transport_sequence": 13,
+                    "transport_sequence": 5,
                     "aggregate": "TRADE_HISTORY",
-                    "event_type": "PERFORMANCE_UPDATED",
+                    "event_type": "ORDER_EXECUTED",
                     "aggregate_version": None,
-                    "related_id": "trade-sell-0001",
+                    "related_id": "trade-9100002",
                     "published_at": "2026-08-31T00:00:22.000Z",
                 },
                 {
                     "event_id": "00000000-0000-4000-8000-000000000106",
-                    "transport_sequence": 14,
+                    "transport_sequence": 6,
+                    "aggregate": "TRADE_HISTORY",
+                    "event_type": "PERFORMANCE_UPDATED",
+                    "aggregate_version": None,
+                    "related_id": "trade-9100002",
+                    "published_at": "2026-08-31T00:00:22.000Z",
+                },
+                {
+                    "event_id": "00000000-0000-4000-8000-000000000107",
+                    "transport_sequence": 7,
                     "aggregate": "TRADING_SESSION",
                     "event_type": "TRADING_SESSION_UPDATED",
-                    "aggregate_version": 2,
-                    "related_id": "bat-phase13-sell-0001",
+                    "aggregate_version": 20,
+                    "related_id": trading_session_id,
                     "published_at": "2026-08-31T00:00:23.000Z",
+                },
+                {
+                    "event_id": "00000000-0000-4000-8000-000000000108",
+                    "transport_sequence": 8,
+                    "aggregate": "ACCOUNT",
+                    "event_type": "ACCOUNT_UPDATED",
+                    "aggregate_version": 4,
+                    "related_id": None,
+                    "published_at": "2026-08-31T00:00:24.000Z",
                 },
             ],
         }
@@ -416,8 +484,8 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         submit_time_filter_evidence = [
             {
                 "sequence": 1,
-                "intent_id": "case2-buy-intent-0001",
-                "client_order_id": "bat-phase13-buy-0001",
+                "intent_id": buy_intent_id,
+                "client_order_id": buy_client_order_id,
                 "side": "BUY",
                 "observed_at": "2026-08-31T00:00:00.900Z",
                 "rules": deepcopy(fresh_filter_rules),
@@ -450,8 +518,8 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             },
             {
                 "sequence": 2,
-                "intent_id": "recovery-sell-intent-0001",
-                "client_order_id": "bat-phase13-sell-0001",
+                "intent_id": sell_intent_id,
+                "client_order_id": sell_client_order_id,
                 "side": "SELL",
                 "observed_at": "2026-08-31T00:00:19.900Z",
                 "rules": deepcopy(fresh_filter_rules),
@@ -490,7 +558,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "record_type": PHASE13_PUBLIC_TRACE_RECORD_TYPE,
             "outcome": "SUCCESS",
             "typed_reason": None,
-            "run_id": "00000000-0000-4000-8000-000000000013",
+            "run_id": run_id,
             "timestamps": {
                 "started_at": "2026-08-31T00:00:00.000Z",
                 "completed_at": "2026-08-31T00:00:30.000Z",
@@ -557,19 +625,19 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "order_execution_traces": [
                 _create_success_order_execution_trace(
                     sequence=1,
-                    intent_id="case2-buy-intent-0001",
-                    client_order_id="bat-phase13-buy-0001",
+                    intent_id=buy_intent_id,
+                    client_order_id=buy_client_order_id,
                     side="BUY",
-                    evaluation_id="evaluation-0001",
+                    evaluation_id=evaluation_id,
                     exchange_order_id="9100001",
                     context_version=12,
                 ),
                 _create_success_order_execution_trace(
                     sequence=2,
-                    intent_id="recovery-sell-intent-0001",
-                    client_order_id="bat-phase13-sell-0001",
+                    intent_id=sell_intent_id,
+                    client_order_id=sell_client_order_id,
                     side="SELL",
-                    evaluation_id="recovery-evaluation-0001",
+                    evaluation_id=sell_evaluation_id,
                     exchange_order_id="9100002",
                     context_version=20,
                 ),
@@ -583,8 +651,8 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "baseline_history_count": 0,
             "run_durable_trades": [
                 {
-                    "trade_id": "trade-buy-0001",
-                    "client_order_id": "bat-phase13-buy-0001",
+                    "trade_id": "trade-9100001",
+                    "client_order_id": buy_client_order_id,
                     "exchange_order_id": "9100001",
                     "symbol": "ETHUSDT",
                     "side": "BUY",
@@ -601,8 +669,8 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                     "executed_at": "2026-08-31T00:00:01.500Z",
                 },
                 {
-                    "trade_id": "trade-sell-0001",
-                    "client_order_id": "bat-phase13-sell-0001",
+                    "trade_id": "trade-9100002",
+                    "client_order_id": sell_client_order_id,
                     "exchange_order_id": "9100002",
                     "symbol": "ETHUSDT",
                     "side": "SELL",
@@ -624,8 +692,8 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                 "required": True,
                 "attempted": True,
                 "outcome": "SUCCESS",
-                "intent_id": "recovery-sell-intent-0001",
-                "client_order_id": "bat-phase13-sell-0001",
+                "intent_id": sell_intent_id,
+                "client_order_id": sell_client_order_id,
                 "authoritative_position_quantity": "0.004",
                 "effective_free_quantity": "0.004",
                 "submitted_quantity": "0.004",
@@ -686,12 +754,12 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         trace_body["submit_time_filter_evidence"] = []
         trace_body["order_results"] = []
         trace_body["run_durable_trades"] = []
-        trace_body["transport_ui_event_batch"]["events"] = [
-            event
-            for event in trace_body["transport_ui_event_batch"]["events"]
-            if event["event_type"]
-            not in {"ORDER_EXECUTED", "PERFORMANCE_UPDATED"}
+        trace_body["public_account_events"] = [
+            trace_body["public_account_events"][0]
         ]
+        trace_body["transport_ui_event_batch"]["events"] = [
+            trace_body["transport_ui_event_batch"]["events"][0]
+        ]  # 주문 없는 run에는 startup ACCOUNT_UPDATED envelope 하나만 남는다.
         trace_body["recovery"] = {
             "required": False,
             "attempted": False,
@@ -732,7 +800,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             },
         }
 
-        return trace_body  # NO_SIGNAL도 public input과 UI batch를 버리지 않는다.
+        return trace_body  # NO_SIGNAL도 exact Kline·startup Account provenance를 버리지 않는다.
 
     def _legacy_v2_trace_body(self) -> dict[str, object]:
         """
@@ -808,6 +876,35 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         self.assertEqual(first_bytes, second_bytes)
         self.assertTrue(first_bytes.endswith(b"\n"))
         self.assertEqual(json.loads(first_bytes), sealed_trace)
+        self.assertEqual(
+            13,
+            sealed_trace["immutable_decision_fingerprint"]["policy_version"],
+        )
+        self.assertEqual(
+            {"TYPE_0"},
+            {
+                attempt["regime"]
+                for attempt in sealed_trace["order_attempts"]
+            },
+        )
+        self.assertEqual(
+            {"100"},
+            {
+                attempt["configured_cap"]
+                for attempt in sealed_trace["order_attempts"]
+            },
+        )
+        self.assertEqual(
+            ["trade-9100001", "trade-9100002"],
+            [trade["trade_id"] for trade in sealed_trace["run_durable_trades"]],
+        )
+        self.assertTrue(
+            all(
+                fill["fill_id"].isdigit()
+                for result in sealed_trace["order_results"]
+                for fill in result["incremental_fills"]
+            )
+        )
 
     def test_preserved_schema_v2_trace_remains_verifiable(self) -> None:
         """
@@ -832,29 +929,51 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         )
         self.assertEqual(recorded_digest, sealed_trace["trace_sha256"])
 
-    def test_all_normalized_outcomes_are_supported_without_synthesizing_orders(
+    def test_v3_success_and_no_signal_are_supported_while_other_outcomes_fail_closed(
         self,
     ) -> None:
         """
-        함수 이름: test_all_normalized_outcomes_are_supported_without_synthesizing_orders()
-        기능: SUCCESS, NO_SIGNAL, BLOCKED와 FAILED가 각 mutation 계약에 맞게 seal되는지 검증한다.
+        함수 이름: test_v3_success_and_no_signal_are_supported_while_other_outcomes_fail_closed()
+        기능: V3 outcome과 local run 대비 ±60초 Binance server/exchange 축을 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/31
+        작성 날짜: 2026/09/01
         """
-        trace_bodies = {
+        accepted_trace_bodies = {
             "SUCCESS": self._success_trace_body(),
             "NO_SIGNAL": self._no_signal_trace_body(),
-            "BLOCKED": self._no_signal_trace_body(),
-            "FAILED": self._no_signal_trace_body(),
         }
-        trace_bodies["BLOCKED"]["outcome"] = "BLOCKED"
-        trace_bodies["BLOCKED"]["typed_reason"] = "RISK_POLICY_BLOCKED"
-        trace_bodies["FAILED"]["outcome"] = "FAILED"
-        trace_bodies["FAILED"]["typed_reason"] = "TRACE_CAPTURE_FAILED"
 
-        # Order 없는 종료를 성공으로 바꾸지 않고 네 normalized outcome만 exact enum으로 허용한다.
-        for expected_outcome, trace_body in trace_bodies.items():
+        # NO_SIGNAL은 production observer가 남긴 exact 1L.1 Kline과 startup Account UI 한 건뿐이다.
+        no_signal_body = accepted_trace_bodies["NO_SIGNAL"]
+        self.assertEqual(1, len(no_signal_body["public_market_events"]))
+        no_signal_market_event = no_signal_body["public_market_events"][0]
+        self.assertEqual("1L.1", no_signal_market_event["message_id"])
+        self.assertEqual("KLINE_OBSERVED", no_signal_market_event["event_type"])
+        self.assertEqual("TYPE_0", no_signal_market_event["regime"])
+        self.assertTrue(
+            all(
+                no_signal_market_event[field_name] is None
+                for field_name in (
+                    "evaluation_id",
+                    "action_type",
+                    "side",
+                    "strategy",
+                )
+            )
+        )
+        self.assertEqual(
+            ["ACCOUNT_UPDATED"],
+            [
+                event["event_type"]
+                for event in no_signal_body["transport_ui_event_batch"][
+                    "events"
+                ]
+            ],
+        )
+
+        # Actual V3 artifact는 완결된 SUCCESS와 mutation 없는 NO_SIGNAL만 공개한다.
+        for expected_outcome, trace_body in accepted_trace_bodies.items():
             with self.subTest(outcome=expected_outcome):
                 sealed_trace = seal_phase13_public_trace(trace_body)
                 self.assertEqual(sealed_trace["outcome"], expected_outcome)
@@ -862,6 +981,349 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                     validate_phase13_public_trace(sealed_trace),
                     sealed_trace["trace_sha256"],
                 )
+
+        # Atomic builder가 만들 수 있는 2/4/6개 canonical source tuple만 batch parser가 수용한다.
+        valid_batch_sources = (
+            (
+                "kline-batch|"
+                "kline:ETHUSDT:1m:2026-08-31T00:29:00Z:"
+                "2026-08-31T00:30:00Z:closed|"
+                "kline:ETHUSDT:30m:2026-08-31T00:00:00Z:"
+                "2026-08-31T00:30:00.001Z:closed"
+            ),
+            (
+                "kline-batch|"
+                "kline:ETHUSDT:1m:2026-08-31T03:59:00Z:"
+                "2026-08-31T04:00:00Z:closed|"
+                "kline:ETHUSDT:30m:2026-08-31T03:30:00Z:"
+                "2026-08-31T04:00:00Z:closed|"
+                "kline:ETHUSDT:4h:2026-08-31T00:00:00Z:"
+                "2026-08-31T04:00:00Z:closed|"
+                "kline:ETHUSDT:4h:2026-08-31T04:00:00Z:"
+                "2026-08-31T04:00:00.001Z:open"
+            ),
+            (
+                "kline-batch|"
+                "kline:ETHUSDT:1m:2026-08-31T23:59:00Z:"
+                "2026-09-01T00:00:00Z:closed|"
+                "kline:ETHUSDT:30m:2026-08-31T23:30:00Z:"
+                "2026-09-01T00:00:00Z:closed|"
+                "kline:ETHUSDT:4h:2026-08-31T20:00:00Z:"
+                "2026-09-01T00:00:00Z:closed|"
+                "kline:ETHUSDT:4h:2026-09-01T00:00:00Z:"
+                "2026-09-01T00:00:00.001Z:open|"
+                "kline:ETHUSDT:1d:2026-08-31T00:00:00Z:"
+                "2026-09-01T00:00:00Z:closed|"
+                "kline:ETHUSDT:1d:2026-09-01T00:00:00Z:"
+                "2026-09-01T00:00:00.001Z:open"
+            ),
+        )
+        for component_count, source_event_id in zip(
+            (2, 4, 6),
+            valid_batch_sources,
+            strict=True,
+        ):
+            with self.subTest(valid_batch_component_count=component_count):
+                parsed_source = _parse_public_market_command_event(
+                    f"market:8:{source_event_id}"
+                )
+                self.assertEqual(source_event_id, parsed_source["source_event_id"])
+
+        # Prefix·순서·길이·공통 경계·interval 중복과 premature close/open은 모두 fail closed한다.
+        invalid_batch_sources = {
+            "prefix": valid_batch_sources[0].replace(
+                "kline-batch|",
+                "kline-batches|",
+                1,
+            ),
+            "order": (
+                "kline-batch|"
+                "kline:ETHUSDT:30m:2026-08-31T00:00:00Z:"
+                "2026-08-31T00:30:00Z:closed|"
+                "kline:ETHUSDT:1m:2026-08-31T00:29:00Z:"
+                "2026-08-31T00:30:00Z:closed"
+            ),
+            "count": (
+                f"{valid_batch_sources[0]}|"
+                "kline:ETHUSDT:4h:2026-08-30T20:00:00Z:"
+                "2026-08-31T00:00:00Z:closed"
+            ),
+            "required_boundary_pair": (
+                "kline-batch|"
+                "kline:ETHUSDT:1m:2026-08-31T03:59:00Z:"
+                "2026-08-31T04:00:00Z:closed|"
+                "kline:ETHUSDT:30m:2026-08-31T03:30:00Z:"
+                "2026-08-31T04:00:00Z:closed"
+            ),
+            "shared_boundary": (
+                "kline-batch|"
+                "kline:ETHUSDT:1m:2026-08-31T00:28:00Z:"
+                "2026-08-31T00:29:00Z:closed|"
+                "kline:ETHUSDT:30m:2026-08-31T00:00:00Z:"
+                "2026-08-31T00:30:00Z:closed"
+            ),
+            "duplicate_interval": (
+                "kline-batch|"
+                "kline:ETHUSDT:1m:2026-08-31T00:29:00Z:"
+                "2026-08-31T00:30:00Z:closed|"
+                "kline:ETHUSDT:1m:2026-08-31T00:28:00Z:"
+                "2026-08-31T00:30:00Z:closed"
+            ),
+            "premature_close": (
+                "kline:ETHUSDT:30m:2026-08-31T00:00:00Z:"
+                "2026-08-31T00:01:00Z:closed"
+            ),
+            "premature_open": valid_batch_sources[1].replace(
+                "2026-08-31T04:00:00.001Z:open",
+                "2026-08-31T03:59:59.999Z:open",
+            ),
+        }
+        for case_name, source_event_id in invalid_batch_sources.items():
+            with self.subTest(invalid_batch_case=case_name):
+                with self.assertRaises((TypeError, ValueError)):
+                    _parse_public_market_command_event(
+                        f"market:8:{source_event_id}"
+                    )
+
+        def bind_market_source(
+            trace_body: dict[str, object],
+            source_event_id: str,
+        ) -> None:
+            """
+            함수 이름: bind_market_source()
+            기능: public source 제한 fixture의 fingerprint·1L·BUY trace identity를 함께 교체한다.
+            인자: trace_body -> mutable V3 trace body
+                source_event_id -> 교체할 canonical single Kline identity
+            반환값: 없음
+            작성 날짜: 2026/09/01
+            """
+            evaluation_id = f"market:7:{source_event_id}"
+            parsed_source = _parse_public_market_command_event(evaluation_id)
+            fingerprint = trace_body["immutable_decision_fingerprint"]
+            if fingerprint is not None:
+                for field_name in (
+                    "source_event_id",
+                    "source_kline_identity",
+                    "source_event_time",
+                    "market_version",
+                ):
+                    fingerprint[field_name] = parsed_source[field_name]
+                fingerprint["evaluation_id"] = evaluation_id
+            for market_event in trace_body["public_market_events"]:
+                for field_name in (
+                    "source_event_id",
+                    "source_kline_identity",
+                    "source_event_time",
+                    "market_version",
+                ):
+                    market_event[field_name] = parsed_source[field_name]
+                if market_event["evaluation_id"] is not None:
+                    market_event["evaluation_id"] = evaluation_id
+            if trace_body["order_attempts"]:
+                trace_body["order_attempts"][0][
+                    "evaluation_id"
+                ] = evaluation_id
+                for trace_entry in trace_body["order_execution_traces"][0][
+                    "entries"
+                ][:-1]:
+                    trace_entry["command_event_id"] = evaluation_id
+
+        # NO_SIGNAL parser는 4H/1D single 관측을 보존하되 Action은 30m 또는 closed 1m만 허용한다.
+        upper_single_sources = (
+            (
+                "kline:ETHUSDT:4h:2026-08-31T00:00:00Z:"
+                "2026-08-31T00:00:00.001Z:open"
+            ),
+            (
+                "kline:ETHUSDT:4h:2026-08-30T20:00:00Z:"
+                "2026-08-31T00:00:00.001Z:closed"
+            ),
+            (
+                "kline:ETHUSDT:1d:2026-08-31T00:00:00Z:"
+                "2026-08-31T00:00:00.001Z:open"
+            ),
+            (
+                "kline:ETHUSDT:1d:2026-08-30T00:00:00Z:"
+                "2026-08-31T00:00:00.001Z:closed"
+            ),
+        )
+        for source_event_id in upper_single_sources:
+            with self.subTest(no_signal_upper_interval=source_event_id[17:19]):
+                no_signal_upper = self._no_signal_trace_body()
+                bind_market_source(no_signal_upper, source_event_id)
+                seal_phase13_public_trace(no_signal_upper)
+        invalid_action_sources = (
+            *upper_single_sources,
+            (
+                "kline:ETHUSDT:1m:2026-08-31T00:00:00Z:"
+                "2026-08-31T00:00:00.001Z:open"
+            ),
+        )
+        for source_event_id in invalid_action_sources:
+            with self.subTest(invalid_action_source=source_event_id[17:19]):
+                invalid_action = self._success_trace_body()
+                bind_market_source(invalid_action, source_event_id)
+                self._assert_body_is_rejected(invalid_action)
+
+        # BLOCKED/FAILED는 V2 검증 호환성에만 남고 V3 artifact로 새로 봉인할 수 없다.
+        for outcome, typed_reason in (
+            ("BLOCKED", "RISK_POLICY_BLOCKED"),
+            ("FAILED", "TRACE_CAPTURE_FAILED"),
+        ):
+            with self.subTest(rejected_v3_outcome=outcome):
+                rejected_body = self._no_signal_trace_body()
+                rejected_body["outcome"] = outcome
+                rejected_body["typed_reason"] = typed_reason
+                self._assert_body_is_rejected(rejected_body)
+
+        def shift_wire_timestamp(
+            timestamp_text: str,
+            offset: timedelta,
+        ) -> str:
+            """
+            함수 이름: shift_wire_timestamp()
+            기능: fixture의 RFC 3339 UTC timestamp를 지정 offset만큼 이동한다.
+            인자: timestamp_text -> millisecond Z timestamp
+                offset -> 이동할 signed timedelta
+            반환값: 같은 millisecond Z 형식의 이동된 timestamp
+            작성 날짜: 2026/09/01
+            """
+            parsed_timestamp = datetime.fromisoformat(
+                timestamp_text.replace("Z", "+00:00")
+            )
+            return (parsed_timestamp + offset).isoformat(
+                timespec="milliseconds"
+            ).replace("+00:00", "Z")
+
+        def shift_server_axis(
+            trace_body: dict[str, object],
+            offset: timedelta,
+        ) -> None:
+            """
+            함수 이름: shift_server_axis()
+            기능: local run/account/UI 시각은 유지하고 Binance server/exchange provenance만 함께 이동한다.
+            인자: trace_body -> SUCCESS 또는 NO_SIGNAL mutable body
+                offset -> server/exchange 축에 적용할 signed timedelta
+            반환값: 없음
+            작성 날짜: 2026/09/01
+            """
+            preflight = trace_body["preflight"]
+            offset_milliseconds = int(offset.total_seconds() * 1_000)
+            preflight["reference_price"]["exchange_timestamp"] += (
+                offset_milliseconds
+            )
+
+            # Kline component 안의 open/event time과 이를 감싼 evaluation identity도 함께 이동한다.
+            first_market_event = trace_body["public_market_events"][0]
+            source_open_time = first_market_event[
+                "source_kline_identity"
+            ].removeprefix("ETHUSDT:30m:")
+            shifted_source_open_time = shift_wire_timestamp(
+                source_open_time,
+                offset,
+            )
+            shifted_source_event_time = shift_wire_timestamp(
+                first_market_event["source_event_time"],
+                offset,
+            )
+            shifted_source_event_id = (
+                "kline:ETHUSDT:30m:"
+                f"{shifted_source_open_time}:"
+                f"{shifted_source_event_time}:closed"
+            )
+            shifted_source_identity = (
+                f"ETHUSDT:30m:{shifted_source_open_time}"
+            )
+            shifted_evaluation_id = (
+                f"market:{first_market_event['market_version']}:"
+                f"{shifted_source_event_id}"
+            )
+
+            # Market, REST submission과 exchange result/Trade만 같은 Binance 축으로 함께 이동한다.
+            fingerprint = trace_body["immutable_decision_fingerprint"]
+            if fingerprint is not None:
+                fingerprint["source_event_id"] = shifted_source_event_id
+                fingerprint["source_kline_identity"] = shifted_source_identity
+                fingerprint["source_event_time"] = shifted_source_event_time
+                fingerprint["evaluation_id"] = shifted_evaluation_id
+            for market_event in trace_body["public_market_events"]:
+                market_event["source_event_id"] = shifted_source_event_id
+                market_event["source_kline_identity"] = shifted_source_identity
+                market_event["source_event_time"] = shifted_source_event_time
+                if market_event["evaluation_id"] is not None:
+                    market_event["evaluation_id"] = shifted_evaluation_id
+            for attempt in trace_body["order_attempts"]:
+                attempt["attempted_at"] = shift_wire_timestamp(
+                    attempt["attempted_at"],
+                    offset,
+                )
+            if trace_body["order_attempts"]:
+                trace_body["order_attempts"][0][
+                    "evaluation_id"
+                ] = shifted_evaluation_id
+                for trace_entry in trace_body["order_execution_traces"][0][
+                    "entries"
+                ][:-1]:
+                    trace_entry["command_event_id"] = shifted_evaluation_id
+            for evidence in trace_body["submit_time_filter_evidence"]:
+                for field_name in (
+                    "account_filters_observed_at",
+                    "observed_at",
+                    "account_open_orders_observed_at",
+                    "account_open_order_lists_observed_at",
+                    "reference_price_observed_at",
+                ):
+                    evidence[field_name] = shift_wire_timestamp(
+                        evidence[field_name],
+                        offset,
+                    )
+                evidence["reference_price"]["exchange_timestamp"] += (
+                    offset_milliseconds
+                )
+            for result in trace_body["order_results"]:
+                result["observed_at"] = shift_wire_timestamp(
+                    result["observed_at"],
+                    offset,
+                )
+                for fill in result["incremental_fills"]:
+                    fill["event_time"] = shift_wire_timestamp(
+                        fill["event_time"],
+                        offset,
+                    )
+            for trade in trace_body["run_durable_trades"]:
+                trade["executed_at"] = shift_wire_timestamp(
+                    trade["executed_at"],
+                    offset,
+                )
+
+        # Local run clock과 Binance 축은 일치할 필요가 없으며 각 축 내부 인과와 identity가 검증 대상이다.
+        for outcome, trace_factory in (
+            ("SUCCESS", self._success_trace_body),
+            ("NO_SIGNAL", self._no_signal_trace_body),
+        ):
+            for offset_seconds in (-60, 60):
+                with self.subTest(
+                    outcome=outcome,
+                    server_offset_seconds=offset_seconds,
+                ):
+                    offset_trace = trace_factory()
+                    shift_server_axis(
+                        offset_trace,
+                        timedelta(seconds=offset_seconds),
+                    )
+                    sealed_offset_trace = seal_phase13_public_trace(
+                        offset_trace
+                    )
+                    self.assertEqual(
+                        outcome,
+                        sealed_offset_trace["outcome"],
+                    )
+                    self.assertEqual(
+                        sealed_offset_trace["trace_sha256"],
+                        validate_phase13_public_trace(
+                            sealed_offset_trace
+                        ),
+                    )
 
     def test_unknown_missing_and_version_drift_fields_fail_closed(self) -> None:
         """
@@ -1129,11 +1591,11 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         """
         sealed_trace = seal_phase13_public_trace(self._success_trace_body())
 
-        # Schema가 여전히 유효한 event type 변경도 원 body SHA-256와 달라져야 한다.
+        # Schema·producer 계약을 유지하는 완료 시각 변경도 원 body SHA-256와 달라져야 한다.
         tampered_trace = deepcopy(sealed_trace)
-        tampered_trace["transport_ui_event_batch"]["events"][0][
-            "related_id"
-        ] = "account-safe-tamper"
+        tampered_trace["timestamps"]["completed_at"] = (
+            "2026-08-31T00:00:30.001Z"
+        )
         with self.assertRaisesRegex(
             PhaseThirteenPublicTraceValidationError,
             "digest does not match",
@@ -1165,6 +1627,32 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             sealed_trace["trace_sha256"],
         )
         transport_events = sealed_trace["transport_ui_event_batch"]["events"]
+        self.assertEqual(
+            list(range(1, 9)),
+            [event["transport_sequence"] for event in transport_events],
+        )
+        self.assertEqual(
+            [
+                "ACCOUNT_UPDATED",
+                "ORDER_EXECUTED",
+                "PERFORMANCE_UPDATED",
+                "TRADING_SESSION_UPDATED",
+                "ORDER_EXECUTED",
+                "PERFORMANCE_UPDATED",
+                "TRADING_SESSION_UPDATED",
+                "ACCOUNT_UPDATED",
+            ],
+            [event["event_type"] for event in transport_events],
+        )
+        self.assertEqual(
+            [3, None, None, 12, None, None, 20, 4],
+            [event["aggregate_version"] for event in transport_events],
+        )
+        self.assertIsNone(transport_events[0]["related_id"])
+        self.assertEqual(
+            transport_events[3]["related_id"],
+            transport_events[6]["related_id"],
+        )
         self.assertNotIn("state_version", transport_events[1])
         self.assertIsNone(transport_events[1]["aggregate_version"])
         self.assertIsNone(transport_events[2]["aggregate_version"])
@@ -1177,25 +1665,118 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             transport_events[2]["published_at"],
         )
 
-        # 지연 domain event의 occurred_at은 감소할 수 있고 envelope sequence만 transport ordering이다.
-        delayed_event_body = self._success_trace_body()
-        delayed_event_body["transport_ui_event_batch"]["events"][0][
+        invalid_trace_bodies: list[tuple[str, dict[str, object]]] = []
+
+        # Shared publication clock을 쓰는 envelope sequence의 시각 역행은 producer가 만들 수 없다.
+        publication_regression = self._success_trace_body()
+        publication_regression["transport_ui_event_batch"]["events"][0][
             "published_at"
         ] = "2026-08-31T00:00:04.000Z"
-        seal_phase13_public_trace(delayed_event_body)
+        invalid_trace_bodies.append(
+            ("publication_regression", publication_regression)
+        )
+
+        # V3 transport는 1부터 시작하는 contiguous sequence와 두 주문별 exact 세 이벤트를 요구한다.
+        sequence_offset = self._success_trace_body()
+        for event in sequence_offset["transport_ui_event_batch"]["events"]:
+            event["transport_sequence"] += 1
+        invalid_trace_bodies.append(("sequence_offset", sequence_offset))
+
+        missing_session = self._success_trace_body()
+        missing_session["transport_ui_event_batch"]["events"].pop(3)
+        for sequence, event in enumerate(
+            missing_session["transport_ui_event_batch"]["events"],
+            start=1,
+        ):
+            event["transport_sequence"] = sequence
+        invalid_trace_bodies.append(("missing_session", missing_session))
+
+        missing_session_identity = self._success_trace_body()
+        missing_session_identity["transport_ui_event_batch"]["events"][3][
+            "related_id"
+        ] = None
+        invalid_trace_bodies.append(
+            ("missing_session_identity", missing_session_identity)
+        )
+
+        changed_session_identity = self._success_trace_body()
+        changed_session_identity["transport_ui_event_batch"]["events"][6][
+            "related_id"
+        ] = "00000000-0000-4000-8000-000000000301"
+        invalid_trace_bodies.append(
+            ("changed_session_identity", changed_session_identity)
+        )
+
+        account_related_id = self._success_trace_body()
+        account_related_id["transport_ui_event_batch"]["events"][0][
+            "related_id"
+        ] = "00000000-0000-4000-8000-000000000302"
+        invalid_trace_bodies.append(("account_related_id", account_related_id))
+
+        wrong_session_version = self._success_trace_body()
+        wrong_session_version["transport_ui_event_batch"]["events"][3][
+            "aggregate_version"
+        ] = 11
+        invalid_trace_bodies.append(
+            ("wrong_session_version", wrong_session_version)
+        )
+
+        reordered_ui = self._success_trace_body()
+        reordered_events = reordered_ui["transport_ui_event_batch"]["events"]
+        reordered_ui["transport_ui_event_batch"]["events"] = [
+            reordered_events[index]
+            for index in (0, 3, 1, 2, 4, 5, 6, 7)
+        ]
+        reordered_ui["transport_ui_event_batch"]["events"][1][
+            "published_at"
+        ] = "2026-08-31T00:00:02.500Z"
+        for sequence, event in enumerate(
+            reordered_ui["transport_ui_event_batch"]["events"],
+            start=1,
+        ):
+            event["transport_sequence"] = sequence
+        invalid_trace_bodies.append(("reordered_ui", reordered_ui))
+
+        extra_ui = self._success_trace_body()
+        extra_ui["transport_ui_event_batch"]["events"].extend(
+            [
+                {
+                    "event_id": "00000000-0000-4000-8000-000000000109",
+                    "transport_sequence": 9,
+                    "aggregate": "TRADE_HISTORY",
+                    "event_type": "ORDER_EXECUTED",
+                    "aggregate_version": None,
+                    "related_id": "trade-9100003",
+                    "published_at": "2026-08-31T00:00:24.000Z",
+                },
+                {
+                    "event_id": "00000000-0000-4000-8000-000000000110",
+                    "transport_sequence": 10,
+                    "aggregate": "TRADE_HISTORY",
+                    "event_type": "PERFORMANCE_UPDATED",
+                    "aggregate_version": None,
+                    "related_id": "trade-9100003",
+                    "published_at": "2026-08-31T00:00:24.000Z",
+                },
+            ]
+        )
+        invalid_trace_bodies.append(("extra_ui", extra_ui))
 
         # Pair sequence, occurred_at, nullable version과 Trade ID 중 하나라도 바뀌면 fail closed한다.
         for field_name, invalid_value in (
             ("transport_sequence", 12),
             ("published_at", "2026-08-31T00:00:03.001Z"),
             ("aggregate_version", 1),
-            ("related_id", "trade-other"),
+            ("related_id", "trade-9100009"),
         ):
-            with self.subTest(field_name=field_name):
-                invalid_body = deepcopy(trace_body)
-                invalid_body["transport_ui_event_batch"]["events"][2][
-                    field_name
-                ] = invalid_value
+            invalid_body = deepcopy(trace_body)
+            invalid_body["transport_ui_event_batch"]["events"][2][
+                field_name
+            ] = invalid_value
+            invalid_trace_bodies.append((f"pair_{field_name}", invalid_body))
+
+        for case_name, invalid_body in invalid_trace_bodies:
+            with self.subTest(case_name=case_name):
                 self._assert_body_is_rejected(invalid_body)
 
     def test_secret_like_keys_values_and_actual_canaries_are_rejected(self) -> None:
@@ -1274,6 +1855,20 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "source_event_id"
         ] = "kline-event-other"
         invalid_trace_bodies.append(("source_mismatch", source_mismatch))
+        source_identity_mismatch = self._success_trace_body()
+        source_identity_mismatch["immutable_decision_fingerprint"][
+            "source_kline_identity"
+        ] = "ETHUSDT:30m:2026-08-30T23:00:00.000Z"
+        invalid_trace_bodies.append(
+            ("source_identity_mismatch", source_identity_mismatch)
+        )
+        source_time_mismatch = self._success_trace_body()
+        source_time_mismatch["immutable_decision_fingerprint"][
+            "source_event_time"
+        ] = "2026-08-30T23:59:59.999Z"
+        invalid_trace_bodies.append(
+            ("source_time_mismatch", source_time_mismatch)
+        )
         attempt_mismatch = self._success_trace_body()
         attempt_mismatch["order_attempts"][0]["decision_price"] = "2000"
         attempt_mismatch["order_attempts"][0]["final_notional"] = "8.000"
@@ -1288,6 +1883,31 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "configured_cap"
         ] = "100.000000000000000001"
         invalid_trace_bodies.append(("cap_exceeded", cap_exceeded))
+        sell_cap_drift = self._success_trace_body()
+        sell_cap_drift["order_attempts"][1]["configured_cap"] = "99"
+        invalid_trace_bodies.append(("sell_cap_drift", sell_cap_drift))
+
+        wrong_regime = self._success_trace_body()
+        wrong_regime["immutable_decision_fingerprint"]["regime"] = "TYPE_1"
+        for event in wrong_regime["public_market_events"]:
+            event["regime"] = "TYPE_1"
+        for attempt in wrong_regime["order_attempts"]:
+            attempt["regime"] = "TYPE_1"
+        for trade in wrong_regime["run_durable_trades"]:
+            trade["regime"] = "TYPE_1"
+        invalid_trace_bodies.append(("wrong_regime", wrong_regime))
+
+        wrong_policy = self._success_trace_body()
+        wrong_policy["immutable_decision_fingerprint"]["policy_version"] = 12
+        for attempt in wrong_policy["order_attempts"]:
+            attempt["policy_version"] = 12
+        invalid_trace_bodies.append(("wrong_policy", wrong_policy))
+
+        invalid_client_id = self._success_trace_body()
+        invalid_client_id["immutable_decision_fingerprint"][
+            "client_order_id"
+        ] = "bat-short-0"
+        invalid_trace_bodies.append(("invalid_client_id", invalid_client_id))
 
         for case_name, trace_body in invalid_trace_bodies:
             with self.subTest(case_name=case_name):
@@ -1474,6 +2094,29 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "2026-08-31T00:00:00.800Z"
         )
         invalid_trace_bodies.append(("stale_sell_filter", stale_sell_filter))
+
+        # STOP SELL composite는 BUY terminal Position이 authoritative해진 뒤에만 시작된다.
+        sell_filter_before_buy_terminal = self._success_trace_body()
+        early_sell_evidence = sell_filter_before_buy_terminal[
+            "submit_time_filter_evidence"
+        ][1]
+        for field_name, observed_at in (
+            ("account_filters_observed_at", "2026-08-31T00:00:01.600Z"),
+            ("observed_at", "2026-08-31T00:00:01.650Z"),
+            ("account_open_orders_observed_at", "2026-08-31T00:00:01.660Z"),
+            (
+                "account_open_order_lists_observed_at",
+                "2026-08-31T00:00:01.670Z",
+            ),
+            ("reference_price_observed_at", "2026-08-31T00:00:01.680Z"),
+        ):
+            early_sell_evidence[field_name] = observed_at
+        invalid_trace_bodies.append(
+            (
+                "sell_filter_before_buy_terminal",
+                sell_filter_before_buy_terminal,
+            )
+        )
         clock_regression = self._success_trace_body()
         clock_regression["order_attempts"][0]["attempted_at"] = (
             "2026-08-31T00:00:00.940Z"
@@ -1484,17 +2127,54 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         ):
             seal_phase13_public_trace(clock_regression)
 
+        def bind_buy_source_event_time(
+            trace_body: dict[str, object],
+            source_event_time: str,
+        ) -> None:
+            """
+            함수 이름: bind_buy_source_event_time()
+            기능: freshness fixture의 Kline source와 파생 evaluation identity를 함께 바꾼다.
+            인자: trace_body -> mutable SUCCESS body
+                source_event_time -> 새 Kline event time
+            반환값: 없음
+            작성 날짜: 2026/09/01
+            """
+            source_open_time = "2026-08-30T23:00:00.000Z"
+            source_event_id = (
+                f"kline:ETHUSDT:30m:{source_open_time}:"
+                f"{source_event_time}:closed"
+            )
+            evaluation_id = f"market:7:{source_event_id}"
+            fingerprint = trace_body["immutable_decision_fingerprint"]
+            fingerprint["source_event_id"] = source_event_id
+            fingerprint["source_kline_identity"] = (
+                f"ETHUSDT:30m:{source_open_time}"
+            )
+            fingerprint["source_event_time"] = source_event_time
+            fingerprint["evaluation_id"] = evaluation_id
+            for market_event in trace_body["public_market_events"]:
+                market_event["source_event_id"] = source_event_id
+                market_event["source_kline_identity"] = (
+                    f"ETHUSDT:30m:{source_open_time}"
+                )
+                market_event["source_event_time"] = source_event_time
+                market_event["evaluation_id"] = evaluation_id
+            trace_body["order_attempts"][0]["evaluation_id"] = evaluation_id
+            for trace_entry in trace_body["order_execution_traces"][0][
+                "entries"
+            ][:-1]:
+                trace_entry["command_event_id"] = evaluation_id
+
         # Source 이후 시작된 composite라도 첫 fetch부터 POST까지
         # production 고정 freshness 경계를 넘기면 stale evidence다.
         stale_composite = self._success_trace_body()
         stale_composite["timestamps"]["started_at"] = (
             "2026-08-30T23:59:00.000Z"
         )
-        stale_composite["immutable_decision_fingerprint"]["source_event_time"] = (
-            "2026-08-30T23:59:00.000Z"
+        bind_buy_source_event_time(
+            stale_composite,
+            "2026-08-30T23:59:00.000Z",
         )
-        for market_event in stale_composite["public_market_events"]:
-            market_event["source_event_time"] = "2026-08-30T23:59:00.000Z"
         stale_composite["submit_time_filter_evidence"][0][
             "account_filters_observed_at"
         ] = "2026-08-30T23:59:30.000Z"
@@ -1509,11 +2189,10 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         boundary_composite["timestamps"]["started_at"] = (
             "2026-08-30T23:59:00.000Z"
         )
-        boundary_composite["immutable_decision_fingerprint"][
-            "source_event_time"
-        ] = "2026-08-30T23:59:00.000Z"
-        for market_event in boundary_composite["public_market_events"]:
-            market_event["source_event_time"] = "2026-08-30T23:59:00.000Z"
+        bind_buy_source_event_time(
+            boundary_composite,
+            "2026-08-30T23:59:00.000Z",
+        )
         boundary_composite["submit_time_filter_evidence"][0][
             "account_filters_observed_at"
         ] = "2026-08-30T23:59:31.000Z"
@@ -1724,7 +2403,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         mismatched_identity_body = self._success_trace_body()
         mismatched_identity_body["order_execution_traces"][0][
             "client_order_id"
-        ] = "bat-phase13-unrelated-order"
+        ] = "bat-000000000000000000000009-0"
         regressed_version_body = self._success_trace_body()
         regressed_version_body["order_execution_traces"][0]["entries"][3][
             "context_version_after"
@@ -1747,6 +2426,45 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         failed_result_entry["result"] = "FAILURE"
         failed_result_entry["failure_code"] = "GATEWAY_REQUEST_FAILED"
 
+        # Message 1의 read-only v와 message 2의 exact v→v+1 mutation은 일반 단조성보다 강하다.
+        message_one_after_drift = self._success_trace_body()
+        message_one_entries = message_one_after_drift[
+            "order_execution_traces"
+        ][0]["entries"]
+        message_one_entries[0]["context_version_after"] = 12
+        message_one_entries[1]["context_version_before"] = 12
+        message_one_entries[1]["context_version_after"] = 13
+        for trace_entry in message_one_entries[2:]:
+            trace_entry["context_version_before"] = 13
+            trace_entry["context_version_after"] = 13
+        message_two_before_drift = self._success_trace_body()
+        message_two_before_entries = message_two_before_drift[
+            "order_execution_traces"
+        ][0]["entries"]
+        message_two_before_entries[1]["context_version_before"] = 12
+        message_two_before_entries[1]["context_version_after"] = 13
+        for trace_entry in message_two_before_entries[2:]:
+            trace_entry["context_version_before"] = 13
+            trace_entry["context_version_after"] = 13
+        message_two_after_drift = self._success_trace_body()
+        message_two_after_entries = message_two_after_drift[
+            "order_execution_traces"
+        ][0]["entries"]
+        message_two_after_entries[1]["context_version_after"] = 13
+        for trace_entry in message_two_after_entries[2:]:
+            trace_entry["context_version_before"] = 13
+            trace_entry["context_version_after"] = 13
+
+        # Message 14는 scheduler source가 아니라 concrete order outcome event ID를 가져야 한다.
+        wrong_outcome_command = self._success_trace_body()
+        wrong_outcome_command["order_execution_traces"][0]["entries"][-1][
+            "command_event_id"
+        ] = "order-outcome-synthetic-CASE_C_POSITION_OPENED"
+        foreign_intermediate_command = self._success_trace_body()
+        foreign_intermediate_command["order_execution_traces"][0]["entries"][
+            2
+        ]["command_event_id"] = "fabricated-producer-event"
+
         # Entry 내부·각 축 monotonic뿐 아니라 직전 after보다 작은 다음 before도 독립 차단한다.
         for case_name, trace_body in (
             ("missing-step", missing_step_body),
@@ -1756,6 +2474,11 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             ("regressed-version", regressed_version_body),
             ("cross-entry-version-regression", cross_entry_regression_body),
             ("failed-result", failed_result_body),
+            ("message-one-after-drift", message_one_after_drift),
+            ("message-two-before-drift", message_two_before_drift),
+            ("message-two-after-drift", message_two_after_drift),
+            ("wrong-outcome-command", wrong_outcome_command),
+            ("foreign-intermediate-command", foreign_intermediate_command),
         ):
             with self.subTest(case_name=case_name):
                 self._assert_body_is_rejected(trace_body)
@@ -1848,14 +2571,14 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_failed_terminal_partial_fill_still_requires_one_durable_trade()
-        기능: CANCELED terminal의 실제 partial fill도 정확히 한 Trade와 Performance를 갖는지 검증한다.
+        기능: 보존 V2 FAILED의 CANCELED partial fill도 정확히 한 Trade와 Performance를 갖는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/31
         """
-        trace_body = self._success_trace_body()
+        trace_body = self._legacy_v2_trace_body()
 
-        # BUY partial 뒤 recovery 전 중단된 FAILED를 한 attempt·terminal fill·Trade로 정규화한다.
+        # V3는 FAILED를 금지하므로 BUY partial 뒤 중단된 보존 사례는 exact V2로만 검증한다.
         trace_body["outcome"] = "FAILED"
         trace_body["typed_reason"] = "RECOVERY_BLOCKED"
         trace_body["order_attempts"] = [trace_body["order_attempts"][0]]
@@ -1878,11 +2601,8 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             trace_body["transport_ui_event_batch"]["events"][0],
             trace_body["transport_ui_event_batch"]["events"][1],
             trace_body["transport_ui_event_batch"]["events"][2],
-            trace_body["transport_ui_event_batch"]["events"][5],
+            trace_body["transport_ui_event_batch"]["events"][3],
         ]
-        trace_body["transport_ui_event_batch"]["events"][3][
-            "related_id"
-        ] = "bat-phase13-buy-0001"
         trace_body["recovery"] = {
             "required": True,
             "attempted": False,
@@ -1906,7 +2626,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         final_state["performance"]["run_realized_profit_loss"] = "0"
         final_state["performance"]["total_realized_profit_loss"] = "0"
 
-        # Terminal status가 FILLED가 아니어도 fill aggregate와 durable Trade가 있으면 valid evidence다.
+        # Terminal status가 FILLED가 아니어도 V2 fill aggregate와 durable Trade는 검증 가능하다.
         sealed_trace = seal_phase13_public_trace(trace_body)
         self.assertEqual(
             validate_phase13_public_trace(sealed_trace),
@@ -1932,6 +2652,30 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         missing_fills = self._success_trace_body()
         missing_fills["order_results"][0]["incremental_fills"] = []
         invalid_trace_bodies.append(("missing_fills", missing_fills))
+        invalid_fill_id = self._success_trace_body()
+        invalid_fill_id["order_results"][0]["incremental_fills"][0][
+            "fill_id"
+        ] = "fill-7100001"
+        invalid_trace_bodies.append(("invalid_fill_id", invalid_fill_id))
+
+        # 두 fill의 합계·Trade latest time은 유지해도 exchange (event_time, fill_id) 순서를 뒤집을 수 없다.
+        reversed_fill_order = self._success_trace_body()
+        earlier_fill = reversed_fill_order["order_results"][0][
+            "incremental_fills"
+        ][0]
+        earlier_fill["event_time"] = "2026-08-31T00:00:01.400Z"
+        earlier_fill["quantity"] = "0.002"
+        earlier_fill["quote_amount"] = "5.000"
+        later_fill = deepcopy(earlier_fill)
+        later_fill["fill_id"] = "7100002"
+        later_fill["event_time"] = "2026-08-31T00:00:01.500Z"
+        reversed_fill_order["order_results"][0]["incremental_fills"] = [
+            later_fill,
+            earlier_fill,
+        ]
+        invalid_trace_bodies.append(
+            ("reversed_fill_order", reversed_fill_order)
+        )
 
         # Exchange ID 재사용, fill quote 오차와 submitted quantity 미달을 별도 tamper로 만든다.
         reused_exchange = self._success_trace_body()
@@ -1947,7 +2691,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                 "sequence": 2,
                 "observed_at": "2026-08-31T00:00:02.100Z",
                 "intent_id": "case2-buy-intent-0001",
-                "client_order_id": "bat-phase13-buy-0001",
+                "client_order_id": "bat-47433b92f280cc3e87953aad-0",
                 "exchange_order_id": "9100009",
                 "status": "FILLED",
                 "failure_code": None,
@@ -1956,6 +2700,20 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         )
         changed_exchange["order_results"][2]["sequence"] = 3
         invalid_trace_bodies.append(("changed_exchange", changed_exchange))
+        reordered_results = self._success_trace_body()
+        reordered_results["order_results"].reverse()
+        for sequence, result in enumerate(
+            reordered_results["order_results"],
+            start=1,
+        ):
+            result["sequence"] = sequence
+        reordered_results["order_results"][0]["observed_at"] = (
+            "2026-08-31T00:00:21.000Z"
+        )
+        reordered_results["order_results"][1]["observed_at"] = (
+            "2026-08-31T00:00:22.000Z"
+        )
+        invalid_trace_bodies.append(("reordered_results", reordered_results))
         quote_mismatch = self._success_trace_body()
         quote_mismatch["order_results"][0]["incremental_fills"][0][
             "quote_amount"
@@ -1981,7 +2739,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
                 "sequence": 3,
                 "observed_at": "2026-08-31T00:00:22.500Z",
                 "intent_id": "case2-buy-intent-0001",
-                "client_order_id": "bat-phase13-buy-0001",
+                "client_order_id": "bat-47433b92f280cc3e87953aad-0",
                 "exchange_order_id": "9100001",
                 "status": "NEW",
                 "failure_code": None,
@@ -2004,12 +2762,61 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         """
         invalid_trace_bodies: list[tuple[str, dict[str, object]]] = []
 
+        # Fixture 자체도 production session·intent SHA-256와 force-sell STOP command를 사용한다.
+        production_identity_body = self._success_trace_body()
+        self.assertEqual(
+            "bat-47433b92f280cc3e87953aad-0",
+            production_identity_body["order_attempts"][0]["client_order_id"],
+        )
+        self.assertEqual(
+            "bat-5b5400567eac4bac2f2eb885-0",
+            production_identity_body["order_attempts"][1]["client_order_id"],
+        )
+
+        # 모든 참조를 함께 바꾼 regex-valid client ID도 session·intent digest가 아니면 거부한다.
+        coherent_buy_client_mutation = self._success_trace_body()
+        mutated_buy_client_order_id = "bat-111111111111111111111111-0"
+        coherent_buy_client_mutation["immutable_decision_fingerprint"][
+            "client_order_id"
+        ] = mutated_buy_client_order_id
+        for entry in (
+            coherent_buy_client_mutation["order_attempts"][0],
+            coherent_buy_client_mutation["order_results"][0],
+            coherent_buy_client_mutation["order_execution_traces"][0],
+            coherent_buy_client_mutation["run_durable_trades"][0],
+            coherent_buy_client_mutation["submit_time_filter_evidence"][0],
+        ):
+            entry["client_order_id"] = mutated_buy_client_order_id
+        invalid_trace_bodies.append(
+            (
+                "coherent_buy_client_mutation",
+                coherent_buy_client_mutation,
+            )
+        )
+
+        # STOP attempt와 모든 trace command를 같이 바꿔도 run/session에서 파생한 command가 아니면 실패한다.
+        synthetic_stop_provenance = self._success_trace_body()
+        synthetic_stop_evaluation_id = (
+            "stop-00000000-0000-4000-8000-000000000300-"
+            "phase13-stop-synthetic-run"
+        )
+        synthetic_stop_provenance["order_attempts"][1][
+            "evaluation_id"
+        ] = synthetic_stop_evaluation_id
+        for trace_entry in synthetic_stop_provenance[
+            "order_execution_traces"
+        ][1]["entries"][:-1]:
+            trace_entry["command_event_id"] = synthetic_stop_evaluation_id
+        invalid_trace_bodies.append(
+            ("synthetic_stop_provenance", synthetic_stop_provenance)
+        )
+
         # 세 번째 attempt, STOP provenance 상실과 non-terminal SELL은 실제 주문 budget을 위반한다.
         extra_attempt = self._success_trace_body()
         copied_attempt = deepcopy(extra_attempt["order_attempts"][1])
         copied_attempt["sequence"] = 3
         copied_attempt["intent_id"] = "unexpected-third-intent"
-        copied_attempt["client_order_id"] = "bat-unexpected-third"
+        copied_attempt["client_order_id"] = "bat-000000000000000000000003-0"
         extra_attempt["order_attempts"].append(copied_attempt)
         extra_attempt["final_state"]["actual_order_count"] = 3
         invalid_trace_bodies.append(("extra_attempt", extra_attempt))
@@ -2039,7 +2846,9 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
 
         # Recovery intent/client와 authoritative/free/submitted 수량은 STOP SELL과 exact identity다.
         wrong_recovery_client = self._success_trace_body()
-        wrong_recovery_client["recovery"]["client_order_id"] = "bat-other-sell"
+        wrong_recovery_client["recovery"]["client_order_id"] = (
+            "bat-000000000000000000000009-0"
+        )
         invalid_trace_bodies.append(("wrong_recovery_client", wrong_recovery_client))
         free_quantity_drift = self._success_trace_body()
         free_quantity_drift["recovery"]["effective_free_quantity"] = "0.003"
@@ -2063,6 +2872,11 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         exchange_mismatch = self._success_trace_body()
         exchange_mismatch["run_durable_trades"][0]["exchange_order_id"] = "9199999"
         invalid_trace_bodies.append(("exchange_mismatch", exchange_mismatch))
+        invalid_trade_id = self._success_trace_body()
+        invalid_trade_id["run_durable_trades"][0]["trade_id"] = (
+            "trade-buy-9100001"
+        )
+        invalid_trace_bodies.append(("invalid_trade_id", invalid_trade_id))
         trade_amount_mismatch = self._success_trace_body()
         trade_amount_mismatch["run_durable_trades"][0]["executed_amount"] = "9.999"
         invalid_trace_bodies.append(("trade_amount_mismatch", trade_amount_mismatch))
@@ -2072,6 +2886,72 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         exit_mismatch = self._success_trace_body()
         exit_mismatch["run_durable_trades"][1]["exit_reason"] = "TAKE_PROFIT"
         invalid_trace_bodies.append(("exit_mismatch", exit_mismatch))
+        reordered_trades = self._success_trace_body()
+        reordered_trades["run_durable_trades"].reverse()
+        invalid_trace_bodies.append(("reordered_trades", reordered_trades))
+        extra_trade = self._success_trace_body()
+        copied_trade = deepcopy(extra_trade["run_durable_trades"][1])
+        copied_trade["trade_id"] = "trade-9100003"
+        copied_trade["client_order_id"] = "bat-000000000000000000000003-0"
+        copied_trade["exchange_order_id"] = "9100003"
+        extra_trade["run_durable_trades"].append(copied_trade)
+        invalid_trace_bodies.append(("extra_trade", extra_trade))
+
+        # Actual Case 2는 commission zero이고 BUY PnL None, SELL PnL은 fill 차액과 정확히 같다.
+        nonzero_fee = self._success_trace_body()
+        buy_fill = nonzero_fee["order_results"][0]["incremental_fills"][0]
+        buy_fill["fee_amount"] = "0.001"
+        buy_fill["fee_quote_amount"] = "0.001"
+        buy_trade = nonzero_fee["run_durable_trades"][0]
+        buy_trade["fee_amount"] = "0.001"
+        buy_trade["fee_quote_amount"] = "0.001"
+        nonzero_fee["final_state"]["performance"]["run_fee_quote"] = (
+            "0.001"
+        )
+        nonzero_fee["final_state"]["performance"]["total_fee_quote"] = (
+            "0.001"
+        )
+        invalid_trace_bodies.append(("nonzero_fee", nonzero_fee))
+
+        # SELL의 ETH fee 산술을 fill·Trade·PnL·Performance까지 맞춰도 production Position은 거부한다.
+        base_asset_sell_fee = self._success_trace_body()
+        sell_fee_fill = base_asset_sell_fee["order_results"][1][
+            "incremental_fills"
+        ][0]
+        sell_fee_fill["fee_amount"] = "0.0001"
+        sell_fee_fill["fee_asset"] = "ETH"
+        sell_fee_fill["fee_quote_amount"] = "0.2505"
+        sell_fee_trade = base_asset_sell_fee["run_durable_trades"][1]
+        sell_fee_trade["fee_amount"] = "0.0001"
+        sell_fee_trade["fee_asset"] = "ETH"
+        sell_fee_trade["fee_quote_amount"] = "0.2505"
+        sell_fee_trade["realized_profit_loss"] = "-0.2305"
+        sell_fee_performance = base_asset_sell_fee["final_state"][
+            "performance"
+        ]
+        sell_fee_performance["run_realized_profit_loss"] = "-0.2305"
+        sell_fee_performance["total_realized_profit_loss"] = "-0.2305"
+        sell_fee_performance["run_fee_quote"] = "0.2505"
+        sell_fee_performance["total_fee_quote"] = "0.2505"
+        invalid_trace_bodies.append(
+            ("base_asset_sell_fee", base_asset_sell_fee)
+        )
+        buy_pnl_zero = self._success_trace_body()
+        buy_pnl_zero["run_durable_trades"][0][
+            "realized_profit_loss"
+        ] = "0"
+        invalid_trace_bodies.append(("buy_pnl_zero", buy_pnl_zero))
+        sell_pnl_zero = self._success_trace_body()
+        sell_pnl_zero["run_durable_trades"][1][
+            "realized_profit_loss"
+        ] = "0"
+        sell_pnl_zero["final_state"]["performance"][
+            "run_realized_profit_loss"
+        ] = "0"
+        sell_pnl_zero["final_state"]["performance"][
+            "total_realized_profit_loss"
+        ] = "0"
+        invalid_trace_bodies.append(("sell_pnl_zero", sell_pnl_zero))
 
         # Empty baseline digest/count와 Performance의 run·total 합은 서로 독립 field지만 exact하게 결속한다.
         baseline_digest_mismatch = self._success_trace_body()
@@ -2086,6 +2966,26 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "total_trade_count"
         ] = 3
         invalid_trace_bodies.append(("baseline_count", baseline_count_mismatch))
+        nonzero_baseline_pnl = self._success_trace_body()
+        nonzero_baseline_pnl["final_state"]["performance"][
+            "baseline_realized_profit_loss"
+        ] = "0.001"
+        nonzero_baseline_pnl["final_state"]["performance"][
+            "total_realized_profit_loss"
+        ] = "0.021"
+        invalid_trace_bodies.append(
+            ("nonzero_baseline_pnl", nonzero_baseline_pnl)
+        )
+        nonzero_baseline_fee = self._success_trace_body()
+        nonzero_baseline_fee["final_state"]["performance"][
+            "baseline_fee_quote"
+        ] = "0.001"
+        nonzero_baseline_fee["final_state"]["performance"][
+            "total_fee_quote"
+        ] = "0.001"
+        invalid_trace_bodies.append(
+            ("nonzero_baseline_fee", nonzero_baseline_fee)
+        )
         performance_mismatch = self._success_trace_body()
         performance_mismatch["final_state"]["performance"][
             "run_realized_profit_loss"
@@ -2103,12 +3003,31 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
     def test_final_unknown_fresh_session_and_run_causal_time_are_exact(self) -> None:
         """
         함수 이름: test_final_unknown_fresh_session_and_run_causal_time_are_exact()
-        기능: final UNKNOWN zero, fresh session identity와 모든 evidence의 run 시간 경계를 검증한다.
+        기능: final UNKNOWN zero, fresh session identity, local run 경계와 server/exchange 축 인과를 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/31
+        작성 날짜: 2026/09/01
         """
         invalid_trace_bodies: list[tuple[str, dict[str, object]]] = []
+
+        # Startup v3 뒤 transport v4는 exact public row로 복사되고 converse 누락도 허용하지 않는다.
+        advancing_account_pair = self._success_trace_body()
+        seal_phase13_public_trace(advancing_account_pair)
+        self.assertEqual(
+            [3, 4],
+            [
+                event["account_version"]
+                for event in advancing_account_pair["public_account_events"]
+            ],
+        )
+        missing_advancing_account_row = self._success_trace_body()
+        missing_advancing_account_row["public_account_events"].pop()
+        invalid_trace_bodies.append(
+            (
+                "missing_advancing_account_row",
+                missing_advancing_account_row,
+            )
+        )
 
         # SUCCESS final에는 UNKNOWN이 남을 수 없고 fresh runtime은 원 transport session과 달라야 한다.
         unknown_final = self._success_trace_body()
@@ -2120,9 +3039,9 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         )
         invalid_trace_bodies.append(("reused_session", reused_session))
 
-        # Preflight-after-submit, result-before-attempt와 final-before-publication은 causal order 위반이다.
+        # Local preflight/final, server result/attempt와 local final/publication은 각 clock 축 안에서 비교한다.
         late_preflight = self._success_trace_body()
-        late_preflight["preflight"]["verified_at"] = "2026-08-31T00:00:02.000Z"
+        late_preflight["preflight"]["verified_at"] = "2026-08-31T00:00:29.500Z"
         invalid_trace_bodies.append(("late_preflight", late_preflight))
         early_result = self._success_trace_body()
         early_result["order_results"][0]["observed_at"] = (
@@ -2137,6 +3056,124 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "2026-08-31T00:00:00.060Z"
         )
         invalid_trace_bodies.append(("late_filter", late_filter))
+
+        # Startup synthetic row와 후속 stream row는 actual harness의 shape·시각·version 전진을 그대로 따른다.
+        invalid_startup_shape = self._success_trace_body()
+        invalid_startup_shape["public_account_events"][0][
+            "message_id"
+        ] = "2.2.1"
+        invalid_trace_bodies.append(
+            ("invalid_startup_shape", invalid_startup_shape)
+        )
+        invalid_account_version = self._success_trace_body()
+        invalid_account_version["public_account_events"][0][
+            "account_version"
+        ] = 0
+        invalid_account_version["public_account_events"][0][
+            "source_event_id"
+        ] = (
+            "startup-account-"
+            "00000000-0000-4000-8000-000000000013-0"
+        )
+        invalid_trace_bodies.append(
+            ("invalid_account_version", invalid_account_version)
+        )
+        invalid_account_free = self._success_trace_body()
+        invalid_account_free["public_account_events"][0][
+            "free_quantity"
+        ] = "-0.001"
+        invalid_trace_bodies.append(
+            ("invalid_account_free", invalid_account_free)
+        )
+        startup_not_first = self._success_trace_body()
+        startup_event = startup_not_first["public_account_events"][0]
+        startup_event["sequence"] = 2
+        startup_event["account_version"] = 4
+        startup_event["source_event_id"] = (
+            "startup-account-"
+            "00000000-0000-4000-8000-000000000013-4"
+        )
+        startup_not_first["public_account_events"].insert(
+            0,
+            {
+                "sequence": 1,
+                "message_id": "2.2.1",
+                "event_type": "ACCOUNT_POSITION_APPLIED",
+                "source_event_id": (
+                    "00000000-0000-4000-8000-000000000101"
+                ),
+                "source_event_time": "2026-08-31T00:00:00.010Z",
+                "account_version": 3,
+                "asset": "ETH",
+                "free_quantity": "1.004",
+                "locked_quantity": "0",
+            },
+        )
+        invalid_trace_bodies.append(("startup_not_first", startup_not_first))
+        startup_after_preflight = self._success_trace_body()
+        startup_after_preflight["public_account_events"][0][
+            "source_event_time"
+        ] = "2026-08-31T00:00:00.060Z"
+        invalid_trace_bodies.append(
+            ("startup_after_preflight", startup_after_preflight)
+        )
+        account_time_regression = self._success_trace_body()
+        account_time_regression["public_account_events"].append(
+            {
+                "sequence": 2,
+                "message_id": "2.2.1",
+                "event_type": "ACCOUNT_POSITION_APPLIED",
+                "source_event_id": (
+                    "00000000-0000-4000-8000-000000000109"
+                ),
+                "source_event_time": "2026-08-31T00:00:00.015Z",
+                "account_version": 4,
+                "asset": "ETH",
+                "free_quantity": "1.004",
+                "locked_quantity": "0",
+            }
+        )
+        invalid_trace_bodies.append(
+            ("account_time_regression", account_time_regression)
+        )
+        account_version_regression = self._success_trace_body()
+        account_version_regression["public_account_events"].append(
+            {
+                "sequence": 2,
+                "message_id": "2.2.1",
+                "event_type": "ACCOUNT_POSITION_APPLIED",
+                "source_event_id": (
+                    "00000000-0000-4000-8000-000000000110"
+                ),
+                "source_event_time": "2026-08-31T00:00:00.150Z",
+                "account_version": 2,
+                "asset": "ETH",
+                "free_quantity": "1.004",
+                "locked_quantity": "0",
+            }
+        )
+        invalid_trace_bodies.append(
+            ("account_version_regression", account_version_regression)
+        )
+        account_transport_mismatch = self._success_trace_body()
+        account_transport_mismatch["public_account_events"].append(
+            {
+                "sequence": 2,
+                "message_id": "2.2.1",
+                "event_type": "ACCOUNT_POSITION_APPLIED",
+                "source_event_id": (
+                    "00000000-0000-4000-8000-000000000111"
+                ),
+                "source_event_time": "2026-08-31T00:00:00.300Z",
+                "account_version": 4,
+                "asset": "ETH",
+                "free_quantity": "1.004",
+                "locked_quantity": "0",
+            }
+        )
+        invalid_trace_bodies.append(
+            ("account_transport_mismatch", account_transport_mismatch)
+        )
         early_fill = self._success_trace_body()
         early_fill["order_results"][0]["incremental_fills"][0][
             "event_time"
@@ -2148,11 +3185,21 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         early_ui_publication = self._success_trace_body()
         early_ui_publication["transport_ui_event_batch"]["events"][1][
             "published_at"
-        ] = "2026-08-31T00:00:01.400Z"
+        ] = "2026-08-30T23:59:59.999Z"
         early_ui_publication["transport_ui_event_batch"]["events"][2][
             "published_at"
-        ] = "2026-08-31T00:00:01.400Z"
+        ] = "2026-08-30T23:59:59.999Z"
         invalid_trace_bodies.append(("early_ui_publication", early_ui_publication))
+        preflight_order_publication = self._success_trace_body()
+        preflight_order_publication["transport_ui_event_batch"]["events"][1][
+            "published_at"
+        ] = "2026-08-31T00:00:00.040Z"
+        preflight_order_publication["transport_ui_event_batch"]["events"][2][
+            "published_at"
+        ] = "2026-08-31T00:00:00.040Z"
+        invalid_trace_bodies.append(
+            ("preflight_order_publication", preflight_order_publication)
+        )
         outside_run = self._success_trace_body()
         outside_run["public_account_events"][0]["source_event_time"] = (
             "2026-08-30T23:59:59.999Z"
@@ -2188,6 +3235,86 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             invalid_body["outcome"] = outcome
             invalid_body["typed_reason"] = typed_reason
             invalid_trace_bodies.append((outcome, invalid_body))
+
+        # V3 producer가 쓰지 않는 BLOCKED/FAILED는 safe reason이 있어도 공개 artifact가 아니다.
+        for outcome, typed_reason in (
+            ("BLOCKED", "RISK_POLICY_BLOCKED"),
+            ("FAILED", "TRACE_CAPTURE_FAILED"),
+        ):
+            invalid_body = self._no_signal_trace_body()
+            invalid_body["outcome"] = outcome
+            invalid_body["typed_reason"] = typed_reason
+            invalid_trace_bodies.append(
+                (f"V3_{outcome}_WITH_REASON", invalid_body)
+            )
+
+        # NO_SIGNAL은 parse 가능한 한 Kline 관측만 보존하며 evaluation·Action을 위조할 수 없다.
+        forged_evaluation = self._no_signal_trace_body()
+        forged_evaluation["public_market_events"][0]["evaluation_id"] = (
+            "market:7:"
+            "kline:ETHUSDT:30m:2026-08-30T23:30:00.000Z:"
+            "2026-08-31T00:00:00.000Z:closed"
+        )
+        invalid_trace_bodies.append(
+            ("NO_SIGNAL_FORGED_EVALUATION", forged_evaluation)
+        )
+        forged_action = self._no_signal_trace_body()
+        no_signal_event = forged_action["public_market_events"][0]
+        no_signal_event["action_type"] = "SUBMIT_ORDER"
+        no_signal_event["side"] = "BUY"
+        no_signal_event["strategy"] = "CASE_C"
+        invalid_trace_bodies.append(("NO_SIGNAL_FORGED_ACTION", forged_action))
+        forged_source = self._no_signal_trace_body()
+        forged_source["public_market_events"][0]["source_event_id"] = (
+            "kline:ETHUSDT:30m:not-a-time:"
+            "2026-08-31T00:00:00.000Z:closed"
+        )
+        invalid_trace_bodies.append(
+            ("NO_SIGNAL_FORGED_SOURCE", forged_source)
+        )
+        source_identity_drift = self._no_signal_trace_body()
+        source_identity_drift["public_market_events"][0][
+            "source_kline_identity"
+        ] = "ETHUSDT:30m:2026-08-30T23:00:00.000Z"
+        invalid_trace_bodies.append(
+            ("NO_SIGNAL_SOURCE_IDENTITY", source_identity_drift)
+        )
+        wrong_symbol_source = self._no_signal_trace_body()
+        wrong_symbol_event = wrong_symbol_source["public_market_events"][0]
+        wrong_symbol_event["source_event_id"] = (
+            "kline:BTCUSDT:30m:2026-08-30T23:30:00.000Z:"
+            "2026-08-31T00:00:00.000Z:closed"
+        )
+        wrong_symbol_event["source_kline_identity"] = (
+            "BTCUSDT:30m:2026-08-30T23:30:00.000Z"
+        )
+        invalid_trace_bodies.append(
+            ("NO_SIGNAL_WRONG_SYMBOL_SOURCE", wrong_symbol_source)
+        )
+        extra_market_event = self._no_signal_trace_body()
+        copied_market_event = deepcopy(
+            extra_market_event["public_market_events"][0]
+        )
+        copied_market_event["sequence"] = 2
+        extra_market_event["public_market_events"].append(copied_market_event)
+        invalid_trace_bodies.append(
+            ("NO_SIGNAL_EXTRA_MARKET", extra_market_event)
+        )
+        extra_no_signal_ui = self._no_signal_trace_body()
+        success_ui_events = self._success_trace_body()[
+            "transport_ui_event_batch"
+        ]["events"]
+        extra_trade_ui_events = deepcopy(
+            success_ui_events[1:3]
+        )
+        for sequence, event in enumerate(extra_trade_ui_events, start=2):
+            event["transport_sequence"] = sequence
+        extra_no_signal_ui["transport_ui_event_batch"]["events"].extend(
+            extra_trade_ui_events
+        )
+        invalid_trace_bodies.append(
+            ("NO_SIGNAL_EXTRA_UI", extra_no_signal_ui)
+        )
 
         # NO_SIGNAL이나 BLOCKED에 order 또는 recovery Position을 합성하면 non-mutating evidence가 아니다.
         no_signal_with_order = self._no_signal_trace_body()
@@ -2343,6 +3470,12 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         sell_trade = exact_ceiling_body["run_durable_trades"][1]
         sell_trade["executed_quantity"] = "0.04"
         sell_trade["executed_amount"] = "100.200"
+        sell_trade["realized_profit_loss"] = "0.200"
+        exact_ceiling_performance = exact_ceiling_body["final_state"][
+            "performance"
+        ]
+        exact_ceiling_performance["run_realized_profit_loss"] = "0.200"
+        exact_ceiling_performance["total_realized_profit_loss"] = "0.200"
         for recovery_field in (
             "authoritative_position_quantity",
             "effective_free_quantity",
@@ -2400,6 +3533,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         recovery_body["recovery"]["authoritative_position_quantity"] = "2"
         recovery_body["recovery"]["effective_free_quantity"] = "2"
         recovery_body["recovery"]["submitted_quantity"] = "2"
+        recovery_body["public_account_events"][0]["free_quantity"] = "2"
         recovery_fill = recovery_body["order_results"][1]["incremental_fills"][0]
         recovery_fill["price"] = "100"
         recovery_fill["quantity"] = "2"
@@ -2408,6 +3542,10 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         recovery_trade["executed_quantity"] = "2"
         recovery_trade["executed_amount"] = "200"
         recovery_trade["average_fill_price"] = "100"
+        recovery_trade["realized_profit_loss"] = "100"
+        recovery_performance = recovery_body["final_state"]["performance"]
+        recovery_performance["run_realized_profit_loss"] = "100"
+        recovery_performance["total_realized_profit_loss"] = "100"
         sealed_trace = seal_phase13_public_trace(recovery_body)
         self.assertEqual(
             validate_phase13_public_trace(sealed_trace),

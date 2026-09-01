@@ -25,6 +25,8 @@ from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
 from binance_auto_trader.application.trading_controller import (
+    ReconciliationCauseCategory,
+    ReconciliationCauseStatus,
     TradingController,
     TradingSessionError,
     TradingSessionFailureCode,
@@ -1182,6 +1184,18 @@ class BuySellFlowIntegrationTests(unittest.TestCase):
             self.assertTrue(snapshot.process_ownership_ambiguous)
             self.assertFalse(snapshot.command_enabled)
             self.assertEqual([], fixture.rest_client.submitted_orders)
+
+            # Control fsync의 반환 전후가 불명하면 process ownership 원인을 같은 lock에서 고정한다.
+            cause_snapshot = fixture.controller.reconciliation_cause_snapshot
+            self.assertTrue(cause_snapshot.reconciliation_required)
+            self.assertIs(
+                cause_snapshot.status,
+                ReconciliationCauseStatus.EXACT,
+            )
+            self.assertIs(
+                cause_snapshot.category,
+                ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS,
+            )
 
             # 같은 process는 journal이 기록됐는지 추측해 해제하거나 version을 재사용하지 못한다.
             with self.assertRaises(RuntimeError):

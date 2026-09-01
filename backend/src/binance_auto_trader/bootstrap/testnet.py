@@ -1086,6 +1086,8 @@ def create_testnet_application_runtime(
         trading_session_update_observer
     ):
         raise TypeError("trading_session_update_observer must be callable")
+    if clock is not None and not callable(clock):
+        raise TypeError("clock must be callable or None")
     if monotonic_clock is not None and not callable(monotonic_clock):
         raise TypeError("monotonic_clock must be callable or None")
     if risk_policy_state is not None and not isinstance(
@@ -1109,6 +1111,10 @@ def create_testnet_application_runtime(
         rest_client_arguments[
             "allow_order_timestamp_retry"
         ] = False  # 한 logical Phase 13 주문은 -1021에서도 추가 HTTP POST permit을 얻지 못한다.
+    if clock is not None:
+        # REST offset·filter·attempt와 fallback result도 runtime과 같은 UTC 축을 사용해 wall 역행을 격리한다.
+        rest_client_arguments["clock"] = clock
+        rest_client_arguments["result_clock"] = clock
     rest_client = rest_client_type(**rest_client_arguments)
     web_socket_client = web_socket_client_type(
         api_key=configuration.api_key,

@@ -11,7 +11,7 @@ import hmac
 from io import BytesIO
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import (
     HTTPSHandler,
@@ -773,6 +773,31 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         self.assertNotIn(API_KEY, repr(client))
         self.assertNotIn(SECRET_KEY, serialized_requests)
         self.assertFalse(transport.responses)
+
+        # 공식 fill tradeId의 non-negative 범위를 벗어난 FULL 응답은 durable fill로 확정하지 않는다.
+        negative_trade_payload = _filled_order_payload(
+            client_order_id="bat-client-negative-trade-id"
+        )
+        negative_trade_payload["fills"][0]["tradeId"] = -1
+        negative_transport = QueueHTTPTransport(
+            [
+                *_preparation_responses(),
+                _json_response(negative_trade_payload),
+            ]
+        )
+        negative_client = _client(negative_transport)
+        negative_order = _order(
+            client_order_id="bat-client-negative-trade-id"
+        )
+        prepared_negative_order = negative_client.prepare_order(negative_order)
+        negative_result = negative_client.submit_order(
+            order=prepared_negative_order
+        )
+        self.assertIs(negative_result.status, OrderStatus.UNKNOWN)
+        self.assertEqual(
+            "BINANCE_PAYLOAD_RECONCILIATION_REQUIRED",
+            negative_result.failure_reason,
+        )
 
     def test_server_timestamp_provider_reuses_synchronized_offset(self) -> None:
         """
@@ -1643,13 +1668,13 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
             ),
         )
 
-    def test_prepare_and_submission_provenance_share_server_time_axis(self) -> None:
+    def test_prepare_submission_and_missing_result_time_fail_closed_on_run_axis(self) -> None:
         """
-        함수 이름: test_prepare_and_submission_provenance_share_server_time_axis()
-        기능: signed preflight 뒤 filter/POST 시각이 skewed result clock 대신 Binance offset을 쓰는지 검증한다.
+        함수 이름: test_prepare_submission_and_missing_result_time_fail_closed_on_run_axis()
+        기능: signed filter·POST 시각축과 timestamp 누락 성공 응답의 fail-closed 조정을 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/31
+        작성 날짜: 2026/09/01
         """
         server_offset = timedelta(seconds=60)
         server_time_milliseconds = FIXED_TIME_MILLISECONDS + 60_000
@@ -1703,6 +1728,96 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         self.assertEqual(expected_server_time, filter_evidence.observed_at)
         self.assertEqual(expected_server_time, submission_evidence.attempted_at)
         self.assertNotEqual(skewed_result_clock(), filter_evidence.observed_at)
+
+        # Actual harness clock을 REST의 primary와 result에 함께 주입해 offset 동기화 뒤 wall 후퇴를 재현한다.
+        from tests.testnet.test_phase13_public_market_case2 import (
+            _RunScopedEvidenceClock,
+        )
+
+        monotonic_value = 0
+
+        def advancing_monotonic_clock() -> int:
+            """
+            함수 이름: advancing_monotonic_clock()
+            기능: 각 evidence 관찰마다 1 millisecond씩 전진하는 monotonic nanosecond를 반환한다.
+            인자: 없음
+            반환값: 현재 monotonic nanosecond 정수
+            작성 날짜: 2026/09/01
+            """
+            nonlocal monotonic_value
+            current_value = monotonic_value
+            monotonic_value += 1_000_000
+            return current_value  # 단조 증가만 제공하며 wall clock 변경과 독립이다.
+
+        wall_clock = Mock(return_value=FIXED_TIME)
+        evidence_clock = _RunScopedEvidenceClock(
+            wall_clock=wall_clock,
+            monotonic_clock=advancing_monotonic_clock,
+        )
+        started_at = evidence_clock()
+        missing_time_order_payload = _filled_order_payload(
+            client_order_id="bat-client-wall-regression"
+        )
+        del missing_time_order_payload[
+            "transactTime"
+        ]  # Exchange 시각이 없는 FULL 응답을 성공으로 확정하지 않게 한다.
+        regression_transport = QueueHTTPTransport(
+            [
+                _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+                _json_response({}),
+                *_preparation_responses(include_server_time=False),
+                _json_response(missing_time_order_payload),
+            ]
+        )
+        regression_client = BinanceSpotRESTClient(
+            API_KEY,
+            SECRET_KEY,
+            transport=regression_transport,
+            clock=evidence_clock,
+            result_clock=evidence_clock,
+        )
+        regression_order = _order(client_order_id="bat-client-wall-regression")
+
+        # Server offset을 먼저 고정한 뒤 wall provider를 하루 후퇴시켜 UNKNOWN 인과 경계를 검증한다.
+        regression_client.get_account_commission(symbol="ETHUSDT")
+        wall_clock.return_value = FIXED_TIME - timedelta(days=1)
+        regression_client.prepare_order(regression_order)
+        regression_result = regression_client.submit_order(
+            order=regression_order
+        )
+        regression_filter = (
+            regression_client.get_order_preparation_filter_evidence(
+                client_order_id=regression_order.client_order_id
+            )
+        )
+        regression_submission = (
+            regression_client.get_order_submission_attempt_evidence(
+                client_order_id=regression_order.client_order_id
+            )
+        )
+        completed_at = evidence_clock()
+
+        self.assertIsNotNone(regression_filter)
+        self.assertIsNotNone(regression_submission)
+        if regression_filter is None or regression_submission is None:
+            self.fail("wall-regression UNKNOWN must retain exact provenance")
+        self.assertEqual(OrderStatus.UNKNOWN, regression_result.status)
+        self.assertEqual((), regression_result.fills)
+        self.assertEqual(
+            "BINANCE_PAYLOAD_RECONCILIATION_REQUIRED",
+            regression_result.failure_reason,
+        )
+        self.assertLessEqual(started_at, regression_filter.observed_at)
+        self.assertLessEqual(
+            regression_filter.observed_at,
+            regression_submission.attempted_at,
+        )
+        self.assertLessEqual(
+            regression_submission.attempted_at,
+            regression_result.processed_at,
+        )
+        self.assertLessEqual(regression_result.processed_at, completed_at)
+        wall_clock.assert_called_once_with()
 
     def test_submit_rejects_quantity_changed_after_prepare(self) -> None:
         """
