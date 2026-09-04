@@ -45,6 +45,7 @@ from binance_auto_trader.domain.trading.order import (
     Order,
     OrderResult,
     OrderStatus,
+    PendingOrderRecoveryLifecycle,
 )
 from binance_auto_trader.domain.trading.position import (
     Position,
@@ -288,6 +289,7 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
         submit_specifications: tuple[OrderResultSpecification, ...],
         query_specifications: tuple[OrderResultSpecification, ...] = (),
         scale_out: Decimal = Decimal("1"),
+        pending_order_recovery_enabled: bool = False,
     ) -> PipelineFixture:
         """
         함수 이름: _create_pipeline()
@@ -295,6 +297,7 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
         인자: submit_specifications -> 신규 제출에 사용할 scripted 결과
             query_specifications -> existing-order query에 사용할 scripted 결과
             scale_out -> SELL 주문 수량에 적용할 분할 비율
+            pending_order_recovery_enabled -> durable sidecar lifecycle 활성 여부
         반환값: RUNNING 상태의 PipelineFixture
         작성 날짜: 2026/08/22
         """
@@ -324,12 +327,15 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
             command_gate=True,
             position=position,
             trade_history_controller=history_controller,
+            pending_order_recovery_enabled=pending_order_recovery_enabled,
             risk_policy_state=create_test_risk_policy(),
             clock=clock,
         )
 
         # Account bootstrap 후 TYPE_0, 100% split과 session을 version 순서대로 commit한다.
         controller.load_account()
+        if pending_order_recovery_enabled:
+            controller.reconcile_startup_state()  # Durable sidecar를 켠 fixture는 빈 startup gap을 먼저 닫는다.
         regime_controller = RegimeController(
             RegimeSTM(),
             market_snapshot,
@@ -360,6 +366,210 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
             storage_path=storage_path,
             clock=clock,
         )
+
+    def test_late_exact_terminal_stream_replay_is_idempotent_after_history_commit(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_late_exact_terminal_stream_replay_is_idempotent_after_history_commit()
+        기능: REST terminal 저장 뒤 같은 WebSocket terminal replay가 sidecar와 재조정을 다시 만들지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        terminal_specification = OrderResultSpecification(
+            "100",
+            OrderStatus.FILLED,
+            MARKET_UPDATED_AT,
+            (
+                FillSpecification(
+                    "100-buy",
+                    None,
+                    Decimal("2500.50"),
+                    Decimal("0"),
+                    MARKET_UPDATED_AT,
+                ),
+            ),
+        )
+        fixture = self._create_pipeline(
+            submit_specifications=(terminal_specification,),
+            pending_order_recovery_enabled=True,
+        )
+
+        # REST terminal 결과가 Trade와 sidecar REMOVE까지 먼저 durable하게 끝난 상태를 만든다.
+        initial_outcomes = self._execute_actions(
+            fixture.controller,
+            self._entry_actions(fixture, sequence_number=1),
+        )
+        submitted_order = fixture.rest_client.submitted_orders[0]
+        initial_position = fixture.position.get_snapshot()
+        self.assertEqual(1, len(initial_outcomes))
+        self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+        self.assertEqual((), fixture.history_controller.get_pending_orders())
+        self.assertFalse(fixture.controller.reconciliation_required)
+
+        # FULL transactTime과 executionReport.T가 달라도 같은 회계 체결이면 durable effect를 반복하지 않는다.
+        stream_terminal_specification = OrderResultSpecification(
+            "100",
+            OrderStatus.FILLED,
+            MARKET_UPDATED_AT + timedelta(milliseconds=1),
+            (
+                FillSpecification(
+                    "100-buy",
+                    None,
+                    Decimal("2500.50"),
+                    Decimal("0"),
+                    MARKET_UPDATED_AT + timedelta(milliseconds=1),
+                ),
+            ),
+        )
+        accepted = fixture.controller.observe_order_result(
+            stream_terminal_specification.build(submitted_order)
+        )
+
+        self.assertTrue(accepted)
+        self.assertEqual(initial_position, fixture.position.get_snapshot())
+        self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+        self.assertEqual((), fixture.history_controller.get_pending_orders())
+        self.assertFalse(fixture.controller.reconciliation_required)
+        self.assertIs(
+            fixture.controller.reconciliation_cause_snapshot.status,
+            ReconciliationCauseStatus.MISSING,
+        )  # 정상 terminal replay는 process-lifetime cause를 새로 만들지 않는다.
+
+    def test_late_new_stream_replay_is_idempotent_after_history_commit(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_late_new_stream_replay_is_idempotent_after_history_commit()
+        기능: REST FULL 저장 뒤 늦게 도착한 무체결 NEW executionReport가 terminal 주문을 되돌리지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        terminal_specification = OrderResultSpecification(
+            "102",
+            OrderStatus.FILLED,
+            MARKET_UPDATED_AT,
+            (
+                FillSpecification(
+                    "102-buy",
+                    None,
+                    Decimal("2500.50"),
+                    Decimal("0"),
+                    MARKET_UPDATED_AT,
+                ),
+            ),
+        )
+        fixture = self._create_pipeline(
+            submit_specifications=(terminal_specification,),
+            pending_order_recovery_enabled=True,
+        )
+
+        # REST FULL이 Trade와 sidecar REMOVE를 먼저 완료한 실제 Testnet 경합 상태를 만든다.
+        initial_outcomes = self._execute_actions(
+            fixture.controller,
+            self._entry_actions(fixture, sequence_number=3),
+        )
+        submitted_order = fixture.rest_client.submitted_orders[0]
+        initial_position = fixture.position.get_snapshot()
+        self.assertEqual(1, len(initial_outcomes))
+        self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+        self.assertEqual((), fixture.history_controller.get_pending_orders())
+        self.assertFalse(fixture.controller.reconciliation_required)
+        completed_state = fixture.controller._order_states_by_client_id[
+            submitted_order.client_order_id
+        ]
+        self.assertIs(
+            completed_state.recovery_lifecycle,
+            PendingOrderRecoveryLifecycle.HISTORY_COMMITTED,
+        )
+        self.assertFalse(completed_state.pending_recovery_pending)
+
+        # 같은 주문의 과거 NEW는 terminal 재무 사실보다 약하므로 새 sidecar나 reconciliation을 만들면 안 된다.
+        late_new = OrderResultSpecification(
+            "102",
+            OrderStatus.NEW,
+            MARKET_UPDATED_AT - timedelta(milliseconds=1),
+            (),
+        ).build(submitted_order)
+        accepted = fixture.controller.observe_order_result(late_new)
+
+        self.assertTrue(accepted)
+        self.assertEqual(initial_position, fixture.position.get_snapshot())
+        self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+        self.assertEqual((), fixture.history_controller.get_pending_orders())
+        self.assertFalse(fixture.controller.reconciliation_required)
+        self.assertIs(
+            fixture.controller.reconciliation_cause_snapshot.status,
+            ReconciliationCauseStatus.MISSING,
+        )  # 과거 NEW replay는 완료된 주문의 process-lifetime cause를 오염시키지 않는다.
+
+    def test_late_terminal_stream_replay_with_accounting_drift_reconciles(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_late_terminal_stream_replay_with_accounting_drift_reconciles()
+        기능: History commit 뒤에도 수량·금액·수수료가 다른 terminal replay는 멱등으로 숨기지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        terminal_specification = OrderResultSpecification(
+            "101",
+            OrderStatus.FILLED,
+            MARKET_UPDATED_AT,
+            (
+                FillSpecification(
+                    "100-conflict-buy",
+                    None,
+                    Decimal("2500.50"),
+                    Decimal("0"),
+                    MARKET_UPDATED_AT,
+                ),
+            ),
+        )
+        fixture = self._create_pipeline(
+            submit_specifications=(terminal_specification,),
+            pending_order_recovery_enabled=True,
+        )
+        self._execute_actions(
+            fixture.controller,
+            self._entry_actions(fixture, sequence_number=2),
+        )
+        submitted_order = fixture.rest_client.submitted_orders[0]
+        initial_position = fixture.position.get_snapshot()
+
+        # 같은 fill key라도 quote amount가 바뀌는 가격 drift는 durable 회계 충돌로 잠근다.
+        conflicting_specification = OrderResultSpecification(
+            "101",
+            OrderStatus.FILLED,
+            MARKET_UPDATED_AT + timedelta(milliseconds=1),
+            (
+                FillSpecification(
+                    "100-conflict-buy",
+                    None,
+                    Decimal("2500.51"),
+                    Decimal("0"),
+                    MARKET_UPDATED_AT + timedelta(milliseconds=1),
+                ),
+            ),
+        )
+        accepted = fixture.controller.observe_order_result(
+            conflicting_specification.build(submitted_order)
+        )
+
+        self.assertTrue(accepted)
+        self.assertEqual(initial_position, fixture.position.get_snapshot())
+        self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+        self.assertEqual((), fixture.history_controller.get_pending_orders())
+        self.assertTrue(fixture.controller.reconciliation_required)
+        cause_snapshot = fixture.controller.reconciliation_cause_snapshot
+        self.assertIs(cause_snapshot.status, ReconciliationCauseStatus.EXACT)
+        self.assertIs(
+            cause_snapshot.category,
+            ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS,
+        )  # Accounting mismatch는 기존 strict order/persistence 원인으로 남는다.
 
     @staticmethod
     def _execute_actions(

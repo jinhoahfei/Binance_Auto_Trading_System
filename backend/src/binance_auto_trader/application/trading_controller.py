@@ -169,10 +169,32 @@ def _order_result_exactly_confirms_trade(
     반환값: 복합 identity, terminal 상태와 전체 체결 집계가 모두 같으면 True
     작성 날짜: 2026/08/23
     """
+    if not _order_result_accounting_confirms_trade(result, trade):
+        return False
+
+    executed_at = max(
+        fill_value.executed_at for fill_value in result.fills
+    )  # Startup/query exact 검증은 durable Trade가 선택한 마지막 체결 시각도 유지한다.
+
+    return executed_at == trade.executed_at
+
+
+def _order_result_accounting_confirms_trade(
+    result: OrderResult,
+    trade: Trade,
+) -> bool:
+    """
+    함수 이름: _order_result_accounting_confirms_trade()
+    기능: 서로 다른 Binance transport 시각 표현을 제외한 durable terminal 회계 사실을 대조한다.
+    인자: result -> REST FULL 또는 누적 executionReport의 canonical OrderResult
+        trade -> 이미 fsync된 terminal Trade
+    반환값: 복합 identity, 수량·금액·평균가·수수료가 모두 같으면 True
+    작성 날짜: 2026/09/05
+    """
     if not isinstance(result, OrderResult) or not isinstance(trade, Trade):
         raise TypeError("result and trade must use canonical domain types")
 
-    # Testnet reset 뒤 숫자 order ID만 재사용된 주문은 durable execution으로 인정하지 않는다.
+    # Testnet reset의 숫자 ID 재사용과 terminal이 아닌 stream update를 먼저 배제한다.
     if (
         result.client_order_id != trade.client_order_id
         or result.exchange_order_id != trade.order_id
@@ -206,10 +228,6 @@ def _order_result_exactly_confirms_trade(
             (fill_value.fee_quote_amount for fill_value in result.fills),
             start=Decimal("0"),
         )
-    executed_at = max(
-        fill_value.executed_at for fill_value in result.fills
-    )  # Durable Trade의 시각도 마지막 누적 fill 시각이다.
-
     return (
         executed_quantity == trade.executed_quantity
         and executed_amount == trade.executed_amount
@@ -217,8 +235,7 @@ def _order_result_exactly_confirms_trade(
         and fee_amount == trade.fee_amount
         and next(iter(fee_assets)) == trade.fee_asset
         and fee_quote_amount == trade.fee_quote_amount
-        and executed_at == trade.executed_at
-    )  # Pair identity만이 아니라 회계에 쓰인 terminal execution 전체를 대조한다.
+    )  # REST FULL fallback 시각과 stream T가 달라도 동일한 재무 effect만 멱등 후보가 된다.
 
 
 def _wait_for_order_retry_delay(delay: timedelta) -> None:
@@ -4055,8 +4072,8 @@ class TradingController:
     def mark_market_stream_reconciliation_required(self, reason: str) -> None:
         """
         함수 이름: mark_market_stream_reconciliation_required()
-        기능: Kline 세대 장애를 기록하고 신규 시장·주문 effect를 full-resync까지 잠근다.
-        인자: reason -> credential 없는 안정적 시장 stream 장애 분류
+        기능: Kline 세대가 사용 불가한 사실을 기록하고 신규 시장·주문 effect를 full-resync까지 잠근다.
+        인자: reason -> credential 없는 안정적 시장 stream 상태 분류
         반환값: 없음
         작성 날짜: 2026/08/25
         """
@@ -4073,6 +4090,12 @@ class TradingController:
             if self._status is TradingSessionStatus.RUNNING:
                 self._market_stream_interrupted_running_session = True
             self._market_stream_reconciliation_required = True
+
+            # 정상 startup의 initializing gate는 주문을 잠그지만 실패 origin이 아니므로 cause를 만들지 않는다.
+            is_pre_session_initialization = (
+                self._status is TradingSessionStatus.NOT_STARTED
+                and reason == "market_stream_initializing"
+            )
             if self._status in (
                 TradingSessionStatus.RUNNING,
                 TradingSessionStatus.STOPPING,
@@ -4083,10 +4106,10 @@ class TradingController:
                     message_id=None,
                     cause_category=ReconciliationCauseCategory.MARKET_STREAM_FAILED,
                 )
-            else:
+            elif not is_pre_session_initialization:
                 self._record_reconciliation_cause_locked(
                     ReconciliationCauseCategory.MARKET_STREAM_FAILED
-                )  # 시작 전 또는 이미 잠긴 session의 새 시장 원인도 단일 latch에 기록한다.
+                )  # 시작 전 실패나 이미 잠긴 session의 새 시장 원인도 단일 latch에 기록한다.
 
             # 전략 timer는 폐기하되 이미 수신한 주문 outcome은 position·history 복구를 위해 보존한다.
             self._scheduler.clear()
@@ -6717,6 +6740,8 @@ class TradingController:
         order = state.order
         message_id = "7" if initial else "9"
         version_before = self._context.version
+        completed_durable_terminal_replay = False
+        completed_durable_stale_no_fill_replay = False
 
         # Testnet reset의 숫자 order ID 재사용은 새 client execution을 Position에 적용하기 전에 막는다.
         if result.exchange_order_id is not None:
@@ -6742,9 +6767,32 @@ class TradingController:
                     message_id=message_id,
                 )
                 return ()  # Pair 충돌 상태와 durable sidecar를 남겨 신규 submit/retry를 차단한다.
+            # Trade와 REMOVE 뒤에는 transport별 시각을 제외한 회계 사실이 같은 replay만 수용한다.
+            completed_durable_state = (
+                durable_trade is not None
+                and state.recovery_lifecycle
+                is PendingOrderRecoveryLifecycle.HISTORY_COMMITTED
+                and not state.pending_recovery_pending
+            )
+            completed_durable_terminal_replay = (
+                completed_durable_state
+                and result.status in TERMINAL_ORDER_STATUSES
+                and _order_result_accounting_confirms_trade(
+                    result,
+                    durable_trade,
+                )
+            )
+            completed_durable_stale_no_fill_replay = (
+                completed_durable_state
+                and result.status not in TERMINAL_ORDER_STATUSES
+                and not result.fills
+                and result.client_order_id == durable_trade.client_order_id
+                and result.symbol == durable_trade.symbol
+            )
             if (
                 durable_trade is not None
                 and result.status in TERMINAL_ORDER_STATUSES
+                and not completed_durable_terminal_replay
                 and not _order_result_exactly_confirms_trade(
                     result,
                     durable_trade,
@@ -6755,7 +6803,13 @@ class TradingController:
                     OrderExecutionFailureCode.ORDER_RESULT_INVALID,
                     message_id=message_id,
                 )
-                return ()  # 같은 pair의 변조된 terminal fill도 Position delta 전에 차단한다.
+                return ()  # 미완료 lifecycle이나 회계 불일치 terminal은 기존 strict 재조정으로 보낸다.
+        if (
+            completed_durable_terminal_replay
+            or completed_durable_stale_no_fill_replay
+        ):
+            # REST FULL이 먼저 끝난 뒤 도착한 같은 주문의 과거 NEW와 terminal replay는 durable 사실을 되돌리지 않는다.
+            return ()  # 회계 불일치 terminal과 fill이 있는 비terminal 결과는 위 보수적 재조정 경계를 유지한다.
         try:
             if initial:
                 order.apply_order_result(result)

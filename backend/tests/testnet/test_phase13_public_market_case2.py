@@ -6,7 +6,8 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, localcontext
+from enum import Enum
 import fcntl
 import hashlib
 from io import StringIO
@@ -18,7 +19,7 @@ import stat
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
-from threading import Lock, RLock
+from threading import Event, Lock, RLock, Thread
 import time
 from types import MappingProxyType, SimpleNamespace
 import unittest
@@ -40,11 +41,14 @@ from binance_auto_trader.adapters.binance import (
 from binance_auto_trader.adapters.binance.mappers import (
     NotionalFilter,
     QuantityFilter,
+    SymbolFilterError,
     floor_market_quantity,
     validate_account_relevant_filters,
     validate_market_notional,
 )
 from binance_auto_trader.application import (
+    MarketDataController,
+    OrderExecutionFailureCode,
     PublicMarketBoundaryTraceEntry,
     ReconciliationCauseCategory,
     ReconciliationCauseSnapshot,
@@ -65,6 +69,12 @@ from binance_auto_trader.bootstrap import (
     load_testnet_configuration,
     require_phase13_public_case2_permission,
     start_application,
+)
+from binance_auto_trader.bootstrap.application import (
+    _TradingEventRuntimeFailureSnapshot,
+    _TradingEventRuntimeFailureStage,
+    _normalize_trading_event_runtime_exception_origin,
+    _normalize_trading_event_runtime_exception_type,
 )
 from binance_auto_trader.bootstrap.testnet import (
     BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV,
@@ -124,6 +134,7 @@ from tests.unit.history.factories import make_trade
 
 # 실제 주문 target은 결정론적 public signal과 same-ID reconciliation을 기다리되 무한 대기는 허용하지 않는다.
 _DETERMINISTIC_BUY_TIMEOUT_SECONDS = 180
+_DETERMINISTIC_EVALUATION_TIMEOUT_SECONDS = 15
 _ORDER_SETTLEMENT_TIMEOUT_SECONDS = 60
 _ACCOUNT_SETTLEMENT_TIMEOUT_SECONDS = 15
 _POLL_INTERVAL_SECONDS = 0.25
@@ -624,6 +635,57 @@ class _PhaseThirteenRecordedOutcomeFailure(AssertionError):
     """
 
 
+class _PhaseThirteenMarketFailureReason(str, Enum):
+    """
+    클래스 이름: _PhaseThirteenMarketFailureReason
+    기능: actual이 관찰한 Kline stream 실패를 원문 없는 두 안정 범주로 구분한다.
+    작성 날짜: 2026/09/04
+    """
+
+    KLINE_STREAM_INVALID = "KLINE_STREAM_INVALID"
+    KLINE_STREAM_DISCONNECTED_OR_UNAVAILABLE = (
+        "KLINE_STREAM_DISCONNECTED_OR_UNAVAILABLE"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _PhaseThirteenMarketFailureSnapshot:
+    """
+    클래스 이름: _PhaseThirteenMarketFailureSnapshot
+    기능: Gateway의 Kline 실패 범주와 optional secret-free 예외 진단을 불변 보존한다.
+    작성 날짜: 2026/09/04
+    """
+
+    reason: _PhaseThirteenMarketFailureReason
+    exception_type: str | None
+    exception_origin: str | None
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: market failure snapshot의 enum과 optional 진단 쌍을 엄격히 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        if not isinstance(self.reason, _PhaseThirteenMarketFailureReason):
+            raise TypeError("reason must be a Phase 13 market failure reason")
+        if (self.exception_type is None) is not (
+            self.exception_origin is None
+        ):
+            raise ValueError("market exception diagnostics must be paired")
+        if self.exception_type is not None and (
+            not self.exception_type.isascii()
+            or not self.exception_type.isidentifier()
+        ):
+            raise ValueError("market exception type must be an ASCII identifier")
+        if self.exception_origin is not None and (
+            self.exception_origin != "EXTERNAL_OR_UNKNOWN"
+            and not self.exception_origin.startswith("binance_auto_trader.")
+        ):
+            raise ValueError("market exception origin must be package-scoped")
+
+
 class _PhaseThirteenReconciliationFailure(AssertionError):
     """
     클래스 이름: _PhaseThirteenReconciliationFailure
@@ -631,22 +693,145 @@ class _PhaseThirteenReconciliationFailure(AssertionError):
     작성 날짜: 2026/08/31
     """
 
-    def __init__(self, cause_snapshot: ReconciliationCauseSnapshot) -> None:
+    def __init__(
+        self,
+        cause_snapshot: ReconciliationCauseSnapshot,
+        order_failure_code: OrderExecutionFailureCode | None = None,
+        worker_failure_snapshot: _TradingEventRuntimeFailureSnapshot
+        | None = None,
+        market_failure_snapshot: _PhaseThirteenMarketFailureSnapshot
+        | None = None,
+    ) -> None:
         """
         함수 이름: __init__()
-        기능: exact frozen cause snapshot만 보존하고 secret-free 고정 assertion message를 만든다.
+        기능: frozen cause와 optional typed worker·order 진단을 secret-free 고정 assertion에 결속한다.
         인자: cause_snapshot -> Controller lock에서 한 번에 읽은 reconciliation cause snapshot
+            order_failure_code -> 마지막 typed order trace failure 또는 trace가 없으면 None
+            worker_failure_snapshot -> event worker의 원문 없는 immutable failure 진단 또는 None
+            market_failure_snapshot -> Kline stream의 원문 없는 immutable failure 진단 또는 None
         반환값: 없음
         작성 날짜: 2026/08/31
         """
         if type(cause_snapshot) is not ReconciliationCauseSnapshot:
             raise TypeError("cause_snapshot must be exact")
+        if order_failure_code is not None and not isinstance(
+            order_failure_code,
+            OrderExecutionFailureCode,
+        ):
+            raise TypeError(
+                "order_failure_code must be an OrderExecutionFailureCode or None"
+            )
+        if worker_failure_snapshot is not None and type(
+            worker_failure_snapshot
+        ) is not _TradingEventRuntimeFailureSnapshot:
+            raise TypeError(
+                "worker_failure_snapshot must be an exact runtime failure snapshot or None"
+            )
+        if market_failure_snapshot is not None and type(
+            market_failure_snapshot
+        ) is not _PhaseThirteenMarketFailureSnapshot:
+            raise TypeError(
+                "market_failure_snapshot must be an exact market failure snapshot or None"
+            )
 
-        # 원 category 외 raw callback reason이나 예외 문구를 assertion 문자열에 포함하지 않는다.
+        # EXACT enum과 정규화된 worker 진단만 노출하고 raw callback reason이나 예외 문구는 포함하지 않는다.
+        diagnostic_parts: list[str] = []
+        if cause_snapshot.status is ReconciliationCauseStatus.EXACT:
+            cause_category = cause_snapshot.category
+            if cause_category is None:
+                raise AssertionError("EXACT cause snapshot requires a category")
+            diagnostic_parts.append(f"cause_category={cause_category.value}")
+        if order_failure_code is not None:
+            diagnostic_parts.append(
+                f"order_failure_code={order_failure_code.value}"
+            )
+        if worker_failure_snapshot is not None:
+            diagnostic_parts.extend(
+                (
+                    f"worker_failure_stage={worker_failure_snapshot.stage.value}",
+                    f"worker_failure_type={worker_failure_snapshot.exception_type}",
+                    f"worker_failure_origin={worker_failure_snapshot.exception_origin}",
+                )
+            )
+        if market_failure_snapshot is not None:
+            diagnostic_parts.append(
+                f"market_failure_reason={market_failure_snapshot.reason.value}"
+            )
+            if market_failure_snapshot.exception_type is not None:
+                diagnostic_parts.extend(
+                    (
+                        "market_failure_type="
+                        f"{market_failure_snapshot.exception_type}",
+                        "market_failure_origin="
+                        f"{market_failure_snapshot.exception_origin}",
+                    )
+                )
+        diagnostic_suffix = "".join(
+            f"; {diagnostic_part}"
+            for diagnostic_part in diagnostic_parts
+        )
         super().__init__(
             "public Case 2 entered reconciliation before a durable BUY"
+            f"{diagnostic_suffix}"
         )
         self.cause_snapshot = cause_snapshot  # Finalizer는 오염 전 frozen identity만 다시 읽는다.
+        self.order_failure_code = order_failure_code
+        self.worker_failure_snapshot = worker_failure_snapshot
+        self.market_failure_snapshot = market_failure_snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class _DeterministicBuyCandidate:
+    """
+    클래스 이름: _DeterministicBuyCandidate
+    기능: actual 시작 전 account·cap·filter를 통과한 public split과 BUY 수량 근거를 보존한다.
+    작성 날짜: 2026/09/04
+    """
+
+    scale_in: Decimal
+    submitted_quantity: Decimal
+    decision_notional: Decimal
+    reference_notional: Decimal
+
+
+def _read_phase13_market_failure_snapshot(
+    runtime: ApplicationRuntime,
+) -> _PhaseThirteenMarketFailureSnapshot:
+    """
+    함수 이름: _read_phase13_market_failure_snapshot()
+    기능: Gateway의 최초 Kline buffer 오류를 raw 원문 없이 actual 진단 snapshot으로 읽는다.
+    인자: runtime -> 현재 actual ApplicationRuntime
+    반환값: invalid 또는 disconnected/unavailable로 정규화한 market failure snapshot
+    작성 날짜: 2026/09/04
+    """
+    if not isinstance(runtime, ApplicationRuntime):
+        raise TypeError("runtime must be an ApplicationRuntime")
+    gateway = runtime.web_socket_gateway
+    gateway_lock = getattr(gateway, "_lock", None)
+    if not hasattr(gateway_lock, "__enter__"):
+        raise TypeError("WebSocket Gateway must expose its diagnostic lock")
+
+    # Gateway lock 아래 최초 buffer error identity만 읽고 raw message·payload는 반환하지 않는다.
+    with gateway_lock:
+        buffer_error = getattr(gateway, "_buffer_error", None)
+    if not isinstance(buffer_error, BaseException):
+        return _PhaseThirteenMarketFailureSnapshot(
+            reason=(
+                _PhaseThirteenMarketFailureReason.KLINE_STREAM_DISCONNECTED_OR_UNAVAILABLE
+            ),
+            exception_type=None,
+            exception_origin=None,
+        )
+
+    return _PhaseThirteenMarketFailureSnapshot(
+        reason=_PhaseThirteenMarketFailureReason.KLINE_STREAM_INVALID,
+        exception_type=(
+            _normalize_trading_event_runtime_exception_type(buffer_error)
+        ),
+        exception_origin=(
+            _normalize_trading_event_runtime_exception_origin(buffer_error)
+        ),
+    )  # Raw exception은 Gateway memory에만 남기고 정규화된 세 필드만 actual assertion에 전달한다.
 
 
 def _assert_complete_success_order_trace(
@@ -928,6 +1113,158 @@ def _release_phase13_process_lease(lease_descriptor: int) -> None:
         fcntl.flock(lease_descriptor, fcntl.LOCK_UN)
     finally:
         os.close(lease_descriptor)
+
+
+def _acquire_deterministic_kline_delivery_guard(
+    web_socket_gateway: object,
+) -> object:
+    """
+    함수 이름: _acquire_deterministic_kline_delivery_guard()
+    기능: actual fixture 수명 동안 실제 Kline callback 전달을 test-only 경계에서 직렬화한다.
+    인자: web_socket_gateway -> 현재 actual runtime의 Binance WebSocket Gateway
+    반환값: unittest cleanup에서 같은 thread가 해제할 획득된 delivery guard
+    작성 날짜: 2026/09/04
+    """
+    delivery_guard = getattr(
+        web_socket_gateway,
+        "_kline_delivery_lock",
+        None,
+    )
+    acquire = getattr(delivery_guard, "acquire", None)
+    release = getattr(delivery_guard, "release", None)
+    if not callable(acquire) or not callable(release):
+        raise TypeError(
+            "web_socket_gateway must expose the Kline delivery guard"
+        )
+
+    # 이미 진행 중인 live callback이 끝난 stable snapshot 경계부터 fixture 수명을 시작한다.
+    acquire()
+    return delivery_guard  # Production observer나 order seam을 바꾸지 않고 transport 전달만 직렬화한다.
+
+
+def _release_deterministic_kline_delivery_guard(
+    delivery_guard: object,
+) -> None:
+    """
+    함수 이름: _release_deterministic_kline_delivery_guard()
+    기능: actual runtime 종료 뒤 test-only Kline delivery guard를 같은 unittest thread에서 해제한다.
+    인자: delivery_guard -> acquire helper가 반환한 획득된 reentrant guard
+    반환값: 없음
+    작성 날짜: 2026/09/04
+    """
+    release = getattr(delivery_guard, "release", None)
+    if not callable(release):
+        raise TypeError("delivery_guard must provide release")
+
+    # Runtime close가 generation을 먼저 닫은 뒤 대기 중 callback이 stale 상태만 관찰하게 한다.
+    release()  # addCleanup이 실행되는 동일 unittest thread에서 ownership을 정확히 반납한다.
+
+
+def _prepare_deterministic_buy_candidate(
+    *,
+    free_quote_quantity: Decimal,
+    decision_price: Decimal,
+    maximum_notional: Decimal,
+    symbol_rules: SymbolTradingRules,
+    account_filters: AccountRelevantFilters,
+    reference_price: ReferencePrice,
+) -> _DeterministicBuyCandidate:
+    """
+    함수 이름: _prepare_deterministic_buy_candidate()
+    기능: actual 시작 전에 free quote·base MAX_ASSET·공개 filter를 만족하는 BUY split과 수량을 계산한다.
+    인자: free_quote_quantity -> startup Account의 현재 free USDT
+        decision_price -> deterministic RECOVERY Kline의 양수 종가
+        maximum_notional -> 사용자가 승인한 BUY decision-notional 상한
+        symbol_rules -> fresh public ETHUSDT 거래 규칙
+        account_filters -> fresh signed account relevant filter 합성값
+        reference_price -> MARKET notional 검증용 공식 reference price
+    반환값: 공개 split command와 filter 후 수량·notional을 묶은 candidate
+    작성 날짜: 2026/09/04
+    """
+    decimal_inputs = (
+        ("free_quote_quantity", free_quote_quantity, True),
+        ("decision_price", decision_price, False),
+        ("maximum_notional", maximum_notional, False),
+    )
+    for field_name, field_value, zero_allowed in decimal_inputs:
+        if not isinstance(field_value, Decimal) or not field_value.is_finite():
+            raise TypeError(f"{field_name} must be a finite Decimal")
+        if field_value < Decimal("0") or (
+            not zero_allowed and field_value == Decimal("0")
+        ):
+            raise ValueError(f"{field_name} must be positive")
+    if type(symbol_rules) is not SymbolTradingRules:
+        raise TypeError("symbol_rules must be exact")
+    if type(account_filters) is not AccountRelevantFilters:
+        raise TypeError("account_filters must be exact")
+    if type(reference_price) is not ReferencePrice:
+        raise TypeError("reference_price must be exact")
+    if reference_price.symbol != symbol_rules.symbol:
+        raise ValueError("reference_price must match symbol_rules")
+    if free_quote_quantity == Decimal("0"):
+        raise ValueError("deterministic BUY requires free quote balance")
+
+    # Base MAX_ASSET가 outer cap보다 작으면 public split만 줄이고 private quantity seam은 만들지 않는다.
+    base_asset_limits = tuple(
+        account_filter.maximum_quantity
+        for account_filter in account_filters.asset_filters
+        if account_filter.asset == symbol_rules.base_asset
+    )
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decimal_context.rounding = ROUND_DOWN
+        scale_in = Decimal("1")
+        if base_asset_limits:
+            maximum_base_quantity = min(base_asset_limits)
+            base_limited_scale = (
+                maximum_base_quantity
+                * decision_price
+                / free_quote_quantity
+            )
+            scale_in = min(scale_in, base_limited_scale)
+        if scale_in <= Decimal("0"):
+            raise ValueError(
+                "deterministic BUY account limit permits no positive quantity"
+            )
+        natural_quantity = (
+            free_quote_quantity * scale_in / decision_price
+        )
+        capped_quantity = min(
+            natural_quantity,
+            maximum_notional / decision_price,
+        )
+
+    # Production과 같은 floor·reference-price·signed account validator를 session 시작 전에 재사용한다.
+    submitted_quantity = floor_market_quantity(
+        capped_quantity,
+        symbol_rules,
+    )
+    validate_market_notional(
+        submitted_quantity,
+        reference_price.price,
+        symbol_rules,
+    )
+    validate_account_relevant_filters(
+        submitted_quantity,
+        reference_price.price,
+        symbol_rules,
+        account_filters,
+        side=OrderSide.BUY,
+        account_open_state_verified_empty=True,
+    )
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decision_notional = submitted_quantity * decision_price
+        reference_notional = submitted_quantity * reference_price.price
+    if decision_notional > maximum_notional:
+        raise ValueError("deterministic BUY exceeds the approved notional cap")
+
+    return _DeterministicBuyCandidate(
+        scale_in=scale_in,
+        submitted_quantity=submitted_quantity,
+        decision_notional=decision_notional,
+        reference_notional=reference_notional,
+    )  # Candidate 수치 자체는 성공 trace의 production order evidence로만 최종 확정한다.
 
 
 def _utc_now() -> datetime:
@@ -2011,7 +2348,7 @@ def _create_actual_risk_policy(maximum_notional: Decimal) -> RiskPolicy:
     if maximum_notional <= Decimal("0") or maximum_notional > Decimal("100"):
         raise ValueError("maximum_notional must be within the approved ceiling")
 
-    # 세 사용자 policy cap은 None을 보존하고 Testnet 100 USDT 상한은 bootstrap/permission 경계만 소유한다.
+    # 세 가지 사용자 policy cap은 None을 보존하고 Session 3의 10 USDT 상한은 bootstrap/permission 경계만 소유한다.
     return RiskPolicy(
         version=13,
         max_order_notional=None,
@@ -2453,6 +2790,15 @@ def _open_failure_durability_directory_chain(
         normalized_path = Path("/private/var").joinpath(
             *normalized_path.parts[2:]
         )  # macOS의 고정 root alias만 lexical canonical path로 바꾸고 임의 symlink는 허용하지 않는다.
+    if (
+        normalized_path.parts[:2] == (os.sep, "tmp")
+        and os.path.islink("/tmp")
+        and os.readlink("/tmp") == "private/tmp"
+    ):
+        # 최소 runner 환경에서 tempfile이 선택하는 macOS 고정 /tmp alias도 같은 방식으로 정규화한다.
+        normalized_path = Path("/private/tmp").joinpath(
+            *normalized_path.parts[2:]
+        )
     directory_descriptors: list[int] = []
     directory_identities: list[tuple[int, int, int]] = []
     try:
@@ -4459,12 +4805,10 @@ def _kline_source_component(kline: Kline) -> str:
     """
     if not isinstance(kline, Kline) or kline.event_time is None:
         raise TypeError("kline must be a source Kline with an event time")
-    close_state = "closed" if kline.closed else "open"
 
-    return (
-        f"kline:{kline.symbol}:{kline.interval.value}:"
-        f"{_datetime_to_wire(kline.open_time)}:"
-        f"{_datetime_to_wire(kline.event_time)}:{close_state}"
+    # Production formatter를 직접 재사용해 0 microsecond 생략 규칙까지 같은 identity를 만든다.
+    return MarketDataController._create_source_event_id(
+        kline
     )  # OHLCV나 raw frame은 identity에 포함하지 않아 public provenance만 기록한다.
 
 
@@ -4886,6 +5230,443 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
     기능: network 없이 actual harness의 source, journal, UI와 NO_SIGNAL evidence 경계를 검증한다.
     작성 날짜: 2026/08/31
     """
+
+    def test_kline_source_component_matches_production_datetime_precision(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_kline_source_component_matches_production_datetime_precision()
+        기능: 정각 시각을 포함한 fixture source ID가 production canonical ID와 exact 일치하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        source_kline = Kline(
+            symbol="ETHUSDT",
+            interval=Interval.THIRTY_MINUTES,
+            open_time=datetime(2026, 9, 5, 0, 0, tzinfo=timezone.utc),
+            open=Decimal("2400"),
+            high=Decimal("2410"),
+            low=Decimal("2390"),
+            close=Decimal("2405"),
+            volume=Decimal("1"),
+            closed=False,
+            event_time=datetime(2026, 9, 5, 0, 1, tzinfo=timezone.utc),
+        )
+
+        # Production은 microsecond가 0인 시각에 소수부를 붙이지 않으므로 helper도 동일해야 한다.
+        self.assertEqual(
+            MarketDataController._create_source_event_id(source_kline),
+            _kline_source_component(source_kline),
+        )
+
+    def test_deterministic_kline_delivery_guard_blocks_live_callback_until_cleanup(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_deterministic_kline_delivery_guard_blocks_live_callback_until_cleanup()
+        기능: actual fixture guard가 concurrent live Kline 전달을 막고 cleanup 뒤 정확히 해제하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        delivery_lock = RLock()
+        web_socket_gateway = SimpleNamespace(
+            _kline_delivery_lock=delivery_lock
+        )
+        callback_started = Event()
+        callback_completed = Event()
+
+        def emulate_live_kline_callback() -> None:
+            """
+            함수 이름: emulate_live_kline_callback()
+            기능: Gateway callback thread처럼 같은 delivery lock 뒤에서 완료 신호를 기록한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/09/04
+            """
+            callback_started.set()
+            with delivery_lock:
+                callback_completed.set()  # Guard 해제 뒤에만 live callback 완료가 공개된다.
+
+        delivery_guard = _acquire_deterministic_kline_delivery_guard(
+            web_socket_gateway
+        )
+        callback_thread = Thread(
+            target=emulate_live_kline_callback,
+            daemon=True,
+        )
+        try:
+            # Callback이 lock 획득을 시도한 뒤에도 fixture guard가 잡혀 있으면 완료할 수 없다.
+            callback_thread.start()
+            self.assertTrue(callback_started.wait(timeout=1))
+            self.assertFalse(callback_completed.wait(timeout=0.05))
+        finally:
+            _release_deterministic_kline_delivery_guard(delivery_guard)
+
+        self.assertTrue(callback_completed.wait(timeout=1))
+        callback_thread.join(timeout=1)
+        self.assertFalse(callback_thread.is_alive())  # Cleanup 뒤 blocked callback thread가 남지 않아야 한다.
+
+    def test_deterministic_buy_candidate_respects_account_limit_and_notional(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_deterministic_buy_candidate_respects_account_limit_and_notional()
+        기능: BUY candidate가 base MAX_ASSET에는 split을 줄이고 free·NOTIONAL 불가능 상태는 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        lot_size_filter = QuantityFilter(
+            filter_type="LOT_SIZE",
+            minimum_quantity=Decimal("0.0001"),
+            maximum_quantity=Decimal("100"),
+            step_size=Decimal("0.0001"),
+        )
+        market_lot_size_filter = QuantityFilter(
+            filter_type="MARKET_LOT_SIZE",
+            minimum_quantity=Decimal("0"),
+            maximum_quantity=Decimal("100"),
+            step_size=Decimal("0"),
+        )
+        notional_filter = NotionalFilter(
+            filter_type="NOTIONAL",
+            minimum_notional=Decimal("5"),
+            maximum_notional=Decimal("9000000"),
+            apply_minimum_to_market=True,
+            apply_maximum_to_market=False,
+            average_price_minutes=5,
+        )
+        public_filters = AccountRelevantFilters(
+            symbol="ETHUSDT",
+            exchange_order_count_filters=(),
+            symbol_order_count_filters=(),
+            symbol_quantity_filters=(
+                lot_size_filter,
+                market_lot_size_filter,
+            ),
+            symbol_notional_filters=(notional_filter,),
+            symbol_maximum_position=None,
+            passive_symbol_filter_types=frozenset(),
+            asset_filters=(),
+        )
+        symbol_rules = SymbolTradingRules(
+            symbol="ETHUSDT",
+            status="TRADING",
+            base_asset="ETH",
+            quote_asset="USDT",
+            base_asset_precision=8,
+            order_types=frozenset({"MARKET"}),
+            is_spot_trading_allowed=True,
+            lot_size=lot_size_filter,
+            market_lot_size=market_lot_size_filter,
+            notional_filters=(notional_filter,),
+            maximum_position=None,
+            public_relevant_filters=public_filters,
+        )
+        reference_price = ReferencePrice(
+            symbol="ETHUSDT",
+            price=Decimal("2450"),
+            exchange_timestamp=1,
+        )
+
+        def create_account_filters(
+            maximum_quantity: Decimal,
+        ) -> AccountRelevantFilters:
+            """
+            함수 이름: create_account_filters()
+            기능: 한 base MAX_ASSET limit을 가진 signed account filter 합성값을 만든다.
+            인자: maximum_quantity -> 한 주문에서 허용할 최대 ETH 수량
+            반환값: candidate 검증용 AccountRelevantFilters
+            작성 날짜: 2026/09/04
+            """
+            return AccountRelevantFilters(
+                symbol="ETHUSDT",
+                exchange_order_count_filters=(),
+                symbol_order_count_filters=(),
+                symbol_quantity_filters=(),
+                symbol_notional_filters=(),
+                symbol_maximum_position=None,
+                passive_symbol_filter_types=frozenset(),
+                asset_filters=(
+                    AccountAssetFilter(
+                        filter_type="MAX_ASSET",
+                        asset="ETH",
+                        maximum_quantity=maximum_quantity,
+                    ),
+                ),
+            )
+
+        # 0.003 ETH account limit은 10 USDT outer cap보다 작지만 NOTIONAL 5 이상이므로 split 축소로 통과한다.
+        candidate = _prepare_deterministic_buy_candidate(
+            free_quote_quantity=Decimal("100"),
+            decision_price=Decimal("2450"),
+            maximum_notional=Decimal("10"),
+            symbol_rules=symbol_rules,
+            account_filters=create_account_filters(Decimal("0.003")),
+            reference_price=reference_price,
+        )
+        self.assertEqual(Decimal("0.0735"), candidate.scale_in)
+        self.assertEqual(Decimal("0.003"), candidate.submitted_quantity)
+        self.assertEqual(Decimal("7.350"), candidate.decision_notional)
+        self.assertEqual(Decimal("7.350"), candidate.reference_notional)
+
+        # 0.001 ETH limit과 zero quote는 최소 MARKET notional을 만들 수 없어 session 시작 전에 닫힌다.
+        with self.assertRaises(SymbolFilterError):
+            _prepare_deterministic_buy_candidate(
+                free_quote_quantity=Decimal("100"),
+                decision_price=Decimal("2450"),
+                maximum_notional=Decimal("10"),
+                symbol_rules=symbol_rules,
+                account_filters=create_account_filters(Decimal("0.001")),
+                reference_price=reference_price,
+            )
+        with self.assertRaises(ValueError):
+            _prepare_deterministic_buy_candidate(
+                free_quote_quantity=Decimal("0"),
+                decision_price=Decimal("2450"),
+                maximum_notional=Decimal("10"),
+                symbol_rules=symbol_rules,
+                account_filters=create_account_filters(Decimal("1")),
+                reference_price=reference_price,
+            )
+
+    def test_reconciliation_failure_exposes_only_typed_order_diagnostic(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_reconciliation_failure_exposes_only_typed_order_diagnostic()
+        기능: CONFLICT failure가 raw 예외 없이 마지막 typed order failure code만 출력하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        cause_snapshot = ReconciliationCauseSnapshot(
+            reconciliation_required=True,
+            status=ReconciliationCauseStatus.CONFLICT,
+            category=None,
+        )
+        failure = _PhaseThirteenReconciliationFailure(
+            cause_snapshot,
+            OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+        )
+
+        # Assertion 문자열에는 typed enum만 있고 filter payload·quantity·credential 입력 위치는 없다.
+        self.assertIs(cause_snapshot, failure.cause_snapshot)
+        self.assertIs(
+            OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+            failure.order_failure_code,
+        )
+        self.assertEqual(
+            "public Case 2 entered reconciliation before a durable BUY; "
+            "order_failure_code=SYMBOL_FILTER_REJECTED",
+            str(failure),
+        )
+
+    def test_reconciliation_failure_exposes_exact_cause_category(self) -> None:
+        """
+        함수 이름: test_reconciliation_failure_exposes_exact_cause_category()
+        기능: EXACT failure가 raw 원문 없이 stable cause category를 출력하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        cause_snapshot = ReconciliationCauseSnapshot(
+            reconciliation_required=True,
+            status=ReconciliationCauseStatus.EXACT,
+            category=ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
+        )
+        worker_failure_snapshot = _TradingEventRuntimeFailureSnapshot(
+            stage=_TradingEventRuntimeFailureStage.RUNTIME_CYCLE,
+            exception_type="RuntimeError",
+            exception_origin=(
+                "binance_auto_trader.application.trading_controller:"
+                "run_event_runtime_cycle"
+            ),
+        )
+
+        # 외부에 노출되는 문구는 원문 대신 schema에 고정된 enum value만 포함한다.
+        failure = _PhaseThirteenReconciliationFailure(
+            cause_snapshot,
+            worker_failure_snapshot=worker_failure_snapshot,
+        )
+        self.assertIs(cause_snapshot, failure.cause_snapshot)
+        self.assertIsNone(failure.order_failure_code)
+        self.assertIs(
+            worker_failure_snapshot,
+            failure.worker_failure_snapshot,
+        )
+        self.assertEqual(
+            "public Case 2 entered reconciliation before a durable BUY; "
+            "cause_category=EVENT_WORKER_OR_RUNTIME_FAILED; "
+            "worker_failure_stage=RUNTIME_CYCLE; "
+            "worker_failure_type=RuntimeError; "
+            "worker_failure_origin=binance_auto_trader.application."
+            "trading_controller:run_event_runtime_cycle",
+            str(failure),
+        )
+
+    def test_reconciliation_failure_exposes_only_normalized_market_diagnostic(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_reconciliation_failure_exposes_only_normalized_market_diagnostic()
+        기능: 시장 실패 assertion이 raw 원문 없이 reason·type·package origin만 출력하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        cause_snapshot = ReconciliationCauseSnapshot(
+            reconciliation_required=True,
+            status=ReconciliationCauseStatus.EXACT,
+            category=ReconciliationCauseCategory.MARKET_STREAM_FAILED,
+        )
+        market_failure_snapshot = _PhaseThirteenMarketFailureSnapshot(
+            reason=_PhaseThirteenMarketFailureReason.KLINE_STREAM_INVALID,
+            exception_type="ValueError",
+            exception_origin=(
+                "binance_auto_trader.application.market_data_controller:"
+                "_observe_validated_kline"
+            ),
+        )
+
+        # Stable diagnostic 세 필드만 assertion suffix에 포함하고 raw payload 위치는 만들지 않는다.
+        failure = _PhaseThirteenReconciliationFailure(
+            cause_snapshot,
+            market_failure_snapshot=market_failure_snapshot,
+        )
+        self.assertIs(
+            market_failure_snapshot,
+            failure.market_failure_snapshot,
+        )
+        self.assertEqual(
+            "public Case 2 entered reconciliation before a durable BUY; "
+            "cause_category=MARKET_STREAM_FAILED; "
+            "market_failure_reason=KLINE_STREAM_INVALID; "
+            "market_failure_type=ValueError; "
+            "market_failure_origin=binance_auto_trader.application."
+            "market_data_controller:_observe_validated_kline",
+            str(failure),
+        )
+
+    def test_market_failure_reader_distinguishes_invalid_from_disconnect(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_market_failure_reader_distinguishes_invalid_from_disconnect()
+        기능: Gateway buffer error 유무가 invalid와 disconnected 진단으로 안전하게 구분되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        gateway = SimpleNamespace(
+            _lock=RLock(),
+            _buffer_error=ValueError("credential-like-kline-payload-canary"),
+        )
+        runtime = object.__new__(ApplicationRuntime)
+        object.__setattr__(runtime, "web_socket_gateway", gateway)
+
+        # Raw error가 있으면 type만 남기고 test module origin과 canary 원문은 모두 축약한다.
+        invalid_snapshot = _read_phase13_market_failure_snapshot(runtime)
+        self.assertIs(
+            invalid_snapshot.reason,
+            _PhaseThirteenMarketFailureReason.KLINE_STREAM_INVALID,
+        )
+        self.assertEqual("ValueError", invalid_snapshot.exception_type)
+        self.assertEqual(
+            "EXTERNAL_OR_UNKNOWN",
+            invalid_snapshot.exception_origin,
+        )
+        self.assertNotIn("credential-like", repr(invalid_snapshot))
+
+        # Transport disconnect는 raw buffer error가 없으므로 optional 예외 진단을 합성하지 않는다.
+        gateway._buffer_error = None
+        disconnected_snapshot = _read_phase13_market_failure_snapshot(runtime)
+        self.assertIs(
+            disconnected_snapshot.reason,
+            (
+                _PhaseThirteenMarketFailureReason.KLINE_STREAM_DISCONNECTED_OR_UNAVAILABLE
+            ),
+        )
+        self.assertIsNone(disconnected_snapshot.exception_type)
+        self.assertIsNone(disconnected_snapshot.exception_origin)
+
+    def test_actual_injection_waits_for_each_prior_evaluation_before_next_kline(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_actual_injection_waits_for_each_prior_evaluation_before_next_kline()
+        기능: actual fixture가 이전 평가 commit 뒤에만 다음 occurred_at Kline을 생성하는 순서를 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        open_time = datetime(2026, 9, 4, 5, 0, tzinfo=timezone.utc)
+        fixture_klines = tuple(
+            Kline(
+                symbol="ETHUSDT",
+                interval=Interval.THIRTY_MINUTES,
+                open_time=open_time,
+                open=Decimal("2450"),
+                high=Decimal("2451"),
+                low=Decimal("2440"),
+                close=Decimal(2445 + sequence),
+                volume=Decimal("1"),
+                closed=False,
+                event_time=open_time + timedelta(seconds=sequence),
+            )
+            for sequence in (1, 2, 3)
+        )
+        deterministic_klines = DeterministicPublicCase2Klines(
+            setup=fixture_klines[0],
+            flush=fixture_klines[1],
+            recovery=fixture_klines[2],
+        )
+        observed_order: list[tuple[str, Kline | None]] = []
+
+        def observe_kline(kline: Kline) -> None:
+            """
+            함수 이름: observe_kline()
+            기능: actual helper가 전달한 Kline 순서를 기록한다.
+            인자: kline -> 전달된 public Kline
+            반환값: 없음
+            작성 날짜: 2026/09/04
+            """
+            observed_order.append(("observe", kline))
+
+        harness = object.__new__(
+            BinanceTestnetPhaseThirteenPublicMarketCase2Tests
+        )
+        harness.runtime = SimpleNamespace(
+            market_data_controller=SimpleNamespace(
+                observe_kline=observe_kline,
+            ),
+        )
+        harness._wait_for_public_market_evaluation = Mock(
+            side_effect=lambda kline: observed_order.append(("wait", kline))
+        )
+        harness._wait_for_public_buy = Mock(
+            side_effect=lambda: observed_order.append(("wait_buy", None))
+            or None
+        )
+
+        # SETUP·FLUSH는 각각 commit을 기다리고 RECOVERY 뒤에만 BUY waiter로 넘어가야 한다.
+        result = harness._inject_deterministic_public_case2_and_wait_for_buy(
+            deterministic_klines
+        )
+        self.assertIsNone(result)
+        self.assertEqual(
+            [
+                ("observe", fixture_klines[0]),
+                ("wait", fixture_klines[0]),
+                ("observe", fixture_klines[1]),
+                ("wait", fixture_klines[1]),
+                ("observe", fixture_klines[2]),
+                ("wait_buy", None),
+            ],
+            observed_order,
+        )
 
     def test_all_client_preflight_canaries_block_actual_without_repr(
         self,
@@ -5756,9 +6537,9 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/08/31
         """
-        policy = _create_actual_risk_policy(Decimal("100"))
+        policy = _create_actual_risk_policy(Decimal("10"))
 
-        # 사용자 확정 세 cap의 None을 Testnet execution cap 100으로 덮지 않고 recovery behavior도 결속한다.
+        # 사용자 확정 세 cap의 None을 Session 3 execution cap 10으로 덮지 않고 recovery behavior도 결속한다.
         self.assertEqual(13, policy.version)
         self.assertIsNone(policy.max_order_notional)
         self.assertIsNone(policy.max_position_notional)
@@ -8645,6 +9426,52 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             )
             close_runtime.assert_called_once_with(runtime)
 
+    def test_failure_durability_directory_chain_accepts_fixed_macos_tmp_alias(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_failure_durability_directory_chain_accepts_fixed_macos_tmp_alias()
+        기능: 최소 runner 환경의 macOS /tmp alias를 private root chain으로 여는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        if not (
+            os.path.islink("/tmp")
+            and os.readlink("/tmp") == "private/tmp"
+        ):
+            self.skipTest("fixed macOS /tmp alias is unavailable")
+
+        # 실제 private temporary directory를 만든 뒤 lexical /tmp alias로 같은 inode를 연다.
+        with TemporaryDirectory(dir="/private/tmp") as private_root:
+            private_root_path = Path(private_root)
+            alias_root_path = Path("/tmp") / private_root_path.name
+            (
+                directory_descriptors,
+                directory_identities,
+                descriptor_identity,
+            ) = _open_failure_durability_directory_chain(
+                alias_root_path,
+                require_private_mode=True,
+            )
+            try:
+                private_root_state = os.stat(
+                    private_root_path,
+                    follow_symlinks=False,
+                )
+                self.assertEqual(
+                    private_root_state.st_ino,
+                    descriptor_identity[1],
+                )  # Alias와 canonical path가 같은 final directory inode를 가리켜야 한다.
+                self.assertEqual(
+                    len(private_root_path.parts),
+                    len(directory_identities),
+                )
+            finally:
+                _close_failure_durability_directory_chain(
+                    directory_descriptors
+                )  # 검증 성공과 assertion 실패 모두에서 전체 pinned chain을 닫는다.
+
     def test_failure_durability_snapshot_is_descriptor_bound_and_fsynced(
         self,
     ) -> None:
@@ -10218,7 +11045,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
     작성 날짜: 2026/08/31
 
     주의: 이 class는 private Action, threshold patch 또는 성공 상태 주입을 전혀 사용하지 않는다.
-    실제 주문은 이 module 하나를 세 opt-in과 100 USDT 이하 cap으로 직접 지정할 때만 실행한다.
+    실제 주문은 이 module 하나를 세 opt-in과 10 USDT 이하 cap으로 직접 지정할 때만 실행한다.
     """
 
     def setUp(self) -> None:
@@ -10454,10 +11281,14 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 "deterministic_klines must be DeterministicPublicCase2Klines"
             )
 
-        # 세 immutable evaluation을 연속 enqueue해 실제 live tick이 fixture stage 사이에 끼어들 창을 최소화한다.
+        # Kline delivery guard가 live tick을 막으므로 각 stage commit 뒤 다음 occurred_at을 생성한다.
         ordered_klines = deterministic_klines.as_tuple()
-        for kline in ordered_klines:
+        for kline in ordered_klines[:-1]:
             self.runtime.market_data_controller.observe_kline(kline)
+            self._wait_for_public_market_evaluation(kline)
+
+        recovery_kline = ordered_klines[-1]
+        self.runtime.market_data_controller.observe_kline(recovery_kline)
 
         buy_trade = self._wait_for_public_buy()
         if buy_trade is None:
@@ -10488,6 +11319,55 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             )
 
         return buy_trade
+
+    def _wait_for_public_market_evaluation(self, expected_kline: Kline) -> None:
+        """
+        함수 이름: _wait_for_public_market_evaluation()
+        기능: 이전 fixture Kline의 production Context commit을 기다려 다음 event 시각 역전을 막는다.
+        인자: expected_kline -> 이번 stage에서 전달한 immutable public Kline
+        반환값: exact price와 low가 Context에 commit되면 없음
+        작성 날짜: 2026/09/04
+        """
+        if not isinstance(expected_kline, Kline):
+            raise TypeError("expected_kline must be a Kline")
+        deadline = time.monotonic() + _DETERMINISTIC_EVALUATION_TIMEOUT_SECONDS
+
+        # Background worker publication을 기다리며 직접 drain하거나 runtime clock을 보정하지 않는다.
+        while time.monotonic() < deadline:
+            remaining_seconds = max(0.0, deadline - time.monotonic())
+            self._collect_runtime_observations(
+                timeout=min(_POLL_INTERVAL_SECONDS, remaining_seconds)
+            )
+            self._observe_phase13_mutation_boundary()
+            controller = self.runtime.trading_controller
+            market = controller.context.market
+            if (
+                market.realtime_price == expected_kline.close
+                and market.current_30m_low == expected_kline.low
+            ):
+                return
+
+            cause_snapshot = controller.reconciliation_cause_snapshot
+            if cause_snapshot.reconciliation_required:
+                worker = self.runtime._trading_event_runtime_worker
+                worker_failure_snapshot = (
+                    None if worker is None else worker.failure_snapshot
+                )
+                market_failure_snapshot = (
+                    _read_phase13_market_failure_snapshot(self.runtime)
+                    if cause_snapshot.category
+                    is ReconciliationCauseCategory.MARKET_STREAM_FAILED
+                    else None
+                )
+                raise _PhaseThirteenReconciliationFailure(
+                    cause_snapshot,
+                    worker_failure_snapshot=worker_failure_snapshot,
+                    market_failure_snapshot=market_failure_snapshot,
+                )  # Stage commit 전 실패도 같은 secret-free 최초 원인으로 즉시 중단한다.
+
+        raise TimeoutError(
+            "production worker did not commit deterministic public evaluation"
+        )
 
     def _wait_for_public_buy(self) -> Trade | None:
         """
@@ -10522,8 +11402,24 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 self.runtime.trading_controller.reconciliation_cause_snapshot
             )
             if cause_snapshot.reconciliation_required:
+                order_failure_code = next(
+                    (
+                        trace_entry.failure_code
+                        for trace_entry in reversed(
+                            self.runtime.trading_controller.order_execution_trace
+                        )
+                        if trace_entry.failure_code is not None
+                    ),
+                    None,
+                )
+                worker = self.runtime._trading_event_runtime_worker
+                worker_failure_snapshot = (
+                    None if worker is None else worker.failure_snapshot
+                )  # Reconciliation publication 전에 고정된 immutable worker 진단만 읽는다.
                 raise _PhaseThirteenReconciliationFailure(
-                    cause_snapshot
+                    cause_snapshot,
+                    order_failure_code,
+                    worker_failure_snapshot,
                 )  # 한 lock snapshot을 예외에 고정해 finalizer 자체 fail-close가 원인을 바꾸지 못한다.
 
         return None  # Timeout은 private trigger로 우회하지 않고 실제 주문 상태를 별도 증거화한다.
@@ -12259,7 +13155,23 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 baseline_recent_results,
             )
         )  # Verified Trade로 설명할 수 없는 manual·외부 recent order는 mutation 전에 차단한다.
-        self.assertFalse(controller.reconciliation_required)
+        cause_snapshot = controller.reconciliation_cause_snapshot
+        if cause_snapshot.reconciliation_required:
+            worker = self.runtime._trading_event_runtime_worker
+            worker_failure_snapshot = (
+                None if worker is None else worker.failure_snapshot
+            )
+            market_failure_snapshot = (
+                _read_phase13_market_failure_snapshot(self.runtime)
+                if cause_snapshot.category
+                is ReconciliationCauseCategory.MARKET_STREAM_FAILED
+                else None
+            )
+            raise _PhaseThirteenReconciliationFailure(
+                cause_snapshot,
+                worker_failure_snapshot=worker_failure_snapshot,
+                market_failure_snapshot=market_failure_snapshot,
+            )  # 주문 전 blocker도 최초 원인과 raw 없는 stream/worker 진단을 같은 예외에 결속한다.
         commission_policy = self.runtime.api_gateway.fetch_commission_discount_policy(
             "ETHUSDT"
         )
@@ -12346,7 +13258,36 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
             reference_price_observed_at=reference_price_observed_at,
         )
 
-        # TYPE_0과 split은 public optimistic-version command만 사용하고 BUY 수량은 production cap이 제한한다.
+        # 진행 중 live callback을 먼저 끝내 candidate snapshot과 actual fixture 수명을 하나로 고정한다.
+        market_delivery_guard = (
+            _acquire_deterministic_kline_delivery_guard(
+                self.runtime.web_socket_gateway
+            )
+        )
+        self.addCleanup(
+            _release_deterministic_kline_delivery_guard,
+            market_delivery_guard,
+        )  # TearDown의 close 뒤 guard를 풀어 queued callback이 stale generation만 관찰하게 한다.
+        deterministic_klines = create_deterministic_public_case2_klines(
+            self.runtime.market_snapshot.get_snapshot()
+        )
+        quote_balance = self.runtime.account.balances.get(
+            symbol_rules.quote_asset
+        )
+        if quote_balance is None:
+            raise AssertionError(
+                "actual preflight requires a free quote balance"
+            )
+        buy_candidate = _prepare_deterministic_buy_candidate(
+            free_quote_quantity=quote_balance.free,
+            decision_price=deterministic_klines.recovery.close,
+            maximum_notional=self.maximum_notional,
+            symbol_rules=symbol_rules,
+            account_filters=account_filters,
+            reference_price=reference_price,
+        )
+
+        # TYPE_0과 candidate split은 public optimistic-version command만 사용하고 outer cap은 그대로 유지한다.
         selection = self.runtime.regime_controller.set_regime_type(
             RegimeType.TYPE_0,
             command_id=f"phase13-select-{self.run_id}",
@@ -12355,7 +13296,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         split_result = controller.update_split_ratios(
             command_id=f"phase13-split-{self.run_id}",
             expected_version=selection.version,
-            scale_in=Decimal("1"),
+            scale_in=buy_candidate.scale_in,
             scale_out=Decimal("1"),
         )
         session_result = controller.start_trading(
@@ -12364,10 +13305,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         )
         self.assertIs(session_result.status, TradingSessionStatus.RUNNING)
 
-        # Current snapshot에서 계산한 세 public Kline만 넣고 production builder·STM이 BUY를 만들게 한다.
-        deterministic_klines = create_deterministic_public_case2_klines(
-            self.runtime.market_snapshot.get_snapshot()
-        )
+        # Preflight와 같은 세 public Kline만 넣고 production builder·STM이 BUY를 만들게 한다.
         buy_trade = self._inject_deterministic_public_case2_and_wait_for_buy(
             deterministic_klines
         )

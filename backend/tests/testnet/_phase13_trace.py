@@ -31,8 +31,9 @@ _MAXIMUM_INTEGER = 9_223_372_036_854_775_807
 _MAXIMUM_ORDER_QUERY_TRACE_COUNT = 4
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
+# Production Decimal128 파생값은 18자리보다 긴 scale을 보존하므로 양쪽 자릿수를 별도로 bounded 허용한다.
 _PLAIN_DECIMAL_PATTERN = re.compile(
-    r"-?(?:0|[1-9][0-9]{0,37})(?:\.[0-9]{1,18})?\Z"
+    r"-?(?:0|[1-9][0-9]{0,37})(?:\.[0-9]{1,64})?\Z"
 )
 _UTC_TIMESTAMP_PATTERN = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"

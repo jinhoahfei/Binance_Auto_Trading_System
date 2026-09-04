@@ -566,6 +566,142 @@ class _AccountStreamRecoveryWorker:
                     self._rerun_requested = False
 
 
+class _TradingEventRuntimeFailureStage(str, Enum):
+    """
+    클래스 이름: _TradingEventRuntimeFailureStage
+    기능: event worker 실패가 발생한 credential-free 실행 단계를 정의한다.
+    작성 날짜: 2026/09/04
+    """
+
+    APPLICATION_LOCK = "APPLICATION_LOCK"
+    PROCESSING_GUARD = "PROCESSING_GUARD"
+    STATE_SNAPSHOT_BEFORE = "STATE_SNAPSHOT_BEFORE"
+    RUNTIME_CYCLE = "RUNTIME_CYCLE"
+    STATE_SNAPSHOT_AFTER = "STATE_SNAPSHOT_AFTER"
+    STATE_COMPARISON = "STATE_COMPARISON"
+    STATE_PUBLICATION = "STATE_PUBLICATION"
+
+
+_EXTERNAL_RUNTIME_FAILURE_ORIGIN = "EXTERNAL_OR_UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class _TradingEventRuntimeFailureSnapshot:
+    """
+    클래스 이름: _TradingEventRuntimeFailureSnapshot
+    기능: raw 예외 없이 worker의 최초 실패 단계·타입·내부 위치를 불변 보존한다.
+    작성 날짜: 2026/09/04
+    """
+
+    stage: _TradingEventRuntimeFailureStage
+    exception_type: str
+    exception_origin: str
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: snapshot이 enum과 안전한 ASCII 식별자만 포함하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        if not isinstance(self.stage, _TradingEventRuntimeFailureStage):
+            raise TypeError("stage must be a runtime failure stage")
+        if (
+            not isinstance(self.exception_type, str)
+            or not self.exception_type.isascii()
+            or not self.exception_type.isidentifier()
+            or len(self.exception_type) > 128
+        ):
+            raise ValueError("exception_type must be a bounded ASCII identifier")
+        if self.exception_origin == _EXTERNAL_RUNTIME_FAILURE_ORIGIN:
+            return  # Package 밖 traceback은 구체 위치를 외부에 복사하지 않는다.
+
+        # 내부 origin은 package module과 함수 식별자 한 쌍만 허용해 경로·원문 누출을 막는다.
+        module_name, separator, function_name = self.exception_origin.partition(":")
+        module_parts = module_name.split(".")
+        if (
+            separator != ":"
+            or not module_name.startswith("binance_auto_trader.")
+            or any(
+                not module_part.isascii() or not module_part.isidentifier()
+                for module_part in module_parts
+            )
+            or not function_name.isascii()
+            or not function_name.isidentifier()
+            or len(self.exception_origin) > 256
+        ):
+            raise ValueError("exception_origin must be a safe package origin")
+
+
+def _normalize_trading_event_runtime_exception_type(
+    error: BaseException,
+) -> str:
+    """
+    함수 이름: _normalize_trading_event_runtime_exception_type()
+    기능: 예외 인스턴스에서 원문 없는 bounded ASCII 타입 식별자를 만든다.
+    인자: error -> worker가 포착한 BaseException
+    반환값: 안전한 예외 타입 이름 또는 고정 fallback
+    작성 날짜: 2026/09/04
+    """
+    if not isinstance(error, BaseException):
+        raise TypeError("error must be a BaseException")
+    exception_type = type(error).__name__
+    if (
+        isinstance(exception_type, str)
+        and exception_type.isascii()
+        and exception_type.isidentifier()
+        and len(exception_type) <= 128
+    ):
+        return exception_type
+
+    return "UNSAFE_EXCEPTION_TYPE"  # 동적 예외 이름도 raw diagnostic으로 전달하지 않는다.
+
+
+def _normalize_trading_event_runtime_exception_origin(
+    error: BaseException,
+) -> str:
+    """
+    함수 이름: _normalize_trading_event_runtime_exception_origin()
+    기능: traceback의 최심부 package module·함수만 credential-free origin으로 정규화한다.
+    인자: error -> worker가 포착한 BaseException
+    반환값: 안전한 package origin 또는 외부·미확정 고정값
+    작성 날짜: 2026/09/04
+    """
+    if not isinstance(error, BaseException):
+        raise TypeError("error must be a BaseException")
+
+    # Traceback frame을 최심부까지 따라가되 파일 경로·line·local 값은 읽거나 복사하지 않는다.
+    traceback_cursor = error.__traceback__
+    while (
+        traceback_cursor is not None
+        and traceback_cursor.tb_next is not None
+    ):
+        traceback_cursor = traceback_cursor.tb_next
+    if traceback_cursor is None:
+        return _EXTERNAL_RUNTIME_FAILURE_ORIGIN
+
+    module_name = traceback_cursor.tb_frame.f_globals.get("__name__")
+    function_name = traceback_cursor.tb_frame.f_code.co_name
+    if (
+        not isinstance(module_name, str)
+        or not module_name.startswith("binance_auto_trader.")
+        or any(
+            not module_part.isascii() or not module_part.isidentifier()
+            for module_part in module_name.split(".")
+        )
+        or not isinstance(function_name, str)
+        or not function_name.isascii()
+        or not function_name.isidentifier()
+    ):
+        return _EXTERNAL_RUNTIME_FAILURE_ORIGIN
+
+    normalized_origin = f"{module_name}:{function_name}"
+    if len(normalized_origin) > 256:
+        return _EXTERNAL_RUNTIME_FAILURE_ORIGIN
+    return normalized_origin  # 내부 함수 식별자만 반환하고 raw traceback은 즉시 버린다.
+
+
 class _TradingEventRuntimeWorker:
     """
     클래스 이름: _TradingEventRuntimeWorker
@@ -635,6 +771,7 @@ class _TradingEventRuntimeWorker:
         self._active_thread: Thread | None = None
         self._closed = False
         self._failed = False
+        self._failure_snapshot: _TradingEventRuntimeFailureSnapshot | None = None
 
     @property
     def failed(self) -> bool:
@@ -647,6 +784,18 @@ class _TradingEventRuntimeWorker:
         """
         with self._state_lock:
             return self._failed  # Raw 예외 대신 credential 없는 상태만 외부 진단에 제공한다.
+
+    @property
+    def failure_snapshot(self) -> _TradingEventRuntimeFailureSnapshot | None:
+        """
+        함수 이름: failure_snapshot()
+        기능: worker 최초 실패의 raw 원문 없는 immutable diagnostic을 반환한다.
+        인자: 없음
+        반환값: 실패 snapshot 또는 실패 전 None
+        작성 날짜: 2026/09/04
+        """
+        with self._state_lock:
+            return self._failure_snapshot  # Frozen snapshot identity는 caller가 바꿀 수 없다.
 
     def start(self) -> bool:
         """
@@ -728,15 +877,33 @@ class _TradingEventRuntimeWorker:
                 if self._stop_event.is_set():
                     return
 
+                failure_stage = (
+                    _TradingEventRuntimeFailureStage.APPLICATION_LOCK
+                )
                 try:
                     # Lifecycle Guard, Controller cycle과 publication을 같은 application snapshot에 묶는다.
                     with self._application_lock:
+                        failure_stage = (
+                            _TradingEventRuntimeFailureStage.PROCESSING_GUARD
+                        )
                         if self._processing_allowed() is not True:
                             continue
 
+                        failure_stage = (
+                            _TradingEventRuntimeFailureStage.STATE_SNAPSHOT_BEFORE
+                        )
                         state_before = self._state_snapshot()
+                        failure_stage = (
+                            _TradingEventRuntimeFailureStage.RUNTIME_CYCLE
+                        )
                         cycle_results = asyncio.run(self._runtime_cycle())
+                        failure_stage = (
+                            _TradingEventRuntimeFailureStage.STATE_SNAPSHOT_AFTER
+                        )
                         state_after = self._state_snapshot()
+                        failure_stage = (
+                            _TradingEventRuntimeFailureStage.STATE_COMPARISON
+                        )
                         should_publish = (
                             bool(cycle_results) or state_after != state_before
                         )
@@ -744,8 +911,25 @@ class _TradingEventRuntimeWorker:
                             should_publish
                             and self._state_update_observer is not None
                         ):
+                            failure_stage = (
+                                _TradingEventRuntimeFailureStage.STATE_PUBLICATION
+                            )
                             self._state_update_observer()
-                except BaseException:
+                except BaseException as error:
+                    # Fail-close publication 전에 최초 stage와 정규화된 타입·내부 위치만 원자 봉인한다.
+                    failure_snapshot = _TradingEventRuntimeFailureSnapshot(
+                        stage=failure_stage,
+                        exception_type=(
+                            _normalize_trading_event_runtime_exception_type(error)
+                        ),
+                        exception_origin=(
+                            _normalize_trading_event_runtime_exception_origin(error)
+                        ),
+                    )
+                    with self._state_lock:
+                        if self._failure_snapshot is None:
+                            self._failure_snapshot = failure_snapshot
+
                     # 최초 runtime/publication 실패는 raw 오류를 노출하지 않고 같은 lock에서 잠근다.
                     with self._application_lock:
                         if self._processing_allowed() is True:

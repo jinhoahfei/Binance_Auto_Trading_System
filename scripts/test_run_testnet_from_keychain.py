@@ -18,6 +18,7 @@ from scripts.run_testnet_from_keychain import (
     BACKEND_ROOT,
     BACKEND_SOURCE_ROOT,
     BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV,
+    BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV,
     BINANCE_RUN_TESTNET_ENV,
     BINANCE_RUN_TESTNET_ORDERS_ENV,
     BINANCE_TESTNET_API_KEY_ENV,
@@ -33,6 +34,7 @@ from scripts.run_testnet_from_keychain import (
     KEYCHAIN_SECURITY_COMMAND,
     KEYCHAIN_SERVICE,
     MODE_TEST_MODULES,
+    PRIVATE_BETA_TESTNET_MAX_NOTIONAL,
     TestnetKeychainRunnerError,
     TestnetRunnerArguments,
     build_child_environment,
@@ -127,12 +129,14 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
                         BINANCE_TESTNET_API_SECRET_ENV,
                         BINANCE_RUN_TESTNET_ORDERS_ENV,
                         BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV,
+                        BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV,
                     }
                 ),
             )
             self.assertEqual(child_environment[BINANCE_RUN_TESTNET_ENV], "1")
             self.assertEqual(child_environment[BINANCE_RUN_TESTNET_ORDERS_ENV], "0")
             self.assertEqual(child_environment[BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV], "0")
+            self.assertEqual(child_environment[BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV], "0")
             self.assertNotIn(BINANCE_TESTNET_MAX_NOTIONAL_ENV, child_environment)
             self.assertEqual(
                 child_environment["PYTHONPATH"],
@@ -146,7 +150,7 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
     def test_phase13_environment_has_three_opt_ins_and_exact_cap(self) -> None:
         """
         함수 이름: test_phase13_environment_has_three_opt_ins_and_exact_cap()
-        기능: Public Case 2 child가 세 opt-in과 100 USDT cap을 정확히 활성화하는지 검증한다.
+        기능: Public Case 2 child가 세 opt-in과 10 USDT cap을 정확히 활성화하는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/31
@@ -163,7 +167,11 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
             self.assertEqual(child_environment[BINANCE_RUN_TESTNET_ENV], "1")
             self.assertEqual(child_environment[BINANCE_RUN_TESTNET_ORDERS_ENV], "1")
             self.assertEqual(child_environment[BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV], "1")
-            self.assertEqual(child_environment[BINANCE_TESTNET_MAX_NOTIONAL_ENV], "100")
+            self.assertEqual(child_environment[BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV], "0")
+            self.assertEqual(
+                child_environment[BINANCE_TESTNET_MAX_NOTIONAL_ENV],
+                PRIVATE_BETA_TESTNET_MAX_NOTIONAL,
+            )
             self.assertEqual(
                 child_environment[BINANCE_TESTNET_API_KEY_ENV],
                 API_KEY_CANARY.decode("ascii"),
@@ -171,6 +179,35 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
             self.assertEqual(
                 child_environment[BINANCE_TESTNET_API_SECRET_ENV],
                 API_SECRET_CANARY.decode("ascii"),
+            )
+        finally:
+            zeroize_secret_buffer(api_key_buffer)
+            zeroize_secret_buffer(api_secret_buffer)
+
+    def test_phase13_recovery_environment_allows_only_its_exact_target(self) -> None:
+        """
+        함수 이름: test_phase13_recovery_environment_allows_only_its_exact_target()
+        기능: Recovery child가 public Case 2를 끄고 recovery-only flag·10 USDT cap만 활성화하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        api_key_buffer = bytearray(API_KEY_CANARY)
+        api_secret_buffer = bytearray(API_SECRET_CANARY)
+        try:
+            child_environment = build_child_environment(
+                "phase13-recovery-only",
+                api_key_buffer=api_key_buffer,
+                api_secret_buffer=api_secret_buffer,
+            )
+
+            self.assertEqual(child_environment[BINANCE_RUN_TESTNET_ENV], "1")
+            self.assertEqual(child_environment[BINANCE_RUN_TESTNET_ORDERS_ENV], "1")
+            self.assertEqual(child_environment[BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV], "0")
+            self.assertEqual(child_environment[BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV], "1")
+            self.assertEqual(
+                child_environment[BINANCE_TESTNET_MAX_NOTIONAL_ENV],
+                PRIVATE_BETA_TESTNET_MAX_NOTIONAL,
             )
         finally:
             zeroize_secret_buffer(api_key_buffer)
@@ -543,7 +580,7 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
         captured_environment = captured_exec["environment"]
         self.assertEqual(
             captured_environment[BINANCE_TESTNET_MAX_NOTIONAL_ENV],
-            "100",
+            PRIVATE_BETA_TESTNET_MAX_NOTIONAL,
         )
         self.assertEqual(api_key_buffer, bytearray())
         self.assertEqual(api_secret_buffer, bytearray())
@@ -586,6 +623,8 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
             parse_arguments(["read-only"]),
             TestnetRunnerArguments("read-only", None),
         )
+        with self.assertRaises(TestnetKeychainRunnerError):
+            parse_arguments(["phase13-recovery-only"])
         with self.assertRaises(TestnetKeychainRunnerError):
             parse_arguments([invalid_argument_canary])
         with self.assertRaises(TestnetKeychainRunnerError):

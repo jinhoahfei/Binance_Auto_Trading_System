@@ -511,6 +511,17 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
             self.assertFalse(controller.command_enabled)
             self.assertTrue(controller.reconciliation_required)
 
+        # RUNNING 중의 중단은 시장 source가 복구되더라도 operator가 확인할 exact cause를 유지한다.
+        cause_snapshot = controller.reconciliation_cause_snapshot
+        self.assertTrue(cause_snapshot.reconciliation_required)
+        self.assertIs(
+            cause_snapshot.status,
+            ReconciliationCauseStatus.EXACT,
+        )
+        self.assertIs(
+            cause_snapshot.category,
+            ReconciliationCauseCategory.MARKET_STREAM_FAILED,
+        )
         self.assertIs(
             controller.status,
             TradingSessionStatus.RECONCILIATION_REQUIRED,
@@ -1625,6 +1636,70 @@ class ReconciliationCauseLatchTests(unittest.TestCase):
         )
         with self.assertRaises(FrozenInstanceError):
             snapshot.status = ReconciliationCauseStatus.EXACT  # type: ignore[misc]
+
+    def test_pre_session_market_initializing_gate_keeps_cause_missing(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_pre_session_market_initializing_gate_keeps_cause_missing()
+        기능: 정상 startup 시장 gate가 effect를 잠그되 실패 cause로 기록되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        controller, _, _ = _create_ready_controller(
+            market_stream_recovery_enabled=True,
+        )
+
+        # Initialization 기간에는 public blocker를 열되 최초 실패 origin은 생성하지 않는다.
+        controller.mark_market_stream_reconciliation_required(
+            "market_stream_initializing"
+        )
+        blocked_snapshot = controller.reconciliation_cause_snapshot
+        self.assertTrue(blocked_snapshot.reconciliation_required)
+        self.assertTrue(controller.market_stream_reconciliation_required)
+        self.assertIs(
+            blocked_snapshot.status,
+            ReconciliationCauseStatus.MISSING,
+        )
+        self.assertIsNone(blocked_snapshot.category)
+
+        # Same-version live resync 완료 뒤에는 시장 blocker만 해제하고 monotonic cause는 MISSING을 유지한다.
+        with patch.object(
+            WebSocketGateway,
+            "kline_live_ready",
+            new_callable=PropertyMock,
+            return_value=True,
+        ):
+            controller.complete_market_stream_reconciliation(
+                controller._market_snapshot.version
+            )
+        completed_snapshot = controller.reconciliation_cause_snapshot
+        self.assertFalse(controller.market_stream_reconciliation_required)
+        self.assertEqual(
+            controller.reconciliation_required,
+            completed_snapshot.reconciliation_required,
+        )
+        self.assertIs(
+            completed_snapshot.status,
+            ReconciliationCauseStatus.MISSING,
+        )
+        self.assertIsNone(completed_snapshot.category)
+
+        # 같은 NOT_STARTED에서도 실제 초기화 실패는 이후 evidence가 보존할 최초 origin으로 기록한다.
+        controller.mark_market_stream_reconciliation_required(
+            "market_stream_initialization_failed"
+        )
+        failed_snapshot = controller.reconciliation_cause_snapshot
+        self.assertTrue(failed_snapshot.reconciliation_required)
+        self.assertIs(
+            failed_snapshot.status,
+            ReconciliationCauseStatus.EXACT,
+        )
+        self.assertIs(
+            failed_snapshot.category,
+            ReconciliationCauseCategory.MARKET_STREAM_FAILED,
+        )
 
     def test_account_stream_origin_records_exact_category_once(self) -> None:
         """

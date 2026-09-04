@@ -1014,6 +1014,43 @@ class TestnetConfigurationTests(unittest.TestCase):
             ),
         )  # 전용 gate도 기존 cap 객체를 다른 숫자로 대체하지 않는다.
 
+    def test_phase13_recovery_only_requires_exclusive_exact_opt_in(self) -> None:
+        """
+        함수 이름: test_phase13_recovery_only_requires_exclusive_exact_opt_in()
+        기능: Recovery-only 권한이 주문 gate를 요구하고 public Case 2 flag와 공존하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        environment = _read_only_environment()
+        environment[testnet_module.BINANCE_RUN_TESTNET_ORDERS_ENV] = "1"
+        environment[testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV] = "10"
+        environment[
+            testnet_module.BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV
+        ] = "1"
+
+        # Exact recovery flag는 기존 order opt-in과 cap을 보존한 별도 configuration 상태를 만든다.
+        configuration = testnet_module.load_testnet_configuration(environment)
+        self.assertTrue(configuration.allow_phase13_recovery_only)
+        self.assertFalse(configuration.allow_phase13_public_case2)
+        self.assertEqual(
+            Decimal("10"),
+            testnet_module.require_phase13_recovery_only_permission(
+                configuration
+            ),
+        )
+
+        # 두 mutation target을 동시에 켜면 어느 쪽으로도 완화하지 않고 loader에서 거부한다.
+        conflicting_environment = dict(environment)
+        conflicting_environment[
+            testnet_module.BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV
+        ] = "1"
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "mutually exclusive",
+        ):
+            testnet_module.load_testnet_configuration(conflicting_environment)
+
     def test_phase13_broad_collection_keeps_legacy_order_suites_skipped(
         self,
     ) -> None:
@@ -1442,6 +1479,70 @@ class TestnetConfigurationTests(unittest.TestCase):
             ("MARKET", "MARKET"),
         )
         self.assertEqual(delegate.submit_order.call_count, 2)
+
+    def test_phase13_recovery_guard_allows_one_stop_sell_and_no_other_mutation(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_phase13_recovery_guard_allows_one_stop_sell_and_no_other_mutation()
+        기능: Recovery-only proxy가 CASE_C STOP SELL 한 번만 허용하고 BUY·retry·cancel을 차단하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        delegate = Mock(name="phase13_recovery_only_delegate")
+        delegate.get_account.return_value = {}
+        delegate.submit_order.return_value = sentinel.order_result
+        delegate.prepare_order.side_effect = lambda *, order: order
+        permission_client = testnet_module._TestnetOrderPermissionRESTClient(
+            delegate,
+            allow_orders=True,
+            maximum_order_notional=Decimal("10"),
+            phase13_recovery_only=True,
+            clock=lambda: datetime(2026, 9, 4, tzinfo=timezone.utc),
+        )
+        gateway = APIGateway(permission_client)
+        buy_order = _phase13_order(
+            side=OrderSide.BUY,
+            client_order_id="bat-phase13-recovery-buy",
+            intent_id="phase13-recovery-buy-intent",
+        )
+        sell_order = _phase13_order(
+            side=OrderSide.SELL,
+            client_order_id="bat-phase13-recovery-sell",
+            intent_id="phase13-recovery-sell-intent",
+        )
+
+        # BUY는 filter delegate 전에 거부되고 exact STOP SELL만 첫 permit을 소비한다.
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "exact STOP SELL only",
+        ):
+            permission_client.prepare_order(order=buy_order)
+        delegate.prepare_order.assert_not_called()
+        self.assertIs(
+            sentinel.order_result,
+            permission_client.submit_order(order=sell_order),
+        )
+
+        # 소비한 단일 permit은 같은 STOP shape와 cancel에도 복구되지 않는다.
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "permanently blocked",
+        ):
+            permission_client.submit_order(order=sell_order)
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "does not permit order cancellation",
+        ):
+            permission_client.cancel_order(order=sell_order)
+        snapshot = gateway.get_phase13_order_submission_guard_snapshot()
+        self.assertTrue(snapshot.mutation_started)
+        self.assertTrue(snapshot.submissions_blocked)
+        self.assertEqual(1, len(snapshot.attempts))
+        self.assertIs(snapshot.attempts[0].side, OrderSide.SELL)
+        self.assertEqual(1, delegate.submit_order.call_count)
+        delegate.cancel_order.assert_not_called()
 
     def test_phase13_failure_block_prevents_delegate_and_reports_zero_mutation(
         self,

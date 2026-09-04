@@ -20,7 +20,10 @@ from binance_auto_trader.bootstrap import (
     start_application,
 )
 from binance_auto_trader.bootstrap.application import _FAKE_ORDER_CAPABILITY
-from binance_auto_trader.application import TradingSessionStatus
+from binance_auto_trader.application import (
+    ReconciliationCauseStatus,
+    TradingSessionStatus,
+)
 from binance_auto_trader.domain.common import Interval, RegimeType
 from binance_auto_trader.domain.market import Kline
 from binance_auto_trader.domain.trading import (
@@ -465,6 +468,37 @@ class DeterministicProductionPathCase2FlowTests(unittest.TestCase):
     기능: public Kline부터 strategy, order, persistence와 UI publication까지의 한 흐름을 검증한다.
     작성 날짜: 2026/09/04
     """
+
+    def test_successful_startup_does_not_record_initialization_as_failure(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_successful_startup_does_not_record_initialization_as_failure()
+        기능: 정상 시장 stream 초기화 gate가 실패 cause latch에 기록되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        with TemporaryDirectory() as temporary_directory:
+            fixture = _create_deterministic_production_path_fixture(
+                temporary_directory
+            )
+            self.addCleanup(_close_deterministic_fixture, fixture)
+
+            # Production startup의 초기 시장 재조정과 전체 readiness를 그대로 실행한다.
+            ready_state = start_application(fixture.runtime)
+            cause_snapshot = (
+                fixture.runtime.trading_controller.reconciliation_cause_snapshot
+            )
+
+            # 실제 blocker가 없는 READY는 다음 단일 원인을 오염시킬 stale cause도 가지지 않는다.
+            self.assertIs(ready_state.status, ApplicationStatus.READY)
+            self.assertFalse(cause_snapshot.reconciliation_required)
+            self.assertIs(
+                cause_snapshot.status,
+                ReconciliationCauseStatus.MISSING,
+            )
+            self.assertIsNone(cause_snapshot.category)
 
     def test_public_fixture_runs_buy_stop_sell_and_zero_exposure(
         self,

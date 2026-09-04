@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta
+from decimal import Decimal
 import hashlib
 import json
 import unittest
@@ -13,6 +14,7 @@ from tests.testnet._phase13_trace import (
     PHASE13_PUBLIC_TRACE_SCHEMA_VERSION,
     PhaseThirteenPublicTraceValidationError,
     _parse_public_market_command_event,
+    _require_plain_decimal,
     canonical_actual_phase13_public_trace_bytes,
     canonical_phase13_public_trace_bytes,
     seal_actual_phase13_public_trace,
@@ -143,6 +145,34 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
     기능: actual public Case 2 evidence의 strict schema, provenance, redaction와 digest를 검증한다.
     작성 날짜: 2026/08/31
     """
+
+    def test_plain_decimal_accepts_production_decimal128_scale_with_bound(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_plain_decimal_accepts_production_decimal128_scale_with_bound()
+        기능: production Case C 결정 가격의 긴 Decimal128 scale은 보존하고 비정상 장문은 거부하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        production_decision_price = "2384.439606036697913199790340"
+
+        # Actual fixture 값을 반올림하지 않고 같은 Decimal로 복원해야 의사결정 fingerprint가 손실되지 않는다.
+        self.assertEqual(
+            Decimal(production_decision_price),
+            _require_plain_decimal(
+                production_decision_price,
+                "decision price",
+                minimum=Decimal("0"),
+            ),
+        )
+        with self.assertRaises(PhaseThirteenPublicTraceValidationError):
+            _require_plain_decimal(
+                "0." + "1" * 65,
+                "decision price",
+                minimum=Decimal("0"),
+            )  # 최대 scale을 넘는 문자열은 bounded artifact 계약 밖으로 닫는다.
 
     def _success_trace_body(self) -> dict[str, object]:
         """

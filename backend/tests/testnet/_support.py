@@ -13,6 +13,7 @@ from uuid import uuid4
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
 from binance_auto_trader.bootstrap.testnet import (
     BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV,
+    BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV,
     BINANCE_RUN_TESTNET_ENV,
     BINANCE_RUN_TESTNET_ORDERS_ENV,
     BINANCE_TESTNET_API_KEY_ENV,
@@ -47,17 +48,26 @@ _AUTHENTICATED_TESTNET_REQUESTED = (
 READ_ONLY_TESTNET_REQUESTED = (
     _AUTHENTICATED_TESTNET_REQUESTED
     and os.environ.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV) != "1"
+    and os.environ.get(BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV) != "1"
 )
 ORDER_TESTNET_REQUESTED = (
     _AUTHENTICATED_TESTNET_REQUESTED
     and os.environ.get(BINANCE_RUN_TESTNET_ORDERS_ENV) == "1"
     and os.environ.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV) != "1"
+    and os.environ.get(BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV) != "1"
 )
 PHASE13_PUBLIC_CASE2_REQUESTED = (
     _AUTHENTICATED_TESTNET_REQUESTED
     and os.environ.get(BINANCE_RUN_TESTNET_ORDERS_ENV) == "1"
     and os.environ.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV) == "1"
-)  # Phase 13 전용 flag는 legacy actual-order suite와 상호 배타적인 단일 target을 선택한다.
+    and os.environ.get(BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV) != "1"
+)
+PHASE13_RECOVERY_ONLY_REQUESTED = (
+    _AUTHENTICATED_TESTNET_REQUESTED
+    and os.environ.get(BINANCE_RUN_TESTNET_ORDERS_ENV) == "1"
+    and os.environ.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV) != "1"
+    and os.environ.get(BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV) == "1"
+)  # 두 Phase 13 mutation flag는 legacy suite와 서로 배타적인 exact target을 선택한다.
 READ_ONLY_SKIP_REASON = (
     f"set {BINANCE_RUN_TESTNET_ENV}=1 with testnet credentials while leaving "
     f"{BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV} disabled to run"
@@ -71,6 +81,11 @@ PHASE13_PUBLIC_CASE2_SKIP_REASON = (
     f"set {BINANCE_RUN_TESTNET_ENV}=1, "
     f"{BINANCE_RUN_TESTNET_ORDERS_ENV}=1 and "
     f"{BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV}=1 with a max notional to run"
+)
+PHASE13_RECOVERY_ONLY_SKIP_REASON = (
+    f"set {BINANCE_RUN_TESTNET_ENV}=1, "
+    f"{BINANCE_RUN_TESTNET_ORDERS_ENV}=1 and "
+    f"{BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV}=1 with a max notional to run"
 )
 _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 TESTNET_BASELINE_HISTORY_PATH_ENV = "BINANCE_TESTNET_BASELINE_HISTORY_PATH"
@@ -337,6 +352,118 @@ def seed_verified_closed_history(
         )
 
     return baseline_trades  # Startup이 Binance recent orders와 다시 대조할 closed provenance다.
+
+
+def seed_verified_open_recovery_history(
+    destination_history_path: Path,
+) -> tuple[Trade, ...]:
+    """
+    함수 이름: seed_verified_open_recovery_history()
+    기능: Secure runner가 pin한 단일 Phase 13 BUY exposure를 recovery 전용 history로 복제한다.
+    인자: destination_history_path -> recovery runtime이 단독 소유할 새 history 파일
+    반환값: closed prefix와 마지막 open Case C BUY로 구성된 canonical Trade tuple
+    작성 날짜: 2026/09/04
+    """
+    if not isinstance(destination_history_path, Path):
+        raise TypeError("destination_history_path must be a Path")
+    raw_source_path = os.environ.get(TESTNET_BASELINE_HISTORY_PATH_ENV)
+    raw_source_descriptor = os.environ.get(TESTNET_BASELINE_HISTORY_FD_ENV)
+    expected_source_sha256 = os.environ.get(
+        TESTNET_BASELINE_HISTORY_SHA256_ENV
+    )
+    raw_pending_descriptor = os.environ.get(TESTNET_BASELINE_PENDING_FD_ENV)
+    expected_pending_sha256 = os.environ.get(
+        TESTNET_BASELINE_PENDING_SHA256_ENV
+    )
+    if (
+        raw_source_path is not None
+        or raw_source_descriptor is None
+        or expected_source_sha256 is None
+        or (raw_pending_descriptor is None)
+        is not (expected_pending_sha256 is None)
+        or destination_history_path.exists()
+        or destination_history_path.is_symlink()
+    ):
+        raise RuntimeError(
+            "Phase 13 recovery requires one inherited baseline source"
+        )
+
+    # History와 optional REMOVE journal을 private staging에서 함께 replay해 active pending을 배제한다.
+    with TemporaryDirectory(
+        prefix=".phase13-recovery-baseline-",
+        dir=destination_history_path.parent,
+    ) as staging_directory:
+        staging_history_path = Path(staging_directory) / "history.jsonl"
+        _copy_inherited_baseline_file(
+            staging_history_path,
+            raw_source_descriptor,
+            expected_source_sha256,
+        )
+        if (
+            raw_pending_descriptor is not None
+            and expected_pending_sha256 is not None
+        ):
+            staging_pending_path = staging_history_path.with_name(
+                f"{staging_history_path.name}.pending-orders.jsonl"
+            )
+            _copy_inherited_baseline_file(
+                staging_pending_path,
+                raw_pending_descriptor,
+                expected_pending_sha256,
+            )
+        copied_repository = TradeHistoryRepository(staging_history_path)
+        baseline_trades = copied_repository.get_trade_history()
+        if not baseline_trades:
+            raise RuntimeError(
+                "Phase 13 recovery history must contain durable trades"
+            )
+        if copied_repository.get_pending_order_recovery_records():
+            raise RuntimeError(
+                "Phase 13 recovery history must not contain pending orders"
+            )
+
+        # 마지막 Trade 직전은 zero이고 마지막 한 건만 승인된 Case C BUY exposure를 열어야 한다.
+        closed_prefix_position = Position("ETHUSDT")
+        for closed_trade in baseline_trades[:-1]:
+            closed_prefix_position.apply_historical_trade(closed_trade)
+        open_buy = baseline_trades[-1]
+        if (
+            closed_prefix_position.quantity != Decimal("0")
+            or open_buy.symbol != "ETHUSDT"
+            or open_buy.side is not OrderSide.BUY
+            or open_buy.strategy is not StrategyType.CASE_C
+            or open_buy.regime_type is not RegimeType.TYPE_0
+            or open_buy.exit_reason is not None
+            or open_buy.executed_quantity <= Decimal("0")
+            or open_buy.requested_quantity
+            * open_buy.market_price_at_decision
+            > Decimal("10")
+        ):
+            raise RuntimeError(
+                "Phase 13 recovery history is not one approved open BUY"
+            )
+        recovery_position = Position("ETHUSDT")
+        for baseline_trade in baseline_trades:
+            recovery_position.apply_historical_trade(baseline_trade)
+        if recovery_position.quantity != open_buy.executed_quantity:
+            raise RuntimeError(
+                "Phase 13 recovery history has ambiguous open exposure"
+            )
+
+    # 검증된 Trade만 새 repository에 append해 과거 REMOVE event를 새 SELL lifecycle과 분리한다.
+    destination_repository = TradeHistoryRepository(destination_history_path)
+    try:
+        for baseline_trade in baseline_trades:
+            destination_repository.save_this_trade_by_order_id(
+                baseline_trade.order_id,
+                baseline_trade,
+            )
+        destination_history_path.chmod(0o600)  # Recovery source copy도 owner-only로 고정한다.
+    except Exception:
+        destination_history_path.unlink(missing_ok=True)
+        raise  # Partial copy는 recovery submit 경계로 넘기지 않는다.
+
+    return baseline_trades  # Caller는 마지막 BUY 수량만 exact STOP recovery 대상으로 사용한다.
 
 
 def require_empty_all_client_open_orders(

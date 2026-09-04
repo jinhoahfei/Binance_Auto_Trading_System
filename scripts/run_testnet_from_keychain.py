@@ -28,7 +28,11 @@ BINANCE_TESTNET_API_KEY_ENV = "BINANCE_TESTNET_API_KEY"
 BINANCE_TESTNET_API_SECRET_ENV = "BINANCE_TESTNET_API_SECRET"
 BINANCE_RUN_TESTNET_ORDERS_ENV = "BINANCE_RUN_TESTNET_ORDERS"
 BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV = "BINANCE_RUN_PHASE13_PUBLIC_CASE2"
+BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV = (
+    "BINANCE_RUN_PHASE13_RECOVERY_ONLY"
+)
 BINANCE_TESTNET_MAX_NOTIONAL_ENV = "BINANCE_TESTNET_MAX_NOTIONAL"
+PRIVATE_BETA_TESTNET_MAX_NOTIONAL = "10"
 BINANCE_TESTNET_BASELINE_HISTORY_FD_ENV = (
     "BINANCE_TESTNET_BASELINE_HISTORY_FD"
 )
@@ -54,6 +58,7 @@ BASELINE_HISTORY_READ_CHUNK_BYTES = 65_536
 MODE_TEST_MODULES: dict[str, str] = {
     "read-only": "tests.testnet.test_binance_testnet_read_only",
     "phase13-public-case2": "tests.testnet.test_phase13_public_market_case2",
+    "phase13-recovery-only": "tests.testnet.test_phase13_recovery_only",
 }
 
 
@@ -242,7 +247,7 @@ def build_unittest_command(
     """
     함수 이름: build_unittest_command()
     기능: 허용 mode를 정확히 하나의 Testnet unittest module argv로 변환한다.
-    인자: mode -> read-only 또는 phase13-public-case2
+    인자: mode -> read-only, phase13-public-case2 또는 phase13-recovery-only
         python_executable -> 현재 runner와 같은 검증된 Python executable
     반환값: shell을 사용하지 않는 exact execve argv tuple
     작성 날짜: 2026/08/31
@@ -547,10 +552,10 @@ def build_child_environment(
     """
     함수 이름: build_child_environment()
     기능: 상위 process 환경을 상속하지 않는 mode별 최소 Testnet child 환경을 만든다.
-    인자: mode -> read-only 또는 phase13-public-case2
+    인자: mode -> 허용된 세 fixed Testnet target 중 하나
         api_key_buffer -> 출력 금지 Testnet API key buffer
         api_secret_buffer -> 출력 금지 Testnet API secret buffer
-        verified_baseline_history -> optional inode-pinned closed history descriptor
+        verified_baseline_history -> optional inode-pinned history descriptor
     반환값: execve에만 전달할 fixed-key environment dictionary
     작성 날짜: 2026/08/31
     """
@@ -575,11 +580,17 @@ def build_child_environment(
             "0" if mode == "read-only" else "1"
         ),
         BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV: (
-            "0" if mode == "read-only" else "1"
+            "1" if mode == "phase13-public-case2" else "0"
+        ),
+        BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV: (
+            "1" if mode == "phase13-recovery-only" else "0"
         ),
     }
-    if mode == "phase13-public-case2":
-        child_environment[BINANCE_TESTNET_MAX_NOTIONAL_ENV] = "100"
+    if mode in {"phase13-public-case2", "phase13-recovery-only"}:
+        # Session 3 mutation mode는 BUY 가능 여부와 무관하게 승인된 10 USDT 상한을 고정한다.
+        child_environment[BINANCE_TESTNET_MAX_NOTIONAL_ENV] = (
+            PRIVATE_BETA_TESTNET_MAX_NOTIONAL
+        )
     if verified_baseline_history is not None:
         descriptor_text = str(verified_baseline_history.descriptor)
         digest_text = verified_baseline_history.sha256
@@ -661,6 +672,8 @@ def execute_testnet_mode(
     작성 날짜: 2026/08/31
     """
     if mode not in MODE_TEST_MODULES:
+        raise TestnetKeychainRunnerError()
+    if mode == "phase13-recovery-only" and baseline_history_path is None:
         raise TestnetKeychainRunnerError()
     if baseline_history_path is not None and not isinstance(
         baseline_history_path,
@@ -773,6 +786,8 @@ def parse_arguments(
     if not selected_arguments or selected_arguments[0] not in MODE_TEST_MODULES:
         raise TestnetKeychainRunnerError()
     if len(selected_arguments) == 1:
+        if selected_arguments[0] == "phase13-recovery-only":
+            raise TestnetKeychainRunnerError()
         return TestnetRunnerArguments(selected_arguments[0], None)
     if len(selected_arguments) != 3 or selected_arguments[1] != "--baseline-history":
         raise TestnetKeychainRunnerError()

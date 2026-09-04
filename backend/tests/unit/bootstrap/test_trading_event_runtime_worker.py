@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from threading import Event, RLock
 from time import monotonic
 import unittest
 
 from binance_auto_trader.bootstrap.application import (
+    _TradingEventRuntimeFailureStage,
     _TradingEventRuntimeWorker,
 )
+from binance_auto_trader.transport.contracts import decimal_to_wire
 
 
 class TradingEventRuntimeWorkerTests(unittest.TestCase):
@@ -153,6 +156,22 @@ class TradingEventRuntimeWorkerTests(unittest.TestCase):
             self.assertTrue(worker.request_processing())
             self.assertTrue(publication_completed.wait(1.0))
             self.assertTrue(worker.failed)
+            failure_snapshot = worker.failure_snapshot
+            self.assertIsNotNone(failure_snapshot)
+            assert failure_snapshot is not None
+            self.assertIs(
+                failure_snapshot.stage,
+                _TradingEventRuntimeFailureStage.RUNTIME_CYCLE,
+            )
+            self.assertEqual(failure_snapshot.exception_type, "RuntimeError")
+            self.assertEqual(
+                failure_snapshot.exception_origin,
+                "EXTERNAL_OR_UNKNOWN",
+            )
+            self.assertNotIn(
+                "controlled event runtime failure",
+                repr(failure_snapshot),
+            )  # Raw 예외 원문은 immutable diagnostic에도 복사하지 않는다.
             self.assertEqual(fail_closed_calls, ["EVENT_RUNTIME_FAILED"])
             self.assertEqual(
                 mutable_state["status"],
@@ -163,6 +182,139 @@ class TradingEventRuntimeWorkerTests(unittest.TestCase):
         finally:
             worker.close()
             worker.close()  # 실패 뒤 중복 close도 join이나 callback을 반복하지 않는다.
+
+    def test_publication_failure_records_exact_stage_without_raw_message(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_publication_failure_records_exact_stage_without_raw_message()
+        기능: 상태 publication 실패가 cycle 실패와 구분되고 raw 원문 없이 봉인되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        mutable_state = {"version": 0}
+        fail_closed_completed = Event()
+
+        async def change_state() -> tuple[str, ...]:
+            """
+            함수 이름: change_state()
+            기능: publication이 필요한 단일 state change를 만든다.
+            인자: 없음
+            반환값: 처리 marker tuple
+            작성 날짜: 2026/09/04
+            """
+            mutable_state["version"] += 1
+            return ("changed",)
+
+        def mark_failed() -> None:
+            """
+            함수 이름: mark_failed()
+            기능: publication 예외 뒤 fail-close callback 진입을 기록한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/09/04
+            """
+            fail_closed_completed.set()
+
+        def fail_publication() -> None:
+            """
+            함수 이름: fail_publication()
+            기능: credential canary가 포함된 controlled publication 오류를 발생시킨다.
+            인자: 없음
+            반환값: 반환하지 않음
+            작성 날짜: 2026/09/04
+            """
+            raise ValueError("credential-like-publication-canary")
+
+        worker = _TradingEventRuntimeWorker(
+            change_state,
+            mark_failed,
+            lambda: True,
+            lambda: mutable_state["version"],
+            RLock(),
+            state_update_observer=fail_publication,
+            poll_interval_seconds=0.01,
+        )
+        try:
+            self.assertTrue(worker.start())
+            self.assertTrue(worker.request_processing())
+            self.assertTrue(fail_closed_completed.wait(1.0))
+
+            # Fail-close publication의 재실패까지 끝난 worker snapshot을 bounded하게 기다린다.
+            deadline = monotonic() + 1.0
+            while not worker.failed and monotonic() < deadline:
+                Event().wait(0.01)
+            self.assertTrue(worker.failed)
+
+            failure_snapshot = worker.failure_snapshot
+            self.assertIsNotNone(failure_snapshot)
+            assert failure_snapshot is not None
+            self.assertIs(
+                failure_snapshot.stage,
+                _TradingEventRuntimeFailureStage.STATE_PUBLICATION,
+            )
+            self.assertEqual(failure_snapshot.exception_type, "ValueError")
+            self.assertNotIn(
+                "credential-like-publication-canary",
+                repr(failure_snapshot),
+            )  # Exception type과 stage만 남겨 secret-like 원문을 배제한다.
+        finally:
+            worker.close()
+
+    def test_cycle_failure_records_only_package_module_and_function_origin(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_cycle_failure_records_only_package_module_and_function_origin()
+        기능: package 내부 예외 위치가 파일·line·원문 없이 module과 함수로만 정규화되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        fail_closed_completed = Event()
+
+        async def fail_inside_package() -> tuple[object, ...]:
+            """
+            함수 이름: fail_inside_package()
+            기능: transport Decimal validator에서 controlled package 내부 오류를 발생시킨다.
+            인자: 없음
+            반환값: 반환하지 않음
+            작성 날짜: 2026/09/04
+            """
+            decimal_to_wire(Decimal("NaN"))
+            return ()  # Validator가 fail closed하지 않으면 test가 이 비정상 경로에 도달한다.
+
+        worker = _TradingEventRuntimeWorker(
+            fail_inside_package,
+            fail_closed_completed.set,
+            lambda: True,
+            lambda: 0,
+            RLock(),
+            poll_interval_seconds=0.01,
+        )
+        try:
+            self.assertTrue(worker.start())
+            self.assertTrue(worker.request_processing())
+            self.assertTrue(fail_closed_completed.wait(1.0))
+
+            # Reconciliation callback보다 먼저 저장된 immutable snapshot만 읽어 origin을 검증한다.
+            failure_snapshot = worker.failure_snapshot
+            self.assertIsNotNone(failure_snapshot)
+            assert failure_snapshot is not None
+            self.assertIs(
+                failure_snapshot.stage,
+                _TradingEventRuntimeFailureStage.RUNTIME_CYCLE,
+            )
+            self.assertEqual(failure_snapshot.exception_type, "ValueError")
+            self.assertEqual(
+                failure_snapshot.exception_origin,
+                "binance_auto_trader.transport.contracts:decimal_to_wire",
+            )
+            self.assertNotIn("NaN", repr(failure_snapshot))
+            self.assertNotIn("/Users/", repr(failure_snapshot))
+        finally:
+            worker.close()
 
     def test_close_interrupts_long_poll_without_waiting_for_timeout(self) -> None:
         """

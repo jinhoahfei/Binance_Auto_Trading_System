@@ -232,7 +232,7 @@ class PhaseThirteenDeterministicPublicBoundaryTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_actual_one_shot_uses_fixture_only_through_public_market_input()
-        기능: actual orchestration이 helper를 호출하고 injection method는 observe_kline 외 order seam을 쓰지 않는지 검증한다.
+        기능: actual orchestration이 live delivery guard와 fixture를 쓰고 injection은 observe_kline 외 order seam을 쓰지 않는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/09/04
@@ -253,7 +253,12 @@ class PhaseThirteenDeterministicPublicBoundaryTests(unittest.TestCase):
         execute_call_names = set(_call_names(execute_method))
         injection_call_names = set(_call_names(injection_method))
 
-        # Current snapshot helper와 public observer가 모두 없으면 actual runner가 자연 signal 또는 private seam으로 회귀한 것이다.
+        # Test-only delivery guard와 current snapshot helper가 없으면 live tick이 fixture candle을 되돌릴 수 있다.
+        self.assertIn(
+            "_acquire_deterministic_kline_delivery_guard",
+            execute_call_names,
+        )
+        self.assertIn("addCleanup", execute_call_names)
         self.assertIn(
             "create_deterministic_public_case2_klines",
             execute_call_names,

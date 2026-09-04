@@ -48,6 +48,9 @@ BINANCE_TESTNET_API_SECRET_ENV = "BINANCE_TESTNET_API_SECRET"
 BINANCE_RUN_TESTNET_ORDERS_ENV = "BINANCE_RUN_TESTNET_ORDERS"
 BINANCE_TESTNET_MAX_NOTIONAL_ENV = "BINANCE_TESTNET_MAX_NOTIONAL"
 BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV = "BINANCE_RUN_PHASE13_PUBLIC_CASE2"
+BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV = (
+    "BINANCE_RUN_PHASE13_RECOVERY_ONLY"
+)
 BINANCE_TESTNET_ABSOLUTE_MAX_NOTIONAL = Decimal("100")
 BINANCE_SPOT_TESTNET_REST_ORIGIN = "https://testnet.binance.vision"
 BINANCE_SPOT_TESTNET_STREAM_ORIGIN = "wss://stream.testnet.binance.vision"
@@ -82,6 +85,7 @@ class _TestnetOrderPermissionRESTClient:
         "_phase13_attempts",
         "_phase13_guard_lock",
         "_phase13_public_case2",
+        "_phase13_recovery_only",
         "_phase13_submission_in_progress",
         "_phase13_submissions_blocked",
     )
@@ -93,6 +97,7 @@ class _TestnetOrderPermissionRESTClient:
         allow_orders: bool,
         maximum_order_notional: Decimal | None,
         phase13_public_case2: bool = False,
+        phase13_recovery_only: bool = False,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         """
@@ -102,6 +107,7 @@ class _TestnetOrderPermissionRESTClient:
             allow_orders -> 환경 이중 opt-in 완료 여부
             maximum_order_notional -> 주문 권한에 결속된 quote cap 또는 read-only None
             phase13_public_case2 -> 전용 BUY 1회와 STOP SELL 1회 guard 활성 여부
+            phase13_recovery_only -> 기존 open BUY의 STOP SELL 1회만 허용할지 여부
             clock -> secret-free logical submit UTC 시각 provider 또는 None
         반환값: 없음
         작성 날짜: 2026/08/31
@@ -116,9 +122,15 @@ class _TestnetOrderPermissionRESTClient:
             raise TypeError("allow_orders must be a bool")
         if type(phase13_public_case2) is not bool:
             raise TypeError("phase13_public_case2 must be a bool")
-        if phase13_public_case2 and not allow_orders:
+        if type(phase13_recovery_only) is not bool:
+            raise TypeError("phase13_recovery_only must be a bool")
+        if phase13_public_case2 and phase13_recovery_only:
             raise TestnetConfigurationError(
-                "Phase 13 submission guard requires enabled testnet orders"
+                "Phase 13 mutation targets must be mutually exclusive"
+            )
+        if (phase13_public_case2 or phase13_recovery_only) and not allow_orders:
+            raise TestnetConfigurationError(
+                "Phase 13 submission guards require enabled testnet orders"
             )
         selected_clock = (
             (lambda: datetime.now(timezone.utc))
@@ -148,6 +160,7 @@ class _TestnetOrderPermissionRESTClient:
         # Phase 13 전용 clock, lock과 permit state는 legacy proxy 동작과 분리해 초기화한다.
         self._clock = selected_clock
         self._phase13_public_case2 = phase13_public_case2
+        self._phase13_recovery_only = phase13_recovery_only
         self._phase13_guard_lock = RLock()
         self._phase13_attempts: list[Phase13OrderSubmissionAttempt] = []
         self._phase13_submission_in_progress = False
@@ -546,9 +559,11 @@ class _TestnetOrderPermissionRESTClient:
         반환값: 없음
         작성 날짜: 2026/08/31
         """
-        if not self._phase13_public_case2:
+        if not (
+            self._phase13_public_case2 or self._phase13_recovery_only
+        ):
             raise TestnetConfigurationError(
-                "Phase 13 submission blocking requires its dedicated opt-in"
+                "Phase 13 submission blocking requires a dedicated opt-in"
             )
 
         # 이미 시작한 delegate 호출은 취소하지 않되 이 lock 이후 새 호출은 하나도 승인하지 않는다.
@@ -565,9 +580,11 @@ class _TestnetOrderPermissionRESTClient:
         반환값: credential과 raw parameter가 없는 frozen guard snapshot
         작성 날짜: 2026/08/31
         """
-        if not self._phase13_public_case2:
+        if not (
+            self._phase13_public_case2 or self._phase13_recovery_only
+        ):
             raise TestnetConfigurationError(
-                "Phase 13 submission snapshot requires its dedicated opt-in"
+                "Phase 13 submission snapshot requires a dedicated opt-in"
             )
 
         # Mutable 내부 목록을 lock 아래 tuple로 복제해 다른 thread의 submit과 혼합되지 않게 한다.
@@ -584,12 +601,14 @@ class _TestnetOrderPermissionRESTClient:
     def _begin_phase13_order_submission(self, order: Order) -> bool:
         """
         함수 이름: _begin_phase13_order_submission()
-        기능: exact BUY→STOP SELL shape를 검증하고 한 logical submit permit을 원자 소비한다.
+        기능: 선택된 Phase 13 target의 exact 주문 shape와 단일 submit permit을 원자 검증한다.
         인자: order -> delegate 호출 직전의 durable canonical Order
         반환값: Phase 13 guard가 활성화되어 permit을 소비했으면 True
         작성 날짜: 2026/08/31
         """
-        if not self._phase13_public_case2:
+        if not (
+            self._phase13_public_case2 or self._phase13_recovery_only
+        ):
             return False  # Legacy Phase 9 Testnet은 기존 다섯 attempt 정책을 그대로 사용한다.
 
         # Shape와 순서는 하나의 lock에서 읽고 써 concurrent submit이 같은 permit을 공유하지 못하게 한다.
@@ -604,16 +623,27 @@ class _TestnetOrderPermissionRESTClient:
                 )
 
             attempt_index = len(self._phase13_attempts)
-            if attempt_index >= 2:
+            maximum_attempt_count = (
+                1 if self._phase13_recovery_only else 2
+            )
+            if attempt_index >= maximum_attempt_count:
                 self._phase13_submissions_blocked = True
                 raise TestnetConfigurationError(
-                    "Phase 13 permits exactly one BUY and one STOP SELL"
+                    "Phase 13 recovery STOP SELL permit is exhausted"
+                    if self._phase13_recovery_only
+                    else "Phase 13 permits exactly one BUY and one STOP SELL"
                 )
             expected_side = (
-                OrderSide.BUY if attempt_index == 0 else OrderSide.SELL
+                OrderSide.SELL
+                if self._phase13_recovery_only
+                else OrderSide.BUY
+                if attempt_index == 0
+                else OrderSide.SELL
             )
             expected_exit_reason = (
-                None if attempt_index == 0 else ExitReason.STOP
+                ExitReason.STOP
+                if self._phase13_recovery_only or attempt_index == 1
+                else None
             )
             if (
                 order.symbol != "ETHUSDT"
@@ -623,7 +653,9 @@ class _TestnetOrderPermissionRESTClient:
                 or order.exit_reason is not expected_exit_reason
             ):
                 raise TestnetConfigurationError(
-                    "Phase 13 requires ETHUSDT CASE_C initial BUY then STOP SELL"
+                    "Phase 13 recovery requires ETHUSDT CASE_C initial STOP SELL"
+                    if self._phase13_recovery_only
+                    else "Phase 13 requires ETHUSDT CASE_C initial BUY then STOP SELL"
                 )
             if any(
                 attempt.client_order_id == order.client_order_id
@@ -654,7 +686,7 @@ class _TestnetOrderPermissionRESTClient:
                 )
             )
             self._phase13_submission_in_progress = True
-            if len(self._phase13_attempts) == 2:
+            if len(self._phase13_attempts) == maximum_attempt_count:
                 self._phase13_submissions_blocked = True
 
         return True  # Delegate 실패나 UNKNOWN이어도 이미 소비한 permit은 되돌리지 않는다.
@@ -685,6 +717,16 @@ class _TestnetOrderPermissionRESTClient:
         self._require_order_permission()
         if not isinstance(order, Order):
             raise TypeError("order must be an Order")
+        if self._phase13_recovery_only and (
+            order.symbol != "ETHUSDT"
+            or order.strategy is not StrategyType.CASE_C
+            or order.submission_attempt != 0
+            or order.side is not OrderSide.SELL
+            or order.exit_reason is not ExitReason.STOP
+        ):
+            raise TestnetConfigurationError(
+                "Phase 13 recovery permits one exact STOP SELL only"
+            )  # Filter REST도 호출하기 전에 recovery-only target의 BUY·cancel·retry shape를 차단한다.
         prepare_order = getattr(self._delegate, "prepare_order", None)
         if not callable(prepare_order):
             raise TypeError("delegate must provide prepare_order")
@@ -819,6 +861,10 @@ class _TestnetOrderPermissionRESTClient:
             raise TestnetConfigurationError(
                 "Phase 13 public Case 2 does not permit order cancellation"
             )  # 전용 target의 유일한 mutation은 최초 BUY와 exact STOP SELL 제출이다.
+        if self._phase13_recovery_only:
+            raise TestnetConfigurationError(
+                "Phase 13 recovery does not permit order cancellation"
+            )  # Recovery-only target은 exact STOP SELL 외 mutation을 허용하지 않는다.
         cancel_order = getattr(self._delegate, "cancel_order", None)
         if not callable(cancel_order):
             raise TypeError("delegate must provide cancel_order")
@@ -838,6 +884,7 @@ class TestnetConfiguration:
     api_secret: str = field(repr=False)
     allow_testnet_orders: bool
     allow_phase13_public_case2: bool
+    allow_phase13_recovery_only: bool
     max_notional: Decimal | None
 
     def __repr__(self) -> str:
@@ -855,6 +902,8 @@ class TestnetConfiguration:
             f"allow_testnet_orders={self.allow_testnet_orders!r}, "
             "allow_phase13_public_case2="
             f"{self.allow_phase13_public_case2!r}, "
+            "allow_phase13_recovery_only="
+            f"{self.allow_phase13_recovery_only!r}, "
             f"max_notional={self.max_notional!r})"
         )  # 주문 gate와 공개 가능한 cap만 운영 진단에 남긴다.
 
@@ -959,6 +1008,15 @@ def load_testnet_configuration(
         and selected_environment.get(BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV)
         == "1"
     )  # 세 번째 flag만 켠 read-only runtime이 Phase 13 mutation mode로 승격되지 않게 한다.
+    allow_phase13_recovery_only = (
+        allow_testnet_orders
+        and selected_environment.get(BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV)
+        == "1"
+    )
+    if allow_phase13_public_case2 and allow_phase13_recovery_only:
+        raise TestnetConfigurationError(
+            "Phase 13 mutation targets must be mutually exclusive"
+        )
     max_notional = (
         _read_positive_max_notional(selected_environment)
         if allow_testnet_orders
@@ -970,6 +1028,7 @@ def load_testnet_configuration(
         api_secret=api_secret,
         allow_testnet_orders=allow_testnet_orders,
         allow_phase13_public_case2=allow_phase13_public_case2,
+        allow_phase13_recovery_only=allow_phase13_recovery_only,
         max_notional=max_notional,
     )  # 알 수 없는 order flag 값은 권한 없는 read-only 상태로 수렴한다.
 
@@ -1017,6 +1076,26 @@ def require_phase13_public_case2_permission(
         )
 
     return require_testnet_order_permission(configuration)  # 기존 이중 gate와 cap 검증도 우회하지 않는다.
+
+
+def require_phase13_recovery_only_permission(
+    configuration: TestnetConfiguration,
+) -> Decimal:
+    """
+    함수 이름: require_phase13_recovery_only_permission()
+    기능: 기존 open BUY를 exact STOP SELL 한 번으로 닫는 전용 opt-in과 상한을 검증한다.
+    인자: configuration -> load_testnet_configuration() 결과
+    반환값: 기존 이중 gate가 검증한 양수 Decimal 상한
+    작성 날짜: 2026/09/04
+    """
+    if not isinstance(configuration, TestnetConfiguration):
+        raise TypeError("configuration must be a TestnetConfiguration")
+    if not configuration.allow_phase13_recovery_only:
+        raise TestnetConfigurationError(
+            "Phase 13 recovery requires its dedicated opt-in"
+        )
+
+    return require_testnet_order_permission(configuration)  # STOP은 cap 예외지만 broad order gate도 함께 요구한다.
 
 
 def _load_testnet_client_types() -> tuple[type[object], type[object]]:
@@ -1107,7 +1186,10 @@ def create_testnet_application_runtime(
         "secret_key": configuration.api_secret,
         "maximum_order_notional": configuration.max_notional,
     }
-    if configuration.allow_phase13_public_case2:
+    if (
+        configuration.allow_phase13_public_case2
+        or configuration.allow_phase13_recovery_only
+    ):
         rest_client_arguments[
             "allow_order_timestamp_retry"
         ] = False  # 한 logical Phase 13 주문은 -1021에서도 추가 HTTP POST permit을 얻지 못한다.
@@ -1126,6 +1208,7 @@ def create_testnet_application_runtime(
         allow_orders=configuration.allow_testnet_orders,
         maximum_order_notional=configuration.max_notional,
         phase13_public_case2=configuration.allow_phase13_public_case2,
+        phase13_recovery_only=configuration.allow_phase13_recovery_only,
         clock=clock,
     )
 
@@ -1137,7 +1220,12 @@ def create_testnet_application_runtime(
         allow_testnet_orders=configuration.allow_testnet_orders,
         testnet_maximum_order_notional=configuration.max_notional,
         maximum_order_submissions_per_intent=(
-            1 if configuration.allow_phase13_public_case2 else 5
+            1
+            if (
+                configuration.allow_phase13_public_case2
+                or configuration.allow_phase13_recovery_only
+            )
+            else 5
         ),
         risk_policy_state=risk_policy_state,
         _testnet_order_capability=(
