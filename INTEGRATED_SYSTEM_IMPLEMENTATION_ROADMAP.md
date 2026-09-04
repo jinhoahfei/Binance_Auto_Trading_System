@@ -4381,3 +4381,519 @@ baseline actual을 한 번 실행하라. NO_SIGNAL/BLOCKED/UNKNOWN/FAILED/timeou
 freeze하고 visual16/16, axe16/16, supply/license와 final no-order check_all exit0까지 완료해야 Phase13을
 완료로 바꿀 수 있다. 별도 live 승인 전 live는 계속 disabled다.
 ```
+
+### 16.20 개인용 베타 종료 기준과 단계별 세션 계획
+
+이 subsection은 2026-09-04 사용 목적 재평가를 반영한 **개인용 베타의 최신 authoritative
+handoff**다. macOS 사용자와 Windows 사용자가 사용하는 비공개 desktop app을 우선 목표로 하며,
+§16.19.5의 작업을 위험 기반으로 재분류한다. 이 범위에서는 §16.20이 §16.19.5의 실행 순서와
+완료 기준보다 우선한다.
+
+플랫폼 표현은 `macOS PC`·`macOS 사용자`, `Windows 11 x64 PC`·`Windows 사용자`로 통일한다.
+Windows binary를 실제 생성·검증하는 컴퓨터는 `Windows native build host`라고 쓴다. 개인 관계를
+나타내는 표현을 platform/build 요구사항 대신 사용하지 않는다.
+
+범위 축소는 이미 구현된 fail-closed 안전장치, 주문 멱등성, crash reconciliation, credential 보호,
+risk cap 또는 durable history를 제거하거나 느슨하게 만들라는 뜻이 아니다. 기존 안전 코드는
+그대로 보존하고, 개인용 사용과 코드 결함 방지에 직접 필요하지 않은 추가 증거·시각 일치·공개
+배포용 compliance 작업만 완료 gate에서 분리한다.
+
+#### 16.20.1 재평가 결론과 판단 이유
+
+현재 Phase 0~12, Phase 13의 risk/reconciliation/watchdog/fault matrix와 Communication `126/126`은
+완료됐다. 남은 코드상 핵심 공백은 current source의 실제
+market event → indicator → strategy → order intent → Spot Testnet order/fill → durable History/
+Performance/UI publication을 한 흐름으로 확인하지 못한 점이다. 이 seam을 검증하지 않으면 각
+부분이 개별 통과해도 조립 경계의 결함이 남을 수 있으므로 개인용이라도 완료해야 한다.
+
+반면 SSIM `16/16`, 제3자 866개 전체 license text/attribution, historical Phase 12 DMG 원본 복구,
+모든 artifact의 공개 release provenance와 Developer ID/notarization은 현재 두 명의 비공개 사용에서
+코드 정확성을 높이는 작업이 아니다. 이 항목은 공개 배포를 선택할 때 다시 여는 별도 release track로
+이동한다.
+
+실제 시장의 자연 신호만을 기다리는 방식도 개인용 베타 완료 gate로 사용하지 않는다. 코드가
+정상이어도 시장 조건이 충족되지 않으면 `NO_SIGNAL`로 끝나 완료 시점이 외부 시장에 종속되기
+때문이다. 대신 BUY가 발생하는 기록 또는 현재 가격에 맞춘 결정론적 market-event fixture를
+**public market-data 입력 경계**에 넣고, indicator와 strategy가 production 경로에서 직접 signal을
+계산하게 한다. `SubmitOrder`, private BUY helper 또는 Order Action을 직접 호출해 전략 판단을
+우회해서는 안 된다. 실제 주문 구간은 고정 Spot Testnet, 명시적 opt-in과 낮은 cap을 그대로 사용한다.
+
+#### 16.20.2 §16.19.5 작업 재분류
+
+| §16.19.5 범위 | 결정 | 개인용 베타에서 적용할 기준과 이유 |
+|---|---|---|
+| 관련 명세 전체 재독과 current dirty state 보존 | **필수, 축소 수행** | 각 세션에서 실제로 수정할 component의 Communication/ADR/코딩 규칙만 한 번 읽는다. 사용자 Rust 변경, current Backend 변경과 보존 artifact는 reset/checkout/clean하지 않는다. 모든 문서를 매 세션 반복해서 읽거나 과거 handoff를 재봉인하지 않는다. |
+| historical Phase 12 DMG exact 원본 탐색·복원 | **하지 않음** | 누락된 과거 DMG는 current source의 코드 결함이 아니다. retained app/raw image와 validator는 변경하지 않고 historical blocker로 보존한다. macOS package는 Session 4, Windows package는 Session 6에서 current source로 각각 native fresh build한다. 공개 release track를 재개할 때만 exact historical provenance를 다시 검토한다. |
+| Keychain read, signed read-only preflight, 실제 Testnet BUY/STOP SELL | **필수** | credential 조립, account/filter/order 상태와 실제 exchange adapter seam은 금전 손실과 직접 연결된다. 각 외부 실행 전에 별도 명시 승인을 받고 Spot Testnet만 사용한다. 신규 BUY cap은 기존 성공 범위인 **최대 10 USDT**로 낮추며 100 USDT를 개인용 완료에 요구하지 않는다. |
+| 다른 process·수동 account activity 배제와 account-wide empty-state 확인 | **필수** | 테스트 도중 외부 주문이 섞이면 reconciliation 결과를 신뢰할 수 없다. Position/pending/unknown/openOrders/openOrderList `0`, balance, filter/reference와 두 stream READY를 actual 직전에 확인한다. |
+| descriptor·inode·owner·mode·link·digest·ancestor ctime·sibling churn 반복 봉인 | **조건부** | 기존 durability 구현과 회귀 test는 보존한다. baseline file identity와 digest, regular-file 및 mode `0600` 확인은 actual 시작 시 한 번 수행한다. ancestor ABA, sibling churn과 source→copy→source 방어를 더 확장하거나 매 세션 반복 증명하지 않는다. 관련 코드를 수정했거나 기존 test가 실패할 때만 다시 연다. |
+| 자연 public signal 기반 actual P13-04 one-shot | **필수, 방식 변경** | 자연 신호를 무기한 기다리지 않는다. Session 2의 결정론적 public-boundary fixture가 production indicator/strategy에서 signal과 intent를 만들고, Session 3에서 같은 경로가 실제 Spot Testnet 주문으로 이어지게 한다. 주문 ambiguity, timeout, persistence failure 또는 final exposure 불일치가 있으면 추가 주문 없이 reconciliation 후 중단한다. |
+| V3 모든 trace identity와 failure artifact의 exact release 봉인 | **핵심만 필수** | session/intent/client/exchange order ID의 일관성, partial/terminal fill, commission, durable Trade와 final zero exposure는 필수다. raw secret 비노출도 유지한다. trace 전체의 비업무용 identity 순서, historical v1/v2 artifact의 재봉인과 presentation용 evidence 확대는 기존 회귀가 통과하면 추가 작업하지 않는다. |
+| current order-critical source와 actual evidence 결속 | **필수** | actual Testnet을 통과한 source와 Session 4 macOS package 및 Session 6 Windows package source가 같아야 한다. actual 뒤 order-critical code나 lockfile이 바뀌면 영향 범위 test와 actual seam을 다시 확인한다. checkpoint commit은 사용자가 별도로 요청한 경우에만 만든다. |
+| visual `16/16 >= 0.98` | **하지 않음** | axe `16/16 Violations 0`과 기능 UI smoke는 유지하되 reference PNG와 pixel-perfect 일치는 개인용 코드 안전 gate가 아니다. 깨진 layout이나 조작 불가능 상태만 결함으로 수정한다. |
+| SBOM 868 components, 제3자 866개 license/notice와 공개 supply provenance | **부분 수행** | credential을 다루는 direct/runtime dependency의 알려진 exploitable High/Critical 취약점과 final secret scan만 확인한다. 전체 license text/attribution/notice와 공개 배포 provenance는 비공개 개인용 완료 조건에서 제외한다. |
+| final `scripts/check_all.sh` exit `0` | **개인용 gate로 대체** | historical DMG 단독 누락 때문에 aggregate가 실패하는 상태를 코드 실패로 오인하지 않는다. Session 4의 macOS code-critical suite와 Session 6의 Windows native suite·fresh package smoke를 모두 통과해야 한다. validator를 완화하거나 retained app을 숨겨 인위적 PASS를 만들지는 않는다. |
+| 24시간 이상 soak | **하지 않음** | 기존 결정론적 fault/reconnect/restart test와 actual lifecycle로 대체한다. 장시간 soak는 선택적 운영 관찰이며 개인용 베타 완료 gate가 아니다. |
+| legacy v1 ETH-fee lot migration | **조건부 필수** | macOS 사용자 또는 Windows 사용자의 실제 보존 history에 열린 v1 ETH-fee lot이 있을 때만 Session 1에서 migration을 완료한다. 두 사용자 모두 fresh history로 시작하면 구현하지 않는다. |
+| `TYPE_1`~`TYPE_4` TradingSTM | **하지 않음** | UI/backend가 start를 명시적으로 차단하고 `TYPE_0` fallback이 없으므로 미지원 상태 자체는 결함이 아니다. 새 전략 요구가 생길 때 별도 Phase로 구현한다. |
+
+#### 16.20.3 범위 축소 후에도 반드시 보존할 안전 불변식
+
+- [x] `disabled`, Testnet와 live endpoint/credential/order opt-in은 서로 분리한다.
+- [x] 사용자가 승인한 양수 max-notional 없이는 신규 BUY를 제출하지 않는다.
+- [x] client/exchange order ID 멱등성, partial/UNKNOWN 처리와 same-ID reconciliation을 유지한다.
+- [x] 설명되지 않은 외부 execution, process ownership ambiguity와 pending journal 불일치는 fresh
+  reconciliation 전까지 신규 BUY를 차단한다.
+- [x] commission과 실제 received/sold quantity를 durable Trade, Position과 Performance에 일관되게
+  반영한다.
+- [x] timeout/5xx/persistence ambiguity에서 신규 order를 자동 retry하지 않고 먼저 같은 ID와
+  account-wide 상태를 조회한다.
+- [x] Testnet actual은 STOP/recovery SELL, durable save, fresh restart 뒤 Position/pending/open order
+  `0`까지 확인해야 성공이다.
+- [x] credential은 macOS Keychain 또는 Windows Credential Manager에서 memory-only로 읽고 log, URL,
+  artifact와 UI에 노출하지 않는다.
+- [x] live order는 Session 8의 별도 명시 승인 전 configuration, backend와 UI에서 계속 disabled다.
+
+#### 16.20.4 Session 1 — 범위 동결과 code-critical baseline
+
+**목표:** 새 기능을 추가하기 전에 current source에서 개인용 사용을 막는 실제 코드 결함과 단순
+release-evidence blocker를 분리한다. 이 세션에서는 Keychain, Binance signed endpoint와 주문을
+사용하지 않는다.
+
+**실행 범위:**
+
+1. current user-owned 변경과 Phase 13 변경을 보존하고, Session 2에서 손댈 market/controller/order
+   seam의 명세와 test만 읽는다.
+2. order ID, reconciliation, fee, persistence, lifecycle와 public Case 2의 기존 focused test를
+   실행한다. 전체 evidence 재검증이나 historical artifact 복원은 하지 않는다.
+3. historical DMG 누락으로 발생한 root-script 실패를 별도 non-code blocker로 기록한다.
+4. 실제 보존 history에 열린 v1 ETH-fee lot이 있는지만 비밀 없이 확인한다. 없으면 migration을
+   `NOT_REQUIRED_FOR_PRIVATE_BETA`로 고정한다.
+5. Session 2의 결정론적 market-event 입력 지점과 production 우회가 불가능한 test-only 경계를
+   확정한다.
+
+**완료 조건:** code-critical focused suite가 통과하고, Session 2가 수정할 정확한 file/test 범위와
+fixture 입력 계약이 정해졌으며, 외부 호출과 주문이 `0`회다.
+
+**2026-09-04 실행 결과:** `[x] 완료`
+
+- 시작·종료 기준은 `main == origin/main`, HEAD
+  `c5dca15231022b903af85693cac08e428bcf4c3b`다. 시작 시 user-owned 변경은 이 문서에 새로 추가된
+  §16.20뿐이었고 reset/checkout/clean/자동 commit 없이 그대로 보존했다. 이번 Session 1의 실제
+  변경 file도 이 문서 하나뿐이며 새 production 기능은 추가하지 않았다.
+- Testnet 관련 환경 열 개를 명시적으로 제거하고 `PYTHONWARNINGS=error`를 적용한 code-critical
+  consolidated backend suite는 `Ran 347 tests in 7.889s`, `OK (skipped=1)`이다. Skip 한 한 건은 세
+  opt-in이 없으면 실행할 수 없는 actual Spot Testnet Case 2이며, local public Case 2·production
+  Spot REST memory transport·order ID/trace·reconciliation·fee·Position·History persistence·restart·
+  trading/event/shutdown lifecycle과 architecture/coding-convention test는 모두 실행됐다.
+- 실행 명령은 아래와 같다. 첫 명령의 `<code-critical modules>`는 바로 아래 고정 목록이며 discovery나
+  external target을 포함하지 않는다.
+
+  ```text
+  cd backend
+  env -u BINANCE_RUN_TESTNET -u BINANCE_TESTNET_API_KEY -u BINANCE_TESTNET_API_SECRET \
+    -u BINANCE_RUN_TESTNET_ORDERS -u BINANCE_RUN_PHASE13_PUBLIC_CASE2 \
+    -u BINANCE_TESTNET_MAX_NOTIONAL -u BINANCE_TESTNET_BASELINE_HISTORY_FD \
+    -u BINANCE_TESTNET_BASELINE_HISTORY_SHA256 -u BINANCE_TESTNET_BASELINE_PENDING_FD \
+    -u BINANCE_TESTNET_BASELINE_PENDING_SHA256 PYTHONWARNINGS=error \
+    .venv/bin/python -m unittest -q <code-critical modules>
+
+  code-critical modules =
+    tests.integration.test_public_market_case2_flow
+    tests.integration.test_public_market_spot_rest_case2_flow
+    tests.integration.test_phase13_order_cap_flow
+    tests.architecture.test_market_boundaries
+    tests.architecture.test_phase9_order_mutation_boundaries
+    tests.architecture.test_trading_coding_conventions
+    tests.unit.market.test_thirty_minute_market_evaluation_builder
+    tests.integration.test_market_live_stream_flow
+    tests.integration.test_buy_sell_flow
+    tests.integration.test_order_reconciliation_flow
+    tests.integration.test_order_fault_matrix
+    tests.integration.test_order_trace_invariants
+    tests.integration.test_order_observed_time_scheduling
+    tests.integration.test_stop_persistence_recovery_flow
+    tests.integration.test_testnet_restart_reconciliation_flow
+    tests.unit.history.test_trade_history_repository
+    tests.unit.history.test_pending_order_recovery_repository
+    tests.unit.history.test_repository_cross_instance_durability
+    tests.unit.history.test_shutdown_durability
+    tests.integration.test_trading_session_flow
+    tests.unit.bootstrap.test_shutdown_lifecycle
+    tests.unit.bootstrap.test_trading_event_runtime_worker
+    tests.unit.trading.test_event_queue
+    tests.unit.trading.test_order
+    tests.unit.trading.test_order_duplicate_fill_regression
+    tests.unit.trading.test_position
+    tests.unit.history.test_trade
+    tests.unit.history.test_performance
+    tests.unit.history.test_performance_day_rollover
+    tests.testnet.test_phase13_public_trace_contract
+    tests.testnet.test_phase13_public_market_case2
+
+  cd ..
+  env -u BINANCE_RUN_TESTNET -u BINANCE_TESTNET_API_KEY -u BINANCE_TESTNET_API_SECRET \
+    -u BINANCE_RUN_TESTNET_ORDERS -u BINANCE_RUN_PHASE13_PUBLIC_CASE2 \
+    -u BINANCE_TESTNET_MAX_NOTIONAL -u BINANCE_TESTNET_BASELINE_HISTORY_FD \
+    -u BINANCE_TESTNET_BASELINE_HISTORY_SHA256 -u BINANCE_TESTNET_BASELINE_PENDING_FD \
+    -u BINANCE_TESTNET_BASELINE_PENDING_SHA256 PYTHONWARNINGS=error \
+    backend/.venv/bin/python -m unittest -q \
+    scripts.test_run_testnet_from_keychain scripts.test_check_communication_traceability
+  PYTHONWARNINGS=error backend/.venv/bin/python scripts/check_communication_traceability.py
+  ```
+
+  두 번째 unittest는 `31/31` OK이고 Communication matrix는
+  `126 COMPLETE / 0 GAP`이다. 따라서 성공 baseline은 총 `378`개, external actual safe skip `1`개다.
+- 실제 macOS app-data의
+  `/Users/oscar/Library/Application Support/com.binance-auto.trader/history.jsonl`은 작업 전후 SHA-256
+  `7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34`로 동일했다. Raw row나 주문 ID를
+  출력하지 않고 production JSON parser와 `Position.apply_historical_trade()`로 replay한 결과는 Trade
+  `6`건 전부 schema v2, schema v1 `0`건, 최종 `CLOSED`, quantity `0`,
+  `requires_legacy_fee_accounting_migration=False`다. Windows history는 Session 5~6 전이라 존재하지 않고
+  fresh history로 시작한다. 따라서 현재 개인용 범위의 legacy migration은
+  `NOT_REQUIRED_FOR_PRIVATE_BETA`로 고정한다. 이후 외부에서 보존 Windows history를 반입한다면 Session
+  6 전에 같은 검사를 다시 열고, 열린 v1 ETH-fee lot이면 이 판정을 취소한다.
+- Historical Phase 12 retained app은
+  `UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader Phase12 Local Fixed.app`에
+  남아 있지만 exact pair
+  `UI/apps/desktop/src-tauri/target/release/bundle/dmg/Binance Auto Trader_0.1.0_aarch64_phase12-local-fixed.dmg`
+  는 현재 존재하지 않는다. §16.19에서 확인한 root aggregate 실패를
+  `NON_CODE_HISTORICAL_RELEASE_EVIDENCE_BLOCKER`로 분류한다. 이번 세션은 root 전체 evidence suite를
+  재실행하거나 DMG를 탐색·대체하지 않았고 validator와 retained app도 변경하지 않았다.
+
+**Session 2 수정 범위 동결:**
+
+1. 새 test-only fixture owner는
+   `backend/tests/testnet/_deterministic_public_case2_fixture.py` 한 file로 제한한다. Current production
+   `MarketStateSnapshot`에서 같은 열린 30분봉에 속하는 `SETUP → FLUSH → RECOVERY` Kline 세 개를
+   계산하되 strategy result, `SubmitOrder`, Order/Position/History 결과를 만들거나 주입하지 않는다.
+2. 새 full-flow test는
+   `backend/tests/integration/test_deterministic_production_path_case2_flow.py`에 둔다. Production
+   `ApplicationRuntime`, `MarketDataController`, `ThirtyMinuteMarketEvaluationBuilder`, Regime/Trading
+   Controller·STM, order executor, durable repository와 `BackendEventStream`을 memory client/transport에
+   조립한다. Public command로 TYPE_0·split·start를 적용하고 fixture를 오직
+   `MarketDataController.observe_kline()`에 넣어 정확히 한 BUY intent를 만든 뒤 public STOP으로 한 SELL,
+   두 Trade, Performance와 UI용 `ORDER_EXECUTED → PERFORMANCE_UPDATED` publication, final Position/pending
+   `0`을 검증한다.
+3. 기존 exact one-shot owner
+   `backend/tests/testnet/test_phase13_public_market_case2.py`는 같은 fixture helper를 호출하도록만 바꾼다.
+   Session 2에서는 helper/local 회귀 뒤 actual TestCase가 계속 safe skip되어 signed call과 주문이
+   `0`회여야 한다. Keychain runner의 고정 target인 `phase13-public-case2`와 임의 selector 금지 계약은
+   바꾸지 않는다.
+4. 새 architecture regression은
+   `backend/tests/architecture/test_phase13_deterministic_public_boundary.py`에 둔다. `backend/src`가
+   fixture/test module이나 injection flag를 import·참조하지 않는지, one-shot 경로가 `SubmitOrder`,
+   `_execute_action`, `_submit_order_action`, prepared journal, `OrderResult`, Trade save를 직접 호출하지
+   않는지 AST로 검사한다. Memory transport가 반환하는 외부 응답 이외의 fill/success 주입도 금지한다.
+5. 기존 production owner인
+   `backend/src/binance_auto_trader/application/market_data_controller.py`,
+   `market_evaluation_builder.py`, `trading_controller.py`, `bootstrap/application.py`, `bootstrap/testnet.py`,
+   `adapters/binance/api_gateway.py`, `application/trade_history_controller.py`와 `transport/app.py`는 Session
+   2에서 수정하지 않는다. 기존 public seam으로 완료할 수 없다는 재현 가능한 code defect가 먼저
+   발견된 경우에만 Session 2 안에서 최소 production 수정과 같은 변경 묶음의 convention test를 허용한다.
+
+**Fixture 입력 계약:**
+
+- 입력 snapshot은 ready `ETHUSDT`, 현재 열린 `30m` Kline 한 개와 그 직전 최소 `20`개 확정 `30m`
+  Kline을 가져야 한다. Fixture는 현재 open/volume과 누적 high/low 의미를 보존하고 `closed=False`, 동일
+  `open_time`, 엄격히 증가하는 UTC `event_time`을 사용한다.
+- `SETUP`은 production 계산 결과 `realtime_pct_b <= -0.15`와 `cci_30m_realtime <= -140`, `FLUSH`는 더
+  낮은 price/low와 `realtime_pct_b <= -0.25`, `RECOVERY`는 같은 누적 low에서 flush 기준 `%B +0.06`
+  이상이면서 entry 기준 `< -0.15`를 만족한다. FLUSH와 RECOVERY의 source/monotonic 간격은 `180초`
+  이하다. Candidate는 유한 양수 `Decimal`만 사용하며 threshold 값을 evaluation/Context에 patch하지
+  않는다.
+- Production builder와 STM이 만든 evaluation/event/intent를 검증 결과로 읽을 뿐 fixture가
+  evaluation ID, intent/client/exchange order ID를 정하지 않는다. 정확히 한 BUY `SubmitOrder`가
+  production action trace에 나타나야 하며, test가 private action을 호출해 이 조건을 합성하면 실패다.
+- Fixture module은 `backend/tests` 아래에만 있고 environment, sidecar schema, release/live configuration,
+  UI와 `backend/src`에는 enable switch가 없다. 따라서 packaged backend와 live composition에서는 import,
+  생성 또는 활성화할 수 없다.
+- Immediate/partial/UNKNOWN과 fee/persistence는 이번 baseline의 기존 focused module을 그대로 회귀하고,
+  새 full-flow happy path는 memory transport의 외부 응답 경계만 사용한다. Session 2에서도 Keychain,
+  Binance public/signed endpoint와 Testnet/live 주문은 모두 `0`회다.
+
+**Session 2 진입 판정:** `GO`. 이유는 public 입력 `observe_kline → production builder →
+observe_market_evaluation → TradingSTM → SubmitOrder` seam과 STOP/persistence/publication owner가 이미 있고,
+관련 code-critical `378`개가 통과했으며 legacy migration도 필요하지 않기 때문이다. 남은 historical DMG
+누락은 current code seam과 무관한 release-evidence blocker다. 위 test-only fixture·architecture 경계를
+지키면 production 전략을 우회하거나 외부 시장 신호를 기다리지 않고 Session 2의 미검증 조립 seam만
+닫을 수 있다. 이 판정은 Session 3의 Keychain, signed preflight 또는 actual 주문을 승인하지 않는다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 1만 수행하라. 개인용 베타에 필요한
+code-critical baseline과 deterministic market-event 입력 경계를 확정하고, historical DMG·SSIM·전체
+license/provenance 작업은 하지 마라. Keychain, Binance signed endpoint와 주문은 모두 0회로 유지하라.
+```
+
+#### 16.20.5 Session 2 — 결정론적 production-path E2E 완성
+
+**목표:** 시장 상황을 기다리지 않고 public market-data 입력부터 strategy intent와 order pipeline
+직전까지 같은 production 경로를 재현한다. 외부 Binance 주문은 아직 실행하지 않는다.
+
+**실행 범위:**
+
+1. 기록 또는 현재 가격에 맞춘 candle/event fixture를 public market-data 입력 경계에만 주입한다.
+2. production indicator, Regime/Trading controller와 STM이 직접 BUY signal과 intent를 생성해야 한다.
+3. `SubmitOrder`, private BUY helper, prepared journal 또는 fill result를 test가 직접 호출·위조하지
+   못하게 architecture regression을 둔다.
+4. test-only injection은 release/live configuration에서 생성하거나 활성화할 수 없어야 하고,
+   Testnet 전용 one-shot runner에서만 명시적으로 조립한다.
+5. immediate/partial/UNKNOWN, fee와 persistence 결과가 기존 reconciliation 계약으로 이어지는 focused
+   test를 통과한다.
+
+**완료 조건:** deterministic event에서 production strategy가 정확히 한 BUY intent를 만들고,
+fake/memory transport에서 BUY → STOP SELL → History/Performance/UI publication과 final zero exposure를
+재현한다. 외부 signed call과 주문은 `0`회다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 2만 수행하라. public market-data 입력에
+결정론적 fixture를 넣되 strategy나 SubmitOrder를 직접 호출하지 말고 production indicator→strategy→
+intent→order pipeline을 검증하라. injection은 Testnet test runner 밖에서 활성화 불가능해야 하며
+이번 세션에는 외부 signed call과 주문을 실행하지 마라.
+```
+
+#### 16.20.6 Session 3 — current-source Spot Testnet actual E2E
+
+**목표:** Session 2와 같은 source에서 실제 Spot Testnet adapter를 결속해 한 번의 낮은 cap
+BUY와 exact Position STOP SELL을 완료한다.
+
+**사전 승인:** 실행 직전에 사용자에게 다음 세 범위를 각각 명시해 한 번에 승인받는다.
+
+1. Keychain service `com.binance-auto.trader.testnet`, account `api-key`/`api-secret` memory-only read.
+2. 고정 Binance Spot Testnet signed read-only preflight 1회.
+3. preflight가 모두 통과한 경우에만 `ETHUSDT` 신규 BUY decision notional 최대 `10 USDT` 1회와
+   same-run exact Position STOP SELL 1회.
+
+**실행 범위:**
+
+1. 다른 Testnet process와 같은 account의 수동 activity를 중지하고 baseline regular-file/mode/digest,
+   Position/pending/unknown/openOrders/openOrderList `0`, filter/reference/balance와 두 stream READY를
+   확인한다.
+2. Session 2의 public-boundary fixture가 production strategy에서 signal/intent를 만들고, 실제 Testnet
+   order adapter 이후 경로만 외부 exchange와 통신하게 한다.
+3. 제출 ambiguity, timeout, 5xx, persistence failure 또는 account-state 불일치가 발생하면 추가 BUY나
+   자동 재시도 없이 same-ID/account-wide reconciliation 후 중단한다.
+4. 성공 시 BUY/SELL의 client/exchange ID, fill, commission, 두 durable Trade, History/Performance/UI
+   publication을 확인한다.
+5. fresh process에서 Position/pending/unknown/openOrders/openOrderList `0`과 History 재생을 확인한다.
+
+**완료 조건:** 승인된 BUY 최대 `10 USDT` 한 건과 exact STOP SELL 한 건 이외 mutation이 없고,
+fresh restart까지 zero exposure이며 actual을 통과한 source checkpoint가 기록된다. 자연 market signal
+관찰은 완료 조건이 아니다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 3만 수행하라. 어떤 Keychain 또는 signed
+Testnet 동작 전 세 범위를 새로 승인받고, 승인되면 deterministic public-boundary signal에서 최대
+10 USDT BUY 1회와 exact STOP SELL 1회만 실행하라. ambiguity에는 재주문하지 말고 reconciliation 후
+중단하며 fresh restart zero exposure까지 확인하라.
+```
+
+#### 16.20.7 Session 4 — macOS fresh package와 macOS PC smoke
+
+**목표:** Session 3의 order-critical source로 macOS fresh ad-hoc package를 만들고 macOS PC에서
+현재 platform의 최소 운영 경계를 고정한다. Windows compatibility와 live endpoint는 이 세션에서
+다루지 않는다.
+
+**실행 범위:**
+
+1. Session 3 뒤 order-critical source/lockfile 변경이 없는지 확인하고 current source의 fresh
+   macOS `.app`/`.dmg` pair를 만든다. historical Phase 12 DMG를 찾거나 대체하지 않는다.
+2. final package에서 secret scan과 direct/runtime dependency의 알려진 exploitable High/Critical
+   취약점만 판정한다. 전체 SBOM license text/notice는 생성하지 않는다.
+3. macOS PC architecture를 확인하고 ad-hoc 최초 실행 신뢰 허용 절차를 사용한다.
+4. macOS PC에서 startup, Keychain read-only READY, Dashboard/History/stop UI, native picker 선택·취소,
+   safe shutdown과 orphan `0`을 smoke한다. actual order는 다시 실행하지 않는다.
+5. reference SSIM은 실행하지 않는다. 화면이 깨져 조작할 수 없거나 중요한 상태가 보이지 않는 경우만
+   기능 결함으로 수정하고 영향 test를 다시 수행한다.
+
+**완료 조건:** 같은 source의 macOS fresh package가 read-only startup과 safe shutdown을 통과하고,
+unresolved reachable High/Critical runtime vulnerability와 secret 노출이 없다. 이 시점에는
+`macOS package ready`만 `[x]`로 변경하며 Cross-platform package나 Private Beta master를 완료하지
+않는다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 4만 수행하라. Session 3과 같은 source로
+macOS fresh ad-hoc app/DMG를 만들고 macOS PC의 read-only startup, 핵심 UI와 safe shutdown을
+smoke하라. Windows compatibility, live endpoint, historical DMG 복구, SSIM 16/16, 전체
+license/notice와 Developer ID/notarization은 하지 마라.
+```
+
+#### 16.20.8 Session 5 — Windows 11 x64 호환 계층 구현
+
+**목표:** macOS 동작과 안전 불변식을 유지하면서 Windows 11 x64가 요구하는 credential, process IPC,
+runtime ownership, path와 packaging adapter를 추가한다. PyInstaller는 cross-compiler가 아니므로 이
+세션의 macOS PC에서는 Windows binary를 만들거나 Windows native PASS를 주장하지 않는다.
+
+**실행 범위:**
+
+1. platform-neutral lifecycle/contract와 macOS·Windows adapter를 분리한다. 기존 macOS Keychain,
+   AppKit quit guard와 fixed FD `3`~`6` 구현은 macOS adapter에 보존한다.
+2. Windows credential은 renderer와 분리된 hidden-prompt 설정 도구가 Windows Credential Manager의
+   fixed generic credential target에 저장·조회·삭제하도록 설계한다. secret을 command argument,
+   environment, log, URL, renderer 또는 일반 파일에 전달하지 않는다.
+3. Windows sidecar IPC는 stdin/stdout의 bounded framed protocol을 사용한다. 최초 parent→child frame은
+   token과 strict bootstrap configuration, 최초 child→parent frame은 secret 없는 READY descriptor다.
+   이후 control frame과 CLOSED ACK를 같은 방향별 stream에서 처리한다. Parent 종료의 stdin EOF는
+   기존 FD5 EOF와 동일하게 신규 BUY를 잠그고 orphan recovery를 요구한다.
+4. Python `fcntl/flock`과 Rust Unix lock/process/path 구현을 platform adapter로 분리한다. Windows는
+   non-blocking `LockFileEx`, process handle 기반 liveness, non-reparse per-user app-data 경계를 사용한다.
+5. Windows packaged Tauri origin을 실제 native runtime에서 확인하고 exact Origin/CORS/CSP allowlist에만
+   추가한다. 임의 Origin이나 wildcard를 허용하지 않는다.
+6. Tauri platform configuration을 분리한다. macOS는 `app`·`dmg`·`.icns`, Windows는 `nsis`·`.ico`와
+   `x86_64-pc-windows-msvc` externalBin suffix를 사용한다.
+7. Native Windows에서 실행할 PowerShell sidecar packaging script를 추가한다. PyInstaller credential,
+   certificate와 exchange environment를 제거하고 pinned PyInstaller와 x64 Python만 허용한다.
+8. macOS regression과 platform-neutral frame/contract test만 실행한다. Keychain, Binance signed endpoint,
+   Testnet/live order는 모두 `0`회다.
+
+**완료 조건:** macOS existing lifecycle 회귀가 유지되고 Windows-specific source/config/build script가
+명시적 `cfg`와 platform contract 뒤에 격리된다. Windows native build와 smoke는 Session 6 전까지
+미검증으로 기록한다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 5만 수행하라. macOS 동작을 보존하면서
+Windows 11 x64 credential, framed stdio sidecar IPC, ownership/path adapter와 platform-specific Tauri/
+PyInstaller 설정을 구현하라. Windows binary PASS를 macOS에서 주장하지 말고 외부 Binance 호출과
+주문은 모두 0회로 유지하라.
+```
+
+#### 16.20.9 Session 6 — Windows 11 x64 native build와 read-only smoke
+
+**목표:** Windows native build host에서 Session 5 구현을 실제 compile/test/package하고 Windows 11
+x64 PC의 read-only lifecycle을 검증한다.
+
+**실행 범위:**
+
+1. Windows native build host에 MSVC Build Tools, Rust stable MSVC, WebView2, Node/pnpm, Python x64와
+   pinned PyInstaller를 준비한다.
+2. Windows에서 backend, UI와 Rust의 platform-neutral/Windows focused suite를 native 실행한다.
+   POSIX-only test는 이유가 명시된 platform skip만 허용하고 module import 실패를 skip으로 숨기지 않는다.
+3. Windows Credential Manager 설정 도구의 canary set/read/delete, bounded printable credential,
+   zeroization과 secret 비노출을 확인한다. 실제 credential은 renderer나 test log에 넣지 않는다.
+4. PyInstaller로 `binance-auto-sidecar-x86_64-pc-windows-msvc.exe`, Tauri로 unsigned NSIS installer를
+   native build한다. SmartScreen 수동 신뢰 허용은 macOS ad-hoc trust와 같은 비공개 배포 범위다.
+5. Windows 11 x64 PC에서 Testnet credential read-only READY, Dashboard/History/stop UI, native picker,
+   parent exit/orphan recovery, safe shutdown, process 잔여 `0`과 fresh restart를 smoke한다.
+6. Windows installer 재설치 시 실행 중 sidecar를 강제 종료하거나 history/credential을 삭제하지 않는다.
+   실행 중이면 fail closed 안내 후 정상 종료 뒤 재설치한다.
+7. Testnet order, live signed endpoint와 live order는 모두 `0`회다.
+
+**완료 조건:** Windows native test와 unsigned NSIS package read-only smoke가 통과하고 macOS package
+regression도 유지된다. 이 시점에 `Cross-platform package master`만 `[x]`로 변경한다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 6만 Windows native build host에서 수행하라.
+Windows 11 x64 native backend/UI/Rust test, Credential Manager canary, PyInstaller sidecar, unsigned NSIS와
+read-only startup/shutdown/orphan recovery를 검증하라. Testnet 주문과 모든 live signed/order 동작은
+0회로 유지하라.
+```
+
+#### 16.20.10 Session 7 — live bootstrap과 양 OS live-readiness
+
+**목표:** 현재 존재하지 않는 live composition root와 capability를 Testnet에서 분리해 구현하고,
+macOS와 Windows package를 실제 주문 없는 signed live read-only 상태까지 검증한다.
+
+**현재 위험 정책 보존:** `TradingController`는 KST 당일 durable SELL의 realized PnL과 `daily_loss`를
+계속 계산·게시한다. `max_daily_loss=None`이므로 이 값으로 신규 BUY를 차단하지 않는다. 새로운 일일
+손실 차단 로직을 추가하지 않고 `daily_loss_scope=REALIZED_ONLY`,
+`manual_kill_behavior=CANCEL_AND_LIQUIDATE`를 유지한다. 저액 live는 기존 `RiskPolicy`의
+`max_order_notional=Decimal("10")`과 `max_position_notional=Decimal("10")`만 설정한다.
+
+**실행 범위:**
+
+1. Testnet bootstrap의 URL만 치환하지 말고 별도 live composition root, configuration validator와
+   `_LIVE_ORDER_CAPABILITY`를 만든다. Capability가 없으면 `ExecutionMode.LIVE`는 read-only이며 order
+   gate를 얻지 못한다.
+2. live endpoint는 공식 fixed value만 허용한다: REST `https://api.binance.com/api`, market stream
+   `wss://stream.binance.com:443`, WebSocket API `wss://ws-api.binance.com:443/ws-api/v3`. Environment,
+   UI와 local file에서 base URL override를 제공하지 않는다.
+3. Testnet과 live의 credential namespace, history, pending journal, runtime ownership artifact와 UI mode
+   표시를 분리한다. 한 mode의 credential/artifact를 다른 mode에서 fallback하지 않는다.
+4. live profile은 default `disabled`다. Native 설정 도구에서 정확한 `LIVE` 확인과 별도 order opt-in이
+   있어야 하며 renderer는 enable 값이나 secret을 만들 수 없다.
+5. 기존 `RiskPolicy`를 order `10 USDT`, projected Position `10 USDT`, daily loss `None`,
+   `REALIZED_ONLY`, `CANCEL_AND_LIQUIDATE`로 조립한다. 같은 `10 USDT`를 REST permission과 Controller
+   gate에 결속해 한쪽만 우회할 수 없게 한다.
+6. macOS 사용자와 Windows 사용자는 서로 다른 Binance account/API key를 사용하고 withdrawal 권한을
+   비활성화한다. Actual pilot 동안 두 account 모두 다른 app process와 수동 거래를 배제한다.
+7. Memory-HTTP/WS test에서 live endpoint exactness, Testnet/live credential 혼용, endpoint fallback,
+   cap 누락, policy version mismatch, unknown external execution과 disabled default를 positive/negative로
+   검증한다.
+8. 별도 사용자 승인 뒤 macOS와 Windows에서 live Keychain/Credential Manager read와 official live
+   signed read-only preflight만 수행한다. Account/filter/commission, app Position/pending/unknown과
+   open order 상태를 확인하며 order mutation은 `0`회다.
+
+**완료 조건:** 양 OS package가 별도 credential namespace와 fixed live endpoint에서 signed read-only
+READY이고, live order capability/cap이 없는 모든 구성은 network submit 전에 fail closed한다. 이
+시점에 `Private Beta master`를 `[x]`로 변경할 수 있지만 live 주문은 아직 승인되지 않는다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 7만 수행하라. Testnet과 분리된 fixed-endpoint
+live bootstrap/capability를 구현하고 기존 RiskPolicy의 order 10, position 10, daily loss None,
+REALIZED_ONLY, CANCEL_AND_LIQUIDATE를 사용하라. 어떤 live credential read나 signed preflight 전에도
+별도 승인을 받고, 양 OS read-only READY까지만 검증하며 order mutation은 0회로 유지하라.
+```
+
+#### 16.20.11 Session 8 — macOS 후 Windows 순차 저액 live pilot
+
+이 세션은 코드 구현 완료가 아니라 실제 운영 시작이며 Private Beta master와 분리한다. Session 1~7이
+완료된 뒤 live endpoint와 live order를 각 platform/account에 대해 별도로 명시 승인한 경우에만
+수행한다.
+
+1. macOS account부터 다른 process와 수동 activity를 중지하고 Position/pending/unknown/openOrders/
+   openOrderList `0`, filter/reference/balance, reconciliation과 stream READY를 확인한다.
+2. 자연 strategy signal만 사용한다. 결정론적 fixture와 test injection은 live build/configuration에
+   존재하거나 활성화될 수 없다.
+3. `max_order_notional=10 USDT`, `max_position_notional=10 USDT`를 유지한다.
+   `max_daily_loss=None`이며 새로운 일일 손실 차단 로직을 추가하지 않는다.
+4. 첫 terminal BUY/SELL 또는 STOP 청산 뒤 Account, Position, open order, durable History, fee와 fresh
+   restart zero exposure를 확인한다.
+5. macOS lifecycle과 restart가 통과한 뒤에만 Windows account에서 같은 preflight와 pilot을 수행한다.
+6. Timeout, 5xx, persistence ambiguity, 설명되지 않은 execution 또는 UI/backend 불일치가 있으면 신규
+   BUY를 잠그고 자동 재주문하거나 다음 platform으로 확대하지 않는다.
+7. 양 OS가 각각 terminal lifecycle과 재시작 복구를 통과한 뒤에만 동시 운영을 허용한다. Cap 확대와
+   무인 운영은 별도 결정이다.
+
+**세션 요청문:**
+
+```text
+INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 8만 수행하라. 각 live credential/order
+범위를 별도로 승인받고 macOS account를 먼저 최대 order/position 10 USDT로 운영하라. terminal
+BUY/SELL 또는 STOP과 fresh restart zero exposure가 확인된 뒤에만 Windows account를 같은 순서로
+진행하라. max_daily_loss는 None으로 유지하고 ambiguity에는 재주문하거나 확대하지 마라.
+```
+
+#### 16.20.12 개인용 베타 진행 체크리스트
+
+- [x] Session 1 — 범위 동결과 code-critical baseline
+- [ ] Session 2 — 결정론적 production-path E2E
+- [ ] Session 3 — current-source Spot Testnet actual E2E와 fresh zero exposure
+- [ ] Session 4 — macOS fresh package와 macOS PC smoke
+- [ ] **macOS package ready**
+- [ ] Session 5 — Windows 11 x64 호환 계층 구현
+- [ ] Session 6 — Windows native build와 Windows 11 x64 PC read-only smoke
+- [ ] **Cross-platform package master**
+- [ ] Session 7 — live bootstrap과 양 OS signed read-only readiness
+- [ ] **Private Beta master — macOS·Windows 비공개 live 준비 완료, 주문은 별도 승인**
+- [ ] Session 8 — macOS 후 Windows 순차 저액 live pilot
+- [ ] **Two-user live pilot — 양 OS terminal lifecycle과 fresh restart 완료**
+- [ ] 공개 배포 release track — SSIM/full supply notice/provenance/notarization; 현재 범위 제외
+
+Phase 13의 기존 public/live readiness master는 삭제하거나 완료로 오표기하지 않는다. 개인용 프로젝트의
+구현 종료 기준은 Session 7의 Private Beta master이고 실제 양 OS 운영 시작은 Session 8의 Two-user
+live pilot로 분리한다. 공개 배포를 실제로 선택할 때만 기존 P13-06 visual, P13-07 full aggregate
+supply gate와 P13-08 public release evidence를 다시 연다.
