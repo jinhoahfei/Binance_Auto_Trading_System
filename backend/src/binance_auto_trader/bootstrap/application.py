@@ -929,18 +929,21 @@ class _TradingEventRuntimeWorker:
                     with self._state_lock:
                         if self._failure_snapshot is None:
                             self._failure_snapshot = failure_snapshot
+                        self._failed = True
 
                     # 최초 runtime/publication 실패는 raw 오류를 노출하지 않고 같은 lock에서 잠근다.
-                    with self._application_lock:
-                        if self._processing_allowed() is True:
-                            self._fail_closed_operation()
-                            if self._state_update_observer is not None:
-                                try:
-                                    self._state_update_observer()
-                                except BaseException:
-                                    pass  # 실패한 publication을 재귀 재시도하거나 thread로 늘리지 않는다.
-                    with self._state_lock:
-                        self._failed = True
+                    try:
+                        with self._application_lock:
+                            if self._processing_allowed() is True:
+                                self._fail_closed_operation()
+                                if self._state_update_observer is not None:
+                                    try:
+                                        self._state_update_observer()
+                                    except BaseException:
+                                        pass  # 실패한 publication을 재귀 재시도하거나 thread로 늘리지 않는다.
+                    except BaseException:
+                        # 2차 fail-close 오류는 raw traceback을 노출하거나 worker 재시작 권한을 열지 않는다.
+                        pass
                     return
         finally:
             # close와 failure 어느 경로에서도 현재 worker identity만 정확히 해제한다.

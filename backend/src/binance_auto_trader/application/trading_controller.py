@@ -6777,11 +6777,12 @@ class TradingController:
             completed_durable_terminal_replay = (
                 completed_durable_state
                 and result.status in TERMINAL_ORDER_STATUSES
+                and state.order.status is result.status
                 and _order_result_accounting_confirms_trade(
                     result,
                     durable_trade,
                 )
-            )
+            )  # 동일 회계라도 FILLED·CANCELED 같은 terminal 상태가 바뀌면 멱등 replay가 아니다.
             completed_durable_stale_no_fill_replay = (
                 completed_durable_state
                 and result.status not in TERMINAL_ORDER_STATUSES

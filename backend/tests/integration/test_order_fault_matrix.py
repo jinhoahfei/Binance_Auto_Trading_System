@@ -571,6 +571,74 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
             ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS,
         )  # Accounting mismatch는 기존 strict order/persistence 원인으로 남는다.
 
+    def test_late_terminal_stream_replay_with_status_drift_reconciles(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_late_terminal_stream_replay_with_status_drift_reconciles()
+        기능: History commit 뒤 회계가 같아도 terminal 상태가 바뀐 replay는 충돌로 처리하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        terminal_specification = OrderResultSpecification(
+            "103",
+            OrderStatus.FILLED,
+            MARKET_UPDATED_AT,
+            (
+                FillSpecification(
+                    "103-buy",
+                    None,
+                    Decimal("2500.50"),
+                    Decimal("0"),
+                    MARKET_UPDATED_AT,
+                ),
+            ),
+        )
+        fixture = self._create_pipeline(
+            submit_specifications=(terminal_specification,),
+            pending_order_recovery_enabled=True,
+        )
+
+        # REST FILLED가 Position, Trade와 sidecar REMOVE까지 완료한 terminal 기준을 만든다.
+        self._execute_actions(
+            fixture.controller,
+            self._entry_actions(fixture, sequence_number=4),
+        )
+        submitted_order = fixture.rest_client.submitted_orders[0]
+        initial_position = fixture.position.get_snapshot()
+
+        # 수량·금액·수수료가 같아도 CANCELED는 기존 FILLED와 다른 terminal 사실이므로 숨기지 않는다.
+        conflicting_specification = OrderResultSpecification(
+            "103",
+            OrderStatus.CANCELED,
+            MARKET_UPDATED_AT + timedelta(milliseconds=1),
+            (
+                FillSpecification(
+                    "103-buy",
+                    None,
+                    Decimal("2500.50"),
+                    Decimal("0"),
+                    MARKET_UPDATED_AT + timedelta(milliseconds=1),
+                ),
+            ),
+        )
+        accepted = fixture.controller.observe_order_result(
+            conflicting_specification.build(submitted_order)
+        )
+
+        self.assertTrue(accepted)
+        self.assertEqual(initial_position, fixture.position.get_snapshot())
+        self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+        self.assertEqual((), fixture.history_controller.get_pending_orders())
+        self.assertTrue(fixture.controller.reconciliation_required)
+        cause_snapshot = fixture.controller.reconciliation_cause_snapshot
+        self.assertIs(cause_snapshot.status, ReconciliationCauseStatus.EXACT)
+        self.assertIs(
+            cause_snapshot.category,
+            ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS,
+        )  # Terminal 상태 drift도 durable 회계와 같은 수준의 충돌로 보존한다.
+
     @staticmethod
     def _execute_actions(
         controller: TradingController,

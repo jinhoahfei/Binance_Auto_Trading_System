@@ -1388,7 +1388,9 @@ lower-BB로 대체하지 않는다. 실행 중 REGIME 변경은 `TRADING_ACTIVE`
 `disabled`다. Phase 9의 `testnet` bootstrap은 공식 Spot Testnet endpoint만 고정해
 사용하고 credential 기반 read-only 실행과 주문 실행을 분리한다. Phase 13 actual
 Testnet Case 2는 local in-scope gate 통과 후만 `ETHUSDT`에 별도 opt-in하고,
-각 신규 BUY decision notional을 `100 USDT` 이하로 제한한다. 이 상한은 신규
+일반 Phase 13 ceiling은 각 신규 BUY decision notional `100 USDT` 이하다. 다만
+§16.20 Session 3 current-source target은 사용자가 승인한 `10 USDT` 이하로 더 좁히며,
+public Case 2 permission 경계가 `10 USDT`를 넘는 설정을 client 조립 전에 거부한다. 이 상한은 신규
 노출 사전 추정치이므로 거래소 filter 검증을 대체하지 않는다. STOP/recovery SELL은
 Position·free ETH·최신 filter 안의 정확한 보유 수량으로 제한하고 BUY cap을 적용하지
 않는다. 각 BUY/SELL prepare는 fresh `exchangeInfo`, signed `myFilters`와 public
@@ -1664,8 +1666,9 @@ fail closed했다. 이는 external release binding이 아니므로 actual Phase 
   `READY`로 고정했고 `TYPE_1`~`TYPE_4`는 typed failure로 거부했다.
 - [x] Registry `READY`와 실행 mode·account stream readiness를 결합한
   `command_enabled` gate를 분리했다.
-- [x] Configured-unbounded 세 상한, `REALIZED_ONLY`, `CANCEL_AND_LIQUIDATE`와
-  Phase 13 `ETHUSDT` BUY `100 USDT` outer cap 결정을 명세에 동기화했다.
+- [x] Configured-unbounded 세 상한, `REALIZED_ONLY`, `CANCEL_AND_LIQUIDATE`, 일반
+  Phase 13 `ETHUSDT` BUY `100 USDT` outer ceiling과 Session 3 public Case 2의 `10 USDT`
+  축소 실행 cap을 명세에 동기화했다.
 - [x] 30분 EMA9/SMA9 seed/alpha 0.2/최근 6개 OLS/Decimal 34/최종 HALF_EVEN과
   `raw_ols_slope / candidate_price * 100`·`%/30분봉`을 확정했다. Concrete builder는 기존
   seam의 application 구현 세부사항으로 기록하고 architecture audit 대상에 포함했다.

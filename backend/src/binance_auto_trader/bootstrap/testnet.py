@@ -52,6 +52,7 @@ BINANCE_RUN_PHASE13_RECOVERY_ONLY_ENV = (
     "BINANCE_RUN_PHASE13_RECOVERY_ONLY"
 )
 BINANCE_TESTNET_ABSOLUTE_MAX_NOTIONAL = Decimal("100")
+BINANCE_PHASE13_PUBLIC_CASE2_MAX_NOTIONAL = Decimal("10")
 BINANCE_SPOT_TESTNET_REST_ORIGIN = "https://testnet.binance.vision"
 BINANCE_SPOT_TESTNET_STREAM_ORIGIN = "wss://stream.testnet.binance.vision"
 BINANCE_SPOT_TESTNET_WEBSOCKET_API_URL = (
@@ -148,6 +149,15 @@ class _TestnetOrderPermissionRESTClient:
         ):
             raise TestnetConfigurationError(
                 "enabled testnet orders require a finite cap no greater than 100"
+            )
+        if (
+            phase13_public_case2
+            and maximum_order_notional is not None
+            and maximum_order_notional
+            > BINANCE_PHASE13_PUBLIC_CASE2_MAX_NOTIONAL
+        ):
+            raise TestnetConfigurationError(
+                "Phase 13 public Case 2 max notional must be no greater than 10"
             )
         if not allow_orders and maximum_order_notional is not None:
             raise TestnetConfigurationError(
@@ -1062,10 +1072,10 @@ def require_phase13_public_case2_permission(
 ) -> Decimal:
     """
     함수 이름: require_phase13_public_case2_permission()
-    기능: 세 번째 전용 opt-in과 기존 주문 gate를 함께 확인해 public Case 2 cap을 반환한다.
+    기능: 세 번째 전용 opt-in과 Session 3의 10 USDT 상한을 함께 확인한다.
     인자: configuration -> load_testnet_configuration() 결과
-    반환값: 100 USDT 절대 상한 안의 승인된 Decimal cap
-    작성 날짜: 2026/08/31
+    반환값: 10 USDT 이하의 승인된 Decimal cap
+    작성 날짜: 2026/09/05
     """
     # Broad Testnet order suite와 구분된 exact flag가 없으면 public-path actual target을 실행하지 않는다.
     if not isinstance(configuration, TestnetConfiguration):
@@ -1075,7 +1085,14 @@ def require_phase13_public_case2_permission(
             "Phase 13 public Case 2 requires its dedicated opt-in"
         )
 
-    return require_testnet_order_permission(configuration)  # 기존 이중 gate와 cap 검증도 우회하지 않는다.
+    # 일반 Testnet의 100 USDT ceiling보다 좁은 Session 3 실행 승인을 별도 경계에서 고정한다.
+    maximum_notional = require_testnet_order_permission(configuration)
+    if maximum_notional > BINANCE_PHASE13_PUBLIC_CASE2_MAX_NOTIONAL:
+        raise TestnetConfigurationError(
+            "Phase 13 public Case 2 max notional must be no greater than 10"
+        )
+
+    return maximum_notional  # 승인 범위 안의 원본 Decimal cap을 adapter guard에 전달한다.
 
 
 def require_phase13_recovery_only_permission(
@@ -1180,6 +1197,10 @@ def create_testnet_application_runtime(
 
     # 모든 설정을 client 생성 전에 검증해 잘못된 opt-in에서 객체나 network가 만들어지지 않게 한다.
     configuration = load_testnet_configuration(environment)
+    if configuration.allow_phase13_public_case2:
+        require_phase13_public_case2_permission(
+            configuration
+        )  # Session 3 cap은 credential을 transport client에 전달하기 전에 확정한다.
     rest_client_type, web_socket_client_type = _load_testnet_client_types()
     rest_client_arguments: dict[str, object] = {
         "api_key": configuration.api_key,

@@ -6,6 +6,7 @@ from decimal import Decimal
 from threading import Event, RLock
 from time import monotonic
 import unittest
+from unittest.mock import patch
 
 from binance_auto_trader.bootstrap.application import (
     _TradingEventRuntimeFailureStage,
@@ -261,6 +262,68 @@ class TradingEventRuntimeWorkerTests(unittest.TestCase):
             )  # Exception type과 stage만 남겨 secret-like 원문을 배제한다.
         finally:
             worker.close()
+
+    def test_fail_closed_callback_failure_still_permanently_stops_worker(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_fail_closed_callback_failure_still_permanently_stops_worker()
+        기능: 2차 fail-close callback도 예외이면 worker가 재시작되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        fail_closed_attempted = Event()
+
+        async def fail_cycle() -> tuple[object, ...]:
+            """
+            함수 이름: fail_cycle()
+            기능: 최초 worker failure를 만들기 위한 controlled 예외를 발생시킨다.
+            인자: 없음
+            반환값: 반환하지 않음
+            작성 날짜: 2026/09/05
+            """
+            raise RuntimeError("primary-runtime-failure-canary")
+
+        def fail_while_closing() -> None:
+            """
+            함수 이름: fail_while_closing()
+            기능: fail-close callback 자체의 2차 예외를 재현한다.
+            인자: 없음
+            반환값: 반환하지 않음
+            작성 날짜: 2026/09/05
+            """
+            fail_closed_attempted.set()
+            raise ValueError("secondary-fail-close-canary")
+
+        worker = _TradingEventRuntimeWorker(
+            fail_cycle,
+            fail_while_closing,
+            lambda: True,
+            lambda: 0,
+            RLock(),
+            poll_interval_seconds=0.01,
+        )
+        with patch("threading.excepthook") as thread_exception_hook:
+            try:
+                self.assertTrue(worker.start())
+                self.assertTrue(worker.request_processing())
+                self.assertTrue(fail_closed_attempted.wait(1.0))
+
+                # Callback 실패도 thread 밖으로 누출하지 않고 최초 failure 뒤 권한을 영구 회수한다.
+                deadline = monotonic() + 1.0
+                while not worker.failed and monotonic() < deadline:
+                    Event().wait(0.01)
+                self.assertTrue(worker.failed)
+                self.assertFalse(worker.request_processing())
+                self.assertFalse(worker.start())
+                self.assertNotIn(
+                    "secondary-fail-close-canary",
+                    repr(worker.failure_snapshot),
+                )  # 최초 immutable snapshot은 2차 callback 원문으로 오염하지 않는다.
+            finally:
+                worker.close()
+        thread_exception_hook.assert_not_called()  # Raw traceback이 Python thread hook에도 전달되지 않는다.
 
     def test_cycle_failure_records_only_package_module_and_function_origin(
         self,

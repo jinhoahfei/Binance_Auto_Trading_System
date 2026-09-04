@@ -5202,13 +5202,101 @@ current-source actual PASS, Session 4 GO`
   `1f87e74925a30ece0ba1c22bb0c42db5beb4328b9d739ec067a36ec1d428f2fe`, `uv.lock`은
   `cfecb5e02854f90c2c8fabbc67d2692c370dc81df767127329a40489e708084f`다. 자동 commit은 하지 않았다.
 
+**2026-09-05 커밋 후 독립 review와 actual 재검증 결과 (세 범위 횟수 제한 없는 승인 계속
+사용):** `[x] 완료 — reviewed current-source actual PASS, Session 4 GO 유지`
+
+- 사용자가 직전 작업을 commit한 뒤 Session 3 review를 계속하도록 요청했다. 시작 checkpoint는
+  `HEAD == origin/main == 96d3d9e1d05ffab955793a3945f1c45e4b617003`이며 commit subject는
+  `Complete current-source Spot Testnet live E2E`다. 실제 재검증 source는 이 commit에 아래 7개
+  source/spec/test file의 binary diff SHA-256
+  `d34ec95a321589e4669c624e356785540a247724c0bbcbada7723f281b6c805b`를 결합한 상태다. 주요 file은
+  `TradingController`, Testnet bootstrap, event runtime worker, Communication 명세와 각 회귀 test다.
+  `uv.lock`은 수정되지 않았고 SHA-256
+  `cfecb5e02854f90c2c8fabbc67d2692c370dc81df767127329a40489e708084f`를 유지한다.
+- Test-first 독립 review에서 terminal replay의 추가 위험을 확인했다. Durable `FILLED`가 이미 완료된
+  뒤 client/exchange/symbol과 accounting은 같지만 terminal status가 다른 늦은 replay도 기존
+  accounting-only guard가 멱등으로 무시할 수 있었다. 완료 replay는 accounting뿐 아니라 기존 terminal
+  status까지 같아야만 멱등 처리하도록 `TradingController`를 보완했고, `FILLED -> CANCELED` status
+  drift가 reconciliation으로 닫히는 회귀 test를 추가했다. Transport timestamp 차이는 계속 허용하되
+  회계 또는 상태 차이는 숨기지 않는다.
+- Session 3의 `10 USDT` 경계도 production 조립까지 역추적했다. Secure runner는 이미 exact `10`을
+  사용했지만 generic Phase 13 permission의 `100 USDT` 상한을 직접 주입하면 public Case 2 proxy와
+  runtime factory가 이를 허용할 수 있었다. Public Case 2 전용 상한을 `10`으로 고정하고 oversized
+  permission을 credential transport client 조립 전에 거부했으며 direct proxy 구성도 동일하게
+  fail-closed했다. Recovery-only는 BUY를 허용하지 않는 exact STOP SELL 전용 경계이므로 변경하지
+  않았다. Communication 명세에는 generic Phase 13 `100`과 Session 3 public Case 2 `10`의 책임 차이를
+  명시했다.
+- Event worker의 2차 실패 경계도 보완했다. 최초 runtime failure 뒤 `fail_closed_operation` 자체가
+  예외를 내면 기존 순서에서는 `_failed` seal 전 thread가 빠져나가 worker 재시작·새 request가 가능하고
+  raw thread traceback이 노출될 수 있었다. 최초 immutable snapshot과 함께 permanent failure를 먼저
+  원자적으로 seal하고, 이후 application-lock/processing/fail-close/publication 2차 오류는 raw
+  traceback 없이 영구 중단하도록 수정했다. Callback 실패 뒤 `failed == true`, start/request 거부와
+  `threading.excepthook` 미호출을 검증하는 회귀 test를 추가했다. 모든 신규 함수·검증 블록과 단일 문장
+  guard에는 `CODING_CONVENTIONS.md`의 한국어 함수·블록·문장 주석을 적용했다.
+- 구현 판단은 공식 Binance 문서를 다시 확인해 고정했다. Signed `POST /api/v3/order`, MARKET의 기본
+  `FULL` 응답과 `fills`는
+  [Spot REST Trade](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/trade),
+  `executionReport`의 execution/order status와 last/cumulative fill은
+  [User Data Stream](https://developers.binance.com/en/docs/products/spot/user-data-stream),
+  `NOTIONAL`·`MARKET_LOT_SIZE`는
+  [Filters](https://developers.binance.com/en/docs/products/spot/filters), Testnet endpoint와 최신 filter
+  조회·주기적 reset은
+  [Testnet General Info](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md)를
+  기준으로 했다. Timeout/`5XX`의 execution status를 추측하지 않고 기존 same-ID reconciliation을
+  유지했다.
+- Credential/order opt-in을 제거한 변경 후 집중 검증은 actual/recovery `41/41 OK (skipped=2)`, trace
+  contract `28/28 OK`, deterministic/session/order-fault integration `45/45 OK`, secure runner와
+  Communication unittest `32/32 OK`, coding/Phase 5/Phase 13 architecture `12/12 OK`다. Traceability
+  matrix는 `126 COMPLETE / 0 GAP`이고 수정 Python `compileall`과 `git diff --check`도 통과했다. 제한
+  sandbox의 loopback bind 거부를 local socket 허용 환경에서 재실행한 전체 Backend는
+  `Ran 996 tests in 32.686s`, `OK (skipped=9)`다.
+- Actual 전 충돌하는 Testnet runner가 없음을 확인했다. 기존 SUCCESS baseline history는 owner UID
+  `501`, GID `20`, mode `0600`, link `1`, `9329 bytes`, SHA-256
+  `996c02a8835104c28ac177b6610ee427aeedad1a1578da582fafb47ce8359128`로 이전 기록과 일치했다.
+  승인된 Keychain 두 item memory-only 조회와 signed read-only preflight 결과는
+  `PHASE13_READ_ONLY_BASELINE all_open_order_count=0 all_recent_order_count=14`, `Ran 5 tests in
+  4.246s`, `OK`다. 이 통과 뒤에만 같은 baseline과 source로 actual selector를 실행했고 local helper
+  39개와 actual 1개, 총 `Ran 40 tests in 8.348s`, `OK`다.
+
+  ```text
+  backend/.venv/bin/python scripts/run_testnet_from_keychain.py read-only \
+    --baseline-history <verified-14-trade-closed-history.jsonl>
+  backend/.venv/bin/python scripts/run_testnet_from_keychain.py phase13-public-case2 \
+    --baseline-history <verified-14-trade-closed-history.jsonl>
+  ```
+
+- 재검증 run `be781e67-00a9-4265-9ec8-69861aa47f67`은 public Kline 3개에서 Case C BUY를 만들었다.
+  Decision price `2368.817418120965667527268172`, 제출 수량 `0.0042 ETH`, decision notional
+  `9.9490331561080558036145263224 USDT <= 10 USDT`이며 BUY/SELL submission은 각 한 번뿐이다.
+  BUY는 `0.00420000 ETH`, 평균 `2451.43000000 USDT`, 실제 fill notional `10.296006 USDT`, fee
+  `0 ETH`이고 same-run STOP SELL은 authoritative Position과 같은 `0.00420000 ETH`, 평균
+  `2451.42000000 USDT`, 실제 fill notional `10.295964 USDT`, fee `0 USDT`다. 기존 승인·명세와 같이
+  상한은 **decision notional** 기준이며 MARKET 실제 fill 금액은 숨기지 않고 evidence에 보존했다.
+  Run realized P/L은 `-0.000042 USDT`다.
+- 새 canonical SUCCESS evidence는
+  `backend/.testnet-artifacts/phase13-public-case2-20260904T160513352035Z-be781e6700a942659ec869861aa47f67/phase13-public-case2-trace.json`이다.
+  Schema `3`, outcome `SUCCESS`, mode `0600`, UID `501`, GID `20`, link `1`, `30410 bytes`, file
+  SHA-256 `b54f5a96a3db70901a04854efb415037e80df0f5f7e0d8a8bb168f00714fa148`이고 canonical body
+  digest는 `a92d6bf0eb548f62dc7c7efc90a71aaaf6ea9b79feb47da7246e2d39137f9821`다. 독립 validator가 같은
+  digest를 반환했다. 결속 history는 mode `0600`, link `1`, `10682 bytes`, 16행, SHA-256
+  `ed436eecc1e0e44037248d625ee37ce0d9ff857c6ddad524a616e9e887ba16b2`이고 pending sidecar는 같은
+  mode/link, `2298 bytes`, 10행, SHA-256
+  `d46cfc86774143f606e06b4770b27b53c8b4abb395c04c69001870a9afcffed7`다.
+- SUCCESS artifact와 fresh runtime은 order attempt/result/durable Trade 각 `2`, final Position
+  `0`, matching open/pending/unknown `0`, duplicate order/trade `0`, retry/cancel과 허용 범위 밖
+  mutation `0`을 봉인했다. 새 16행 history를 baseline으로 별도 signed read-only postflight를 실행한
+  결과도 `PHASE13_READ_ONLY_BASELINE all_open_order_count=0 all_recent_order_count=16`, `Ran 5 tests in
+  4.522s`, `OK`다. 따라서 이번 review에서 찾은 세 위험을 수정한 exact current source도 Session 3의
+  모든 완료 조건을 재현했고 Session 4 `GO`를 유지한다. Production/live endpoint와 live enable은
+  변경하거나 실행하지 않았다.
+
 **Session 3 완료 조건 체크:**
 
 - [x] Keychain 두 item을 memory-only로만 조회하고 credential을 출력·파일화하지 않았다.
 - [x] Current-source signed read-only preflight가 통과한 뒤에만 mutation을 시작했다.
-- [x] Public-boundary Case C BUY decision notional `9.7814300211721854636528636815 USDT <= 10 USDT`
+- [x] Public-boundary Case C BUY decision notional `9.9490331561080558036145263224 USDT <= 10 USDT`
   한 건만 제출했다.
-- [x] Same-run exact Position STOP SELL `0.0041 ETH` 한 건만 제출했다.
+- [x] Same-run exact Position STOP SELL `0.0042 ETH` 한 건만 제출했다.
 - [x] BUY/SELL fill·commission, 두 durable Trade와 History/Performance/UI publication을 확인했다.
 - [x] Retry, cancel, duplicate와 허용 범위 밖 mutation은 모두 `0`이다.
 - [x] Fresh runtime과 별도 post-run signed read-only에서 Position/pending/unknown/openOrders/

@@ -1001,6 +1001,9 @@ class TestnetConfigurationTests(unittest.TestCase):
 
         enabled_environment = dict(environment)
         enabled_environment[
+            testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV
+        ] = "10"
+        enabled_environment[
             testnet_module.BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV
         ] = "1"
         enabled_configuration = testnet_module.load_testnet_configuration(
@@ -1008,11 +1011,27 @@ class TestnetConfigurationTests(unittest.TestCase):
         )
         self.assertTrue(enabled_configuration.allow_phase13_public_case2)
         self.assertEqual(
-            Decimal("100"),
+            Decimal("10"),
             testnet_module.require_phase13_public_case2_permission(
                 enabled_configuration
             ),
-        )  # 전용 gate도 기존 cap 객체를 다른 숫자로 대체하지 않는다.
+        )  # 전용 gate는 Session 3 승인 상한 안의 기존 Decimal cap 객체를 보존한다.
+
+        # 일반 Testnet ceiling 이하여도 Session 3의 좁은 10 USDT 승인을 넘으면 외부 동작 전에 거부한다.
+        oversized_environment = dict(environment)
+        oversized_environment[
+            testnet_module.BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV
+        ] = "1"
+        oversized_configuration = testnet_module.load_testnet_configuration(
+            oversized_environment
+        )
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "no greater than 10",
+        ):
+            testnet_module.require_phase13_public_case2_permission(
+                oversized_configuration
+            )
 
     def test_phase13_recovery_only_requires_exclusive_exact_opt_in(self) -> None:
         """
@@ -1051,6 +1070,52 @@ class TestnetConfigurationTests(unittest.TestCase):
         ):
             testnet_module.load_testnet_configuration(conflicting_environment)
 
+    def test_phase13_public_case2_rejects_oversized_cap_before_client_assembly(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_phase13_public_case2_rejects_oversized_cap_before_client_assembly()
+        기능: Session 3 승인을 넘는 cap이 client 타입과 permission proxy 조립 전에 차단되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        oversized_environment = _read_only_environment()
+        oversized_environment.update(
+            {
+                testnet_module.BINANCE_RUN_TESTNET_ORDERS_ENV: "1",
+                testnet_module.BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV: "1",
+                testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV: "100",
+            }
+        )
+
+        # Factory는 credential을 client constructor에 넘기기 전에 좁은 Session 3 cap을 검증해야 한다.
+        with patch.object(
+            testnet_module,
+            "_load_testnet_client_types",
+        ) as client_type_loader:
+            with self.assertRaisesRegex(
+                testnet_module.TestnetConfigurationError,
+                "no greater than 10",
+            ):
+                testnet_module.create_testnet_application_runtime(
+                    history_path=Path("oversized-phase13-history.jsonl"),
+                    environment=oversized_environment,
+                )
+        client_type_loader.assert_not_called()
+
+        # 내부 proxy를 직접 조립하는 경로도 같은 bound를 우회해 permit을 만들 수 없다.
+        with self.assertRaisesRegex(
+            testnet_module.TestnetConfigurationError,
+            "no greater than 10",
+        ):
+            testnet_module._TestnetOrderPermissionRESTClient(
+                Mock(name="oversized_phase13_delegate"),
+                allow_orders=True,
+                maximum_order_notional=Decimal("100"),
+                phase13_public_case2=True,
+            )
+
     def test_phase13_broad_collection_keeps_legacy_order_suites_skipped(
         self,
     ) -> None:
@@ -1073,7 +1138,7 @@ class TestnetConfigurationTests(unittest.TestCase):
                 testnet_module.BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV: "1",
                 testnet_module.BINANCE_TESTNET_API_KEY_ENV: API_KEY_CANARY,
                 testnet_module.BINANCE_TESTNET_API_SECRET_ENV: API_SECRET_CANARY,
-                testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV: "100",
+                testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV: "10",
             }
         )
         verification_source = "\n".join(
@@ -1401,7 +1466,7 @@ class TestnetConfigurationTests(unittest.TestCase):
         permission_client = testnet_module._TestnetOrderPermissionRESTClient(
             delegate,
             allow_orders=True,
-            maximum_order_notional=Decimal("100"),
+            maximum_order_notional=Decimal("10"),
             phase13_public_case2=True,
             clock=lambda: datetime(2026, 8, 31, tzinfo=timezone.utc),
         )
@@ -1559,7 +1624,7 @@ class TestnetConfigurationTests(unittest.TestCase):
         permission_client = testnet_module._TestnetOrderPermissionRESTClient(
             delegate,
             allow_orders=True,
-            maximum_order_notional=Decimal("100"),
+            maximum_order_notional=Decimal("10"),
             phase13_public_case2=True,
         )
         gateway = APIGateway(permission_client)
@@ -1598,7 +1663,7 @@ class TestnetConfigurationTests(unittest.TestCase):
         permission_client = testnet_module._TestnetOrderPermissionRESTClient(
             delegate,
             allow_orders=True,
-            maximum_order_notional=Decimal("100"),
+            maximum_order_notional=Decimal("10"),
             phase13_public_case2=True,
         )
         gateway = APIGateway(permission_client)
@@ -1645,7 +1710,7 @@ class TestnetConfigurationTests(unittest.TestCase):
         permission_client = testnet_module._TestnetOrderPermissionRESTClient(
             delegate,
             allow_orders=True,
-            maximum_order_notional=Decimal("100"),
+            maximum_order_notional=Decimal("10"),
             phase13_public_case2=True,
         )
         buy_order = _phase13_order(
@@ -1709,7 +1774,7 @@ class TestnetConfigurationTests(unittest.TestCase):
         permission_client = testnet_module._TestnetOrderPermissionRESTClient(
             delegate,
             allow_orders=True,
-            maximum_order_notional=Decimal("100"),
+            maximum_order_notional=Decimal("10"),
             phase13_public_case2=True,
         )
         buy_order = _phase13_order(
@@ -1777,7 +1842,7 @@ class TestnetConfigurationTests(unittest.TestCase):
             {
                 testnet_module.BINANCE_RUN_TESTNET_ORDERS_ENV: "1",
                 testnet_module.BINANCE_RUN_PHASE13_PUBLIC_CASE2_ENV: "1",
-                testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV: "100",
+                testnet_module.BINANCE_TESTNET_MAX_NOTIONAL_ENV: "10",
             }
         )
         evidence_clock = Mock(
