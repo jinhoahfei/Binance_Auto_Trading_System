@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -515,6 +516,30 @@ def _close_account_subscription_safely(
     return None
 
 
+def _attempt_shutdown_cleanup(
+    operation: Callable[[], object],
+    *,
+    resource_name: str,
+    cleanup_failures: list[tuple[str, BaseException]],
+) -> None:
+    """
+    함수 이름: _attempt_shutdown_cleanup()
+    기능: 하나의 application 종료 Operation을 시도하고 실패를 순서대로 보존한다.
+    인자: operation -> worker, stream, session 또는 subscription 종료 Operation
+        resource_name -> 후속 진단 note에 사용할 credential 없는 자원 이름
+        cleanup_failures -> 최초와 후속 실패를 호출 순서대로 담을 목록
+    반환값: 성공·실패 모두 없음
+    작성 날짜: 2026/09/04
+    """
+    # BaseException을 전파하기 전에 모든 후속 소유 자원을 회수할 수 있게 분리한다.
+    try:
+        operation()
+    except BaseException as error:
+        cleanup_failures.append(
+            (resource_name, error)
+        )  # 예외 identity와 traceback은 바꾸지 않고 진단 이름만 같이 보존한다.
+
+
 def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     """
     함수 이름: start_application()
@@ -606,39 +631,85 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
 
-    # Worker stop/join은 application lock 밖에서 수행해 진행 중 Controller cycle과 교착하지 않는다.
+    cleanup_failures: list[tuple[str, BaseException]] = []
+
+    # Worker stop/join은 application lock 밖에서 수행하되 하나의 실패로 뒤 worker를 누수시키지 않는다.
     event_runtime_worker = runtime._trading_event_runtime_worker
     if event_runtime_worker is not None:
-        event_runtime_worker.close()
+        _attempt_shutdown_cleanup(
+            event_runtime_worker.close,
+            resource_name="trading event worker",
+            cleanup_failures=cleanup_failures,
+        )
     recovery_worker = runtime._account_stream_recovery_worker
     if recovery_worker is not None:
-        recovery_worker.close()
+        _attempt_shutdown_cleanup(
+            recovery_worker.close,
+            resource_name="account stream recovery worker",
+            cleanup_failures=cleanup_failures,
+        )
     market_recovery_worker = runtime._market_stream_recovery_worker
     if market_recovery_worker is not None:
-        market_recovery_worker.close()
+        _attempt_shutdown_cleanup(
+            market_recovery_worker.close,
+            resource_name="market stream recovery worker",
+            cleanup_failures=cleanup_failures,
+        )
 
-    # Market callback이 application lock을 재사용하므로 Kline handle도 lock 밖에서 먼저 닫는다.
-    runtime.market_data_controller.close_market_stream()
+    # Market callback이 application lock을 재사용하므로 Kline handle도 lock 밖에서 먼저 종료를 시도한다.
+    _attempt_shutdown_cleanup(
+        runtime.market_data_controller.close_market_stream,
+        resource_name="market stream",
+        cleanup_failures=cleanup_failures,
+    )
 
     with runtime.application_lock:
-        # CLOSED publication은 멱등 반환하고 다른 상태만 소유 자원을 정리한다.
+        # 이미 CLOSED이면 상태를 재게시하지 않고 이번 호출의 worker·market 실패만 전파한다.
         current_state = runtime.state
         if current_state.status is ApplicationStatus.CLOSED:
-            return current_state  # 이미 닫힌 runtime은 자원을 다시 만지지 않는다.
+            closed_state = current_state
+        else:
+            # 거래 상태를 강제 종료하지 않고 callback·timer·session 구독 차단을 독립 시도한다.
+            _attempt_shutdown_cleanup(
+                runtime.trading_controller.close_session_resources,
+                resource_name="trading session resources",
+                cleanup_failures=cleanup_failures,
+            )
 
-        # 거래 상태를 강제 종료하지 않고 callback·timer·session 구독부터 차단한다.
-        runtime.trading_controller.close_session_resources()
+            # Session 정리 실패와 무관하게 마지막 authenticated account handle도 닫는다.
+            account_subscription = (
+                runtime.trading_controller.account_subscription
+            )
+            if account_subscription is not None:
+                _attempt_shutdown_cleanup(
+                    account_subscription.close,
+                    resource_name="account subscription",
+                    cleanup_failures=cleanup_failures,
+                )
 
-        # Market stream과 worker를 모두 회수한 뒤 마지막 authenticated account handle을 정리한다.
-        account_subscription = runtime.trading_controller.account_subscription
-        if account_subscription is not None:
-            account_subscription.close()
+            # 자원 정리 실패가 있어도 terminal gate를 열지 않도록 CLOSED를 마지막에 게시한다.
+            try:
+                closed_state = runtime._publish_state(
+                    status=ApplicationStatus.CLOSED,
+                    failure=None,
+                    startup_trace=current_state.startup_trace,
+                )
+            except BaseException as error:
+                cleanup_failures.append(
+                    ("application CLOSED publication", error)
+                )  # Publication 실패도 최초 정리 오류 뒤에 순서대로 집계한다.
 
-        return runtime._publish_state(
-            status=ApplicationStatus.CLOSED,
-            failure=None,
-            startup_trace=current_state.startup_trace,
-        )
+    if cleanup_failures:
+        # 기존 단일 예외 계약을 유지하고 후속 오류는 credential 없는 note로 집계한다.
+        _, first_error = cleanup_failures[0]
+        for resource_name, later_error in cleanup_failures[1:]:
+            first_error.add_note(
+                "Additional shutdown cleanup failure: "
+                f"{resource_name} ({type(later_error).__name__})."
+            )
+        raise first_error  # 최초 예외 identity와 원래 traceback을 호출자에게 그대로 보존한다.
+
+    return closed_state
 
 
 def _read_shutdown_safety_receipt(

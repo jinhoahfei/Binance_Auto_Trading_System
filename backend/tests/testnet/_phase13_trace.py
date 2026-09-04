@@ -27,6 +27,8 @@ PHASE13_PUBLIC_TRACE_ABSOLUTE_MAX_NOTIONAL = Decimal("100")
 _MAXIMUM_EVENT_COUNT = 2048
 _MAXIMUM_TEXT_LENGTH = 512
 _MAXIMUM_INTEGER = 9_223_372_036_854_775_807
+# Controller가 실제 소비하는 same-order scheduled REST query 예산만 별도로 제한한다.
+_MAXIMUM_ORDER_QUERY_TRACE_COUNT = 4
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
 _PLAIN_DECIMAL_PATTERN = re.compile(
@@ -395,6 +397,10 @@ _ORDER_TRACE_EXCHANGE_ID_REQUIRED_MESSAGE_IDS = frozenset(
     + _SELL_FILL_APPLICATION_TRACE
     + _BUY_ORDER_TRACE_SUFFIX
     + _SELL_ORDER_TRACE_SUFFIX
+)
+# Exchange 응답 전 submit prefix는 미래 order ID를 미리 주장할 수 없다.
+_ORDER_TRACE_PRE_EXCHANGE_ID_MESSAGE_IDS = frozenset(
+    {"1", "2", "3", "4", "5.1", "5", "6", "6.1"}
 )
 _ORDER_RESULT_FIELDS = frozenset(
     {
@@ -2567,7 +2573,7 @@ def _validate_success_order_message_sequence(
 ) -> None:
     """
     함수 이름: _validate_success_order_message_sequence()
-    기능: BUY/SELL 고정 경계와 bounded same-ID query·partial fill branch의 complete 성공 grammar를 검증한다.
+    기능: BUY/SELL 고정 경계와 same-ID query·stream reapply·partial fill 성공 grammar를 검증한다.
     인자: message_ids -> 한 actual order의 Communication message ID 순서
         side -> BUY 또는 SELL
     반환값: complete grammar이면 없음
@@ -2613,21 +2619,25 @@ def _validate_success_order_message_sequence(
 
     # 최초 응답 뒤에는 최대 네 query group과 그 query가 새로 적용한 fill delta만 올 수 있다.
     while branch_cursor < len(branch_ids):
-        if (
-            branch_ids[
-                branch_cursor : branch_cursor + len(_SAME_ORDER_QUERY_TRACE)
-            ]
-            != _SAME_ORDER_QUERY_TRACE
-        ):
-            raise PhaseThirteenPublicTraceValidationError(
-                "successful order execution trace contains an illegal branch"
-            )
-        branch_cursor += len(_SAME_ORDER_QUERY_TRACE)
-        query_count += 1
-        if query_count > 4:
-            raise PhaseThirteenPublicTraceValidationError(
-                "successful order execution trace exceeds the query budget"
-            )
+        # User Data Stream reapply는 query 8/8.1/8.2 없이 message 9로 직접 도착할 수 있다.
+        if branch_ids[branch_cursor] == "9":
+            branch_cursor += 1
+        else:
+            if (
+                branch_ids[
+                    branch_cursor : branch_cursor + len(_SAME_ORDER_QUERY_TRACE)
+                ]
+                != _SAME_ORDER_QUERY_TRACE
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "successful order execution trace contains an illegal branch"
+                )
+            branch_cursor += len(_SAME_ORDER_QUERY_TRACE)
+            query_count += 1
+            if query_count > _MAXIMUM_ORDER_QUERY_TRACE_COUNT:
+                raise PhaseThirteenPublicTraceValidationError(
+                    "successful order execution trace exceeds the query budget"
+                )
         terminal_evidence_complete = False
 
         if (
@@ -2639,7 +2649,7 @@ def _validate_success_order_message_sequence(
             branch_cursor += len(fill_application_trace)
             applied_fill_count += 1
             terminal_evidence_complete = True
-            continue
+            continue  # Partial stream 결과 뒤에도 예약 query 또는 다음 stream 결과가 이어질 수 있다.
         if branch_ids[branch_cursor:] == ("10",) and applied_fill_count > 0:
             branch_cursor += 1
             terminal_evidence_complete = True  # 기존 partial 뒤 새 delta 없는 terminal summary다.
@@ -2745,13 +2755,24 @@ def _validate_order_execution_traces(
                 allow_none=True,
             )
 
-            # Exchange ID가 한 번 관찰된 뒤에는 후속 query·fill·durable trace가 None으로 후퇴할 수 없다.
+            # Submit prefix는 exchange 미래 사실을 주장할 수 없고 최초 ID는 apply/reapply 7·9에서만 나타난다.
+            if (
+                message_id in _ORDER_TRACE_PRE_EXCHANGE_ID_MESSAGE_IDS
+                and order_id is not None
+            ):
+                raise PhaseThirteenPublicTraceValidationError(
+                    "order execution trace exposes exchange identity before its result"
+                )
             if order_id is None:
                 if exchange_identity_observed:
                     raise PhaseThirteenPublicTraceValidationError(
                         "order execution trace exchange identity regressed to None"
                     )
             else:
+                if not exchange_identity_observed and message_id not in {"7", "9"}:
+                    raise PhaseThirteenPublicTraceValidationError(
+                        "order execution trace exchange identity first appeared outside result application"
+                    )
                 if order_id != matching_exchange_order_id:
                     raise PhaseThirteenPublicTraceValidationError(
                         "order execution trace exchange identity is inconsistent"
@@ -2831,22 +2852,36 @@ def _validate_order_execution_traces(
                 raise PhaseThirteenPublicTraceValidationError(
                     "successful order trace does not contain the exact submit mutation"
                 )
-            if trace_entries[0]["command_event_id"] != attempt["evaluation_id"]:
-                raise PhaseThirteenPublicTraceValidationError(
-                    "order trace source event does not match attempt evaluation"
-                )
-            allowed_command_event_ids = {
-                attempt["evaluation_id"],
-                attempt["intent_id"],
-            }
+            expected_prefix = (
+                _BUY_ORDER_TRACE_PREFIX
+                if side == "BUY"
+                else _SELL_ORDER_TRACE_PREFIX
+            )
+            evaluation_id = str(attempt["evaluation_id"])
+            attempt_intent_id = str(attempt["intent_id"])
             if any(
-                trace_entry["command_event_id"]
-                not in allowed_command_event_ids
-                for trace_entry in trace_entries[:-1]
+                trace_entry["command_event_id"] != evaluation_id
+                for trace_entry in trace_entries[: len(expected_prefix)]
             ):
                 raise PhaseThirteenPublicTraceValidationError(
-                    "successful order trace contains a foreign producer event"
+                    "order submit trace does not match its attempt evaluation"
                 )
+
+            # Message 8/9 비동기 경계 전은 evaluation, 경계부터는 intent만 사용한다.
+            asynchronous_identity_observed = False
+            for trace_entry in trace_entries[len(expected_prefix) : -1]:
+                command_event_id = str(trace_entry["command_event_id"])
+                if trace_entry["message_id"] in {"8", "9"}:
+                    asynchronous_identity_observed = True
+                expected_command_event_id = (
+                    attempt_intent_id
+                    if asynchronous_identity_observed
+                    else evaluation_id
+                )
+                if command_event_id != expected_command_event_id:
+                    raise PhaseThirteenPublicTraceValidationError(
+                        "successful order trace producer identity changed outside its async boundary"
+                    )
 
     return trace_groups  # Canonical group와 entry 순서는 digest에 기록된 그대로 유지한다.
 
@@ -3874,9 +3909,11 @@ def _validate_v3_public_market_provenance(
     if fingerprint is None:
         previous_market_version = 0
         previous_context_version = -1
+        observed_source_event_ids: set[str] = set()
         for market_event in market_events:
             market_version = int(market_event["market_version"])
             context_version = int(market_event["context_version"])
+            source_event_id = str(market_event["source_event_id"])
             if (
                 market_event["message_id"] != "1L.1"
                 or market_event["event_type"] != "KLINE_OBSERVED"
@@ -3892,6 +3929,7 @@ def _validate_v3_public_market_provenance(
                 )
                 or market_version <= previous_market_version
                 or context_version < previous_context_version
+                or source_event_id in observed_source_event_ids
             ):
                 raise PhaseThirteenPublicTraceValidationError(
                     "v3 NO_SIGNAL market evidence is not an observed Kline snapshot"
@@ -3923,6 +3961,7 @@ def _validate_v3_public_market_provenance(
                 )
             previous_market_version = market_version
             previous_context_version = context_version
+            observed_source_event_ids.add(source_event_id)
         return  # Kline이 전혀 도착하지 않은 timeout도 실제 NO_SIGNAL로 보존한다.
 
     # SUCCESS evaluation은 실제 market:version:Kline source 문법과 네 파생 필드가 같아야 한다.
@@ -4082,6 +4121,12 @@ def _validate_v3_success_producer_contract(
         raise PhaseThirteenPublicTraceValidationError(
             "v3 SUCCESS BUY identity is not derived from its session and decision"
         )
+    if int(buy_trace_entries[1]["context_version_after"]) != int(
+        fingerprint["context_version"]
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS BUY submit mutation does not match its public decision Context"
+        )
     if (
         sell_attempt["intent_id"] != expected_sell_intent_id
         or sell_attempt["evaluation_id"] != expected_stop_evaluation_id
@@ -4136,6 +4181,21 @@ def _validate_v3_success_producer_contract(
     ):
         raise PhaseThirteenPublicTraceValidationError(
             "v3 SUCCESS recovery free quantity lacks public account evidence"
+        )
+
+    # Dust-free MARKET BUY preflight는 result fill과 durable Trade에도 exact zero fee로 이어져야 한다.
+    buy_fills = tuple(buy_result["incremental_fills"])
+    if (
+        any(
+            Decimal(str(fill[fee_field])) != Decimal("0")
+            for fill in buy_fills
+            for fee_field in ("fee_amount", "fee_quote_amount")
+        )
+        or Decimal(str(buy_trade["fee_amount"])) != Decimal("0")
+        or Decimal(str(buy_trade["fee_quote_amount"])) != Decimal("0")
+    ):
+        raise PhaseThirteenPublicTraceValidationError(
+            "v3 SUCCESS BUY fee contradicts its zero-commission preflight"
         )
 
     # Single BUY/full-close SELL의 Position 원가와 realized PnL을 domain Decimal128 공식으로 재계산한다.

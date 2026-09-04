@@ -1472,6 +1472,21 @@ class TradingController:
             is TradingSessionStatus.RECONCILIATION_REQUIRED
         )
 
+    def _process_lifetime_reconciliation_required_locked(self) -> bool:
+        """
+        함수 이름: _process_lifetime_reconciliation_required_locked()
+        기능: fresh process 전에 해제할 수 없는 event·ownership·외부 실행 blocker를 판정한다.
+        인자: 없음
+        반환값: 현재 process에서 startup이나 신규 session을 열 수 없으면 True
+        작성 날짜: 2026/09/04
+        """
+        # 세 flag는 일반 stream REST 재조정으로 해제하지 않고 Controller process 수명 전체에서 단조 증가한다.
+        return (
+            self._event_runtime_failed
+            or self._process_ownership_ambiguous
+            or self._external_execution_reconciliation_required
+        )
+
     def _record_reconciliation_cause_locked(
         self,
         category: ReconciliationCauseCategory,
@@ -4118,6 +4133,12 @@ class TradingController:
         작성 날짜: 2026/08/22
         """
         with self._session_lock:
+            # 이전 callback이 남긴 process-lifetime blocker는 startup I/O나 완료 flag로 완화하지 않는다.
+            if self._process_lifetime_reconciliation_required_locked():
+                raise StartupOrderReconciliationError(
+                    "process-lifetime reconciliation requires a fresh process"
+                )
+
             # Startup operation은 history와 full account가 준비된 뒤 정확히 한 번만 수행한다.
             if self._startup_reconciliation_complete:
                 return  # 성공한 lifecycle의 중복 호출은 외부 조회나 Position 적용을 반복하지 않는다.
@@ -4400,6 +4421,13 @@ class TradingController:
                     "account stream was not caught up during reconciliation"
                 )
             self._publish_restored_position_snapshot(position)
+
+            # Startup 내부의 동기 재진입 callback도 READY 직전에 다시 잡아 stream gate를 지우지 않는다.
+            if self._process_lifetime_reconciliation_required_locked():
+                raise StartupOrderReconciliationError(
+                    "process-lifetime reconciliation requires a fresh process"
+                )
+
             # Startup 중 관찰한 event는 위 REST open/recent/query 사실이 대체했으므로 gate를 해제한다.
             self._stream_reconciliation_required = False
             self._startup_reconciliation_complete = True
@@ -5551,6 +5579,12 @@ class TradingController:
             raise TradingSessionError(
                 TradingSessionFailureCode.COMMAND_DISABLED,
                 "Manual kill blocks a new strategy session",
+                current_version=self._context.version,
+            )
+        if self._process_lifetime_reconciliation_required_locked():
+            raise TradingSessionError(
+                TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                "Process-lifetime reconciliation requires a fresh process",
                 current_version=self._context.version,
             )
         if self._stream_reconciliation_required:

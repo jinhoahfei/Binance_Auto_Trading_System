@@ -2,8 +2,8 @@
 
 | 항목 | 값 |
 |---|---|
-| 판정일 | 2026-09-01 KST |
-| 기준 revision | `d9a27af` 위 변경 작업트리 |
+| 판정일 | 2026-09-04 KST |
+| 기준 revision | `e402673` 위 local-only 변경 작업트리; external evidence는 historical |
 | 판정 | **NO_GO** |
 | 실제 live 주문 | 0건, 계속 disabled |
 | 보존 누적 Testnet 실행 | 고정 Keychain 조회 12건(2 item × secure child 6회), signed Testnet target 6회; 이전 actual `NO_SIGNAL` 1회와 최신 actual `FAILED` 1회. 이 Phase 13 secure runner에 귀속되는 submission attempt·order POST delegate·durable Trade는 누적 0건 |
@@ -582,12 +582,19 @@ delegate/durable Trade는 누적 0건이다. Live endpoint/credential/order, 24�
   `7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34`로 verified
   baseline과 byte-for-byte 같고 새 pending sidecar는 생성되지 않았다. Process lease는
   nonblocking exclusive reacquire가 성공해 현재 해제 상태다.
-- Credential/order env를 제거하고 `PYTHONWARNINGS=error`로 current tree의 Backend
+- 다음 수치는 2026-09-04 추가 보강 전 확정한 historical local gate이며 최종 전체 회귀 수가 아니다.
+  Credential/order env를 제거하고 `PYTHONWARNINGS=error`로 당시 tree의 Backend
   `Ran 962 tests`, `OK (skipped=8)`, scripts `183/183`, secure runner `14/14`, cause 관련
   integration `50/50`, Case 2 module `Ran 30 tests`, `OK (skipped=1)`, convention `2/2`,
   baseline/trace 계약 `33/33`, Communication checker unit `17/17`과 matrix
   `126 COMPLETE / 0 GAP`을 통과했다. Backend 전체는 local loopback만 허용하는 실행
   경계에서 검증했으며 Binance external network와 credential/order opt-in은 제거했다.
+- 추가 보강 뒤 current Backend는 `Ran 967 tests in 32.817s`, `OK (skipped=8)`이고 trace/Case 2
+  `58`(skip `1`), startup·reconciliation `74`, lifecycle `10`, cause integration `51`, runner `14`,
+  baseline/trace `33`, public local Case 2 `9`, Communication `126/126`이 통과했다. Root scripts는
+  ignored historical Phase 12 app만 남고 결속 DMG가 누락된 local supply 상태를 fail closed해
+  `Ran 183 tests in 34.640s`, `FAILED (failures=1, errors=2)`다. Validator를 완화하거나 retained app을
+  숨겨 PASS를 합성하지 않았으므로 supply와 최종 readiness는 계속 `NO_GO`다.
 - Current writer는 failure evidence schema v2만 새로 쓴다. `first_cause`는 같은
   Controller session lock에서 읽은 `reconciliation_required`, latch `status`, `EXACT`일 때만 공개하는
   `category`를 담는다. Missing, 동일 원인의 중복과 서로 다른 원인의 경합은
@@ -595,16 +602,24 @@ delegate/durable Trade는 누적 0건이다. Live endpoint/credential/order, 24�
   latch는 보존되므로 일반 account disconnect·app-prefix unknown과 market/prepare/order origin에는
   `reconciliation_required=false`, `status=EXACT`, non-null category 조합도 유효하다. Prefixless
   external execution은 worker wake와 direct reconnect를 금지하고 fresh process account-wide 검증만
-  허용한다. External execution, event-runtime과 process-ownership은 process-lifetime blocker라
-  concrete `false`를 허용하지 않는다.
+  허용한다. `ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION` category 자체는 일반 account disconnect와
+  app-prefix unknown도 함께 표현하므로 항상 영구적이지 않다. Event-runtime failure,
+  process-ownership ambiguity와 별도의 prefixless-external flag만 process-lifetime blocker이며,
+  이 세 flag는 concrete `false`를 허용하지 않는다. Startup reconciliation 입구, startup final commit
+  직전 재검사와 direct start 모두 fresh process 전까지 pre-I/O 차단한다.
 - Fresh verification은 `RUNTIME_CREATION`부터 `CLEANUP`까지 허용된 15개 stable
   stage 중 최초 실패를 고정한다. Source history·pending·
   manual-kill control은 filesystem root부터 final parent까지 component-wise no-follow로 연 `0700`
   source/copy ancestor FD chain과 `0600` isolated copy로 fresh runtime에 전달한다. Leaf ctime/mtime을
   포함한 before/after fingerprint나 chain identity/ctime 중 하나라도 변하면 `DURABILITY`로
-  강등한다. Final fingerprint 뒤 chain을 한 번 더 검증해 ancestor rename/restore ABA도 막는다. `VERIFIED`
+  강등한다. Final leaf는 source → copy → source 순서로 다시 캡처하고, 그 뒤 chain을 검증해 leaf와
+  ancestor rename/restore ABA를 모두 막는다. Destination/source ancestor close는 한쪽 실패 뒤에도
+  전체 close를 계속하고 최초 cleanup error를 보존한다. Artifact publication도 file close·temporary
+  unlink·directory close를 모두 best effort로 시도하며 최초 cleanup error를 유지한다. `VERIFIED`
   직전에 account-wide open order/list, symbol open result, recent baseline과 stream/
-  reconciliation을 다시 읽어 REST 사이 TOCTOU를 닫는다.
+  reconciliation을 다시 읽어 REST 사이 TOCTOU를 닫는다. Ancestor ctime pin은 sibling 생성·삭제도
+  fail closed하므로 actual execution 동안 source/destination evidence directory를 격리하고 sibling
+  mutation을 금지한다. 변경 시 자동 재시도 없이 `DURABILITY/INCOMPLETE`로 종료한다.
 - Actual Testnet factory는 explicit evidence clock을 REST `clock`·`result_clock`, permission proxy와
   runtime/event stream에 동일 identity로 전달한다. Run 시작의 단일 wall UTC anchor와 `monotonic_ns`
   경과가 REST 직후 다섯 preflight `observed_at`, permission/runtime/account/UI/final과 startup account
@@ -633,13 +648,23 @@ delegate/durable Trade는 누적 0건이다. Live endpoint/credential/order, 24�
   `market:{market_version}:{source_event_id}`와 parsed source identity/time을 exact 결속한다. Action
   단일 source는 30m open/closed 또는 closed 1m, atomic source는 동일 UTC boundary의 exact 2/4/6개
   1m·30m 및 필요한 4h·1d closed/open batch다. `NO_SIGNAL` single 4h/1d도 허용하며 market version
-  strict increase, context version nondecrease를 강제한다.
+  strict increase, context version nondecrease를 강제한다. 모든 V3 `NO_SIGNAL` `source_event_id`는
+  trace 전체에서 유일해야 하며 version만 높인 duplicate source도 위조로 거부한다.
 - V3 `SUCCESS`는 policy version `13`, 모든 regime `TYPE_0`, BUY/SELL 동일 configured cap과
   `bat-{sha256(session_id + NUL + intent_id)[:24]}-0` client order ID를 요구한다. SELL intent와 STOP
   evaluation, trace message 1의 `v→v`, message 2의 동일 before `v→v+1`, message 14의 exact client
-  outcome을 producer identity에 결속한다. 나머지 command ID도 해당 attempt의 evaluation/intent
-  origin 집합을 벗어날 수 없다. Result와 durable Trade는 extra `UNKNOWN` 없이 attempt와 zip된
-  BUY → SELL exact order이고 Trade ID는 `trade-{exchange_order_id}`다. 각 result fill은
+  outcome을 producer identity에 결속한다. BUY message 2의 `context_version_after`는 immutable
+  fingerprint와 `1L.3` context version에 exact 결속한다. 첫 비동기 message `8` 또는 `9` 전 모든
+  non-final command ID는 evaluation ID이고, 그 경계부터 intent ID이며 final `14`는 outcome identity다.
+  Message `9`는 독립·반복되거나 stream partial 뒤 scheduled query terminal로 이어질 수 있다. Same-ID
+  query budget은 최대 4회지만 stream event 수에 임의의 4회 제한은 없고 전체 구조 상한은 `2048`이다.
+  이는 공식
+  [Binance User Data Stream](https://github.com/binance/binance-spot-api-docs/blob/master/user-data-stream.md)과
+  [Binance Market Orders FAQ](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_orders_faq.md)의
+  partial/terminal 계약에 맞춘다. Messages `1..6.1`의 exchange order ID는 null이고 concrete ID는
+  `7` 또는 `9`에서만 처음 나타나며 이후 바뀌거나 null로 돌아갈 수 없다. Result와 durable Trade는
+  extra `UNKNOWN` 없이 attempt와 zip된 BUY → SELL exact order이고 Trade ID는
+  `trade-{exchange_order_id}`다. 각 result fill은
   `(event_time, canonical integer tradeId)` strict ascending이고 Binance `tradeId`는 non-negative여야 하며, 이는 공식
   [Binance SOR FAQ](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/sor_faq.md)의
   allocation/trade 구분과 일치한다. Fee asset은 `ETH` 또는 `USDT`만 허용하고 quote fee는 USDT fee
@@ -647,6 +672,11 @@ delegate/durable Trade는 누적 0건이다. Live endpoint/credential/order, 24�
   proceeds와 exact quantity allocation으로 domain realized PnL을 다시 계산해 Trade와 Performance
   run/total에 결속한다. Empty baseline의 realized PnL과 fee는 모두 zero다. 양수 ETH base-fee SELL은
   production Position 회계가 표현하지 못하므로 산술을 맞춰도 SUCCESS로 봉인하지 않는다.
+  Preflight MARKET BUY received-asset commission rate가 zero이고 discount asset이 없으면 BUY fill과
+  durable Trade의 `fee_amount`·`fee_quote_amount`도 exact zero다. 이 received-asset commission과
+  discount 의미는 공식
+  [Binance Commission FAQ](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/commission_faq.md)를
+  따른다.
 - V3 transport sequence는 `1..N` 연속이다. Account event interleave는 허용하되
   `ACCOUNT_UPDATED.related_id`는 null이어야 한다. Durable Trade order와 같은 순서의 adjacent
   `ORDER_EXECUTED` → `PERFORMANCE_UPDATED` pair 뒤에는 다음 order 전에 trace context version 이상인
@@ -665,7 +695,8 @@ delegate/durable Trade는 누적 0건이다. Live endpoint/credential/order, 24�
   완료했지만 새 source digest와 signed target을 결속하지 않았으므로 current-tree external PASS로
   사용하지 않는다.
 - 위 immutable snapshot, exact V3 chronology/accounting/outcome-routing과 ancestor-chain durability는
-  local-only 보강이다. 이를 포함한 최종 local gate는 Backend `Ran 962 tests in 32.223s`,
+  local-only 보강이다. 아래 수치는 이번 추가 보강 전 historical local gate다. 당시 Backend
+  `Ran 962 tests in 32.223s`,
   `OK (skipped=8)`, scripts `Ran 183 tests in 33.050s`, secure runner `14/14`, cause integration `50/50`,
   Case 2 helper `29/29`·external actual `1` safe skip, convention `2/2`, Communication `126/126`을
   통과했다. 이번 보강의 Keychain lookup,
@@ -685,7 +716,9 @@ external diagnostic/read-only/actual을 반복하지 않는다. Local-only first
    둘 다 category를 노출하지 않는다. Raw ID·filter value·balance·price·exception
    repr는 증거에 넣지 않는다. App-prefix unknown만 same-process account recovery를 허용하고,
    prefixless external은 process-lifetime flag로 worker wake와 direct reconnect를 pre-I/O 차단해 fresh
-   process account-wide 검증만 허용한다.
+   process account-wide 검증만 허용한다. 이 category는 일반 disconnect도 포함하므로 category 자체가
+   permanent blocker는 아니다. Event-runtime failure, process-ownership ambiguity와 prefixless-external
+   flag는 startup 입구·final commit·direct start를 모두 차단한다.
 2. Failure 감지 시 frozen cause snapshot과 finalizer 시작 직전 current snapshot이 다르면
    `CONFLICT`로 fail closed한다. Schema v2 writer는 `first_cause`, 최초 stable fresh
    failure stage, account-wide open order/list empty truth를 exact field로 보존한다.
@@ -725,10 +758,14 @@ external diagnostic/read-only/actual을 반복하지 않는다. Local-only first
    source/copy ancestor descriptor chain을 함께 pin한 owner-only isolated snapshot을 사용한다. Finalizer는
    ctime/mtime을 포함한 source/copy fingerprint와 chain identity/ctime, account-wide open truth, recent exact baseline,
    stream와 reconciliation을 다시 읽고 변경·누락·cleanup 실패를 stable stage/reason으로
-   강등한다. Final fingerprint 뒤 chain을 다시 검증해 ancestor rename/restore ABA도 거부한다. 이
+   강등한다. Final leaf는 source → copy → source로 캡처하고 뒤이어 chain을 검증한다. Source/destination
+   ancestor close와 artifact file close·unlink·directory close는 전체 cleanup을 best effort로 수행하고
+   최초 error를 보존한다. Ancestor ctime은 sibling churn도 fail closed하므로 actual execution 동안
+   evidence directory를 격리하며, 변경 시 자동 재시도 없이 `DURABILITY/INCOMPLETE`로 종료한다. 이
    보강은 주문·Keychain·외부 network 없이 구현했으며 historical
    external failure의 원인을 사후 결론내지 않는다.
-4. 최종 local gate에서 Backend/scripts/runner/Communication/convention 회귀와 기존
+4. 다음 수치는 2026-09-04 추가 보강 전 historical local gate다. 당시 Backend/scripts/runner/
+   Communication/convention 회귀와 기존
    baseline·preserved v2 `NO_SIGNAL`·latest v1 FAILED artifact digest를 모두 재검증했다. Immutable
    snapshot, exact V3와 ancestor-chain 보강을 포함해 Backend `962`, scripts `183`, runner `14`, cause
    integration `50`, Case 2 local `29`, convention `2`, Communication `126`이 통과했다. 이 local PASS를

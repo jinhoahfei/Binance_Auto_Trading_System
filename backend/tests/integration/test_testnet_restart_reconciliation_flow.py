@@ -2398,6 +2398,134 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
             self.assertIs(stopped.status, TradingSessionStatus.TERMINATED)
             self.assertEqual(client.submit_count, 0)
 
+    def test_process_lifetime_blockers_reject_startup_before_exchange_reads(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_process_lifetime_blockers_reject_startup_before_exchange_reads()
+        기능: 세 process-lifetime flag가 startup 재조정 완료로 해제되지 않음을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        blocker_names = (
+            "event-runtime",
+            "process-ownership",
+            "external-execution",
+        )
+        for blocker_name in blocker_names:
+            with self.subTest(blocker=blocker_name), TemporaryDirectory() as root:
+                seed_order = _make_pending_order(
+                    client_order_id=f"bat-startup-blocker-{blocker_name}"
+                )
+                client = RestartReconciliationRESTClient(
+                    _make_filled_result(seed_order)
+                )
+                client.include_recent_result = False
+                controller, _, _ = _create_recovery_controller(
+                    Path(root) / "trades.jsonl",
+                    client,
+                    command_gate=True,
+                    order_retry_waiter=lambda _delay: None,
+                )
+
+                # Startup 진입 전 각 permanent origin을 기록해 REST 주문 조회 전 즉시 차단한다.
+                if blocker_name == "event-runtime":
+                    controller.mark_event_runtime_failed()
+                elif blocker_name == "process-ownership":
+                    controller.mark_process_ownership_ambiguous(
+                        "parent_identity_lost"
+                    )
+                else:
+                    accepted = controller.observe_order_result(
+                        OrderResult(
+                            symbol="ETHUSDT",
+                            client_order_id="manual-external-before-startup",
+                            exchange_order_id="93004",
+                            status=OrderStatus.NEW,
+                            processed_at=FIXED_TIME,
+                        )
+                    )
+                    self.assertFalse(accepted)  # External execution은 app order recovery 대상이 아니다.
+
+                with self.assertRaisesRegex(
+                    StartupOrderReconciliationError,
+                    "process-lifetime reconciliation",
+                ):
+                    controller.reconcile_startup_state()
+
+                self.assertFalse(controller.startup_reconciliation_complete)
+                self.assertFalse(controller.command_enabled)
+                self.assertTrue(controller.reconciliation_required)
+                self.assertEqual(0, client.recent_request_count)
+                self.assertEqual([], client.query_client_order_ids)
+
+    def test_reentrant_external_execution_blocks_final_startup_commit(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_reentrant_external_execution_blocks_final_startup_commit()
+        기능: startup 최종 publication의 prefixless execution 재진입이 READY gate를 열지 못함을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        seed_order = _make_pending_order(
+            client_order_id="bat-reentrant-startup-seed"
+        )
+        client = RestartReconciliationRESTClient(_make_filled_result(seed_order))
+        client.include_recent_result = False
+
+        with TemporaryDirectory() as temporary_directory:
+            controller, _, _ = _create_recovery_controller(
+                Path(temporary_directory) / "trades.jsonl",
+                client,
+                command_gate=True,
+                order_retry_waiter=lambda _delay: None,
+            )
+            original_publish = controller._publish_restored_position_snapshot
+
+            def publish_then_observe_external_execution(position: Position) -> None:
+                """
+                함수 이름: publish_then_observe_external_execution()
+                기능: Position snapshot publication 뒤 동일 session RLock으로 prefixless result를 재진입한다.
+                인자: position -> startup이 복원한 authoritative Position
+                반환값: 없음
+                작성 날짜: 2026/09/04
+                """
+                original_publish(position)
+                accepted = controller.observe_order_result(
+                    OrderResult(
+                        symbol="ETHUSDT",
+                        client_order_id="manual-reentrant-external-startup",
+                        exchange_order_id="93005",
+                        status=OrderStatus.NEW,
+                        processed_at=FIXED_TIME,
+                    )
+                )
+                if accepted:
+                    raise AssertionError("external startup result was accepted")
+
+            # Final commit 직전 재진입이 permanent·stream flag를 세운 상태로 완료를 거부한다.
+            with mock_patch.object(
+                controller,
+                "_publish_restored_position_snapshot",
+                side_effect=publish_then_observe_external_execution,
+            ):
+                with self.assertRaisesRegex(
+                    StartupOrderReconciliationError,
+                    "process-lifetime reconciliation",
+                ):
+                    controller.reconcile_startup_state()
+
+            self.assertFalse(controller.startup_reconciliation_complete)
+            self.assertTrue(
+                controller.external_execution_reconciliation_required
+            )
+            self.assertTrue(controller._stream_reconciliation_required)
+            self.assertFalse(controller.command_enabled)
+            self.assertTrue(controller.reconciliation_required)
+
     def test_disconnect_after_journal_blocks_post_and_keeps_recovery_record(
         self,
     ) -> None:

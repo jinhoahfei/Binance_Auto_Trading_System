@@ -1,3 +1,4 @@
+//! 사용자가 창 닫기나 Command-Q 같은 종료 동작을 했을 때, 아직 프론트엔드(renderer)의 이벤트 리스너가 준비되지 않았더라도 종료 의도를 잃지 않도록 보관했다가 나중에 전달하는 브리지
 //! Renderer listener 준비 전에도 macOS close/quit intent를 잃지 않는 native bridge를 소유한다.
 
 use serde::Serialize;
@@ -9,6 +10,7 @@ pub const NATIVE_EXIT_REQUESTED_EVENT: &str = "native-exit-requested";
 /// Main window close와 application quit을 renderer에 exact string으로 전달하는 source이다.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// 종료 요청의 출처를 나타내는 열거형으로, 창 닫기와 애플리케이션 종료를 구분한다.
 pub enum NativeExitIntentSource {
     Window,
     Application,
@@ -48,6 +50,7 @@ impl NativeExitIntentFailure {
 }
 
 /// Listener arm 여부와 pre-bootstrap intent 하나를 같은 lock으로 보호한다.
+/// renderer가 event listener를 준비했는지 여부를 나타내는 armed와, listener 준비 전에 발생한 OS close/quit intent를 latch하는 pending_source를 가진다.
 #[derive(Default)]
 struct NativeExitIntentLifecycle {
     armed: bool,

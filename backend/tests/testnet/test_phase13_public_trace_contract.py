@@ -1842,7 +1842,7 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_decision_event_attempt_and_notional_provenance_mismatch_is_rejected()
-        기능: source event, BUY attempt 또는 price×quantity claim이 fingerprint와 다르면 차단하는지 검증한다.
+        기능: source·BUY attempt·Context 또는 price×quantity claim이 fingerprint와 다르면 차단한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/31
@@ -1908,6 +1908,35 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             "client_order_id"
         ] = "bat-short-0"
         invalid_trace_bodies.append(("invalid_client_id", invalid_client_id))
+
+        # Trace와 UI version을 함께 올려도 BUY message 2는 public Action Context를 벗어날 수 없다.
+        decision_context_drift = self._success_trace_body()
+        decision_context_entries = decision_context_drift[
+            "order_execution_traces"
+        ][0]["entries"]
+        for trace_entry in decision_context_entries:
+            if trace_entry["message_id"] == "1":
+                trace_entry["context_version_before"] = 12
+                trace_entry["context_version_after"] = 12
+            elif trace_entry["message_id"] == "2":
+                trace_entry["context_version_before"] = 12
+                trace_entry["context_version_after"] = 13
+            else:
+                trace_entry["context_version_before"] = 13
+                trace_entry["context_version_after"] = 13
+        first_buy_session_event = next(
+            event
+            for event in decision_context_drift[
+                "transport_ui_event_batch"
+            ]["events"]
+            if event["event_type"] == "TRADING_SESSION_UPDATED"
+        )
+        first_buy_session_event["aggregate_version"] = 13
+        with self.assertRaisesRegex(
+            PhaseThirteenPublicTraceValidationError,
+            "BUY submit mutation does not match",
+        ):
+            seal_phase13_public_trace(decision_context_drift)
 
         for case_name, trace_body in invalid_trace_bodies:
             with self.subTest(case_name=case_name):
@@ -2465,6 +2494,80 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             2
         ]["command_event_id"] = "fabricated-producer-event"
 
+        # Submit 1~7은 evaluation만 쓰며 이후 intent 전환 뒤 evaluation으로 돌아갈 수 없다.
+        early_intent_command = self._success_trace_body()
+        early_intent_entries = early_intent_command[
+            "order_execution_traces"
+        ][0]["entries"]
+        early_intent_entries[1]["command_event_id"] = (
+            early_intent_command["order_attempts"][0]["intent_id"]
+        )
+        oscillating_command = self._success_trace_body()
+        oscillating_entries = oscillating_command[
+            "order_execution_traces"
+        ][0]["entries"]
+        oscillating_intent_id = oscillating_command["order_attempts"][0][
+            "intent_id"
+        ]
+        oscillating_evaluation_id = oscillating_command["order_attempts"][0][
+            "evaluation_id"
+        ]
+        message_ten_index = next(
+            index
+            for index, trace_entry in enumerate(oscillating_entries)
+            if trace_entry["message_id"] == "10"
+        )
+        oscillating_entries[message_ten_index][
+            "command_event_id"
+        ] = oscillating_intent_id
+        oscillating_entries[message_ten_index + 1][
+            "command_event_id"
+        ] = oscillating_evaluation_id
+
+        # Immediate fill과 durable suffix는 8/9 비동기 경계가 없으므로 evaluation을 유지한다.
+        immediate_intent_switch = self._success_trace_body()
+        immediate_intent_entries = immediate_intent_switch[
+            "order_execution_traces"
+        ][0]["entries"]
+        immediate_intent_id = immediate_intent_switch["order_attempts"][0][
+            "intent_id"
+        ]
+        immediate_fill_index = next(
+            index
+            for index, trace_entry in enumerate(immediate_intent_entries)
+            if trace_entry["message_id"] == "10"
+        )
+        for trace_entry in immediate_intent_entries[
+            immediate_fill_index:-1
+        ]:
+            trace_entry["command_event_id"] = immediate_intent_id
+
+        # Scheduled query 8~9는 processor evaluation이 끝난 뒤 intent fallback으로만 기록된다.
+        async_evaluation_command = self._success_trace_body()
+        async_evaluation_entries = async_evaluation_command[
+            "order_execution_traces"
+        ][0]["entries"]
+        async_fill_index = next(
+            index
+            for index, trace_entry in enumerate(async_evaluation_entries)
+            if trace_entry["message_id"] == "10"
+        )
+        async_query_entries: list[dict[str, object]] = []
+        for message_id in ("8", "8.1", "8.2", "9"):
+            query_entry = deepcopy(
+                async_evaluation_entries[async_fill_index]
+            )
+            query_entry["message_id"] = message_id
+            async_query_entries.append(query_entry)
+        async_evaluation_entries[
+            async_fill_index:async_fill_index
+        ] = async_query_entries
+        for sequence, trace_entry in enumerate(
+            async_evaluation_entries,
+            start=1,
+        ):
+            trace_entry["sequence"] = sequence
+
         # Entry 내부·각 축 monotonic뿐 아니라 직전 after보다 작은 다음 before도 독립 차단한다.
         for case_name, trace_body in (
             ("missing-step", missing_step_body),
@@ -2479,16 +2582,92 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             ("message-two-after-drift", message_two_after_drift),
             ("wrong-outcome-command", wrong_outcome_command),
             ("foreign-intermediate-command", foreign_intermediate_command),
+            ("early-intent-command", early_intent_command),
+            ("oscillating-command", oscillating_command),
+            ("immediate-intent-switch", immediate_intent_switch),
+            ("async-evaluation-command", async_evaluation_command),
         ):
             with self.subTest(case_name=case_name):
                 self._assert_body_is_rejected(trace_body)
+
+        # REST query 없이 User Data Stream terminal message 9가 ID와 intent provenance를 확정할 수 있다.
+        stream_terminal_body = self._success_trace_body()
+        stream_terminal_entries = stream_terminal_body[
+            "order_execution_traces"
+        ][0]["entries"]
+        stream_intent_id = stream_terminal_body["order_attempts"][0][
+            "intent_id"
+        ]
+        message_seven_index = next(
+            index
+            for index, trace_entry in enumerate(stream_terminal_entries)
+            if trace_entry["message_id"] == "7"
+        )
+        stream_terminal_entries[message_seven_index]["order_id"] = None
+        stream_message_nine = deepcopy(
+            stream_terminal_entries[message_seven_index + 1]
+        )
+        stream_message_nine["message_id"] = "9"
+        stream_message_nine["command_event_id"] = stream_intent_id
+        stream_terminal_entries.insert(
+            message_seven_index + 1,
+            stream_message_nine,
+        )
+        for trace_entry in stream_terminal_entries[
+            message_seven_index + 2 : -1
+        ]:
+            trace_entry["command_event_id"] = stream_intent_id
+        for sequence, trace_entry in enumerate(
+            stream_terminal_entries,
+            start=1,
+        ):
+            trace_entry["sequence"] = sequence
+        seal_phase13_public_trace(stream_terminal_body)
+
+        # Stream partial 적용 뒤 scheduled query가 새 delta 없는 terminal summary를 확정할 수도 있다.
+        mixed_terminal_body = deepcopy(stream_terminal_body)
+        mixed_terminal_body.pop("trace_sha256", None)
+        mixed_terminal_entries = mixed_terminal_body[
+            "order_execution_traces"
+        ][0]["entries"]
+        mixed_suffix_index = next(
+            index
+            for index, trace_entry in enumerate(mixed_terminal_entries)
+            if trace_entry["message_id"] == "13"
+        )
+        mixed_message_nine = next(
+            trace_entry
+            for trace_entry in mixed_terminal_entries
+            if trace_entry["message_id"] == "9"
+        )
+        mixed_message_ten = next(
+            trace_entry
+            for trace_entry in mixed_terminal_entries
+            if trace_entry["message_id"] == "10"
+        )
+        mixed_query_entries: list[dict[str, object]] = []
+        for message_id in ("8", "8.1", "8.2", "9"):
+            query_entry = deepcopy(mixed_message_nine)
+            query_entry["message_id"] = message_id
+            mixed_query_entries.append(query_entry)
+        terminal_summary_entry = deepcopy(mixed_message_ten)
+        mixed_query_entries.append(terminal_summary_entry)
+        mixed_terminal_entries[
+            mixed_suffix_index:mixed_suffix_index
+        ] = mixed_query_entries
+        for sequence, trace_entry in enumerate(
+            mixed_terminal_entries,
+            start=1,
+        ):
+            trace_entry["sequence"] = sequence
+        seal_phase13_public_trace(mixed_terminal_body)
 
     def test_order_execution_trace_requires_monotonic_terminal_exchange_identity(
         self,
     ) -> None:
         """
         함수 이름: test_order_execution_trace_requires_monotonic_terminal_exchange_identity()
-        기능: SUCCESS trace의 exchange ID 전체 누락과 최초 관찰 후 None 회귀를 거부한다.
+        기능: SUCCESS exchange ID의 미래 주장·전체 누락·최초 관찰 후 None/다른 ID 회귀를 거부한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/31
@@ -2526,10 +2705,34 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         ):
             trace_entry["sequence"] = sequence
 
-        # Old validator가 허용하던 all-None과 matching ID 관찰 후 None 회귀를 독립 거부한다.
+        # Exchange result 전 미래 ID와 최초 확정 뒤 다른 ID로의 변경도 각각 거부한다.
+        future_identity_body = self._success_trace_body()
+        future_identity_entries = future_identity_body[
+            "order_execution_traces"
+        ][0]["entries"]
+        message_six_one = next(
+            trace_entry
+            for trace_entry in future_identity_entries
+            if trace_entry["message_id"] == "6.1"
+        )
+        message_six_one["order_id"] = "9100001"
+        changed_identity_body = self._success_trace_body()
+        changed_identity_entries = changed_identity_body[
+            "order_execution_traces"
+        ][0]["entries"]
+        changed_identity_entry = next(
+            trace_entry
+            for trace_entry in changed_identity_entries
+            if trace_entry["message_id"] == "10"
+        )
+        changed_identity_entry["order_id"] = "9100099"
+
+        # Old validator가 허용하던 미래 ID와 None·다른 ID 회귀를 독립 거부한다.
         for case_name, trace_body in (
             ("all-order-ids-none", all_none_body),
             ("order-id-none-regression", none_regression_body),
+            ("future-order-id", future_identity_body),
+            ("changed-order-id", changed_identity_body),
         ):
             with self.subTest(case_name=case_name):
                 self._assert_body_is_rejected(trace_body)
@@ -2905,13 +3108,25 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
         buy_trade = nonzero_fee["run_durable_trades"][0]
         buy_trade["fee_amount"] = "0.001"
         buy_trade["fee_quote_amount"] = "0.001"
+        sell_trade = nonzero_fee["run_durable_trades"][1]
+        sell_trade["realized_profit_loss"] = "0.019"
         nonzero_fee["final_state"]["performance"]["run_fee_quote"] = (
             "0.001"
         )
         nonzero_fee["final_state"]["performance"]["total_fee_quote"] = (
             "0.001"
         )
-        invalid_trace_bodies.append(("nonzero_fee", nonzero_fee))
+        nonzero_fee["final_state"]["performance"][
+            "run_realized_profit_loss"
+        ] = "0.019"
+        nonzero_fee["final_state"]["performance"][
+            "total_realized_profit_loss"
+        ] = "0.019"
+        with self.assertRaisesRegex(
+            PhaseThirteenPublicTraceValidationError,
+            "BUY fee contradicts its zero-commission preflight",
+        ):
+            seal_phase13_public_trace(nonzero_fee)
 
         # SELL의 ETH fee 산술을 fill·Trade·PnL·Performance까지 맞춰도 production Position은 거부한다.
         base_asset_sell_fee = self._success_trace_body()
@@ -3296,10 +3511,14 @@ class PhaseThirteenPublicTraceContractTests(unittest.TestCase):
             extra_market_event["public_market_events"][0]
         )
         copied_market_event["sequence"] = 2
+        copied_market_event["market_version"] = 8
+        copied_market_event["context_version"] = 13
         extra_market_event["public_market_events"].append(copied_market_event)
-        invalid_trace_bodies.append(
-            ("NO_SIGNAL_EXTRA_MARKET", extra_market_event)
-        )
+        with self.assertRaisesRegex(
+            PhaseThirteenPublicTraceValidationError,
+            "NO_SIGNAL market evidence is not an observed Kline snapshot",
+        ):
+            seal_phase13_public_trace(extra_market_event)
         extra_no_signal_ui = self._no_signal_trace_body()
         success_ui_events = self._success_trace_body()[
             "transport_ui_event_batch"

@@ -12,7 +12,7 @@ pub struct CsvDirectoryPickerFailure {
 
 impl CsvDirectoryPickerFailure {
     /// 함수 이름: invalid_selected_path()
-    /// 기능: native picker 결과를 안전한 absolute UTF-8 path로 변환할 수 없을 때의 정적 실패를 만든다.
+    /// 기능: 폴더 선택 과정에서 문제(native picker 결과를 안전한 absolute UTF-8 path로 변환할 수 없을 때)발생 시 프론트엔드에 반환할 에러 구조체.
     /// 인자: 없음
     /// 반환값: 선택 경로를 담지 않는 typed failure
     /// 작성 날짜: 2026/08/23
@@ -25,7 +25,7 @@ impl CsvDirectoryPickerFailure {
 }
 
 /// 함수 이름: absolute_utf8_directory()
-/// 기능: native file path를 renderer와 backend가 공유할 absolute UTF-8 directory 문자열로 제한한다.
+/// 기능: OS의 PathBuf를 프론트엔드와 backend가 사용할 수 있는 String으로 변환
 /// 인자: directory_path -> native picker가 선택한 filesystem path
 /// 반환값: absolute UTF-8 path 또는 경로를 노출하지 않는 typed failure
 /// 작성 날짜: 2026/08/23

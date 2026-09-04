@@ -1,3 +1,4 @@
+//! Tauri 데스크톱 앱의 최상위 네이티브 오케스트레이션 파일, UI와 sidecar backend를 안전하게 연결하고, renderer에 secret 없는 descriptor를 한 번만 전달하며, OS picker와 native dialog를 안전하게 호출한다.
 mod dialog;
 mod exit_bridge;
 #[cfg(target_os = "macos")]

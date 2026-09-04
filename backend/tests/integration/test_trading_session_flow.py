@@ -55,6 +55,7 @@ from binance_auto_trader.domain.trading.events import (
 from binance_auto_trader.domain.trading.logic_registry import (
     TradingLogicSupportStatus,
 )
+from binance_auto_trader.domain.trading.order import OrderResult, OrderStatus
 from binance_auto_trader.domain.trading.results import TradingSTMResult
 from binance_auto_trader.domain.trading.states import (
     OrderAttemptKind,
@@ -869,6 +870,70 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
             disabled_start.exception.code,
             TradingSessionFailureCode.COMMAND_DISABLED,
         )
+
+    def test_process_lifetime_reconciliation_blocks_direct_start(self) -> None:
+        """
+        함수 이름: test_process_lifetime_reconciliation_blocks_direct_start()
+        기능: event runtime·process ownership·외부 실행 flag 뒤 direct start가 RUNNING을 열지 못함을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        blocker_names = (
+            "event-runtime",
+            "process-ownership",
+            "external-execution",
+        )
+        for blocker_name in blocker_names:
+            with self.subTest(blocker=blocker_name):
+                controller, regime_controller, _ = _create_ready_controller()
+                selection = regime_controller.set_regime_type(
+                    RegimeType.TYPE_0,
+                    command_id=f"select-before-{blocker_name}",
+                    expected_version=0,
+                )
+                selected_stm = controller._selected_stm
+
+                # 세 production origin을 각각 시작 전 Controller에 기록해 잠긴 공개 gate를 만든다.
+                if blocker_name == "event-runtime":
+                    controller.mark_event_runtime_failed()
+                elif blocker_name == "process-ownership":
+                    controller.mark_process_ownership_ambiguous(
+                        "parent_identity_lost"
+                    )
+                else:
+                    accepted = controller.observe_order_result(
+                        OrderResult(
+                            symbol="ETHUSDT",
+                            client_order_id="manual-external-before-start",
+                            exchange_order_id="92004",
+                            status=OrderStatus.NEW,
+                            processed_at=MARKET_UPDATED_AT,
+                        )
+                    )
+                    self.assertFalse(accepted)  # Prefixless execution은 app-owned 주문으로 수락하지 않는다.
+
+                # Route가 command_enabled를 우회해 Controller를 직접 호출해도 Context와 STM은 시작 전 상태를 유지한다.
+                context_before = controller.context
+                self.assertFalse(controller.command_enabled)
+                with self.assertRaises(TradingSessionError) as blocked_start:
+                    controller.start_trading(
+                        command_id=f"start-after-{blocker_name}",
+                        expected_version=selection.version,
+                    )
+
+                self.assertIs(
+                    blocked_start.exception.code,
+                    TradingSessionFailureCode.POSITION_RECONCILIATION_REQUIRED,
+                )
+                self.assertEqual(context_before, controller.context)
+                self.assertIs(controller.status, TradingSessionStatus.NOT_STARTED)
+                self.assertIsNotNone(selected_stm)
+                self.assertIs(
+                    selected_stm.current_state.root_state,
+                    RootState.NOT_STARTED,
+                )
+                self.assertTrue(controller.reconciliation_required)
 
     def test_split_command_is_versioned_and_idempotent(self) -> None:
         """

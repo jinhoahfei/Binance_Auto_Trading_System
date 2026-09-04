@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 from threading import Event, Thread
 import unittest
-from unittest.mock import PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 from binance_auto_trader.application import (
     TradeHistoryController,
@@ -147,6 +147,169 @@ class ShutdownLifecycleTests(unittest.TestCase):
             self.assertIs(runtime.state.status, ApplicationStatus.CLOSED)
             self.assertFalse(event_worker.request_processing())
             self.assertEqual(published_states, [])
+
+    def test_close_failure_attempts_all_resources_and_publishes_closed(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_close_failure_attempts_all_resources_and_publishes_closed()
+        기능: 최초 close 실패를 보존하면서 후속 자원·CLOSED 게시를 모두 시도하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            def observe_trading_state(
+                controller: object,
+                execution_mode: object,
+            ) -> None:
+                """
+                함수 이름: observe_trading_state()
+                기능: 종료 오류 test에 실제 event worker를 조립할 observer shape을 제공한다.
+                인자: controller -> worker가 게시할 TradingController
+                    execution_mode -> runtime의 ExecutionMode
+                반환값: 없음
+                작성 날짜: 2026/09/04
+                """
+                return None  # 이 test는 publication payload가 아니라 자원 종료 순서만 관찰한다.
+
+            cleanup_order: list[str] = []
+
+            def create_cleanup_operation(
+                resource_name: str,
+                failure: BaseException | None = None,
+            ) -> Callable[[], None]:
+                """
+                함수 이름: create_cleanup_operation()
+                기능: 자원 종료 시도 순서를 기록하고 선택 예외를 발생시킨다.
+                인자: resource_name -> 기록할 안정적 자원 이름
+                    failure -> close 기록 뒤 발생시킬 선택 예외
+                반환값: 인자 없이 호출할 deterministic close Operation
+                작성 날짜: 2026/09/04
+                """
+
+                def run_cleanup_operation() -> None:
+                    """
+                    함수 이름: run_cleanup_operation()
+                    기능: 해당 자원 시도를 기록하고 fixture의 예외를 그대로 발생시킨다.
+                    인자: 없음
+                    반환값: 성공하면 없음
+                    작성 날짜: 2026/09/04
+                    """
+                    cleanup_order.append(resource_name)
+                    if failure is not None:
+                        raise failure  # 실제 예외 identity를 재생성하지 않고 lifecycle에 전달한다.
+
+                return run_cleanup_operation
+
+            runtime = _create_ready_runtime(
+                Path(temporary_directory) / "history.jsonl",
+                trading_session_update_observer=observe_trading_state,
+            )
+            event_worker = runtime._trading_event_runtime_worker
+            if event_worker is None:
+                raise AssertionError("observer must compose the event worker")
+
+            # Network effect 없는 실제 worker 타입을 주입해 FAKE runtime에서도 두 recovery slot을 검증한다.
+            account_recovery_worker = _AccountStreamRecoveryWorker(
+                Mock(),
+                Mock(return_value=False),
+                worker_name="test-account-cleanup",
+            )
+            market_recovery_worker = _AccountStreamRecoveryWorker(
+                Mock(),
+                Mock(return_value=False),
+                worker_name="test-market-cleanup",
+            )
+            object.__setattr__(
+                runtime,
+                "_account_stream_recovery_worker",
+                account_recovery_worker,
+            )  # Frozen runtime의 소유 slot만 deterministic worker로 교체한다.
+            object.__setattr__(
+                runtime,
+                "_market_stream_recovery_worker",
+                market_recovery_worker,
+            )  # Production close 순서를 유지하며 market worker를 별도로 관찰한다.
+
+            # 최초 worker 오류와 세 후속 오류를 다른 타입으로 고정해 집계 순서를 본다.
+            first_error = RuntimeError("synthetic event worker close failure")
+            market_error = OSError("synthetic market close failure")
+            session_error = ValueError("synthetic session close failure")
+            account_error = LookupError("synthetic account close failure")
+            account_subscription = Mock()
+            account_subscription.close.side_effect = create_cleanup_operation(
+                "account",
+                account_error,
+            )
+            runtime.trading_controller._account_subscription = (
+                account_subscription
+            )  # Production property이 읽는 소유 handle에 deterministic fixture를 주입한다.
+
+            with (
+                patch.object(
+                    event_worker,
+                    "close",
+                    side_effect=create_cleanup_operation(
+                        "event-worker",
+                        first_error,
+                    ),
+                ),
+                patch.object(
+                    account_recovery_worker,
+                    "close",
+                    side_effect=create_cleanup_operation("account-recovery"),
+                ),
+                patch.object(
+                    market_recovery_worker,
+                    "close",
+                    side_effect=create_cleanup_operation("market-recovery"),
+                ),
+                patch.object(
+                    runtime.market_data_controller,
+                    "close_market_stream",
+                    side_effect=create_cleanup_operation(
+                        "market",
+                        market_error,
+                    ),
+                ),
+                patch.object(
+                    runtime.trading_controller,
+                    "close_session_resources",
+                    side_effect=create_cleanup_operation(
+                        "session",
+                        session_error,
+                    ),
+                ),
+            ):
+                with self.assertRaises(RuntimeError) as error_context:
+                    close_application(runtime)
+
+            # 오류 경계 뒤의 모든 close와 terminal publication이 실행된 뒤 최초 identity가 돌아와야 한다.
+            self.assertIs(error_context.exception, first_error)
+            self.assertEqual(
+                cleanup_order,
+                [
+                    "event-worker",
+                    "account-recovery",
+                    "market-recovery",
+                    "market",
+                    "session",
+                    "account",
+                ],
+            )
+            self.assertIs(runtime.state.status, ApplicationStatus.CLOSED)
+            self.assertFalse(runtime.ready)
+            self.assertEqual(
+                first_error.__notes__,
+                [
+                    "Additional shutdown cleanup failure: market stream (OSError).",
+                    "Additional shutdown cleanup failure: "
+                    "trading session resources (ValueError).",
+                    "Additional shutdown cleanup failure: "
+                    "account subscription (LookupError).",
+                ],
+            )
 
     def test_shutdown_joins_market_recovery_before_reacquiring_app_lock(
         self,

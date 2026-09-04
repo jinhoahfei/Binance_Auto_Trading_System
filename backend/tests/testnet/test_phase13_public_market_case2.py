@@ -124,6 +124,9 @@ _ORDER_SETTLEMENT_TIMEOUT_SECONDS = 60
 _ACCOUNT_SETTLEMENT_TIMEOUT_SECONDS = 15
 _POLL_INTERVAL_SECONDS = 0.25
 _MAXIMUM_RECORDED_MARKET_EVENTS = 512
+# Public artifact의 구조 한도와 Controller의 scheduled REST query 예산을 동일하게 검증한다.
+_MAXIMUM_ORDER_TRACE_ENTRY_COUNT = 2048
+_MAXIMUM_ORDER_QUERY_TRACE_COUNT = 4
 _ARTIFACT_ROOT = Path(__file__).resolve().parents[2] / ".testnet-artifacts"
 _PHASE13_PROCESS_LEASE_PATH = (
     _ARTIFACT_ROOT / ".phase13-public-case2.lock"
@@ -649,7 +652,7 @@ def _assert_complete_success_order_trace(
 ) -> None:
     """
     함수 이름: _assert_complete_success_order_trace()
-    기능: 성공 주문의 고정 prefix·same-ID query/fill branch·durable suffix를 exact grammar로 검증한다.
+    기능: 성공 주문의 고정 prefix·same-ID query/stream/fill branch·durable suffix를 exact 검증한다.
     인자: message_ids -> 한 client order ID에 귀속된 실제 message ID 순서
         side -> BUY 또는 SELL에 따른 위험·원가 trace branch
     반환값: complete 성공 grammar이면 없음
@@ -663,6 +666,8 @@ def _assert_complete_success_order_trace(
     if not isinstance(side, OrderSide):
         raise TypeError("side must be an OrderSide")
     normalized_ids = tuple(message_ids)
+    if len(normalized_ids) > _MAXIMUM_ORDER_TRACE_ENTRY_COUNT:
+        raise AssertionError("successful order trace exceeds the structural limit")
     if any(
         not isinstance(message_id, str)
         or message_id not in _ORDER_TRACE_MESSAGE_ORDER
@@ -714,19 +719,28 @@ def _assert_complete_success_order_trace(
 
     # 이후에는 최대 네 same-ID query와 그 query가 새로 관찰한 fill delta만 허용한다.
     while branch_cursor < len(branch_ids):
-        if (
-            tuple(
-                branch_ids[
-                    branch_cursor : branch_cursor + len(_SAME_ORDER_QUERY_TRACE)
-                ]
-            )
-            != _SAME_ORDER_QUERY_TRACE
-        ):
-            raise AssertionError("successful order trace contains an illegal branch")
-        branch_cursor += len(_SAME_ORDER_QUERY_TRACE)
-        query_count += 1
-        if query_count > 4:
-            raise AssertionError("successful order trace exceeds the query budget")
+        # Account stream reapply는 REST query prefix 없이 message 9로 직접 들어올 수 있다.
+        if branch_ids[branch_cursor] == "9":
+            branch_cursor += 1
+        else:
+            if (
+                tuple(
+                    branch_ids[
+                        branch_cursor : branch_cursor
+                        + len(_SAME_ORDER_QUERY_TRACE)
+                    ]
+                )
+                != _SAME_ORDER_QUERY_TRACE
+            ):
+                raise AssertionError(
+                    "successful order trace contains an illegal branch"
+                )
+            branch_cursor += len(_SAME_ORDER_QUERY_TRACE)
+            query_count += 1
+            if query_count > _MAXIMUM_ORDER_QUERY_TRACE_COUNT:
+                raise AssertionError(
+                    "successful order trace exceeds the query budget"
+                )
         terminal_evidence_complete = False
 
         if (
@@ -740,7 +754,7 @@ def _assert_complete_success_order_trace(
             branch_cursor += len(fill_application_trace)
             applied_fill_count += 1
             terminal_evidence_complete = True
-            continue
+            continue  # Partial stream 결과 뒤 예약 query나 다음 stream 결과가 이어질 수 있다.
 
         # 앞선 partial fill 뒤 terminal 응답에 새 delta가 없으면 summary 10만 suffix 직전에 추가된다.
         if (
@@ -2774,10 +2788,10 @@ def _copy_failure_durability_snapshot(
         require_private_mode=True,
     )
     source_descriptor = source_ancestor_descriptors[-1]
-    source_change_time_ns = os.fstat(source_descriptor).st_ctime_ns
     destination_ancestor_descriptors: tuple[int, ...] | None = None
     snapshot_handle: _FailureDurabilitySnapshotHandle | None = None
     try:
+        source_change_time_ns = os.fstat(source_descriptor).st_ctime_ns
         (
             destination_ancestor_descriptors,
             destination_ancestor_identities,
@@ -2922,14 +2936,24 @@ def _copy_failure_durability_snapshot(
         source_ancestor_descriptors = None  # Handle이 source ancestor chain을 fresh runtime 종료까지 소유한다.
         destination_ancestor_descriptors = None  # Handle이 copy ancestor chain도 cleanup까지 소유한다.
     finally:
+        cleanup_error: OSError | None = None
         if destination_ancestor_descriptors is not None:
-            _close_failure_durability_directory_chain(
-                destination_ancestor_descriptors
-            )
+            try:
+                _close_failure_durability_directory_chain(
+                    destination_ancestor_descriptors
+                )
+            except OSError as error:
+                cleanup_error = error
         if source_ancestor_descriptors is not None:
-            _close_failure_durability_directory_chain(
-                source_ancestor_descriptors
-            )
+            try:
+                _close_failure_durability_directory_chain(
+                    source_ancestor_descriptors
+                )
+            except OSError as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+        if cleanup_error is not None:
+            raise cleanup_error  # Body가 실패해도 두 chain을 모두 닫고 첫 cleanup 오류를 보존한다.
 
     if snapshot_handle is None:
         raise RuntimeError("durability snapshot handle was not created")
@@ -4356,14 +4380,27 @@ def _publish_new_artifact_bytes(
         if final_path_state.st_nlink != 1:
             raise RuntimeError("artifact final path has an external hardlink")
     finally:
+        cleanup_error: OSError | None = None
         if temporary_descriptor is not None:
-            os.close(temporary_descriptor)
+            try:
+                os.close(temporary_descriptor)
+            except OSError as error:
+                cleanup_error = error
         if temporary_exists:
             try:
                 os.unlink(temporary_name, dir_fd=directory_descriptor)
             except FileNotFoundError:
                 pass  # Publish 전후 다른 cleanup 경로가 이미 이름을 회수했으면 멱등 종료한다.
-        os.close(directory_descriptor)
+            except OSError as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+        try:
+            os.close(directory_descriptor)
+        except OSError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        if cleanup_error is not None:
+            raise cleanup_error  # Body 실패와 무관하게 세 cleanup을 독립 시도하고 첫 cleanup 오류를 보존한다.
 
     return trace_path
 
@@ -5733,7 +5770,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_success_order_trace_grammar_accepts_only_complete_branches()
-        기능: immediate·query·partial 성공을 허용하고 누락·중복·불법 branch·예산 초과를 거부한다.
+        기능: immediate·query·stream partial 성공과 불법 branch·query 예산 초과를 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/31
@@ -5771,6 +5808,16 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 + _SAME_ORDER_QUERY_TRACE
                 + ("10",)
                 + _SELL_ORDER_TRACE_SUFFIX,
+            ),
+            (
+                "stream-partial-then-query-terminal",
+                OrderSide.BUY,
+                _BUY_ORDER_TRACE_PREFIX
+                + ("9",)
+                + _BUY_FILL_APPLICATION_TRACE
+                + _SAME_ORDER_QUERY_TRACE
+                + ("10",)
+                + _BUY_ORDER_TRACE_SUFFIX,
             ),
         )
 
@@ -6345,6 +6392,107 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             )
             self.assertEqual((), tuple(artifact_directory.iterdir()))
             self.assertEqual((moved_trace_path,), tuple(moved_directory.iterdir()))
+
+    def test_artifact_cleanup_attempts_every_resource_and_preserves_first_error(
+        self,
+    ) -> None:
+        """
+        함수 이름: test_artifact_cleanup_attempts_every_resource_and_preserves_first_error()
+        기능: artifact body와 세 cleanup이 함께 실패해도 전체 정리와 첫 cleanup 오류 보존을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/04
+        """
+        with TemporaryDirectory() as temporary_directory:
+            artifact_directory = Path(temporary_directory) / "artifacts"
+            artifact_directory.mkdir(mode=0o700)
+            body_error = OSError("artifact body failed")
+            temporary_cleanup_error = OSError(
+                "temporary descriptor cleanup failed"
+            )
+            unlink_cleanup_error = OSError("temporary unlink cleanup failed")
+            directory_cleanup_error = OSError(
+                "directory descriptor cleanup failed"
+            )
+            real_close = os.close
+            real_unlink = os.unlink
+            cleanup_trace: list[str] = []
+            closed_descriptors: list[int] = []
+
+            def close_then_report_cleanup_error(file_descriptor: int) -> None:
+                """
+                함수 이름: close_then_report_cleanup_error()
+                기능: 실제 descriptor를 닫은 뒤 temp와 directory cleanup 오류를 순서대로 주입한다.
+                인자: file_descriptor -> artifact helper가 정리할 descriptor
+                반환값: 없음, 순서에 맞는 OSError 발생
+                작성 날짜: 2026/09/04
+                """
+                cleanup_label = (
+                    "temporary-close"
+                    if not closed_descriptors
+                    else "directory-close"
+                )
+                cleanup_trace.append(cleanup_label)
+                closed_descriptors.append(file_descriptor)
+                real_close(file_descriptor)
+                if len(closed_descriptors) == 1:
+                    raise temporary_cleanup_error
+                raise directory_cleanup_error
+
+            def unlink_then_report_cleanup_error(
+                artifact_name: str,
+                *,
+                dir_fd: int,
+            ) -> None:
+                """
+                함수 이름: unlink_then_report_cleanup_error()
+                기능: 임시 이름을 실제 회수한 뒤 unlink cleanup 오류를 주입한다.
+                인자: artifact_name -> directory FD 기준 임시 artifact 이름
+                    dir_fd -> 임시 artifact를 소유한 pinned directory descriptor
+                반환값: 없음, unlink_cleanup_error 발생
+                작성 날짜: 2026/09/04
+                """
+                cleanup_trace.append("temporary-unlink")
+                real_unlink(artifact_name, dir_fd=dir_fd)
+                raise unlink_cleanup_error
+
+            # Body write 실패 뒤 세 cleanup도 모두 실패하게 해 후속 정리 시도와 오류 우선순위를 고정한다.
+            with patch.object(
+                os,
+                "write",
+                side_effect=body_error,
+            ) as write_mock, patch.object(
+                os,
+                "close",
+                side_effect=close_then_report_cleanup_error,
+            ), patch.object(
+                os,
+                "unlink",
+                side_effect=unlink_then_report_cleanup_error,
+            ):
+                with self.assertRaises(OSError) as cleanup_context:
+                    _publish_new_artifact_bytes(
+                        artifact_directory,
+                        "cleanup-regression.json",
+                        b"{}\n",
+                    )
+
+            self.assertIs(temporary_cleanup_error, cleanup_context.exception)
+            self.assertIs(body_error, cleanup_context.exception.__context__)
+            write_mock.assert_called_once()
+            self.assertEqual(
+                [
+                    "temporary-close",
+                    "temporary-unlink",
+                    "directory-close",
+                ],
+                cleanup_trace,
+            )
+            self.assertEqual(2, len(closed_descriptors))
+            for file_descriptor in closed_descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(file_descriptor)
+            self.assertEqual((), tuple(artifact_directory.iterdir()))
 
     def test_failed_evidence_seals_incomplete_fresh_state_without_exception_text(
         self,
@@ -8837,6 +8985,53 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                         fsync_directory,
                     )
 
+            # Body와 destination cleanup이 함께 실패해도 source chain까지 닫고 첫 cleanup 오류를 반환한다.
+            body_cleanup_directory = root_path / "body-cleanup"
+            body_cleanup_directory.mkdir(mode=0o700)
+            real_close_chain = _close_failure_durability_directory_chain
+            closed_descriptor_chains: list[tuple[int, ...]] = []
+            destination_cleanup_error = OSError(
+                "destination chain cleanup failed"
+            )
+
+            def close_chain_with_destination_failure(
+                directory_descriptors: tuple[int, ...],
+            ) -> None:
+                """
+                함수 이름: close_chain_with_destination_failure()
+                기능: 실제 chain을 닫은 뒤 첫 destination cleanup만 실패로 보고한다.
+                인자: directory_descriptors -> cleanup 대상 descriptor chain
+                반환값: source cleanup이면 없음, 첫 destination cleanup이면 OSError
+                작성 날짜: 2026/09/04
+                """
+                closed_descriptor_chains.append(directory_descriptors)
+                real_close_chain(directory_descriptors)
+                if len(closed_descriptor_chains) == 1:
+                    raise destination_cleanup_error
+
+            with patch.object(
+                os,
+                "fsync",
+                side_effect=OSError("snapshot body failed"),
+            ), patch(
+                f"{__name__}._close_failure_durability_directory_chain",
+                side_effect=close_chain_with_destination_failure,
+            ):
+                with self.assertRaises(OSError) as cleanup_context:
+                    _copy_failure_durability_snapshot(
+                        source_history_path,
+                        body_cleanup_directory,
+                    )
+            self.assertIs(
+                destination_cleanup_error,
+                cleanup_context.exception,
+            )
+            self.assertEqual(2, len(closed_descriptor_chains))
+            for descriptor_chain in closed_descriptor_chains:
+                for directory_descriptor in descriptor_chain:
+                    with self.assertRaises(OSError):
+                        os.fstat(directory_descriptor)
+
     def test_fresh_verification_uses_isolated_durability_and_rest_sandwich(
         self,
     ) -> None:
@@ -8880,7 +9075,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 False,
-                False,
+                None,
                 "VERIFIED",
                 None,
                 None,
@@ -8892,7 +9087,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 False,
-                False,
+                None,
                 "INCOMPLETE",
                 "OPEN_ORDERS",
                 "FRESH_OPEN_ORDERS_NOT_EMPTY",
@@ -8904,7 +9099,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, True),
                 ((), ()),
                 False,
-                False,
+                None,
                 "INCOMPLETE",
                 "OPEN_ORDER_LISTS",
                 "FRESH_OPEN_ORDER_LISTS_NOT_EMPTY",
@@ -8916,7 +9111,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), (drift_order,)),
                 False,
-                False,
+                None,
                 "INCOMPLETE",
                 "RECENT_ORDERS",
                 "FRESH_RECENT_ORDERS_CHANGED",
@@ -8928,7 +9123,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 True,
-                False,
+                None,
                 "INCOMPLETE",
                 "DURABILITY",
                 "FRESH_DURABILITY_CHANGED",
@@ -8940,7 +9135,19 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 False,
-                True,
+                "absent-sidecar",
+                "INCOMPLETE",
+                "DURABILITY",
+                "FRESH_DURABILITY_CHANGED",
+                closed_snapshot,
+            ),
+            (
+                "final-source-leaf-aba",
+                (False, False),
+                (False, False),
+                ((), ()),
+                False,
+                "source-leaf",
                 "INCOMPLETE",
                 "DURABILITY",
                 "FRESH_DURABILITY_CHANGED",
@@ -8952,7 +9159,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 False,
-                False,
+                None,
                 "INCOMPLETE",
                 "CLEANUP",
                 "FRESH_RUNTIME_CLOSE_FAILED",
@@ -8964,7 +9171,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 False,
-                False,
+                None,
                 "INCOMPLETE",
                 "CLEANUP",
                 "FRESH_RUNTIME_CLOSE_FAILED",
@@ -8976,7 +9183,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 False,
-                False,
+                None,
                 "INCOMPLETE",
                 "CLEANUP",
                 "FRESH_RUNTIME_CLOSE_FAILED",
@@ -8988,7 +9195,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 (False, False),
                 ((), ()),
                 False,
-                False,
+                None,
                 "INCOMPLETE",
                 "CLEANUP",
                 "FRESH_RUNTIME_CLOSE_FAILED",
@@ -9001,7 +9208,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
             open_order_list_states,
             recent_order_states,
             mutate_isolated_copy,
-            mutate_final_absent_sidecar,
+            final_durability_mutation,
             expected_status,
             expected_stage,
             expected_reason,
@@ -9018,7 +9225,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                         f"{source_history_path.name}.manual-kill-control.jsonl"
                     ): b'{"manual_kill":"source"}\n',
                 }
-                if mutate_final_absent_sidecar:
+                if final_durability_mutation == "absent-sidecar":
                     source_leaves.pop(
                         source_history_path.with_name(
                             f"{source_history_path.name}.manual-kill-control.jsonl"
@@ -9165,20 +9372,20 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                 )
                 fingerprint_call_count = 0
 
-                def capture_with_final_absent_sidecar_aba(
+                def capture_with_final_durability_aba(
                     selected_history_path: Path,
                 ) -> tuple[_FailureDurabilityFileFingerprint, ...]:
                     """
-                    함수 이름: capture_with_final_absent_sidecar_aba()
-                    기능: final source fingerprint 직전에 absent sidecar create·delete ABA를 삽입한다.
+                    함수 이름: capture_with_final_durability_aba()
+                    기능: final source capture 전 parent ABA 또는 source→copy 사이 leaf ABA를 삽입한다.
                     인자: selected_history_path -> fingerprint할 history path
                     반환값: 실제 helper가 만든 세 leaf fingerprint tuple
-                    작성 날짜: 2026/09/01
+                    작성 날짜: 2026/09/04
                     """
                     nonlocal fingerprint_call_count
                     fingerprint_call_count += 1
                     if (
-                        mutate_final_absent_sidecar
+                        final_durability_mutation == "absent-sidecar"
                         and fingerprint_call_count == 4
                     ):
                         transient_sidecar = source_history_path.with_name(
@@ -9187,10 +9394,32 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                         transient_sidecar.write_bytes(b"transient-final-aba\n")
                         os.chmod(transient_sidecar, 0o600)
                         transient_sidecar.unlink()
+                    if (
+                        final_durability_mutation == "source-leaf"
+                        and fingerprint_call_count == 5
+                    ):
+                        source_bytes = source_history_path.read_bytes()
+                        source_state = os.stat(
+                            source_history_path,
+                            follow_symlinks=False,
+                        )
+                        source_history_path.write_bytes(
+                            b"x" * len(source_bytes)
+                        )
+                        source_history_path.write_bytes(source_bytes)
+                        os.chmod(source_history_path, 0o600)
+                        os.utime(
+                            source_history_path,
+                            ns=(
+                                source_state.st_atime_ns,
+                                source_state.st_mtime_ns,
+                            ),
+                            follow_symlinks=False,
+                        )  # Bytes·inode·mtime을 복원해도 leaf ctime은 복원할 수 없다.
 
                     return real_capture_durability_fingerprint(
                         selected_history_path
-                    )  # Leaf tuple은 initial absent 상태로 복원되지만 parent ctime은 복원되지 않는다.
+                    )  # 호출 위치는 최종 source→copy→source fingerprint 순서를 그대로 따른다.
 
                 with patch(
                     f"{__name__}.create_testnet_application_runtime",
@@ -9219,7 +9448,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                     f"{__name__}.verify_exact_recent_order_baseline",
                 ) as verify_recent, patch(
                     f"{__name__}._capture_failure_durability_fingerprint",
-                    side_effect=capture_with_final_absent_sidecar_aba,
+                    side_effect=capture_with_final_durability_aba,
                 ):
                     verification = harness._capture_fresh_failure_verification(
                         frozenset(),
@@ -9234,12 +9463,17 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
                     evidence_errors,
                 )
                 self.assertEqual(
+                    6,
+                    fingerprint_call_count,
+                )  # Initial 3회와 final source→copy→source 3회를 정확히 소비한다.
+                self.assertEqual(
                     2
                     if case_name
                     in {
                         "stable",
                         "isolated-copy-mutation",
                         "final-absent-sidecar-aba",
+                        "final-source-leaf-aba",
                         "close-failed",
                         "close-shutting-down",
                         "close-non-exact",
@@ -10858,11 +11092,17 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                         isolated_history_path
                     )
                 )
-                # Path fingerprint 중 absent sidecar ABA도 final pinned-parent barrier에서 다시 잡는다.
+                source_durability_after_final_copy = (
+                    _capture_failure_durability_fingerprint(self.history_path)
+                )  # Copy fingerprint 사이의 source leaf in-place ABA를 source→copy→source로 잡는다.
+
+                # Path fingerprint 중 absent sidecar ABA와 sandwich 직후 directory 변경을 final pinned-parent barrier에서 다시 잡는다.
                 snapshot_handle.verify()
                 durability_changed = (
                     source_durability_before is None
                     or source_durability_after != source_durability_before
+                    or source_durability_after_final_copy
+                    != source_durability_before
                     or copy_durability_before is None
                     or copy_durability_after != copy_durability_before
                 )
