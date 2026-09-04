@@ -108,6 +108,10 @@ from tests.testnet._phase13_trace import (
     seal_phase13_public_trace,
     validate_actual_phase13_public_trace,
 )
+from tests.testnet._deterministic_public_case2_fixture import (
+    DeterministicPublicCase2Klines,
+    create_deterministic_public_case2_klines,
+)
 from tests.testnet._support import (
     PHASE13_PUBLIC_CASE2_REQUESTED,
     PHASE13_PUBLIC_CASE2_SKIP_REASON,
@@ -118,8 +122,8 @@ from tests.testnet._support import (
 from tests.unit.history.factories import make_trade
 
 
-# 실제 주문 target은 자연 market signal과 same-ID reconciliation을 기다리되 무한 대기는 허용하지 않는다.
-_PUBLIC_SIGNAL_TIMEOUT_SECONDS = 180
+# 실제 주문 target은 결정론적 public signal과 same-ID reconciliation을 기다리되 무한 대기는 허용하지 않는다.
+_DETERMINISTIC_BUY_TIMEOUT_SECONDS = 180
 _ORDER_SETTLEMENT_TIMEOUT_SECONDS = 60
 _ACCOUNT_SETTLEMENT_TIMEOUT_SECONDS = 15
 _POLL_INTERVAL_SECONDS = 0.25
@@ -10210,7 +10214,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
 class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
     """
     클래스 이름: BinanceTestnetPhaseThirteenPublicMarketCase2Tests
-    기능: 세 opt-in에서 자연 public Case C BUY와 same-run STOP recovery를 실제 Testnet에서 검증한다.
+    기능: 세 opt-in에서 결정론적 public Case C BUY와 same-run STOP recovery를 실제 Testnet에서 검증한다.
     작성 날짜: 2026/08/31
 
     주의: 이 class는 private Action, threshold patch 또는 성공 상태 주입을 전혀 사용하지 않는다.
@@ -10431,17 +10435,71 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         ):
             raise AssertionError("Phase 13 logical submission entered a failed order trace")
 
+    def _inject_deterministic_public_case2_and_wait_for_buy(
+        self,
+        deterministic_klines: DeterministicPublicCase2Klines,
+    ) -> Trade | None:
+        """
+        함수 이름: _inject_deterministic_public_case2_and_wait_for_buy()
+        기능: 세 fixture Kline을 public market 경계에만 넣고 production BUY publication을 기다린다.
+        인자: deterministic_klines -> current snapshot에서 계산한 SETUP, FLUSH와 RECOVERY 입력
+        반환값: production strategy가 만든 run 첫 BUY Trade 또는 bounded timeout의 None
+        작성 날짜: 2026/09/04
+        """
+        if not isinstance(
+            deterministic_klines,
+            DeterministicPublicCase2Klines,
+        ):
+            raise TypeError(
+                "deterministic_klines must be DeterministicPublicCase2Klines"
+            )
+
+        # 세 immutable evaluation을 연속 enqueue해 실제 live tick이 fixture stage 사이에 끼어들 창을 최소화한다.
+        ordered_klines = deterministic_klines.as_tuple()
+        for kline in ordered_klines:
+            self.runtime.market_data_controller.observe_kline(kline)
+
+        buy_trade = self._wait_for_public_buy()
+        if buy_trade is None:
+            return None
+
+        # Exact 1L.3 source를 recovery event에 결속해 SETUP·FLUSH 조기 BUY와 자연 tick 대체를 차단한다.
+        injected_source_ids = tuple(
+            _kline_source_component(kline)
+            for kline in ordered_klines
+        )
+        injected_action_boundaries = tuple(
+            trace_entry
+            for trace_entry in (
+                self.runtime.trading_controller.public_market_boundary_trace
+            )
+            if (
+                trace_entry.message_id == "1L.3"
+                and trace_entry.source_event_id in injected_source_ids
+            )
+        )
+        if (
+            len(injected_action_boundaries) != 1
+            or injected_action_boundaries[0].source_event_id
+            != injected_source_ids[-1]
+        ):
+            raise AssertionError(
+                "deterministic BUY must originate from the recovery Kline"
+            )
+
+        return buy_trade
+
     def _wait_for_public_buy(self) -> Trade | None:
         """
         함수 이름: _wait_for_public_buy()
-        기능: 자연 Kline 평가가 만든 최초 durable BUY를 기다리고 signal 부재면 None을 반환한다.
+        기능: 결정론적 recovery 평가가 만든 최초 durable BUY를 기다리고 timeout이면 None을 반환한다.
         인자: 없음
         반환값: run 첫 BUY Trade 또는 bounded timeout의 None
-        작성 날짜: 2026/08/31
+        작성 날짜: 2026/09/04
         """
-        deadline = time.monotonic() + _PUBLIC_SIGNAL_TIMEOUT_SECONDS
+        deadline = time.monotonic() + _DETERMINISTIC_BUY_TIMEOUT_SECONDS
 
-        # Production background worker가 public queue를 drain하며 test는 state를 관찰할 뿐 직접 실행하지 않는다.
+        # Production background worker가 recovery queue를 drain하며 test는 state를 관찰할 뿐 직접 실행하지 않는다.
         while time.monotonic() < deadline:
             remaining_seconds = max(0.0, deadline - time.monotonic())
             self._collect_runtime_observations(
@@ -10468,7 +10526,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                     cause_snapshot
                 )  # 한 lock snapshot을 예외에 고정해 finalizer 자체 fail-close가 원인을 바꾸지 못한다.
 
-        return None  # NO_SIGNAL은 private trigger로 우회하지 않고 실제 주문 0을 별도 증거화한다.
+        return None  # Timeout은 private trigger로 우회하지 않고 실제 주문 상태를 별도 증거화한다.
 
     def _wait_for_effective_free_eth(self, position_quantity: Decimal) -> Decimal:
         """
@@ -12306,8 +12364,13 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         )
         self.assertIs(session_result.status, TradingSessionStatus.RUNNING)
 
-        # 실제 Kline 조건이 자연히 성립할 때만 production worker가 BUY를 만들며 timeout은 mutation 없이 기록한다.
-        buy_trade = self._wait_for_public_buy()
+        # Current snapshot에서 계산한 세 public Kline만 넣고 production builder·STM이 BUY를 만들게 한다.
+        deterministic_klines = create_deterministic_public_case2_klines(
+            self.runtime.market_snapshot.get_snapshot()
+        )
+        buy_trade = self._inject_deterministic_public_case2_and_wait_for_buy(
+            deterministic_klines
+        )
         if buy_trade is None:
             self._record_non_signal_and_fail()
         self.assertIs(buy_trade.side, OrderSide.BUY)

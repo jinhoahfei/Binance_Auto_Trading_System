@@ -4647,6 +4647,104 @@ license/provenance 작업은 하지 마라. Keychain, Binance signed endpoint와
 fake/memory transport에서 BUY → STOP SELL → History/Performance/UI publication과 final zero exposure를
 재현한다. 외부 signed call과 주문은 `0`회다.
 
+**2026-09-04 실행 결과:** `[x] 완료`
+
+- 시작 기준은 `main == origin/main`, HEAD
+  `9d0ae1dcb2be5e31bc1838e48bf4ff4676c6b18c`다. 사용자 요청이 없는 commit은 만들지 않았으므로
+  구현 결과는 이 base HEAD 위 working tree에 남아 있다. Production `backend/src`와 UI는 변경하지
+  않았고 Session 1에서 동결한 범위대로 아래 다섯 file만 변경했다.
+
+  ```text
+  backend/tests/testnet/_deterministic_public_case2_fixture.py
+  backend/tests/integration/test_deterministic_production_path_case2_flow.py
+  backend/tests/architecture/test_phase13_deterministic_public_boundary.py
+  backend/tests/testnet/test_phase13_public_market_case2.py
+  INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md
+  ```
+
+- 새 test-only fixture는 ready `ETHUSDT` `MarketStateSnapshot`의 현재 open/volume과 누적 high/low를
+  보존하고, 마지막 20개 이상 확정 `30m` Kline에서 production과 같은 Decimal 유효숫자 34의
+  Bollinger `%B`와 CCI 20 계산으로 같은 열린 봉의 `SETUP → FLUSH → RECOVERY` 세 Kline을 찾는다.
+  세 입력은 유한 양수 Decimal, `closed=False`, 같은 `open_time`과 엄격히 증가하는 UTC
+  `event_time`만 가지며 setup `%B <= -0.15`·CCI `<= -140`, flush `%B <= -0.25`, recovery는 같은
+  flush low에서 `flush %B + 0.06` 이상이면서 `< -0.15`를 만족한다. Strategy result,
+  `SubmitOrder`, ID, Order/Position/Trade/Performance 또는 success/fill은 만들거나 주입하지 않는다.
+- 새 full-flow test는 production `create_application_runtime()`이 조립한 `ApplicationRuntime`, 실제
+  `MarketDataController`·`ThirtyMinuteMarketEvaluationBuilder`·Regime/Trading Controller·STM,
+  order executor, JSONL `TradeHistoryRepository`와 `BackendEventStream`을 network-free memory
+  REST/WebSocket client에 연결한다. TYPE_0 선택, split, start와 STOP은 public optimistic-version
+  operation만 사용하고 fixture 입력은 오직 `MarketDataController.observe_kline()`에 전달한다.
+  Production worker가 setup·flush를 순서대로 적용한 뒤 recovery에서 정확히 한 `1L.3` BUY action과
+  BUY 한 건을 만들고, public STOP이 열린 Position 전량의 STOP SELL 한 건을 만든다. 최종 결과는
+  durable Trade `2`, completed sell `1`, Position quantity/cost basis `0`, owner `None`, pending `0`이며
+  UI용 `ORDER_EXECUTED → PERFORMANCE_UPDATED` pair가 각 Trade마다 같은 시각과 연속 sequence로
+  발행된다.
+- 기존 exact actual one-shot owner는 같은 fixture helper를 current production snapshot에서 호출하고
+  각 Kline을 public `observe_kline()` 경계에만 넣도록 변경했다. Architecture regression은
+  `backend/src`의 `tests`/fixture import·enable switch를 금지하고, fixture의 trading/bootstrap/transport/
+  environment 의존과 업무 결과 생성을 금지하며, local·actual orchestration의 `SubmitOrder`,
+  `_execute_action`, `_submit_order_action`, pending/Trade save 및 `OrderResult` 직접 생성을 AST로
+  차단한다. Memory REST가 반환하는 외부 응답 외 fill/success 주입도 없고 새 class/function의 한국어
+  필수 docstring, 공백 들여쓰기와 블록·문장 주석을 함께 고정했다.
+- Testnet 관련 환경 열 개를 명시적으로 제거하고 `PYTHONWARNINGS=error`를 적용했다. §16.20.4의 exact
+  code-critical module 목록에 아래 두 module을 추가한 consolidated suite는
+  `Ran 353 tests in 8.024s`, `OK (skipped=1)`이다. 추가된 6개는 full-flow `1`개와 architecture `5`개며,
+  skip 한 건은 세 actual opt-in이 없는 Spot Testnet Case 2다. 기존 immediate/partial/UNKNOWN,
+  submission rejection, fee, order ID, reconciliation와 persistence focused test도 이 353개 안에서
+  모두 통과했다.
+
+  ```text
+  tests.architecture.test_phase13_deterministic_public_boundary
+  tests.integration.test_deterministic_production_path_case2_flow
+  ```
+
+- 동일한 환경 제거 상태의 backend 전체 discovery는 `Ran 973 tests`, external actual safe skip `8`개다.
+  최초 sandbox 실행은 code assertion 실패 없이 loopback bind 권한 때문에 transport `27`개만
+  `PermissionError`로 중단됐다. 로컬 loopback 권한으로 동일 전체 명령을 재실행해 exit `0`을 확인했고,
+  중단됐던 HTTP/WebSocket/process/command module 다섯 개도 별도로 `Ran 27 tests in 16.541s`, `OK`로
+  재확인했다. 실행 명령은 다음과 같다.
+
+  ```text
+  cd backend
+  env -u BINANCE_RUN_TESTNET -u BINANCE_TESTNET_API_KEY -u BINANCE_TESTNET_API_SECRET \
+    -u BINANCE_RUN_TESTNET_ORDERS -u BINANCE_RUN_PHASE13_PUBLIC_CASE2 \
+    -u BINANCE_TESTNET_MAX_NOTIONAL -u BINANCE_TESTNET_BASELINE_HISTORY_FD \
+    -u BINANCE_TESTNET_BASELINE_HISTORY_SHA256 -u BINANCE_TESTNET_BASELINE_PENDING_FD \
+    -u BINANCE_TESTNET_BASELINE_PENDING_SHA256 PYTHONWARNINGS=error \
+    .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q
+
+  env -u BINANCE_RUN_TESTNET -u BINANCE_TESTNET_API_KEY -u BINANCE_TESTNET_API_SECRET \
+    -u BINANCE_RUN_TESTNET_ORDERS -u BINANCE_RUN_PHASE13_PUBLIC_CASE2 \
+    -u BINANCE_TESTNET_MAX_NOTIONAL PYTHONWARNINGS=error \
+    .venv/bin/python -m unittest -q \
+    tests.integration.transport.test_http_server \
+    tests.integration.transport.test_process_runner \
+    tests.integration.transport.test_production_sidecar_process \
+    tests.integration.transport.test_trading_commands \
+    tests.integration.transport.test_websocket_server
+  ```
+
+- Root의 Keychain runner/Communication unittest는 `31/31 OK`, matrix는
+  `126 COMPLETE / 0 GAP`이고 `git diff --check`도 통과했다. 이번 변경은 Binance endpoint, payload,
+  filter 또는 signature 계약을 수정하지 않아 Binance 공식 문서 재확인이 필요한 구현 지점은 없었다.
+  Keychain read, Binance public/signed endpoint, Testnet/live 주문은 모두 `0`회이며 historical DMG,
+  SSIM, license/provenance와 live configuration은 건드리지 않았다.
+
+**Session 3 진입 판정:** `GO_WITH_EXPLICIT_SESSION3_APPROVAL`.
+
+- 이유는 Session 2의 미검증 seam이 current source에서 닫혔기 때문이다. 같은 test-only helper가 actual
+  one-shot owner에 결속됐고, public market input부터 production indicator → strategy → intent → order
+  executor → durable History/Performance/UI publication → STOP zero exposure까지 우회 없이 통과했다.
+  기존 partial/UNKNOWN/fee/reconciliation 회귀와 production 비참조 architecture gate도 함께
+  통과했으므로 Session 2에서 내부 production-path E2E가 완료됐으며, 남은 미검증 범위는 Session 3의 실제 Spot Testnet 외부 경계와 fresh-restart zero-exposure 검증이다.
+- 이 `GO`는 Keychain 또는 actual 주문 승인이 아니다. §16.20.6에 따라 실행 직전에
+  (1) service `com.binance-auto.trader.testnet`의 `api-key`/`api-secret` memory-only read,
+  (2) 고정 Spot Testnet signed read-only preflight 1회,
+  (3) preflight 통과 시에만 `ETHUSDT` decision notional 최대 `10 USDT` BUY 1회와 same-run exact
+  Position STOP SELL 1회를 별도 명시해 한 번에 승인받아야 한다. Current snapshot이 fixture 조건을
+  만들 수 없거나 live stream race, preflight 불일치, submit ambiguity, timeout, 5xx 또는 persistence
+  오류가 있으면 신규 BUY/자동 retry 없이 fail closed하고 same-ID/account-wide reconciliation만 수행한다.
+
 **세션 요청문:**
 
 ```text
@@ -4880,7 +4978,7 @@ BUY/SELL 또는 STOP과 fresh restart zero exposure가 확인된 뒤에만 Windo
 #### 16.20.12 개인용 베타 진행 체크리스트
 
 - [x] Session 1 — 범위 동결과 code-critical baseline
-- [ ] Session 2 — 결정론적 production-path E2E
+- [x] Session 2 — 결정론적 production-path E2E
 - [ ] Session 3 — current-source Spot Testnet actual E2E와 fresh zero exposure
 - [ ] Session 4 — macOS fresh package와 macOS PC smoke
 - [ ] **macOS package ready**
