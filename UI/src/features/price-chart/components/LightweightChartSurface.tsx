@@ -542,10 +542,11 @@ function create_chart_coordinate_space(handles: LightweightChartHandles): ChartC
  * 작성 날짜: 2026/08/20
  */
 function create_lightweight_chart(container: HTMLDivElement): LightweightChartHandles {
+    // 캔들과 보조지표에 사용할 색상을 공통 CSS 토큰에서 읽는다.
     const positive_color = read_color_token('--color-status-positive', '#0eb77b');
     const negative_color = read_color_token('--color-status-negative', '#f03858');
     const information_color = read_color_token('--color-status-info', '#1768d4');
-    const bollinger_color = read_color_token('--color-text-secondary', '#a7afbb');
+    const bollinger_color = read_color_token('--color-status-warning', '#f0b90b');  // 볼린저밴드 설정 항목의 주황색을 사용한다.
     const border_color = read_color_token('--color-border-default', '#33404b');
     const text_color = read_color_token('--color-text-secondary', '#a7afbb');
     const chart = createChart(container, {
@@ -641,11 +642,13 @@ function create_lightweight_chart(container: HTMLDivElement): LightweightChartHa
         wickDownColor: negative_color,
         wickUpColor: positive_color,
     });
+
+    // 볼린저밴드의 상단과 하단을 동일한 주황색 실선으로 표시한다.
     const bollinger_upper_series = chart.addSeries(LineSeries, {
         color: bollinger_color,
         crosshairMarkerVisible: false,
         lastValueVisible: false,
-        lineStyle: LineStyle.Dashed,
+        lineStyle: LineStyle.Solid,
         lineWidth: 1,
         priceLineVisible: false,
     });
@@ -653,7 +656,7 @@ function create_lightweight_chart(container: HTMLDivElement): LightweightChartHa
         color: bollinger_color,
         crosshairMarkerVisible: false,
         lastValueVisible: false,
-        lineStyle: LineStyle.Dashed,
+        lineStyle: LineStyle.Solid,
         lineWidth: 1,
         priceLineVisible: false,
     });
@@ -693,10 +696,11 @@ function create_lightweight_chart(container: HTMLDivElement): LightweightChartHa
  * 작성 날짜: 2026/08/29
  */
 function create_fixture_lightweight_chart(container: HTMLDivElement): LightweightChartHandles {
+    // 고정 차트도 실제 차트와 같은 지표 색상 토큰을 사용한다.
     const positive_color = read_color_token('--color-status-positive', '#0eb77b');
     const negative_color = read_color_token('--color-status-negative', '#f03858');
     const information_color = read_color_token('--color-status-info', '#1768d4');
-    const bollinger_color = read_color_token('--color-text-secondary', '#a7afbb');
+    const bollinger_color = read_color_token('--color-status-warning', '#f0b90b');  // 볼린저밴드 설정 항목의 주황색을 사용한다.
 
     // Figma 기준은 SVG 격자·축과 조합되므로 library 자체의 축·격자·상호작용은 숨긴다.
     const chart = createChart(container, {
@@ -743,11 +747,13 @@ function create_fixture_lightweight_chart(container: HTMLDivElement): Lightweigh
         wickDownColor: negative_color,
         wickUpColor: positive_color,
     });
+
+    // 고정 화면에서도 볼린저밴드 상단과 하단의 주황색 실선 표현을 유지한다.
     const bollinger_upper_series = chart.addSeries(LineSeries, {
         color: bollinger_color,
         crosshairMarkerVisible: false,
         lastValueVisible: false,
-        lineStyle: LineStyle.Dashed,
+        lineStyle: LineStyle.Solid,
         lineWidth: 1,
         priceLineVisible: false,
     });
@@ -755,7 +761,7 @@ function create_fixture_lightweight_chart(container: HTMLDivElement): Lightweigh
         color: bollinger_color,
         crosshairMarkerVisible: false,
         lastValueVisible: false,
-        lineStyle: LineStyle.Dashed,
+        lineStyle: LineStyle.Solid,
         lineWidth: 1,
         priceLineVisible: false,
     });

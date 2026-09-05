@@ -137,9 +137,10 @@
     vector-effect: non-scaling-stroke;
 }
 
+/* SVG 볼린저밴드도 지표 설정창과 실제 차트의 주황색 실선 표현을 공유한다. */
 .bollinger {
-    stroke: color-mix(in srgb, var(--color-text-secondary) 62%, transparent);
-    stroke-dasharray: 6 6;
+    stroke: var(--color-status-warning);
+    stroke-dasharray: none;  /* 상단과 하단 밴드를 끊김 없는 실선으로 표시한다. */
     stroke-width: 1.2;
     vector-effect: non-scaling-stroke;
 }
