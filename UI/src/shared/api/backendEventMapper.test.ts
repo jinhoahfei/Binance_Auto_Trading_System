@@ -144,6 +144,22 @@ function create_configured_unbounded_snapshot(): BackendSnapshot {
 }
 
 describe('backend runtime contract validation', () => {
+    it('실시간 시장 갱신 뒤에도 마지막 4시간봉 REGIME 평가 snapshot을 읽을 수 있다', () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const live_snapshot = {
+            ...snapshot,
+            market: {
+                ...snapshot.market,
+                version: snapshot.market.version + 4,
+                current_price: '4322.5000',
+            },
+        };
+
+        expect(validate_backend_snapshot(live_snapshot)).toBe(live_snapshot);
+        expect(live_snapshot.regime.indicator?.source_market_version).toBe(snapshot.market.version);
+        expect(live_snapshot.regime.indicator?.current_price).toBe(snapshot.market.current_price);
+    });
+
     it('ready coherent snapshot의 UUID, Decimal, UTC와 required aggregate를 검증한다', () => {
         const snapshot = create_backend_snapshot_fixture();
 

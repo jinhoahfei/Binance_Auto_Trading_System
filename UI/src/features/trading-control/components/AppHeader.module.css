@@ -59,14 +59,88 @@
   line-height: 16px;
 }
 
+.connectionAnchor {
+  position: relative;
+  display: inline-flex;
+  margin-left: 14px;
+}
+
 .connection {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-left: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  cursor: default;
   font-family: var(--font-numeric);
   font-size: 13.5px;
   font-weight: 600;
+}
+
+.connectionTooltip {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 0;
+  width: 246px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-control-strong);
+  box-shadow: var(--shadow-modal);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: none;
+}
+
+.connectionTooltipTitle {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.connectionDetails {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+
+.connectionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.connectionRow dt {
+  color: var(--color-text-secondary);
+}
+
+.connectionStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.connectionStatus[data-state='online'] {
+  color: var(--color-text-positive);
+}
+
+.connectionStatus[data-state='offline'] {
+  color: var(--color-text-negative);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .dot {

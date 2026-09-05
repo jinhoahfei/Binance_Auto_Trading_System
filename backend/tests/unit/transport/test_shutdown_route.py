@@ -11,9 +11,10 @@ from binance_auto_trader.bootstrap import (
     ShutdownReceiptStatus,
     ShutdownSafetyReceipt,
 )
+from binance_auto_trader.application import TradingSessionStatus
 from binance_auto_trader.transport import BackendEventStream, SCHEMA_VERSION
 from binance_auto_trader.transport.routes import RouteContext
-from binance_auto_trader.transport.routes.system import request_shutdown
+from binance_auto_trader.transport.routes.system import get_shutdown_state, request_shutdown
 
 
 class ShutdownRouteTests(unittest.TestCase):
@@ -84,6 +85,45 @@ class ShutdownRouteTests(unittest.TestCase):
             expected_version=7,
         )
         self.assertTrue(context.event_stream.closed)
+
+    def test_shutdown_state_does_not_require_dashboard_aggregates(self) -> None:
+        """
+        함수 이름: test_shutdown_state_does_not_require_dashboard_aggregates()
+        기능: 시장·계좌·지표가 없어도 최소 종료 기준을 반환하고 조회만으로 stream을 닫지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        context = self._create_context()
+        context.runtime.ready = True
+        context.runtime.trading_controller = SimpleNamespace(
+            context=SimpleNamespace(version=7),
+            status=TradingSessionStatus.NOT_STARTED,
+        )
+        response = get_shutdown_state(str(uuid4()), context)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.payload["data"], {
+            "session_id": context.event_stream.session_id,
+            "version": 7,
+            "status": "not_started",
+        })
+        self.assertFalse(context.event_stream.closed)  # 종료 허가는 후속 POST owner가 결정한다.
+
+    def test_unready_shutdown_state_is_rejected_without_controller_access(self) -> None:
+        """
+        함수 이름: test_unready_shutdown_state_is_rejected_without_controller_access()
+        기능: 준비 전 Context version을 추측하지 않고 typed not-ready 응답을 유지한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        context = self._create_context()
+        context.runtime.ready = False
+        response = get_shutdown_state(str(uuid4()), context)
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(response.payload["error"]["code"], "BACKEND_NOT_READY")
 
     def test_blocked_shutdown_returns_exact_409_details_and_keeps_stream_open(
         self,

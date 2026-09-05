@@ -1,6 +1,7 @@
 import { useCallback, useState, useSyncExternalStore } from 'react';
 
 import type { AppViewModel } from '../control';
+import type { BackendBinanceConnectionStatus } from '../../shared/contracts';
 import {
     UiApplicationStore,
     type UiApplicationController,
@@ -13,6 +14,7 @@ import type { UiApplicationFactory } from '../bootstrap';
 export interface UseUiApplicationResult {
     readonly controller: UiApplicationController;
     readonly view_model: AppViewModel;
+    readonly load_binance_connection_status: (signal?: AbortSignal) => Promise<BackendBinanceConnectionStatus>;
 }
 
 /**
@@ -50,9 +52,14 @@ export function use_ui_application(
         [application_store],
     );
     const view_model = useSyncExternalStore(subscribe, get_snapshot, get_snapshot);
+    const load_binance_connection_status = useCallback(
+        (signal?: AbortSignal) => application_store.load_binance_connection_status(signal),
+        [application_store],
+    );
 
     return {
         controller: application_store,
         view_model,
+        load_binance_connection_status,
     };
 }

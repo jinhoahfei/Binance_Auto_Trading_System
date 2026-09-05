@@ -86,11 +86,11 @@
   transform: translateX(-2px);
 }
 
-.frame > :global(header) :global(button:first-child) {
+.frame > :global(header) > :global(div:last-child) > :global(button:first-child) {
   color: #fff;
 }
 
-.frame > :global(header) :global(button:last-child) {
+.frame > :global(header) > :global(div:last-child) > :global(button:last-child) {
   color: var(--color-text-on-strong-status);
 }
 

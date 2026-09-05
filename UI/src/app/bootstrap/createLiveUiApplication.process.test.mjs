@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createElement, StrictMode } from 'react';
 import { describe, expect, it } from 'vitest';
@@ -178,7 +178,7 @@ async function stop_child_process(child_process) {
 }
 
 describe('Phase 5 actual process live read', () => {
-    it('Python startup 1~3 뒤 UISTM 4와 AppShell 5가 실제 snapshot을 표시한다', async () => {
+    it.each([false, true])('Python startup 1~3 뒤 UISTM 4와 AppShell 5가 실제 snapshot을 표시한다 (live tick: %s)', async (advance_market) => {
         const session_token = randomBytes(32).toString('base64url');
         const python_path = [
             path.join(REPOSITORY_ROOT, 'backend', 'src'),
@@ -190,6 +190,7 @@ describe('Phase 5 actual process live read', () => {
                 LANG: 'C.UTF-8',
                 PATH: process.env.PATH ?? '/usr/bin:/bin',
                 PYTHONPATH: python_path,
+                UI_PROCESS_FIXTURE_ADVANCE_MARKET: advance_market ? '1' : '0',
             },
             stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'],
         });
@@ -203,6 +204,8 @@ describe('Phase 5 actual process live read', () => {
                 read_json_line(child_process.stdout, TEST_TIMEOUT_MILLISECONDS),
                 read_json_line(child_process.stdio[5], TEST_TIMEOUT_MILLISECONDS),
             ]);
+            expect(backend_trace.market_version - backend_trace.indicator_market_version)
+                .toBe(advance_market ? 1 : 0);
             let event_socket = null;
             const web_socket_urls = [];
             const application = await create_live_ui_application(
@@ -256,6 +259,16 @@ describe('Phase 5 actual process live read', () => {
 
             // Case 3의 production adapter가 실제 Python `/v1/trades` empty 결과까지 렌더링해야 한다.
             const user = userEvent.setup();
+            const connection_badge = screen.getByRole('button', { name: 'Binance 연결 상태: LIVE' });
+            await user.hover(connection_badge);
+            const connection_tooltip = await screen.findByRole('tooltip');
+            await waitFor(() => {
+                expect(within(connection_tooltip).getAllByText('연결됨')).toHaveLength(2);
+                expect(within(connection_tooltip).getByText('연결 안 됨')).toBeInTheDocument();
+            });
+            await user.unhover(connection_badge);
+            expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
             await user.click(screen.getByRole('button', { name: '전체 보기' }));
             expect(await screen.findByRole('heading', {
                 level: 1,

@@ -116,6 +116,7 @@ export async function hydrate_live_ui_application(
         command_adapter,
         facade,
         initial_session_id: initial_snapshot.session_id,
+        load_binance_connection_status: (signal) => command_adapter.load_binance_connection_status(signal),
         activate: () => {
             if (is_active) {
                 return;
@@ -182,6 +183,7 @@ export function create_live_ui_application_factory(
     let has_activated = false;
     const strict_mode_safe_runtime: UiApplicationRuntime = {
         facade: application.facade,
+        load_binance_connection_status: (signal) => application.command_adapter.load_binance_connection_status(signal),
         activate: () => {
             if (has_activated) {
                 return;

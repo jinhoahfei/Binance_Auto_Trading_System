@@ -152,7 +152,6 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
     let recovery_error: unknown = null;
     let recovery_is_pending = false;
     let recovery_is_visible = false;
-    let recovery_snapshot_is_loaded = false;
     let recovery_sidecar_has_exited = false;
     let recovery_window_is_finalized = false;
 
@@ -275,7 +274,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
 
     /**
      * 함수 이름: safely_shutdown_recovery_child()
-     * 기능: bootstrap failure에서도 같은 adapter로 snapshot을 복원하고 정상 sidecar exit 뒤에만 창을 닫는다.
+     * 기능: bootstrap failure에서도 별도 종료 상태로 안전 종료하고 정상 sidecar exit 뒤에만 창을 닫는다.
      * 인자: 없음
      * 반환값: 안전 종료 시도 완료 Promise
      * 작성 날짜: 2026/08/24
@@ -288,25 +287,12 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         recovery_is_pending = true;
         render_bootstrap_recovery();
         try {
-            if (!recovery_snapshot_is_loaded) {
-                await recovery_adapter.load_snapshot();
-                recovery_snapshot_is_loaded = true;
-            }
-            await recovery_adapter.shutdown_application();
+            await recovery_adapter.shutdown_recovery_application();
             recovery_sidecar_has_exited = true;
             await finalize_recovery_window();
         } catch (error) {
             recovery_error = error;
             recovery_is_pending = false;
-            if (error instanceof BackendCommandError
-                && (error.code === 'STALE_CONTEXT_VERSION'
-                    || error.code === 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE')) {
-                // Definitive pre-202 state drift만 다음 operator 시도에서 snapshot을 새로 읽는다.
-                recovery_snapshot_is_loaded = false;
-            } else if (error instanceof BackendAdapterError
-                && error.code === 'SHUTDOWN_SAFETY_TIMEOUT') {
-                recovery_snapshot_is_loaded = false;
-            }
             render_bootstrap_recovery();
         }
     }
@@ -371,7 +357,6 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
                 render_bootstrap_recovery();
                 return;
             }
-            recovery_snapshot_is_loaded = true;
             install_live_application(application);
         } catch (error) {
             recovery_error = error;
@@ -531,7 +516,6 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         recovery_adapter = new BackendUiAdapter(descriptor);
         recovery_is_pending = true;
         const application = await hydrate_live_ui_application(recovery_adapter);
-        recovery_snapshot_is_loaded = true;
         install_live_application(application);
     } catch (error) {
         // READY child가 살아 있을 수 있으므로 token/listener를 버리지 않고 operator recovery로 남긴다.

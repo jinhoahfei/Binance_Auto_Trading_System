@@ -1082,9 +1082,11 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
     }
     const indicator = validate_indicator_snapshot(regime.indicator);
 
-    // Ready REGIME provenance는 같은 authoritative MarketSnapshot version과 가격을 가리켜야 한다.
-    if (indicator.source_market_version !== market_version
-        || indicator.current_price !== market_current_price) {
+    // 시세 tick은 시장 version만 전진시키며 REGIME은 마지막 4H 평가의 provenance를 유지한다.
+    // 같은 version의 가격 불일치와 아직 존재하지 않는 미래 시장 참조만 거부한다.
+    if (indicator.source_market_version > market_version
+        || (indicator.source_market_version === market_version
+            && indicator.current_price !== market_current_price)) {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
             'indicator provenance does not match the market snapshot',

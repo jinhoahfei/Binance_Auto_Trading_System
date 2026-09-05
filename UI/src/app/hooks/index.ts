@@ -7,3 +7,4 @@ export {
     type CsvCalendarNavigation,
 } from './useCsvCalendarNavigation';
 export { use_desktop_window_lifecycle } from './useDesktopWindowLifecycle';
+export { use_binance_connection_status } from './useBinanceConnectionStatus';

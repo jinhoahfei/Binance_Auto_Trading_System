@@ -8,7 +8,7 @@ from threading import RLock, Thread, local
 from time import sleep
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from binance_auto_trader.domain.history import (
@@ -298,6 +298,44 @@ class LoopbackHttpServerTests(unittest.TestCase):
         작성 날짜: 2026/08/21
         """
         self.server.stop()
+
+    def test_binance_connection_status_requires_authentication_and_reads_gateways(self) -> None:
+        """
+        함수 이름: test_binance_connection_status_requires_authentication_and_reads_gateways()
+        기능: 실제 HTTP 경로가 인증 뒤에만 Binance 진단을 실행하고 두 stream을 구분한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        self.runtime.ready = True
+        probe = Mock()
+        self.runtime.api_gateway = SimpleNamespace(fetch_account_snapshot=probe)
+        self.runtime.web_socket_gateway = SimpleNamespace(
+            kline_connected=False,
+            account_connected=True,
+        )
+        status, payload, _headers = _request_json(
+            self.server,
+            self.token,
+            "GET",
+            "/v1/binance/connection-status",
+            request_id=str(uuid4()),
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["data"], {
+            "api": "online", "market_stream": "offline", "account_stream": "online",
+        })
+        probe.assert_called_once_with()
+
+        status, _payload, _headers = _request_json(
+            self.server,
+            "invalid-token",
+            "GET",
+            "/v1/binance/connection-status",
+            request_id=str(uuid4()),
+        )
+        self.assertEqual(status, 401)
+        probe.assert_called_once_with()
 
     def test_health_uses_random_loopback_port_and_common_envelope(self) -> None:
         """

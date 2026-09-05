@@ -178,6 +178,7 @@ export function FigmaFrameHarness({ frame }: FigmaFrameHarnessProps) {
       data-figma-route={fixture.route}
     >
       <AppHeader
+        connectionDetails={{ api: 'online', market_stream: 'online', account_stream: 'online' }}
         hasOpenPosition={false}
         isCommandPending={fixture.header.is_command_pending}
         isConnected={fixture.header.is_connected}

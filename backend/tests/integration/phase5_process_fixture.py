@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
+from decimal import Decimal
 import os
 from unittest.mock import patch
 
 from binance_auto_trader.application import MarketDataController
 from binance_auto_trader.bootstrap import ApplicationRuntime, start_application
 from binance_auto_trader.domain.trading import Account
+from binance_auto_trader.domain.common import Interval
 from binance_auto_trader.transport import run_transport_process
 from binance_auto_trader.transport.contracts import json_bytes
 from tests.integration.test_startup_flow import (
@@ -67,9 +70,33 @@ def _start_runtime_and_write_trace(runtime: ApplicationRuntime) -> object:
     ):
         ready_state = start_application(runtime)
 
+    if os.environ.get("UI_PROCESS_FIXTURE_ADVANCE_MARKET") == "1":
+        # Live 4H tick은 현재 가격·시장 version을 갱신하고 마지막 확정봉 REGIME 평가는 보존한다.
+        current_klines = runtime.market_snapshot.klines_by_interval
+        previous_kline = current_klines[Interval.FOUR_HOURS][-1]
+        next_close = previous_kline.close + Decimal("1")
+        live_kline = replace(
+            previous_kline,
+            close=next_close,
+            high=max(previous_kline.high, next_close),
+            event_time=runtime.market_snapshot.updated_at,
+        )
+        runtime.market_snapshot.update(
+            {
+                **current_klines,
+                Interval.FOUR_HOURS: (
+                    *current_klines[Interval.FOUR_HOURS][:-1],
+                    live_kline,
+                ),
+            },
+            source_klines=(live_kline,),
+        )
+
     # 별도 test FD에는 UI가 이어 검증할 최상위 Communication message ID만 보낸다.
     trace_payload = {
         "message_ids": [entry.message_id for entry in runtime.startup_trace],
+        "market_version": runtime.market_snapshot.version,
+        "indicator_market_version": runtime.regime_controller.indicator_snapshot.source_market_version,
     }
     os.write(TRACE_FILE_DESCRIPTOR, json_bytes(trace_payload) + b"\n")
     os.close(TRACE_FILE_DESCRIPTOR)

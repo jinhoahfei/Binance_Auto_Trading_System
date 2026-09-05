@@ -146,6 +146,42 @@ describe('production main bootstrap recovery', () => {
         document.body.innerHTML = '';
     });
 
+    it('전체 snapshot이 계속 malformed여도 안전 종료는 별도 상태를 읽고 실제 종료 확인까지 진행한다', async () => {
+        const snapshot = create_backend_snapshot_fixture();
+        const malformed_snapshot = {
+            ...snapshot,
+            regime: { ...snapshot.regime, indicator: { ...snapshot.regime.indicator, current_price: 'invalid' } },
+        };
+        const paths: string[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init).request_id!;
+            const path = new URL(input.toString()).pathname;
+            paths.push(path);
+            if (path === '/v1/snapshot') {
+                return create_success_response(request_id, malformed_snapshot);
+            }
+            if (path === '/v1/shutdown/state') {
+                return create_success_response(request_id, {
+                    session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started',
+                });
+            }
+            if (path === '/v1/shutdown') {
+                return create_success_response(request_id, {
+                    accepted: true, status: 'accepted', version: 0,
+                }, 202);
+            }
+            throw new Error('Unexpected recovery request');
+        }));
+
+        await act(async () => { await import('./main'); });
+        expect(await screen.findByText('MALFORMED_BACKEND_PAYLOAD')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: '안전 종료' }));
+
+        await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
+        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown']);
+        expect(invoke_mock).toHaveBeenCalledWith('await_backend_sidecar_exit');
+    });
+
     it.each([
         ['window', 'window close'],
         ['application', 'Command-Q'],
@@ -183,6 +219,11 @@ describe('production main bootstrap recovery', () => {
                         status: 'accepted',
                         version: 0,
                     }, 202);
+                }
+                if (path === '/v1/shutdown/state') {
+                    return create_success_response(request_id, {
+                        session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started',
+                    });
                 }
 
                 throw new Error(`Unexpected backend path: ${path}`);
@@ -231,7 +272,7 @@ describe('production main bootstrap recovery', () => {
             expect(fetch_mock).toHaveBeenCalledTimes(4);
             expect(fetch_mock.mock.calls.map(([input]) => new URL(input.toString()).pathname)).toEqual([
                 '/v1/snapshot',
-                '/v1/snapshot',
+                '/v1/shutdown/state',
                 '/v1/shutdown',
                 '/v1/shutdown',
             ]);

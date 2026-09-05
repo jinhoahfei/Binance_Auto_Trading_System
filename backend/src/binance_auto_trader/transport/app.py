@@ -44,10 +44,11 @@ from .contracts import (
 )
 from .event_stream import BackendEventStream
 from .routes import RouteContext
+from .routes.connection_status import get_binance_connection_status
 from .routes.csv_export import create_csv_export
 from .routes.regime import select_regime
 from .routes.snapshot import get_snapshot
-from .routes.system import get_health, request_shutdown
+from .routes.system import get_health, get_shutdown_state, request_shutdown
 from .routes.trade_history import get_trades
 from .routes.trading import (
     liquidate_recovered_position,
@@ -108,6 +109,8 @@ _BODY_COMMAND_ENDPOINTS = frozenset(
 _KNOWN_ENDPOINTS = frozenset(
     {
         ("GET", "/v1/health"),
+        ("GET", "/v1/shutdown/state"),
+        ("GET", "/v1/binance/connection-status"),
         ("GET", "/v1/snapshot"),
         ("GET", "/v1/trades"),
         *_COMMAND_ENDPOINTS,
@@ -1442,6 +1445,8 @@ class LoopbackTransportServer:
         """
         route_by_endpoint = {
             ("GET", "/v1/health"): get_health,
+            ("GET", "/v1/shutdown/state"): get_shutdown_state,
+            ("GET", "/v1/binance/connection-status"): get_binance_connection_status,
             ("GET", "/v1/snapshot"): get_snapshot,
             ("GET", "/v1/trades"): get_trades,
             ("POST", "/v1/regime/selection"): select_regime,

@@ -1,5 +1,8 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { desktop_smoke_plugin } from './scripts/desktopSmokePlugin.ts';
+
+const smoke_mode = process.env.BINANCE_DESKTOP_SMOKE;
 
 /**
  * 함수 이름: defineConfig()
@@ -9,7 +12,9 @@ import { defineConfig } from 'vite';
  * 작성 날짜: 2026/08/12
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ...(smoke_mode === '1' || smoke_mode === 'recovery-shutdown'
+    ? [desktop_smoke_plugin(smoke_mode === '1' ? 'connections' : 'recovery-shutdown')]
+    : [])],
   server: {
     strictPort: true,
   },

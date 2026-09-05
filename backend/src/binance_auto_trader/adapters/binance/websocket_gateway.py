@@ -958,6 +958,18 @@ class WebSocketGateway:
             return len(self._kline_event_fingerprints)
 
     @property
+    def kline_connected(self) -> bool:
+        """
+        함수 이름: kline_connected()
+        기능: 백엔드 소유 시세 WebSocket의 현재 연결 여부를 thread-safe 방식으로 읽는다.
+        인자: 없음
+        반환값: 현재 구독이 연결되어 있으면 True
+        작성 날짜: 2026/09/05
+        """
+        with self._lock:
+            return self._connected and self._active_subscription is not None
+
+    @property
     def kline_live_ready(self) -> bool:
         """
         함수 이름: kline_live_ready()

@@ -186,6 +186,43 @@ afterEach(() => {
 });
 
 describe('LightweightChartSurface', () => {
+    it('초기 좌표 발행 뒤 unmount하면 예약한 frame이 제거된 차트를 다시 조회하지 않는다', () => {
+        const pending_frames = new Map<number, FrameRequestCallback>();
+        let next_frame_id = 0;
+        vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+            pending_frames.set(++next_frame_id, callback);
+            return next_frame_id;
+        }));
+        vi.stubGlobal('cancelAnimationFrame', vi.fn((frame_id: number) => {
+            pending_frames.delete(frame_id);
+        }));
+        chart_harness.chart.remove.mockImplementation(() => {
+            chart_harness.chart.paneSize.mockImplementation(() => {
+                throw new Error('removed chart has no pane');
+            });
+        });
+        const { unmount } = render(
+            <LightweightChartSurface
+                bollingerLower={[]}
+                bollingerUpper={[]}
+                candles={create_candles(3, INITIAL_OPEN_TIME)}
+                ema={[]}
+                indicatorSettings={INDICATOR_SETTINGS}
+                interval="1m"
+                onCoordinateSpaceChange={vi.fn()}
+                symbol="ETHUSDT"
+            />,
+        );
+        const queued_callbacks = [...pending_frames.values()];
+        expect(queued_callbacks.length).toBeGreaterThan(0);
+
+        unmount();
+
+        expect(pending_frames.size).toBe(0);
+        // 이미 실행 queue에 넘어간 callback도 이전 StrictMode chart에 접근하지 않는다.
+        expect(() => queued_callbacks.forEach((callback) => callback(0))).not.toThrow();
+    });
+
     it('차트 가격은 2자리, ETH 거래량은 4자리로 반올림하고 원본 봉 값은 유지한다', () => {
         const candle = {
             close: 2451.425,

@@ -1,10 +1,14 @@
 import type { UiApplicationFacade } from '../control';
+import type { BackendBinanceConnectionStatus } from '../../shared/contracts';
 
 /**
  * demo와 live bootstrap이 store에 제공하는 공통 UI 애플리케이션 수명주기이다.
  */
 export interface UiApplicationRuntime {
     readonly facade: UiApplicationFacade;
+    readonly load_binance_connection_status?: (
+        signal?: AbortSignal,
+    ) => Promise<BackendBinanceConnectionStatus>;
     activate(): void;
     deactivate(): void;
 }

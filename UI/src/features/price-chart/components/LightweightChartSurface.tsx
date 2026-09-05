@@ -902,7 +902,10 @@ export function LightweightChartSurface({
          * 작성 날짜: 2026/08/20
          */
         function publish_coordinate_space(): void {
-            coordinate_animation_frame = null;
+            // StrictMode 재생성이나 unmount 뒤 도착한 callback은 제거된 pane을 읽지 않는다.
+            if (handles_ref.current !== handles) {
+                return;
+            }
             onCoordinateSpaceChange?.(create_chart_coordinate_space(handles));
         }
 
@@ -918,7 +921,10 @@ export function LightweightChartSurface({
                 return;
             }
 
-            coordinate_animation_frame = requestAnimationFrame(publish_coordinate_space);
+            coordinate_animation_frame = requestAnimationFrame(() => {
+                coordinate_animation_frame = null;
+                publish_coordinate_space();
+            });
         }
 
         /**

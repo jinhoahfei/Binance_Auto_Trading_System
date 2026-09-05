@@ -60,6 +60,11 @@ export function create_demo_ui_application(): DemoUiApplication {
     return {
         command_adapter,
         facade,
+        load_binance_connection_status: async () => ({
+            api: 'online',
+            market_stream: 'online',
+            account_stream: 'online',
+        }),
         activate: () => {
             // Demo runtime은 actor 시작 뒤에만 결정적인 online fixture를 적용한다.
             facade.start();

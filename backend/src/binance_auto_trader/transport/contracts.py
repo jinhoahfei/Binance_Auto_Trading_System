@@ -1413,6 +1413,18 @@ export interface BackendConnectionSnapshot {{
     readonly schema_version: typeof BACKEND_SCHEMA_VERSION;
 }}
 
+export interface BackendBinanceConnectionStatus {{
+    readonly api: 'online' | 'offline';
+    readonly market_stream: 'online' | 'offline';
+    readonly account_stream: 'online' | 'offline';
+}}
+
+export interface BackendShutdownState {{
+    readonly session_id: string;
+    readonly version: number;
+    readonly status: BackendTradingStatus;
+}}
+
 export interface BackendMarketSnapshot {{
     readonly symbol: string;
     readonly current_price: BackendDecimalString | null;

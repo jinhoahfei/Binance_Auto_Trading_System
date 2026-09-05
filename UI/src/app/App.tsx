@@ -4,6 +4,7 @@ import { AppHeader } from '../features/trading-control';
 import { use_realtime_chart_data } from '../features/price-chart';
 import { AppModalHost } from './components';
 import {
+    use_binance_connection_status,
     use_desktop_window_lifecycle,
     use_ui_application,
 } from './hooks';
@@ -42,7 +43,11 @@ export interface AppProps {
  * 작성 날짜: 2026/08/20
  */
 export function App({ applicationFactory }: AppProps) {
-    const { controller, view_model } = use_ui_application(applicationFactory);
+    const { controller, view_model, load_binance_connection_status } = use_ui_application(applicationFactory);
+    const connection_details = use_binance_connection_status(
+        load_binance_connection_status,
+        !view_model.app_exit.is_final,
+    );
     const market_snapshot = use_realtime_chart_data({
         enabled: import.meta.env.MODE !== 'test' && !view_model.app_exit.is_final,
         limit: 1000,
@@ -64,10 +69,13 @@ export function App({ applicationFactory }: AppProps) {
     return (
         <div className={styles.application}>
             <AppHeader
+                connectionDetails={connection_details.connection_details}
+                connectionDetailsError={connection_details.has_error}
                 hasOpenPosition={view_model.trading.has_open_position}
                 isCommandPending={view_model.trading.is_pending}
                 isConnected={view_model.connection.is_online}
                 isTrading={view_model.trading.is_trading}
+                onConnectionDetailsOpenChange={connection_details.set_is_open}
                 onStartRequested={() => controller.dispatch({ type: 'START_TRADING_CLICKED' })}
                 onStopRequested={() => controller.dispatch({
                     type: 'STOP_TRADING_CLICKED',

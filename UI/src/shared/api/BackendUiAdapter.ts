@@ -2,9 +2,11 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type {
     BackendAuthenticateMessage,
+    BackendBinanceConnectionStatus,
     BackendCsvExportRequest,
     BackendEventEnvelope,
     BackendSnapshot,
+    BackendShutdownState,
     BackendTradeDetails,
     BackendTradeDetailsQuery,
     BackendTradeDetailsSummary,
@@ -33,6 +35,7 @@ import {
     validate_performance_snapshot,
     validate_trade_snapshot,
 } from './backendEventMapper';
+import { validate_binance_connection_status } from './binanceConnectionStatus';
 
 const CANONICAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_TRACKED_EVENT_IDS = 10_000;
@@ -419,6 +422,26 @@ function validate_sidecar_exit_receipt(value: unknown): void {
             true,
         );
     }
+}
+
+/**
+ * 함수 이름: validate_shutdown_state()
+ * 기능: 복구 종료에 필요한 최소 상태와 현재 native launch session을 검증한다.
+ * 인자: value -> 미검증 종료 상태, session_id -> 현재 연결 descriptor의 session
+ * 반환값: 검증된 종료 명령 기준값
+ * 작성 날짜: 2026/09/05
+ */
+function validate_shutdown_state(value: unknown, session_id: string): BackendShutdownState {
+    const state = require_exact_record(value, ['session_id', 'version', 'status'], 'shutdown state');
+    if (state.session_id !== session_id) {
+        throw new BackendAdapterError('SESSION_MISMATCH', 'Shutdown state belongs to another backend session', false);
+    }
+    if (!Number.isSafeInteger(state.version) || (state.version as number) < 0
+        || typeof state.status !== 'string'
+        || !BACKEND_TRADING_STATUSES.has(state.status as BackendTradingStatus)) {
+        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Backend shutdown state is invalid');
+    }
+    return state as unknown as BackendShutdownState;
 }
 
 /**
@@ -923,6 +946,25 @@ export class BackendUiAdapter implements UiCommandPort {
     }
 
     /**
+     * 함수 이름: load_binance_connection_status()
+     * 기능: 백엔드에서 Binance API·WebSocket 연결을 진단하고 검증된 상태만 반환한다.
+     * 인자: signal -> 툴팁이 닫힐 때 요청을 취소할 신호
+     * 반환값: Binance 연결 상태 Promise
+     * 작성 날짜: 2026/09/05
+     */
+    async load_binance_connection_status(signal?: AbortSignal): Promise<BackendBinanceConnectionStatus> {
+        return this.request_json(
+            'GET',
+            '/v1/binance/connection-status',
+            validate_binance_connection_status,
+            undefined,
+            false,
+            signal,
+            60_000,  // Binance의 bounded 인증 조회·시간 재동기화가 끝난 뒤 상태를 받을 수 있게 한다.
+        );
+    }
+
+    /**
      * 함수 이름: start_live_events()
      * 기능: 성공한 startup snapshot의 session/sequence 뒤에서 첫-frame 인증 WebSocket을 시작한다.
      * 인자: snapshot -> facade cold hydration에 사용한 같은 backend snapshot
@@ -1331,8 +1373,43 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     async shutdown_application(): Promise<void> {
-        if (!this.#shutdown_was_accepted) {
+        if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
             await this.await_safe_trading_terminal_state();
+        }
+        await this.request_shutdown_and_await_exit(false);
+    }
+
+    /**
+     * 함수 이름: shutdown_recovery_application()
+     * 기능: 전체 snapshot 없이 종료 기준만 읽고 백엔드의 exposure 검사와 정상 종료를 요청한다.
+     * 인자: 없음
+     * 반환값: backend code 0 확인까지의 Promise
+     * 작성 날짜: 2026/09/05
+     */
+    async shutdown_recovery_application(): Promise<void> {
+        if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
+            const state = await this.request_json(
+                'GET',
+                '/v1/shutdown/state',
+                (value) => validate_shutdown_state(value, this.session_id),
+            );
+            this.#trading_version = state.version;
+            this.#trading_status = state.status;
+        }
+
+        // 복구 화면은 stop/청산을 제출하지 않는다. Backend shutdown owner가 열린 exposure를 거부한다.
+        await this.request_shutdown_and_await_exit(true);
+    }
+
+    /**
+     * 함수 이름: request_shutdown_and_await_exit()
+     * 기능: 정상·복구 종료의 202, 멱등 재시도와 native process exit 확인을 공유한다.
+     * 인자: from_recovery -> backend가 flat RUNNING session을 직접 종료하는 복구 경로 여부
+     * 반환값: backend 정상 종료 완료 Promise
+     * 작성 날짜: 2026/09/05
+     */
+    private async request_shutdown_and_await_exit(from_recovery: boolean): Promise<void> {
+        if (!this.#shutdown_was_accepted) {
             const expected_version = this.require_trading_version();
             let receipt: BackendShutdownReceipt;
 
@@ -1349,7 +1426,9 @@ export class BackendUiAdapter implements UiCommandPort {
                             validated_receipt.version,
                             expected_version,
                         );
-                        if (validated_receipt.version !== expected_version) {
+                        const backend_stopped_running_session = from_recovery
+                            && this.#trading_status === 'running';
+                        if (!backend_stopped_running_session && validated_receipt.version !== expected_version) {
                             throw new BackendContractError(
                                 'MALFORMED_BACKEND_PAYLOAD',
                                 'Backend shutdown receipt version does not match the request',
@@ -1371,13 +1450,15 @@ export class BackendUiAdapter implements UiCommandPort {
                 const stream_was_closed = this.#shutdown_stream_closed_during_request;
                 this.#shutdown_stream_closed_during_request = false;
                 if (error instanceof BackendCommandError
-                    && error.code === 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE') {
+                    && (error.code === 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE'
+                        || error.code === 'STALE_CONTEXT_VERSION')) {
                     this.#shutdown_outcome_is_ambiguous = false;
                     if (stream_was_closed) {
                         // 명시적 409 뒤 닫힌 stream은 정상 live resync 경로로 복구한다.
                         void this.full_resynchronize('EVENT_STREAM_CLOSED');
                     }
-                    throw format_shutdown_blocked_error(error);
+                    throw error.code === 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE'
+                        ? format_shutdown_blocked_error(error) : error;
                 }
 
                 // 응답이 불명확하면 동일 shutdown 재시도 외의 command를 차단한다.
@@ -1385,7 +1466,9 @@ export class BackendUiAdapter implements UiCommandPort {
                 const position_label = this.#has_open_position ? '있음' : '없음';
                 throw new BackendAdapterError(
                     'SHUTDOWN_OUTCOME_AMBIGUOUS',
-                    `종료 응답을 확인하지 못했습니다. 마지막 확인 위치의 열린 포지션: ${position_label}, 미체결 주문·조정 상태: 확인 필요. 프로세스를 강제 종료하지 말고 동일 종료 요청으로 결과를 다시 확인해 주세요.`,
+                    from_recovery
+                        ? '종료 응답을 확인하지 못했습니다. 포지션·미체결 주문·조정 상태: 확인 필요. 동일 종료 요청으로 결과를 다시 확인해 주세요.'
+                        : `종료 응답을 확인하지 못했습니다. 마지막 확인 위치의 열린 포지션: ${position_label}, 미체결 주문·조정 상태: 확인 필요. 프로세스를 강제 종료하지 말고 동일 종료 요청으로 결과를 다시 확인해 주세요.`,
                     true,
                 );
             }

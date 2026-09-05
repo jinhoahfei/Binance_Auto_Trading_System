@@ -15,7 +15,7 @@ from ..contracts import (
     require_expected_version,
     success_response,
 )
-from . import RouteContext, application_error_response
+from . import RouteContext, application_error_response, require_ready_runtime
 
 
 def get_health(request_id: str, context: RouteContext) -> TransportResponse:
@@ -44,6 +44,30 @@ def get_health(request_id: str, context: RouteContext) -> TransportResponse:
             "state": str(status_text),
         },
     )
+
+
+def get_shutdown_state(request_id: str, context: RouteContext) -> TransportResponse:
+    """
+    함수 이름: get_shutdown_state()
+    기능: 대시보드 mapping과 독립적으로 종료 명령에 필요한 session, version과 lifecycle을 조회한다.
+    인자: request_id -> 검증된 요청 UUID
+        context -> application runtime과 event stream context
+    반환값: 안전 종료 허가가 아닌 최소 optimistic command 기준값
+    작성 날짜: 2026/09/05
+    """
+    # 화면 데이터에 오류가 있어도 종료 기준은 동일 application publication에서 읽는다.
+    with context.runtime.application_lock:
+        readiness_failure = require_ready_runtime(request_id, context)
+        if readiness_failure is not None:
+            return readiness_failure
+        trading_controller = context.runtime.trading_controller
+        shutdown_state = {
+            "session_id": context.event_stream.session_id,
+            "version": trading_controller.context.version,
+            "status": trading_controller.status.value,
+        }
+
+    return success_response(request_id, shutdown_state)  # Exposure 검사는 POST owner가 다시 수행한다.
 
 
 def request_shutdown(

@@ -3,8 +3,10 @@
 import json
 import secrets
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
+from binance_auto_trader.application import TradingSessionStatus
 
 from binance_auto_trader.bootstrap import (
     ShutdownReceiptStatus,
@@ -24,6 +26,40 @@ class ShutdownHttpIntegrationTests(unittest.TestCase):
     기능: authenticated HTTP shutdown의 exact 202와 same-key 단일 실행을 검증한다.
     작성 날짜: 2026/08/24
     """
+
+    def test_shutdown_state_is_authenticated_and_independent_of_market_mapping(self) -> None:
+        """
+        함수 이름: test_shutdown_state_is_authenticated_and_independent_of_market_mapping()
+        기능: 실제 HTTP에서 시장 mapping 장애와 독립적인 종료 상태 조회 및 token 검증을 확인한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        runtime = _prepare_runtime(ready=True)
+        runtime.market_snapshot = None  # 전체 대시보드를 구성할 수 없는 상태를 재현한다.
+        runtime.trading_controller = SimpleNamespace(
+            context=SimpleNamespace(version=3),
+            status=TradingSessionStatus.NOT_STARTED,
+        )
+        token = secrets.token_urlsafe(32)
+        server = LoopbackTransportServer(runtime, token, allowed_origins=(TEST_ORIGIN,))
+        server.start()
+        try:
+            status, payload, _ = _request_json(
+                server, token, "GET", "/v1/shutdown/state", request_id=str(uuid4()),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["data"], {
+                "session_id": server.descriptor.session_id,
+                "version": 3,
+                "status": "not_started",
+            })
+            denied, _, _ = _request_json(
+                server, secrets.token_urlsafe(32), "GET", "/v1/shutdown/state", request_id=str(uuid4()),
+            )
+            self.assertEqual(denied, 401)  # 별도 종료 조회도 동일 Bearer 경계를 통과해야 한다.
+        finally:
+            server.stop()
 
     def test_same_idempotency_key_replays_accepted_202_once(self) -> None:
         """

@@ -6,6 +6,32 @@ import { App } from './App';
 import { create_demo_ui_application } from './bootstrap';
 
 describe('App runtime wiring', () => {
+    it('LIVE hover는 백엔드 Binance 상태를 조회하고 영역 이탈 즉시 툴팁과 조회를 닫는다', async () => {
+        const user = userEvent.setup();
+        const application = create_demo_ui_application();
+        const load_status = vi.fn().mockResolvedValue({
+            api: 'online', market_stream: 'offline', account_stream: 'online',
+        });
+        render(<App applicationFactory={() => ({
+            ...application,
+            load_binance_connection_status: load_status,
+        })} />);
+
+        const live_badge = await screen.findByRole('button', { name: 'Binance 연결 상태: LIVE' });
+        expect(load_status).not.toHaveBeenCalled();
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+        await user.hover(live_badge);
+        const tooltip = await screen.findByRole('tooltip');
+        expect(await within(tooltip).findByText('연결 안 됨')).toBeInTheDocument();
+        expect(within(tooltip).getAllByText('연결됨')).toHaveLength(2);
+        expect(load_status).toHaveBeenCalledTimes(1);
+
+        await user.unhover(live_badge);
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+        expect(load_status.mock.calls[0]?.[0].aborted).toBe(true);
+    });
+
     it('초기 REGIME 선택부터 자동매매 시작, route, CSV와 중지 흐름을 연결한다', async () => {
         const user = userEvent.setup();
 

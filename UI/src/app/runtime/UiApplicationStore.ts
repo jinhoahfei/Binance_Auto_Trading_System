@@ -6,6 +6,7 @@ import type {
     UiApplicationFactory,
     UiApplicationRuntime,
 } from '../bootstrap';
+import type { BackendBinanceConnectionStatus } from '../../shared/contracts';
 
 type StoreListener = () => void;
 
@@ -98,6 +99,21 @@ export class UiApplicationStore implements UiApplicationController {
      */
     dispatch(intent: UiApplicationIntent): boolean {
         return this.application?.facade.dispatch(intent) ?? false;
+    }
+
+    /**
+     * 함수 이름: load_binance_connection_status()
+     * 기능: 활성 runtime의 조회 경계로 Binance 연결 진단을 전달한다.
+     * 인자: signal -> 툴팁 수명주기 취소 신호
+     * 반환값: 연결 상태 또는 조회 불가 실패 Promise
+     * 작성 날짜: 2026/09/05
+     */
+    async load_binance_connection_status(signal?: AbortSignal): Promise<BackendBinanceConnectionStatus> {
+        if (!this.is_active || this.application?.load_binance_connection_status === undefined) {
+            throw new Error('Binance connection status is unavailable');
+        }
+
+        return this.application.load_binance_connection_status(signal);
     }
 
     /**
