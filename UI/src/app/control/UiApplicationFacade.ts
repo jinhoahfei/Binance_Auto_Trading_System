@@ -151,6 +151,7 @@ export interface UiApplicationFacadeOptions {
     readonly trade_history_summary?: TradeHistorySummaryViewModel;
     readonly is_trading?: boolean;
     readonly has_open_position?: boolean;
+    readonly position_average_entry_price?: BackendDecimalString | null;
 }
 
 /**
@@ -191,6 +192,7 @@ export interface UiServerOwnedSnapshot {
     readonly trade_history_summary: TradeHistorySummaryViewModel;
     readonly is_trading: boolean;
     readonly has_open_position: boolean;
+    readonly position_average_entry_price?: BackendDecimalString | null;
     readonly trading_state_label: BackendTradingStatus;
 }
 
@@ -252,6 +254,7 @@ export type UiApplicationIntent =
         readonly scale_in_percentage: number;
         readonly scale_out_percentage: number;
         readonly has_open_position: boolean;
+        readonly position_average_entry_price?: BackendDecimalString | null;
         readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
         readonly strategy_status: string;
         readonly strategy_status_tone: 'positive' | 'neutral';
@@ -400,6 +403,7 @@ export interface AppViewModel {
         readonly is_pending: boolean;
         readonly is_recovery_liquidation: boolean;
         readonly has_open_position: boolean;
+        readonly position_average_entry_price: BackendDecimalString | null;
         readonly unavailable_reason: TradingUnavailableReason | null;
         readonly error: UiCommandFailure | null;
     };
@@ -546,6 +550,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
                 || snapshot.trading.matches('awaiting_stop_completion'),
             is_recovery_liquidation: snapshot.trading.context.is_recovery_liquidation,
             has_open_position: snapshot.trading.context.has_open_position,
+            position_average_entry_price: snapshot.trading.context.position_average_entry_price,
             unavailable_reason: snapshot.trading.context.unavailable_reason,
             error: snapshot.trading.context.error,
         },
@@ -812,6 +817,8 @@ export class UiApplicationFacade {
                 ...(options.has_open_position === undefined
                     ? {}
                     : { has_open_position: options.has_open_position }),
+                // 초기 backend 평단가를 반올림 없이 trading actor의 표시 상태로 전달한다.
+                position_average_entry_price: options.position_average_entry_price ?? null,
             })),
         };
 
@@ -1023,6 +1030,7 @@ export class UiApplicationFacade {
                     is_trading,
                     has_open_position: intent.has_open_position,
                     lifecycle_status: intent.status,
+                    position_average_entry_price: intent.position_average_entry_price ?? null,
                 });
                 // 종료 actor도 같은 authoritative lifecycle과 Position 조합을 받아 shutdown barrier를 판정한다.
                 this.actors.app_exit.send({
@@ -1534,6 +1542,7 @@ export class UiApplicationFacade {
                 is_trading: synchronized_snapshot.is_trading,
                 has_open_position: synchronized_snapshot.has_open_position,
                 lifecycle_status: synchronized_snapshot.trading_state_label,
+                position_average_entry_price: synchronized_snapshot.position_average_entry_price ?? null,
             });
             // Event 유실 뒤 full resync도 app-exit의 동일 terminal·Position barrier를 열 수 있어야 한다.
             this.actors.app_exit.send({

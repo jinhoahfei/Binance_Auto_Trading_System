@@ -10,7 +10,21 @@ import {
 } from 'lightweight-charts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { UiApplicationFacade } from '../../../app/control';
+import { present_dashboard_props } from '../../../app/presenters/dashboardPresenter';
+import {
+    map_backend_event_to_intents,
+    map_backend_snapshot,
+    validate_backend_snapshot,
+} from '../../../shared/api/backendEventMapper';
+import {
+    create_backend_event_fixture,
+    create_backend_snapshot_fixture,
+} from '../../../shared/api/backendTestFixtures';
+import { FakeUiCommandAdapter } from '../../../shared/testing';
+import type { RealtimeChartDataSnapshot } from '..';
 import { LightweightChartSurface } from './LightweightChartSurface';
+import { PriceChartPanel } from './PriceChartPanel';
 
 vi.mock('lightweight-charts', () => ({
     CandlestickSeries: Symbol('CandlestickSeries'),
@@ -66,7 +80,9 @@ function create_series_mock() {
         applyOptions: vi.fn(),
         barsInLogicalRange: vi.fn(() => ({ barsBefore: 200, barsAfter: 0 })),
         coordinateToPrice: vi.fn(() => 100),
+        createPriceLine: vi.fn(() => ({ applyOptions: vi.fn() })),
         priceToCoordinate: vi.fn(() => 120),
+        removePriceLine: vi.fn(),
         setData: vi.fn(),
         update: vi.fn(),
     };
@@ -186,6 +202,101 @@ afterEach(() => {
 });
 
 describe('LightweightChartSurface', () => {
+    it('backend 평단가를 초기화·갱신·재연결하고 포지션 종료 시 파란 선과 가격표를 제거한다', () => {
+        // Backend 원본 문자열을 실제 mapper·actor·presenter·panel 경계를 거쳐 차트에 전달한다.
+        const backend_snapshot = create_backend_snapshot_fixture();
+        const open_snapshot = {
+            ...backend_snapshot,
+            trading: {
+                ...backend_snapshot.trading,
+                has_open_position: true,
+                position_average_entry_price: '2451.42500000',
+            },
+        };
+        const mapped_snapshot = map_backend_snapshot(
+            validate_backend_snapshot(open_snapshot),
+            '2026-09-05',
+        );
+        const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), mapped_snapshot.facade_options);
+        const market_snapshot: RealtimeChartDataSnapshot = {
+            data_status: 'live',
+            klines_by_interval: { '1m': [], '30m': [], '4h': [], '1d': [] },
+            status_message: null,
+            symbol: 'ETHUSDT',
+            updated_at: INITIAL_OPEN_TIME,
+        };
+        facade.start();
+
+        /**
+         * 함수 이름: render_position_chart()
+         * 기능: 최신 actor 상태와 고정 봉을 실제 panel에 주입해 평단가 전달 경로를 검증한다.
+         * 인자: 없음
+         * 반환값: 현재 포지션을 표시할 차트 panel
+         * 작성 날짜: 2026/09/05
+         */
+        function render_position_chart() {
+            const chart_props = present_dashboard_props(facade.get_view_model(), facade, market_snapshot).chart;
+
+            return <PriceChartPanel {...chart_props} candles={create_candles(3, INITIAL_OPEN_TIME)} />;
+        }
+
+        const { rerender, unmount } = render(render_position_chart());
+        const initial_price_line = chart_harness.candle_series.createPriceLine.mock.results[0]?.value;
+        const price_formatter = vi.mocked(createChart).mock.calls[0]?.[1]
+            ?.localization?.priceFormatter as (price: number) => string;
+
+        expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledWith({
+            price: 2451.425,
+            color: '#1768d4',
+            lineStyle: LineStyle.Dashed,
+            lineWidth: 1,
+            lineVisible: true,
+            axisLabelVisible: true,
+            axisLabelColor: '#1768d4',
+            axisLabelTextColor: '#f0f1f2',
+            title: '',
+        });
+        expect(price_formatter(2451.425)).toBe('2,451.43');
+        expect(facade.get_view_model().trading.position_average_entry_price).toBe('2451.42500000');
+
+        // 추가 매수 등으로 바뀐 평단가는 기존 선을 대체하며 주기·전체화면 전환에도 하나만 유지한다.
+        const updated_trading = { ...open_snapshot.trading, position_average_entry_price: '2460.00000000' };
+        map_backend_event_to_intents({
+            ...create_backend_event_fixture(1, 'TRADING_SESSION_UPDATED', { trading: updated_trading }),
+            aggregate_version: updated_trading.version,
+        }).forEach((intent) => facade.dispatch(intent));
+        rerender(render_position_chart());
+        expect(chart_harness.candle_series.removePriceLine).toHaveBeenCalledWith(initial_price_line);
+        expect(chart_harness.candle_series.createPriceLine).toHaveBeenLastCalledWith(
+            expect.objectContaining({ price: 2460 }),
+        );
+        facade.dispatch({ type: 'CHART_INTERVAL_SELECTED', interval: '4h' });
+        facade.dispatch({ type: 'CHART_FULLSCREEN_CHANGED', is_fullscreen: true });
+        rerender(render_position_chart());
+        expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledTimes(2);
+        expect(createChart).toHaveBeenCalledOnce();  // 표시 값 갱신 때문에 chart 인스턴스를 초기화하지 않는다.
+
+        // 재연결의 full snapshot에서 닫힌 포지션을 적용하면 선과 가격표를 함께 제거한다.
+        facade.dispatch({
+            type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
+            snapshot: map_backend_snapshot(backend_snapshot, '2026-09-05').server_snapshot,
+        });
+        rerender(render_position_chart());
+        expect(chart_harness.candle_series.removePriceLine).toHaveBeenCalledTimes(2);
+        expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledTimes(2);
+
+        // 열린 포지션을 다시 동기화해도 이전 가격이 아닌 snapshot의 평단가 하나만 복구한다.
+        facade.dispatch({ type: 'BACKEND_SNAPSHOT_SYNCHRONIZED', snapshot: mapped_snapshot.server_snapshot });
+        rerender(render_position_chart());
+        expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledTimes(3);
+        expect(chart_harness.candle_series.createPriceLine).toHaveBeenLastCalledWith(
+            expect.objectContaining({ price: 2451.425 }),
+        );
+        unmount();
+        facade.stop();
+        expect(chart_harness.chart.remove).toHaveBeenCalledOnce();
+    });
+
     it('초기 좌표 발행 뒤 unmount하면 예약한 frame이 제거된 차트를 다시 조회하지 않는다', () => {
         const pending_frames = new Map<number, FrameRequestCallback>();
         let next_frame_id = 0;
@@ -253,6 +364,12 @@ describe('LightweightChartSurface', () => {
         expect(information).toHaveTextContent('종가 2,451.43');
         expect(information).toHaveTextContent('거래량(ETH) 330.8691');
         expect(price_formatter?.(0.125)).toBe('0.13');
+        // 현재가의 오른쪽 가격표는 유지하고 기본 점선과 포지션 없는 평단가 선은 숨긴다.
+        expect(chart_harness.chart.addSeries.mock.calls[0]?.[1]).toMatchObject({
+            lastValueVisible: true,
+            priceLineVisible: false,
+        });
+        expect(chart_harness.candle_series.createPriceLine).not.toHaveBeenCalled();
         expect(chart_harness.candle_series.setData).toHaveBeenCalledWith([
             expect.objectContaining({ close: 2451.425, open: 2450.9876 }),
         ]);

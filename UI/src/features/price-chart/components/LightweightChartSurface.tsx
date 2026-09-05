@@ -98,6 +98,7 @@ export interface ChartCoordinateSpace {
 }
 
 export interface LightweightChartSurfaceProps {
+    readonly position_average_entry_price?: string | null;
     readonly bollingerLower: ReadonlyArray<LinePointViewModel>;
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;
     readonly candles: ReadonlyArray<CandleViewModel>;
@@ -629,12 +630,13 @@ function create_lightweight_chart(container: HTMLDivElement): LightweightChartHa
             timeVisible: true,
         },
     });
+    // 현재가는 오른쪽 가격표만 유지하고 차트 전체를 가로지르는 기본 기준선은 숨긴다.
     const candle_series = chart.addSeries(CandlestickSeries, {
         borderVisible: false,
         downColor: negative_color,
         lastValueVisible: true,
         priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-        priceLineVisible: true,
+        priceLineVisible: false,  // 별도 기준선은 열린 포지션의 평단가 표시에만 사용한다.
         upColor: positive_color,
         wickDownColor: negative_color,
         wickUpColor: positive_color,
@@ -853,6 +855,7 @@ export function LightweightChartSurface({
     interval,
     onCoordinateSpaceChange,
     presentationMode = 'interactive',
+    position_average_entry_price = null,
     symbol = 'ETHUSDT',
 }: LightweightChartSurfaceProps) {
     const container_ref = useRef<HTMLDivElement | null>(null);
@@ -1171,6 +1174,39 @@ export function LightweightChartSurface({
     useEffect(() => {
         set_hovered_candle(null);
     }, [interval]);
+
+    useEffect(() => {
+        const handles = handles_ref.current;
+        const average_entry_price = Number(position_average_entry_price);
+
+        // 표시할 열린 포지션의 유효 가격이 없거나 정적 fixture이면 기준선을 만들지 않는다.
+        if (handles === null || presentationMode !== 'interactive'
+            || position_average_entry_price === null
+            || !Number.isFinite(average_entry_price) || average_entry_price <= 0) {
+            return undefined;
+        }
+
+        // 기존 가격 formatter가 소수 둘째 자리까지 표시하며 선과 오른쪽 가격표는 같은 파랑을 쓴다.
+        const position_color = read_color_token('--color-status-info', '#1768d4');
+        const position_price_line = handles.candle_series.createPriceLine({
+            price: average_entry_price,  // 숫자 변환은 chart 좌표 입력에만 사용한다.
+            color: position_color,
+            lineStyle: LineStyle.Dashed,
+            lineWidth: 1,
+            lineVisible: true,
+            axisLabelVisible: true,
+            axisLabelColor: position_color,
+            axisLabelTextColor: read_color_token('--color-text-primary', '#f0f1f2'),
+            title: '',
+        });
+
+        return () => {
+            // 평단가 변경·포지션 종료 때 이전 선을 지우고 이미 제거된 차트에는 접근하지 않는다.
+            if (handles_ref.current === handles) {
+                handles.candle_series.removePriceLine(position_price_line);
+            }
+        };
+    }, [onCoordinateSpaceChange, position_average_entry_price, presentationMode]);
 
     const change_rate = displayed_candle === null ? 0 : calculate_change_rate(displayed_candle);
     const range_rate = displayed_candle === null ? 0 : calculate_price_range_rate(displayed_candle);

@@ -757,6 +757,7 @@ class TradingSessionSnapshot:
     max_daily_loss: Decimal | None = None
     daily_loss_scope: DailyLossScope | None = None
     manual_kill_behavior: ManualKillBehavior | None = None
+    position_average_entry_price: Decimal | None = None  # 열린 Position의 표시용 평단가다.
 
 
 @dataclass(frozen=True, slots=True)
@@ -2400,11 +2401,25 @@ class TradingController:
                 )
 
             # Startup 복구 전 Context가 초기화되지 않았어도 authoritative Position을 숨기지 않는다.
-            has_open_position = (
-                self._position.quantity > Decimal("0")
+            position_state = (
+                self._position.get_snapshot()
                 if self._position is not None
+                else None
+            )
+            has_open_position = (
+                position_state.quantity > Decimal("0")
+                if position_state is not None
                 else self._position_snapshot.is_open
             )
+
+            # 보유 여부와 같은 lock에서 기존 평단가를 읽고 종료된 포지션은 표시하지 않는다.
+            position_average_entry_price = None
+            if has_open_position:
+                position_average_entry_price = (
+                    position_state.average_entry_price
+                    if position_state is not None
+                    else self._position_snapshot.entry_price
+                )  # UI 표시를 위해 수수료 포함 원가를 다시 계산하거나 반올림하지 않는다.
 
             # Configured policy의 nullable 상한과 운영 enum을 unavailable 상태와 섞지 않고 공개한다.
             configured_risk_policy = (
@@ -2421,6 +2436,7 @@ class TradingController:
                 scale_in=self._context.scale_in_ratio,
                 scale_out=self._context.scale_out_ratio,
                 has_open_position=has_open_position,
+                position_average_entry_price=position_average_entry_price,
                 command_enabled=self.command_enabled,
                 selected=self._selected_regime,
                 support_status=(

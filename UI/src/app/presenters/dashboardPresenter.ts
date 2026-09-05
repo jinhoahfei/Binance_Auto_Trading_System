@@ -294,6 +294,11 @@ export function present_dashboard_props(
                     },
                 }),
             activeState: applied_strategy,
+            // ETHUSDT의 열린 포지션 평단가만 전달하고 캔들·최근 체결 가격으로 대체하지 않는다.
+            position_average_entry_price: view_model.trading.has_open_position
+                && realtime_chart_view_model?.symbol === 'ETHUSDT'
+                ? view_model.trading.position_average_entry_price
+                : null,
             interval: view_model.chart.interval,
             isFullscreen: view_model.chart.is_fullscreen,
             drawingActive: view_model.chart.drawing_mode !== 'deactivated',

@@ -114,6 +114,8 @@ export interface BackendTradingSnapshot {
     readonly scale_in: BackendDecimalString;
     readonly scale_out: BackendDecimalString;
     readonly has_open_position: boolean;
+    /** 구버전 schema v3에서 생략될 수 있는 열린 포지션의 표시용 평단가다. */
+    readonly position_average_entry_price?: BackendDecimalString | null;
     readonly session_id: string | null;
     readonly risk_policy_availability: BackendRiskPolicyAvailability;
     readonly configured_risk_policy_version: number | null;

@@ -652,6 +652,20 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
     assert_unit_interval_ratio(trading.scale_in, 'trading.scale_in');
     assert_unit_interval_ratio(trading.scale_out, 'trading.scale_out');
     assert_boolean(trading.has_open_position, 'trading.has_open_position');
+
+    // 추가 표시 필드가 없는 기존 v3 payload는 허용하되 제공된 평단가는 양수 Decimal로 검증한다.
+    if (trading.position_average_entry_price !== undefined) {
+        const position_average_entry_price = assert_nullable_positive_decimal_string(
+            trading.position_average_entry_price,
+            'trading.position_average_entry_price',
+        );
+        if (!trading.has_open_position && position_average_entry_price !== null) {
+            throw new BackendContractError(
+                'MALFORMED_BACKEND_PAYLOAD',
+                'A closed position must not publish an average entry price',
+            );
+        }
+    }
     if (trading.session_id !== null) {
         assert_uuid(trading.session_id, 'trading.session_id');
     }
@@ -1546,6 +1560,7 @@ export function map_backend_snapshot(
         scale_out_percentage: Number(trading.scale_out) * 100,
         is_trading,
         has_open_position: trading.has_open_position,
+        position_average_entry_price: trading.position_average_entry_price ?? null,  // 원본 소수 문자열을 보존한다.
         trading_state_label: trading.status,
     };
 
@@ -1586,6 +1601,7 @@ export function map_backend_snapshot(
             scale_out_percentage: server_snapshot.scale_out_percentage,
             is_trading: server_snapshot.is_trading,
             has_open_position: server_snapshot.has_open_position,
+            position_average_entry_price: server_snapshot.position_average_entry_price ?? null,
         },
         server_snapshot,
     };
@@ -1737,6 +1753,7 @@ export function map_backend_event_to_intents(
                 scale_in_percentage: Number(trading.scale_in) * 100,
                 scale_out_percentage: Number(trading.scale_out) * 100,
                 has_open_position: trading.has_open_position,
+                position_average_entry_price: trading.position_average_entry_price ?? null,
                 logic_coverage: validate_trading_logic_coverage(trading.logic_coverage),
                 strategy_status: presentation.label,
                 strategy_status_tone: presentation.tone,

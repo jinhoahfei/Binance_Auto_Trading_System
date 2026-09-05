@@ -56,14 +56,17 @@ from binance_auto_trader.domain.trading.logic_registry import (
     TradingLogicSupportStatus,
 )
 from binance_auto_trader.domain.trading.order import OrderResult, OrderStatus
+from binance_auto_trader.domain.trading.position import Position
 from binance_auto_trader.domain.trading.results import TradingSTMResult
 from binance_auto_trader.domain.trading.states import (
+    ExitReason,
     OrderAttemptKind,
     OrderSide,
     RootState,
     StrategyType,
     TradingPhase,
 )
+from binance_auto_trader.transport.contracts import map_trading_snapshot
 
 from tests.integration.test_account_stream_flow import (
     FakeAccountRESTClient,
@@ -72,6 +75,7 @@ from tests.integration.test_account_stream_flow import (
     SynchronousAccountWebSocketClient,
     _ready_market_snapshot,
 )
+from tests.unit.trading.test_position import _execution_summary
 
 
 class RecordingTradingContext(TradingContext):
@@ -261,6 +265,55 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
     기능: REGIME 선택, start Guard, 멱등성과 active 변경 금지를 검증한다.
     작성 날짜: 2026/08/21
     """
+
+    def test_position_average_entry_price_publication(self) -> None:
+        """
+        함수 이름: test_position_average_entry_price_publication()
+        기능: 평단가 원본이 snapshot과 wire에 반영되고 종료 후 제거되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        # Position aggregate 없이 사용하는 기존 snapshot 경로도 보유 여부와 평단가를 함께 공개한다.
+        controller, _, _ = _create_ready_controller()
+        self.assertIsNone(controller.snapshot_session().position_average_entry_price)
+        controller.update_position_snapshot(
+            PositionSnapshot(
+                quantity=Decimal("0.5"),
+                entry_price=Decimal("2451.42500000"),
+            ),
+            owner=StrategyType.CASE_B,
+        )
+        self.assertEqual(
+            "2451.42500000",
+            map_trading_snapshot(controller, "disabled")["position_average_entry_price"],
+        )
+
+        # 실제 체결 aggregate를 연결해 quote 수수료 포함 원가가 추가 매수 시 그대로 갱신되는지 본다.
+        position = Position()
+        controller._position = position  # Fake 실행 결과만 적용하므로 외부 주문을 호출하지 않는다.
+        position.apply_execution(_execution_summary(
+            side=OrderSide.BUY, quantity="1", price="2400", fee_quote_amount="1",
+        ))
+        initial_snapshot = controller.snapshot_session()
+        self.assertEqual(Decimal("2401"), initial_snapshot.position_average_entry_price)
+        position.apply_execution(_execution_summary(
+            side=OrderSide.BUY, quantity="1", price="2500", exchange_order_id="2",
+        ))
+        self.assertEqual(
+            "2450.5",
+            map_trading_snapshot(controller, "disabled")["position_average_entry_price"],
+        )
+        self.assertEqual(Decimal("2401"), initial_snapshot.position_average_entry_price)
+
+        # 전량 매도 후에는 과거 entry 값이 아닌 명시적 null을 wire로 전달한다.
+        position.apply_execution(_execution_summary(
+            side=OrderSide.SELL, quantity="2", price="2500", exchange_order_id="3",
+            exit_reason=ExitReason.TAKE_PROFIT,
+        ))
+        closed_snapshot = map_trading_snapshot(controller, "disabled")
+        self.assertFalse(closed_snapshot["has_open_position"])
+        self.assertIsNone(closed_snapshot["position_average_entry_price"])
 
     def test_market_observation_updates_context_and_opens_lower_event(
         self,

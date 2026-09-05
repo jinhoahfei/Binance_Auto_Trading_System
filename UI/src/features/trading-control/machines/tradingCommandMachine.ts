@@ -40,6 +40,7 @@ export interface TradingCommandContext {
     readonly is_trading: boolean;
     readonly is_recovery_liquidation: boolean;
     readonly has_open_position: boolean;
+    readonly position_average_entry_price: BackendDecimalString | null;
     readonly regime_highlight_requested: boolean;
     readonly notice: 'not_running' | null;
     readonly unavailable_reason: TradingUnavailableReason | null;
@@ -76,6 +77,7 @@ export interface TradingCommandMachineOptions {
     readonly process_ownership_ambiguous?: boolean;
     readonly is_trading?: boolean;
     readonly has_open_position?: boolean;
+    readonly position_average_entry_price?: BackendDecimalString | null;
 }
 
 export type TradingCommandEvent =
@@ -103,6 +105,7 @@ export type TradingCommandEvent =
         readonly process_ownership_ambiguous?: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
+        readonly position_average_entry_price?: BackendDecimalString | null;
         readonly lifecycle_status: BackendTradingStatus;
     }
     | {
@@ -129,6 +132,7 @@ export type TradingCommandEvent =
         readonly process_ownership_ambiguous?: boolean;
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
+        readonly position_average_entry_price?: BackendDecimalString | null;
         readonly lifecycle_status: BackendTradingStatus;
     }
     | {
@@ -444,6 +448,17 @@ export function create_trading_command_machine(
                         ? event.has_open_position
                         : context.has_open_position;
                 },
+                // 시작·실시간 갱신·재연결에서 보유 여부와 평단가를 한 snapshot으로 교체한다.
+                position_average_entry_price: ({ context, event }) => {
+                    if (event.type !== 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        && event.type !== 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') {
+                        return context.position_average_entry_price;
+                    }
+
+                    return event.has_open_position
+                        ? event.position_average_entry_price ?? null
+                        : null;  // 종료되었거나 값이 미제공이면 이전 평단가를 남기지 않는다.
+                },
                 notice: ({ context, event }) => {
                     return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
                         ? null
@@ -515,6 +530,13 @@ export function create_trading_command_machine(
                 error: null,
             }),
             synchronize_position: assign({
+                // 보유 여부만 전달하는 기존 event로 포지션이 바뀌면 오래된 평단가를 제거한다.
+                position_average_entry_price: ({ event, context }) => {
+                    return event.type === 'POSITION_UPDATED'
+                        && (!event.has_open_position || !context.has_open_position)
+                        ? null
+                        : context.position_average_entry_price;
+                },
                 has_open_position: ({ event, context }) => {
                     return event.type === 'POSITION_UPDATED'
                         ? event.has_open_position
@@ -554,6 +576,7 @@ export function create_trading_command_machine(
             }),
             clear_open_position: assign({
                 has_open_position: false,
+                position_average_entry_price: null,  // 청산 완료 시 기준선 표시 값도 함께 정리한다.
             }),
             remember_failure: assign({
                 error: ({ event }) => {
@@ -591,6 +614,9 @@ export function create_trading_command_machine(
             is_trading: options.is_trading ?? false,
             is_recovery_liquidation: false,
             has_open_position: options.has_open_position ?? false,
+            position_average_entry_price: options.has_open_position
+                ? options.position_average_entry_price ?? null
+                : null,
             regime_highlight_requested: false,
             notice: null,
             unavailable_reason: null,

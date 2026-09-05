@@ -64,6 +64,7 @@ export function PriceChartPanel({
     onLoadEarlier,
     onIntent,
     presentationMode = 'interactive',
+    position_average_entry_price = null,
     selectedLineId = null,
     statusMessage = null,
     symbol = 'ETHUSDT',
@@ -146,6 +147,7 @@ export function PriceChartPanel({
                 onLoadEarlier={onLoadEarlier}
                 onIntent={onIntent}
                 presentationMode={presentationMode}
+                position_average_entry_price={position_average_entry_price}
                 selectedLineId={selectedLineId}
                 statusMessage={statusMessage}
                 symbol={symbol}

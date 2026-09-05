@@ -51,6 +51,8 @@ export interface LinePointViewModel {
 }
 
 export interface PriceChartViewModel {
+    /** 열린 포지션의 원본 평단가이며 null 또는 미제공이면 기준선을 숨긴다. */
+    readonly position_average_entry_price?: string | null;
     readonly activeState: string;
     readonly bollingerLower: ReadonlyArray<LinePointViewModel>;
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;

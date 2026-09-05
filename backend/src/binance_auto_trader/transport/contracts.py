@@ -1223,6 +1223,12 @@ def map_trading_snapshot(
                 session_snapshot,
                 "has_open_position",
             ),
+            # 평단가는 같은 session snapshot의 Decimal 원본을 nullable 표시 값으로 공개한다.
+            "position_average_entry_price": getattr(
+                session_snapshot,
+                "position_average_entry_price",
+                None,
+            ),  # 이전 snapshot 제공자는 값을 추측하지 않고 미제공 상태로 유지한다.
             "session_id": getattr(session_snapshot, "session_id"),
             "risk_policy_availability": risk_policy_availability_text,
             "configured_risk_policy_version": getattr(
@@ -1489,6 +1495,8 @@ export interface BackendTradingSnapshot {{
     readonly scale_in: BackendDecimalString;
     readonly scale_out: BackendDecimalString;
     readonly has_open_position: boolean;
+    /** 구버전 schema v3에서 생략될 수 있는 열린 포지션의 표시용 평단가다. */
+    readonly position_average_entry_price?: BackendDecimalString | null;
     readonly session_id: string | null;
     readonly risk_policy_availability: BackendRiskPolicyAvailability;
     readonly configured_risk_policy_version: number | null;

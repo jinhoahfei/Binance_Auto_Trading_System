@@ -954,9 +954,36 @@ describe('backend snapshot and event mapping', () => {
             scale_out_percentage: 60,
             has_open_position: true,
             logic_coverage: snapshot.trading.logic_coverage,
+            position_average_entry_price: null,  // 기존 v3 event의 미제공 평단가는 숨김 값으로 정규화한다.
             strategy_status: '자동매매 중지 처리 중',
             strategy_status_tone: 'neutral',
         }]);
+    });
+
+    it.each(['0', '-1', 'NaN', 'Infinity', '2,450.00', 2450])(
+        '유효하지 않은 포지션 평단가 %s는 snapshot과 실시간 event 모두에서 거부한다',
+        (invalid_average_entry_price) => {
+            // 동일한 잘못된 평단가를 초기 snapshot과 event 경계에 주입해 일관된 거부를 확인한다.
+            const snapshot = create_backend_snapshot_fixture();
+            const trading = {
+                ...snapshot.trading,
+                has_open_position: true,
+                position_average_entry_price: invalid_average_entry_price,
+            };
+            expect(() => validate_backend_snapshot({ ...snapshot, trading })).toThrow(BackendContractError);
+            expect(() => map_backend_event_to_intents({
+                ...create_backend_event_fixture(1, 'TRADING_SESSION_UPDATED', { trading }),
+                aggregate_version: trading.version,
+            })).toThrow(BackendContractError);
+        },
+    );
+
+    it('닫힌 포지션에 남은 평단가는 이전 포지션 가격으로 표시하지 않도록 거부한다', () => {
+        // 보유 여부가 false인 authoritative snapshot에는 null 또는 미제공 값만 허용한다.
+        expect(() => validate_backend_snapshot(create_snapshot_with_trading_patch({
+            has_open_position: false,
+            position_average_entry_price: '2450.00',
+        }))).toThrow(BackendContractError);
     });
 
     it.each([

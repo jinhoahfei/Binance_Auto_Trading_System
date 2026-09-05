@@ -64,6 +64,7 @@ const FIXTURE_CANDLE_GEOMETRIES: ReadonlyArray<FixtureCandleGeometry> = [
 ];
 
 export interface ChartCanvasProps {
+    readonly position_average_entry_price?: string | null;
     readonly bollingerLower: ReadonlyArray<LinePointViewModel>;
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;
     readonly candles: ReadonlyArray<CandleViewModel>;
@@ -458,6 +459,7 @@ export function ChartCanvas({
     onLoadEarlier,
     onIntent,
     presentationMode = 'interactive',
+    position_average_entry_price = null,
 }: ChartCanvasProps) {
     const history_boundary_request_ref = useRef<string | null>(null);
     const history_navigation_armed_ref = useRef(false);
@@ -629,6 +631,7 @@ export function ChartCanvas({
                 interval={interval}
                 onCoordinateSpaceChange={handle_coordinate_space_change}
                 presentationMode={presentationMode}
+                position_average_entry_price={position_average_entry_price}
                 symbol={symbol}
             />
             <svg
