@@ -6,6 +6,8 @@ from dataclasses import replace
 from decimal import Decimal
 
 from ..action_requests import PatchRuntimeContext, ReevaluationTrigger, patch
+# 표시와 주문 판단이 같은 순수 조건 평가를 공유한다.
+from ..conditions import condition_met, condition_unmet
 from ..context import TradingContextView
 from ..events import SellAttemptPayload, TradingEvent, TradingEventType
 from ..states import (
@@ -20,7 +22,6 @@ from ..states import (
 )
 from .base import TransitionOutcome, create_transition_outcome
 from .helpers import (
-    SIXTY_MINUTES,
     create_exit_order_actions,
     create_queue_event_action,
     schedule_market_reevaluation,
@@ -82,7 +83,7 @@ def handle_case_c_position_transition(
             )
         if event_type is TradingEventType.CHECK_CASE_C_RECOVERY:
             # 회복 전에는 scheduler를 사용해 다음 시장 변화에서만 다시 검사한다.
-            if context.market.realtime_pct_b < Decimal("0.25"):
+            if condition_unmet("c_recovery", context):
                 return create_transition_outcome(
                     "PC-25",
                     state,
@@ -196,7 +197,7 @@ def _handle_holding(
     # slope 손절 event는 최초 청산 의도가 없을 때만 실제 매도 action을 만든다.
     if (
         event_type is TradingEventType.CASE_C_STOP
-        and context.market.realtime_slope_at_most_minus_055_for_3m
+        and condition_met("c_stop", context)
         and _can_start_exit(context)
     ):
         actions = create_exit_order_actions(
@@ -212,7 +213,7 @@ def _handle_holding(
     # 익절권 진입 시 고정 tp_price와 비교 기준 slope를 저장하고 trailing을 시작한다.
     if (
         event_type is TradingEventType.CASE_C_ENTER_PROFIT_ZONE
-        and context.market.realtime_pct_b >= Decimal("0.10")
+        and condition_met("c_profit_zone", context)
         and _can_start_exit(context)
     ):
         market = context.market
@@ -321,8 +322,7 @@ def _handle_tp_trailing(
         event_type is TradingEventType.CASE_C_EMA_INCREASEMENT
         and context.market.confirmed_1m_close
         and runtime.previous_trail_ema_slope is not None
-        and context.market.current_close_ema_slope
-        > runtime.previous_trail_ema_slope
+        and condition_met("c_trail_increase", context)
     ):
         return create_transition_outcome(
             "PC-15",
@@ -338,7 +338,7 @@ def _handle_tp_trailing(
     # %B가 익절권 아래로 내려오면 TP_FALLBACK 청산을 요청한다.
     if (
         event_type is TradingEventType.CASE_C_SELL_AT_TP_PRICE
-        and context.market.realtime_pct_b < Decimal("0.10")
+        and condition_met("c_trail_fallback", context)
         and _can_start_exit(context)
     ):
         actions = create_exit_order_actions(
@@ -356,8 +356,7 @@ def _handle_tp_trailing(
         event_type is TradingEventType.CASE_C_EMA_DECREASEMENT
         and context.market.confirmed_1m_close
         and runtime.previous_trail_ema_slope is not None
-        and context.market.current_close_ema_slope
-        <= runtime.previous_trail_ema_slope
+        and condition_unmet("c_trail_increase", context)
         and _can_start_exit(context)
     ):
         actions = create_exit_order_actions(
@@ -434,7 +433,7 @@ def _handle_time_exit_or_failure(
     runtime = context.runtime
     if (
         event.event_type is TradingEventType.CASE_C_TIME_EXIT
-        and context.market.holding_elapsed >= SIXTY_MINUTES
+        and condition_met("c_time_exit", context)
         and _can_start_exit(context)
     ):
         actions = create_exit_order_actions(
@@ -468,12 +467,12 @@ def _select_holding_event(context: TradingContextView) -> TradingEventType | Non
     반환값: 선택된 TradingEventType 또는 조건이 없으면 None
     작성 날짜: 2026/08/14
     """
-    market = context.market
-    if market.realtime_pct_b >= Decimal("0.10"):
+    # 기존 우선순위에서 공유 조건을 순서대로 읽는다.
+    if condition_met("c_profit_zone", context):
         return TradingEventType.CASE_C_ENTER_PROFIT_ZONE
-    if market.realtime_slope_at_most_minus_055_for_3m:
+    if condition_met("c_stop", context):
         return TradingEventType.CASE_C_STOP
-    if market.holding_elapsed >= SIXTY_MINUTES:
+    if condition_met("c_time_exit", context):
         return TradingEventType.CASE_C_TIME_EXIT
     return None
 
@@ -488,13 +487,13 @@ def _select_trailing_event(context: TradingContextView) -> TradingEventType | No
     """
     market = context.market
     previous_slope = context.runtime.previous_trail_ema_slope
-    if market.realtime_pct_b < Decimal("0.10"):
+    if condition_met("c_trail_fallback", context):
         return TradingEventType.CASE_C_SELL_AT_TP_PRICE
     if market.confirmed_1m_close and previous_slope is not None:
-        if market.current_close_ema_slope > previous_slope:
+        if condition_met("c_trail_increase", context):
             return TradingEventType.CASE_C_EMA_INCREASEMENT
         return TradingEventType.CASE_C_EMA_DECREASEMENT
-    if market.holding_elapsed >= SIXTY_MINUTES:
+    if condition_met("c_time_exit", context):
         return TradingEventType.CASE_C_TIME_EXIT
     return None
 
@@ -511,7 +510,7 @@ def _is_case_b_handoff_active(context: TradingContextView) -> bool:
     return (
         runtime.case_c_exit_reason is ExitReason.TP_TRAIL
         and runtime.case_c_exit_pct_b is not None
-        and runtime.case_c_exit_pct_b < Decimal("0.40")
+        and condition_met("c_handoff", context)
     )
 
 

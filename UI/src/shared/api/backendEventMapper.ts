@@ -1,3 +1,4 @@
+import { is_trading_indicator_snapshot } from './tradingIndicatorValidation';
 import type {
     BackendAccountSnapshot,
     BackendDailyLossScope,
@@ -28,6 +29,7 @@ import {
     format_decimal_text,
     format_eth_quantity,
     format_quote_amount,
+    format_trading_logic_state,
 } from '../formatting';
 import type {
     UiApplicationFacadeOptions,
@@ -652,6 +654,31 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
     assert_unit_interval_ratio(trading.scale_in, 'trading.scale_in');
     assert_unit_interval_ratio(trading.scale_out, 'trading.scale_out');
     assert_boolean(trading.has_open_position, 'trading.has_open_position');
+
+    // 실행 로직은 선택 REGIME와 별개인 선택적 표시 계약이며 제공된 값의 enum과 중복을 검증한다.
+    if (trading.active_logic !== undefined && trading.active_logic !== null) {
+        const active_logic = assert_record(trading.active_logic, 'trading.active_logic');
+        const regime_type = assert_string(active_logic.regime_type, 'active_logic.regime_type');
+        const root_state = assert_string(active_logic.root_state, 'active_logic.root_state');
+        // 확장 지표 계약도 전체 snapshot과 event에서 같은 검증 경계를 통과시킨다.
+        if (active_logic.indicators != null && !is_trading_indicator_snapshot(active_logic.indicators)) {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'active_logic.indicators is invalid');
+        }
+        const active_strategies = active_logic.active_strategies;
+        if (!BACKEND_REGIME_TYPES.has(regime_type)
+            || !['LOWER_TOUCH_WATCH', 'TRADE_MANAGEMENT', 'STOPPING'].includes(root_state)
+            || !Array.isArray(active_strategies)
+            || active_strategies.some((strategy) => strategy !== 'CASE_B' && strategy !== 'CASE_C')
+            || new Set(active_strategies).size !== active_strategies.length
+            || (root_state === 'LOWER_TOUCH_WATCH' && active_strategies.length > 0)
+            || trading.status === 'not_started'
+            || trading.status === 'terminated') {
+            throw new BackendContractError(
+                'MALFORMED_BACKEND_PAYLOAD',
+                'trading.active_logic is invalid',
+            );
+        }
+    }
 
     // 추가 표시 필드가 없는 기존 v3 payload는 허용하되 제공된 평단가는 양수 Decimal로 검증한다.
     if (trading.position_average_entry_price !== undefined) {
@@ -1535,7 +1562,7 @@ export function map_backend_snapshot(
     );
     const trading_presentation = map_trading_status_presentation(trading.status);
     const account_strategy = {
-        appliedState: trading.status,
+        appliedState: format_trading_logic_state(trading),  // Snapshot과 event는 같은 전략 표시 규칙을 쓴다.
         // Performance 누적값은 현재 REGIME 상태별 성과가 아니므로 StrategyCard에는 투영하지 않는다.
         profitAmount: '-',
         profitRate: '-',
@@ -1553,6 +1580,7 @@ export function map_backend_snapshot(
         recommended_regime: snapshot.regime.recommended,
         applied_regime: snapshot.regime.selected,
         regime_metrics,
+        strategy_indicators: trading.active_logic?.indicators ?? null,
         logic_coverage,
         command_enabled: trading.command_enabled,
         risk_policy_availability: trading.risk_policy_availability,
@@ -1592,6 +1620,7 @@ export function map_backend_snapshot(
             recommended_regime: server_snapshot.recommended_regime,
             applied_regime: server_snapshot.applied_regime,
             regime_metrics: server_snapshot.regime_metrics,
+            strategy_indicators: server_snapshot.strategy_indicators ?? null,
             logic_coverage: server_snapshot.logic_coverage,
             command_enabled: server_snapshot.command_enabled,
             risk_policy_availability: server_snapshot.risk_policy_availability,
@@ -1745,6 +1774,7 @@ export function map_backend_event_to_intents(
 
             return [{
                 type: 'TRADING_SESSION_SYNCHRONIZED',
+                strategy_indicators: trading.active_logic?.indicators ?? null,
                 status: trading.status,
                 version: trading.version,
                 session_id: trading.session_id,
@@ -1778,6 +1808,7 @@ export function map_backend_event_to_intents(
                 logic_coverage: validate_trading_logic_coverage(trading.logic_coverage),
                 strategy_status: presentation.label,
                 strategy_status_tone: presentation.tone,
+                strategy_state_label: format_trading_logic_state(trading),  // lifecycle과 Case 표시를 분리한다.
             }];
         }
         case 'PERFORMANCE_UPDATED': {

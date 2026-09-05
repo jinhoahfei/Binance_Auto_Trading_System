@@ -20,6 +20,7 @@ from binance_auto_trader.domain.market.ema_slope import (
     SLOPE_SAMPLE_SIZE,
 )
 from binance_auto_trader.domain.trading import MarketEvaluationSnapshot
+from binance_auto_trader.application.market_condition_timers import create_hold_timer_snapshots
 
 
 # 30분 Bollinger/CCI와 monotonic 유지 조건의 고정 상수를 한곳에서 공유한다.
@@ -181,6 +182,8 @@ class ThirtyMinuteMarketEvaluationBuilder:
         "_last_market_version",
         "_last_monotonic_time",
         "_monotonic_clock",
+        "_condition_timers",
+        "_timer_generation",
     )
 
     def __init__(
@@ -204,6 +207,8 @@ class ThirtyMinuteMarketEvaluationBuilder:
         self._last_monotonic_time: int | None = None
         self._current_candle_id: str | None = None
         self._condition_started_at: dict[str, int | None] = {}
+        self._condition_timers = ()  # 마지막 30분 tick의 측정 시각까지 함께 보존한다.
+        self._timer_generation = 0
 
     def reset(self) -> None:
         """
@@ -218,6 +223,8 @@ class ThirtyMinuteMarketEvaluationBuilder:
         self._last_monotonic_time = None
         self._current_candle_id = None
         self._condition_started_at = {}
+        self._condition_timers = ()
+        self._timer_generation += 1  # 재연결 뒤 같은 봉·같은 조건도 새로운 타이머 회차다.
 
     def rebase(self, market_snapshot: MarketSnapshot) -> None:
         """
@@ -300,14 +307,27 @@ class ThirtyMinuteMarketEvaluationBuilder:
             if advances_conditions
             else (self._last_monotonic_time or 0)
         )
-        condition_flags, next_condition_starts = self._evaluate_conditions(
+        condition_flags, next_condition_starts, condition_contracts = self._evaluate_conditions(
             candle_id,
             monotonic_time,
             evaluation_values,
         )
+        # 1분 close는 30분 유지시간의 측정 시각도 다시 찍지 않아 UI 시간을 되돌리지 않는다.
+        condition_timers = self._condition_timers
+        if advances_conditions:
+            sampled_at = market_snapshot.updated_at
+            if sampled_at is None:
+                raise MarketEvaluationCalculationError("Timer evaluation requires a server sample time")
+            condition_timers = create_hold_timer_snapshots(
+                condition_contracts, condition_flags, next_condition_starts, self._condition_timers,
+                monotonic_time=monotonic_time, sampled_at=sampled_at,
+                candle_id=candle_id, generation=self._timer_generation,
+                candle_changed=self._current_candle_id is not None and candle_id != self._current_candle_id,
+            )
         market_evaluation = MarketEvaluationSnapshot(
             **evaluation_values,
             **condition_flags,
+            condition_timers=condition_timers,
         )
 
         # DTO 검증까지 성공한 뒤에만 builder state를 commit해 실패한 계산이 시간을 소비하지 않게 한다.
@@ -315,6 +335,7 @@ class ThirtyMinuteMarketEvaluationBuilder:
             self._current_candle_id = candle_id
             self._condition_started_at = next_condition_starts
             self._last_monotonic_time = monotonic_time
+            self._condition_timers = condition_timers
         self._last_market_version = market_snapshot.version
         return market_evaluation
 
@@ -804,14 +825,14 @@ class ThirtyMinuteMarketEvaluationBuilder:
         candle_id: str,
         monotonic_time: int,
         evaluation_values: dict[str, object],
-    ) -> tuple[dict[str, bool], dict[str, int | None]]:
+    ) -> tuple[dict[str, bool], dict[str, int | None], dict[str, tuple[bool, int]]]:
         """
         함수 이름: _evaluate_conditions()
         기능: 5초·3분 조건의 연속 유지 시작점과 현재 flag를 원자 계산한다.
         인자: candle_id -> 현재 authoritative 30분봉 ID
             monotonic_time -> 이번 평가의 monotonic nanosecond
             evaluation_values -> 계산을 끝낸 실시간 %B와 slope 값
-        반환값: boolean flag mapping과 다음 condition start mapping
+        반환값: boolean flag, 다음 시작점 및 실제 즉시 조건·지속시간 mapping
         작성 날짜: 2026/08/29
         """
         realtime_pct_b = evaluation_values["realtime_pct_b"]
@@ -868,4 +889,4 @@ class ThirtyMinuteMarketEvaluationBuilder:
                 monotonic_time - started_at >= duration_nanoseconds
             )
 
-        return flags, next_starts
+        return flags, next_starts, condition_contracts  # 타이머 표시도 이 평가가 사용한 지속시간을 읽는다.

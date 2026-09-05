@@ -1307,6 +1307,8 @@ class ThirtyMinuteMarketEvaluationBuilderTests(unittest.TestCase):
             closed_one_minute,
         )
         self.assertIsNotNone(one_minute_evaluation)
+        # 1분 event로 새 metadata를 붙이면 UI가 이미 흐른 유지시간을 다시 시작하므로 원본을 보존한다.
+        self.assertEqual(one_minute_evaluation.condition_timers, first_evaluation.condition_timers)
         self.assertFalse(
             one_minute_evaluation.realtime_slope_above_008_for_5s
         )

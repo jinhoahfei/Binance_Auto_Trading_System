@@ -13,7 +13,7 @@ export const DEFAULT_DASHBOARD_PROPS: DashboardPageProps = {
         ],
     },
     chart: {
-        activeState: 'Basic Iterative',
+        activeState: 'Case_B',  // 정적 화면도 계좌 카드와 같은 실행 Case 예시를 사용한다.
         timestampLabel: '2026.06.22 · 10:59 KST',
         interval: '30m',
         indicatorSettingsOpen: false,
@@ -87,36 +87,13 @@ export const DEFAULT_DASHBOARD_PROPS: DashboardPageProps = {
                 secondaryValue: '0.0964 ETH',
             },
         ],
-        residenceTime: '27s',
-        indicatorGroups: [
-            {
-                id: 'basic-iterative',
-                title: 'Basic Iterative 실시간 지표',
-                indicators: [
-                    { id: 'bid-wall', label: 'bid_wall / ask_wall', value: '1.46', tone: 'positive' },
-                    { id: 'ema-slope', label: 'realtime_ema_slope', value: '-0.13', tone: 'negative' },
-                    { id: 'ema-accel', label: 'ema_accel', value: '1.29', tone: 'positive' },
-                    { id: 'percent-b', label: '%b', value: '0.17', tone: 'positive' },
-                ],
-            },
-            {
-                id: 'bollinger-channel',
-                title: '30m 볼린저밴드 channel 1 실시간 추적 지표',
-                indicators: [
-                    { id: 'volume-ratio', label: 'Volume Ratio', value: '0.86', tone: 'negative' },
-                    { id: 'ibs', label: 'ibs', value: '0.45', tone: 'negative' },
-                    { id: 'eat-20-ratio', label: 'Eat 20 Ratio', value: '0.21', tone: 'negative' },
-                    { id: 'spread', label: 'Spread', value: '0.13', tone: 'positive' },
-                    { id: 'z-score', label: 'Z Score', value: '1.29', tone: 'negative' },
-                ],
-            },
-        ],
+        indicatorGroups: [],  // 실제 전략 평가를 수신하기 전에는 예시 지표를 노출하지 않는다.
     },
     account: {
         strategy: {
             status: '정상 작동',
             statusTone: 'positive',
-            appliedState: 'Basic Iterative',
+            appliedState: 'Case_B',  // ACTIVE STATE와 동일한 fixture 전략을 표시한다.
             profitRate: '+0.72%',
             profitAmount: '+ ₩ 345,030',
         },

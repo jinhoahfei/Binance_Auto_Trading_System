@@ -273,6 +273,7 @@ class RunToCompletionEventProcessor:
         order_finished_observer: OrderFinishedObserver | None = None,
         event_processing_observer: EventProcessingObserver | None = None,
         event_context_preparer: EventContextPreparer | None = None,
+        result_observer: Callable[[TradingSTMResult, TradingContextView], None] | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -285,6 +286,7 @@ class RunToCompletionEventProcessor:
             order_finished_observer -> order_finished 성공을 관찰할 optional callback
             event_processing_observer -> action batch의 원 event 식별자를 열고 닫는 optional callback
             event_context_preparer -> claimed event의 immutable market 평가를 Context에 적용할 callback
+            result_observer -> 성공한 action batch와 판단 당시 Context를 보존할 callback
         반환값: 없음
         작성 날짜: 2026/08/14
         """
@@ -301,6 +303,8 @@ class RunToCompletionEventProcessor:
             event_context_preparer
         ):
             raise TypeError("event_context_preparer must be callable or None")
+        if result_observer is not None and not callable(result_observer):
+            raise TypeError("result_observer must be callable or None")
 
         # 주입된 STM·Context·executor와 빈 queue까지 그대로 한 processor 세션에 보존한다.
         self._stm = stm
@@ -315,6 +319,7 @@ class RunToCompletionEventProcessor:
         self._order_finished_observer = order_finished_observer
         self._event_processing_observer = event_processing_observer
         self._event_context_preparer = event_context_preparer
+        self._result_observer = result_observer  # 표시 결과도 성공한 처리 단위에서만 발행한다.
         self._processing = False
 
     @property
@@ -444,6 +449,9 @@ class RunToCompletionEventProcessor:
             for returned_event in returned_events:
                 self._queue.enqueue(returned_event, internal=True)
 
+            # Runtime patch 이전 입력을 전달해 trailing의 이전 비교 기준을 잃지 않는다.
+            if self._result_observer is not None:
+                self._result_observer(result, context)
             return result
         finally:
             # 실패 여부와 무관하게 다음 top-level event가 처리될 수 있도록 복원한다.

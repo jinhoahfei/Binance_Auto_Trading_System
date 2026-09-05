@@ -1126,6 +1126,66 @@ def map_risk_budget_snapshot(risk_budget: object | None) -> JsonObject | None:
     )
 
 
+def _map_trading_timer(timer: object | None) -> dict[str, object] | None:
+    """
+    함수 이름: _map_trading_timer()
+    기능: 실제 타이머 측정 결과를 재계산 없이 Decimal 문자열과 UTC 시각으로 직렬화한다.
+    인자: timer -> application이 보존한 불변 타이머 또는 미수신 None
+    반환값: 선택적 타이머 DTO
+    작성 날짜: 2026/09/05
+    """
+    if timer is None:
+        return None  # 구버전의 flag만으로 경과 시간을 추측하지 않는다.
+
+    # UI는 서버의 회차·측정 시각을 함께 받아 재전송과 새 회차를 구별한다.
+    return {
+        "timer_id": timer.timer_id,
+        "kind": timer.kind,
+        "state": timer.state,
+        "duration_seconds": format(timer.duration_seconds, "f"),
+        "remaining_seconds": format(timer.remaining_seconds, "f"),
+        "sampled_at": datetime_to_wire(timer.sampled_at),
+        "reset_reason": timer.reset_reason,
+    }
+
+
+def _map_trading_indicators(snapshot: object | None) -> dict[str, object] | None:
+    """
+    함수 이름: _map_trading_indicators()
+    기능: application이 보존한 지표 평가를 Decimal 문자열 기반 wire 값으로 옮긴다.
+    인자: snapshot -> 현재 단계의 불변 지표 스냅샷 또는 구버전의 None
+    반환값: 초기 snapshot과 event가 함께 사용하는 선택적 지표 DTO
+    작성 날짜: 2026/09/05
+    """
+    if snapshot is None:
+        return None
+
+    # Transport는 수치 비교를 재계산하지 않고 평가 당시 값·기준·판정을 함께 전달한다.
+    conditions = []
+    for evaluation in snapshot.conditions:
+        condition = evaluation.condition
+        conditions.append({
+            "condition_id": condition.condition_id,
+            "strategy": evaluation.slot.strategy,
+            "phase": evaluation.slot.phase,
+            "value": format(condition.value, "f") if condition.value is not None else None,
+            "threshold": format(condition.threshold, "f") if condition.threshold is not None else None,
+            "comparison": condition.comparison,
+            "satisfied": condition.satisfied,
+            "source": condition.source,
+            "hold_seconds": condition.hold_seconds,
+            "evaluated_at": datetime_to_wire(evaluation.evaluated_at) if evaluation.evaluated_at else None,
+            "market_version": evaluation.market_version,
+            "context_version": evaluation.context_version,
+            "timer": _map_trading_timer(getattr(evaluation, "timer", None)),
+        })  # Decimal을 float로 변환하지 않아 비교 경계의 정밀도를 유지한다.
+    captured_at = getattr(snapshot, "captured_at", None)
+    return {
+        "phase_key": snapshot.phase_key, "notice": snapshot.notice, "conditions": conditions,
+        "server_time": datetime_to_wire(captured_at) if captured_at is not None else None,
+    }  # 전송 기준 시각은 Guard의 평가 시각을 덮어쓰지 않는다.
+
+
 def map_trading_snapshot(
     trading_controller: object,
     execution_mode: object,
@@ -1143,6 +1203,17 @@ def map_trading_snapshot(
     session_status = getattr(session_snapshot, "status")
     status_text = getattr(session_status, "value", session_status)
     mode_text = getattr(execution_mode, "value", execution_mode)
+
+    # 실행 전략은 Controller가 같은 lock에서 확정한 값만 wire DTO로 옮긴다.
+    active_logic = getattr(session_snapshot, "active_logic", None)
+    active_logic_payload = None
+    if active_logic is not None:
+        active_logic_payload = {
+            "regime_type": active_logic.regime_type,
+            "root_state": active_logic.root_state,
+            "active_strategies": active_logic.active_strategies,
+            "indicators": _map_trading_indicators(getattr(active_logic, "indicators", None)),
+        }  # Enum과 tuple의 직렬화는 기존 canonical JSON 정규화기에 맡긴다.
 
     # 최근 위험 판정은 enum identity를 숨기지 않는 stable wire 값과 nullable 결과로 평탄화한다.
     risk_policy_availability = getattr(
@@ -1215,6 +1286,7 @@ def map_trading_snapshot(
         {
             "mode": mode_text,
             "status": status_text,
+            "active_logic": active_logic_payload,
             "version": getattr(session_snapshot, "version"),
             "command_enabled": getattr(session_snapshot, "command_enabled"),
             "scale_in": getattr(session_snapshot, "scale_in"),
@@ -1495,9 +1567,51 @@ export interface BackendRiskBudgetSnapshot {{
     readonly manual_kill_active: boolean;
 }}
 
+export interface BackendTradingTimer {{
+    readonly timer_id: string;
+    readonly kind: 'window' | 'hold' | 'time_exit';
+    readonly state: 'waiting' | 'running' | 'stopped' | 'completed' | 'expired';
+    readonly duration_seconds: BackendDecimalString;
+    readonly remaining_seconds: BackendDecimalString;
+    readonly sampled_at: string;
+    readonly reset_reason: 'timeout' | 'new_low' | 'condition_broken' | 'candle_changed' | 'stream_reset' | null;
+}}
+
+export interface BackendTradingCondition {{
+    readonly condition_id: string;
+    readonly strategy: BackendStrategyType | null;
+    readonly phase: string;
+    readonly value: BackendDecimalString | null;
+    readonly threshold: BackendDecimalString | null;
+    readonly comparison: '<' | '<=' | '>' | '>=';
+    readonly satisfied: boolean | null;
+    readonly source: 'realtime' | 'close_30m' | 'close_1m' | 'touch' | 'elapsed' | 'runtime';
+    readonly hold_seconds: number | null;
+    readonly evaluated_at: string | null;
+    readonly market_version: number | null;
+    readonly context_version: number | null;
+    readonly timer?: BackendTradingTimer | null;
+}}
+
+export interface BackendTradingIndicatorSnapshot {{
+    readonly phase_key: string;
+    readonly notice: 'order_pending' | 'entry_paused' | 'stopping' | 'inactive' | null;
+    readonly conditions: ReadonlyArray<BackendTradingCondition>;
+    readonly server_time?: string | null;
+}}
+
+export interface BackendTradingLogicSnapshot {{
+    readonly regime_type: BackendRegimeType;
+    readonly root_state: 'LOWER_TOUCH_WATCH' | 'TRADE_MANAGEMENT' | 'STOPPING';
+    readonly active_strategies: ReadonlyArray<BackendStrategyType>;
+    readonly indicators?: BackendTradingIndicatorSnapshot | null;
+}}
+
 export interface BackendTradingSnapshot {{
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
+    /** 구버전 schema v3에서 생략될 수 있는 실제 실행 STM의 전략 상태다. */
+    readonly active_logic?: BackendTradingLogicSnapshot | null;
     readonly version: number;
     readonly command_enabled: boolean;
     readonly scale_in: BackendDecimalString;

@@ -39,6 +39,14 @@ pnpm build
 pnpm storybook
 ```
 
+`pnpm test:active-strategy`는 개발 서버와 Binance 연결 없이 ACTIVE STATE 및 거래 / 계좌 → 전략 상태 → 현재 상태의 일치를 검증합니다. 기존 backend 테스트 환경(`backend/.venv/bin/python`, 없으면 `python3`)에서 실제 TradingSTM에 Case B·C의 시장 조건과 가짜 주문·체결 응답을 입력한 뒤, 발행된 JSON event를 실제 UI adapter와 App에 전달합니다. 두 표시 영역과 단계별 단일 지표 목록의 자동 갱신, 5초 유지 판정의 색상 변화, C 트레일링의 이전 EMA 기준 보존, 청산 후 회복·B 인계, 중지·종료, 연결 단절 시 회색 표시와 event 유실 후 전체 snapshot 복원을 검사합니다. 지표 수치 비교는 backend의 순수 조건 평가를 전략 전이와 공유하고, UI는 true/false/null 판정만 초록/빨강/회색으로 표시합니다. Python 외부 socket 연결은 차단하고 UI HTTP·WebSocket은 메모리 대역을 사용하므로 5173 포트를 점유하지 않습니다.
+
+실시간 지표의 구현 경계는 `backend/src/binance_auto_trader/domain/trading/conditions.py`의 순수 평가, `backend/src/binance_auto_trader/application/trading_indicator_snapshot.py`의 단계·평가 보존, 기존 transport 계약, `features/recent-orders/tradingIndicatorPresenter.ts`의 문구·색상 투영으로 분리되어 있습니다. 시작 전·종료 후와 구버전 payload에서는 예시 지표를 표시하지 않습니다. 트레이딩 패널은 기존 순서를 유지하는 세로 스크롤 영역이며 단일 열에서는 높이 640px를 사용합니다.
+
+시간 조건에는 남은 시간과 `시작 대기`·`진행 중`·`정지 · 조건 미충족`·`유지 완료` 상태가 표시됩니다. B의 3시간 신호 유효시간, 5초 연속 유지와 6시간 시간청산, C의 3분 회복·손절 유지와 60분 시간청산이 대상입니다. C 회복은 정확히 180초까지 유효하고 초과하거나 저점이 갱신되면 새 회차의 `03:00`과 리셋 사유를 함께 표시합니다. 진입 일시정지는 B 신호의 경과 시간을 멈추지 않습니다. 화면의 숫자는 서버 측 측정·전송 시각과 로컬 monotonic 경과로 매초 갱신하며 `00:00`만으로 전략 판정을 바꾸지 않습니다. 서버 판정이 오기 전에는 `판정 대기`, 연결 단절이나 구버전 타이머 누락에는 `— · 확인 대기`를 표시합니다. 숨겨진 탭은 interval만 중지하고 다시 열 때 보정하며, 재전송은 최초 수신 시각을 보존합니다.
+
+타이머의 불변 도메인 모델은 `domain/trading/timers.py`, 실제 시장 유지시간 연결은 `application/market_condition_timers.py`, runtime 회차·리셋은 `application/trading_indicator_timers.py`가 담당합니다. `pnpm test:active-strategy`에는 가짜 시계의 카운트다운·정지·탭 복원 및 실제 C-10/C-11 리셋 event 유실 후 전체 snapshot 복원이 포함됩니다. 구현 변경을 실행 중인 앱에 반영하려면 Python sidecar도 재시작해야 합니다.
+
 `BINANCE_DESKTOP_SMOKE=1 pnpm desktop:dev`는 실제 Tauri·Binance 백엔드를 실행하고 시세·계좌·주문 환경 표시, 공개 4시간봉과 backend·화면 스윙 판정의 일치, 연결 툴팁, 초기 renderer 예외를 확인합니다. 터미널의 `desktop-smoke` 결과에는 고정 단계·연결 상태·스윙 분류만 기록하며, 마지막 `passed` 이후 앱은 열린 상태로 유지됩니다. 이 검사는 자동매매·주문·청산을 실행하지 않습니다. 검증용 script와 결과 endpoint는 이 환경 변수를 켠 Vite 개발 실행에만 주입되며 배포 빌드에는 포함되지 않습니다.
 
 `BINANCE_DESKTOP_SMOKE=recovery-shutdown pnpm desktop:dev`는 실제 backend snapshot의 UI 응답 복사본에 지표 오류를 주입하고 `MALFORMED_BACKEND_PAYLOAD` 화면에서 안전 종료를 누릅니다. 종료 상태 조회와 HTTP 202는 실제 backend를 사용하며, native 앱 종료 코드 0과 소유권 파일의 `RELEASED`까지 확인해야 성공입니다. 이 검사는 거래 상태를 바꾸거나 청산을 제출하지 않으며 기존 backend의 종료 안전 검사를 그대로 거칩니다.

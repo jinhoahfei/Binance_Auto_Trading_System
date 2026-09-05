@@ -46,7 +46,8 @@ export function ChartToolbar({
                     </button>
                 ))}
             </div>
-            <div className={styles.activeState}>
+            {/* 실제 Case 이름 전체를 보존해 폭이 좁은 화면에서도 전략 내용을 확인할 수 있게 한다. */}
+            <div aria-label="현재 실행 전략" className={styles.activeState} title={activeState}>
                 <span aria-hidden="true" className={styles.activeDot} />
                 <span className={styles.activeLabel}>ACTIVE STATE</span>
                 <strong>{activeState}</strong>

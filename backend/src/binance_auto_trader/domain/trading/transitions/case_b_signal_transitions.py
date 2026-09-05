@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
 
 from ..action_requests import (
     CancelPendingOrder,
@@ -11,6 +10,8 @@ from ..action_requests import (
     ResetCaseBContext,
     patch,
 )
+# 표시와 주문 판단이 같은 순수 조건 평가를 공유한다.
+from ..conditions import condition_met, condition_unmet
 from ..context import TradingContextView
 from ..events import TradingEvent, TradingEventType
 from ..states import (
@@ -22,7 +23,6 @@ from ..states import (
 )
 from .base import TransitionOutcome, create_transition_outcome
 from .helpers import (
-    THREE_HOURS,
     create_entry_order_actions,
     create_queue_event_action,
     schedule_market_reevaluation,
@@ -56,8 +56,8 @@ def handle_case_b_signal_transition(
             runtime.touch_candle_low is not None
             and runtime.lower_band_at_touch is not None
             and runtime.touch_candle_bbw is not None
-            and runtime.touch_candle_low <= runtime.lower_band_at_touch
-            and runtime.touch_candle_bbw < Decimal("0.02")
+            and condition_met("b_touch_low", context)
+            and condition_met("b_touch_bbw", context)
         )
         # touch 조건이 맞지 않으면 이 lower event의 Case B Region을 종료한다.
         if not valid_touch:
@@ -138,7 +138,7 @@ def handle_case_b_signal_transition(
                 is TradingEventType.START_CASE_B_WAIT_PULLBACK_CONDITION_CHECK
             )
             # 정확히 3시간은 허용하고 이를 초과한 signal만 폐기한다.
-            if market.signal_elapsed > THREE_HOURS:
+            if condition_unmet("b_signal_age", context):
                 return create_transition_outcome(
                     "B-08" if is_start else "B-11",
                     replace(
@@ -151,8 +151,8 @@ def handle_case_b_signal_transition(
                 runtime.position_owner is None
                 and runtime.pending_order_id is None
                 and not runtime.case_b_entry_paused
-                and market.signal_elapsed <= THREE_HOURS
-                and market.realtime_pct_b <= Decimal("0.30")
+                and condition_met("b_signal_age", context)
+                and condition_met("b_pullback", context)
             )
             # owner와 pending 주문이 없을 때만 최초 Case B 매수 action을 만든다.
             if can_buy:
@@ -171,9 +171,9 @@ def handle_case_b_signal_transition(
                     *actions,
                 )
             should_wait = (
-                market.signal_elapsed <= THREE_HOURS
+                condition_met("b_signal_age", context)
                 and (
-                    market.realtime_pct_b > Decimal("0.30")
+                    condition_unmet("b_pullback", context)
                     or runtime.position_owner is not None
                     or runtime.case_b_entry_paused
                 )
@@ -244,10 +244,10 @@ def _is_signal_candle_guard_satisfied(context: TradingContextView) -> bool:
     market = context.market
     return (
         market.confirmed_30m_close
-        and market.ema_slope_30m_close > Decimal("-0.03")
-        and market.pct_b_close > Decimal("0.25")
+        and condition_met("b_signal_slope", context)
+        and condition_met("b_signal_pct_b", context)
         and len(market.previous_3_closed_candle_lows) == 3
-        and market.current_closed_candle_low >= min(market.previous_3_closed_candle_lows)
+        and condition_met("b_signal_low", context)
     )
 
 
@@ -263,7 +263,7 @@ def _is_handoff_active(context: TradingContextView) -> bool:
     return (
         runtime.case_c_exit_reason is ExitReason.TP_TRAIL
         and runtime.case_c_exit_pct_b is not None
-        and runtime.case_c_exit_pct_b < Decimal("0.40")
+        and condition_met("c_handoff", context)
     )
 
 

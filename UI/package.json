@@ -11,6 +11,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
+    "test:active-strategy": "vitest run src/app/presenters/activeTradingStrategy.test.tsx src/app/bootstrap/activeTradingStrategy.process.test.mjs src/features/recent-orders/tradingIndicatorPresenter.test.tsx src/features/recent-orders/indicatorTimer.test.tsx",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "storybook": "storybook dev -p 6006",

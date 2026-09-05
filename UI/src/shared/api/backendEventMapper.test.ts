@@ -881,7 +881,7 @@ describe('backend snapshot and event mapping', () => {
             trading_state_label: 'running',
         });
         expect(mapped.server_snapshot.account_strategy).toMatchObject({
-            appliedState: 'running',
+            appliedState: '전략 확인 대기',  // 구버전 payload의 lifecycle로 Case를 추측하지 않는다.
             status: '자동매매 실행 중',
             statusTone: 'positive',
         });
@@ -955,6 +955,7 @@ describe('backend snapshot and event mapping', () => {
 
         expect(map_backend_event_to_intents(trading_event)).toEqual([{
             type: 'TRADING_SESSION_SYNCHRONIZED',
+            strategy_indicators: null,
             status: 'stopping',
             version: 8,
             session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
@@ -985,6 +986,7 @@ describe('backend snapshot and event mapping', () => {
             position_average_entry_price: null,  // 기존 v3 event의 미제공 평단가는 숨김 값으로 정규화한다.
             strategy_status: '자동매매 중지 처리 중',
             strategy_status_tone: 'neutral',
+            strategy_state_label: '중지 처리 중',  // 실시간 event도 snapshot과 같은 전략 표시 문구를 전달한다.
         }]);
     });
 

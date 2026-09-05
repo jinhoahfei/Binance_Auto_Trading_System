@@ -106,9 +106,51 @@ export interface BackendRiskBudgetSnapshot {
     readonly manual_kill_active: boolean;
 }
 
+export interface BackendTradingTimer {
+    readonly timer_id: string;
+    readonly kind: 'window' | 'hold' | 'time_exit';
+    readonly state: 'waiting' | 'running' | 'stopped' | 'completed' | 'expired';
+    readonly duration_seconds: BackendDecimalString;
+    readonly remaining_seconds: BackendDecimalString;
+    readonly sampled_at: string;
+    readonly reset_reason: 'timeout' | 'new_low' | 'condition_broken' | 'candle_changed' | 'stream_reset' | null;
+}
+
+export interface BackendTradingCondition {
+    readonly condition_id: string;
+    readonly strategy: BackendStrategyType | null;
+    readonly phase: string;
+    readonly value: BackendDecimalString | null;
+    readonly threshold: BackendDecimalString | null;
+    readonly comparison: '<' | '<=' | '>' | '>=';
+    readonly satisfied: boolean | null;
+    readonly source: 'realtime' | 'close_30m' | 'close_1m' | 'touch' | 'elapsed' | 'runtime';
+    readonly hold_seconds: number | null;
+    readonly evaluated_at: string | null;
+    readonly market_version: number | null;
+    readonly context_version: number | null;
+    readonly timer?: BackendTradingTimer | null;
+}
+
+export interface BackendTradingIndicatorSnapshot {
+    readonly phase_key: string;
+    readonly notice: 'order_pending' | 'entry_paused' | 'stopping' | 'inactive' | null;
+    readonly conditions: ReadonlyArray<BackendTradingCondition>;
+    readonly server_time?: string | null;
+}
+
+export interface BackendTradingLogicSnapshot {
+    readonly regime_type: BackendRegimeType;
+    readonly root_state: 'LOWER_TOUCH_WATCH' | 'TRADE_MANAGEMENT' | 'STOPPING';
+    readonly active_strategies: ReadonlyArray<BackendStrategyType>;
+    readonly indicators?: BackendTradingIndicatorSnapshot | null;
+}
+
 export interface BackendTradingSnapshot {
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
+    /** 구버전 schema v3에서 생략될 수 있는 실제 실행 STM의 전략 상태다. */
+    readonly active_logic?: BackendTradingLogicSnapshot | null;
     readonly version: number;
     readonly command_enabled: boolean;
     readonly scale_in: BackendDecimalString;

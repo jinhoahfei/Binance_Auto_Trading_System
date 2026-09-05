@@ -12,6 +12,8 @@ from ..action_requests import (
     ScheduleReevaluation,
     patch,
 )
+# 표시와 주문 판단이 같은 순수 조건 평가를 공유한다.
+from ..conditions import condition_met, condition_unmet
 from ..context import TradingContextView
 from ..events import TradingEvent, TradingEventType
 from ..states import (
@@ -22,7 +24,6 @@ from ..states import (
 )
 from .base import TransitionOutcome, create_transition_outcome
 from .helpers import (
-    THREE_MINUTES,
     create_entry_order_actions,
     create_queue_event_action,
     schedule_market_reevaluation,
@@ -115,7 +116,7 @@ def handle_case_c_signal_transition(
             # 1순위: 매수 전에 %B가 0.25 이상 회복되면 setup을 소비하고 종료한다.
             if (
                 runtime.position_owner is None
-                and market.realtime_pct_b >= Decimal("0.25")
+                and condition_met("c_recovery", context)
             ):
                 return create_transition_outcome(
                     "C-08",
@@ -133,19 +134,19 @@ def handle_case_c_signal_transition(
             # 2순위: 최초 flush 또는 기존보다 낮은 가격에서 timer 기준을 갱신한다.
             if (
                 runtime.flush_low is None
-                and market.realtime_pct_b <= Decimal("-0.25")
+                and condition_met("c_flush", context)
             ):
                 return create_transition_outcome("C-09", state, *_create_flush_actions(context))
 
-            if runtime.flush_low is not None and market.realtime_price < runtime.flush_low:
+            if runtime.flush_low is not None and condition_met("c_new_low", context):
                 return create_transition_outcome("C-10", state, *_create_flush_actions(context))
 
             # 3순위: 3분을 초과하면 현재 %B를 새 기준으로 회복 구간을 다시 시작한다.
             if (
                 runtime.flush_low is not None
-                and market.realtime_price >= runtime.flush_low
-                and market.case_c_timer_elapsed > THREE_MINUTES
-                and market.realtime_pct_b < Decimal("0.25")
+                and condition_unmet("c_new_low", context)
+                and condition_unmet("c_recovery_window", context)
+                and condition_unmet("c_recovery", context)
             ):
                 entry_pct_b = market.realtime_pct_b + Decimal("0.06")
                 return create_transition_outcome(
@@ -169,16 +170,16 @@ def handle_case_c_signal_transition(
             in_recovery_window = (
                 runtime.flush_low is not None
                 and entry_pct_b is not None
-                and market.case_c_timer_elapsed <= THREE_MINUTES
-                and market.realtime_pct_b >= entry_pct_b
-                and market.realtime_pct_b < Decimal("0.25")
+                and condition_met("c_recovery_window", context)
+                and condition_met("c_rebound", context)
+                and condition_unmet("c_recovery", context)
             )
             # owner와 pending 주문이 모두 없을 때만 Case C 최초 매수를 요청한다.
             if (
                 runtime.position_owner is None
                 and runtime.pending_order_id is None
                 and in_recovery_window
-                and entry_pct_b < Decimal("-0.15")
+                and condition_met("c_entry_limit", context)
             ):
                 actions = (
                     patch(current_open_pct_b=market.realtime_pct_b),
@@ -198,7 +199,7 @@ def handle_case_c_signal_transition(
                     *actions,
                 )
 
-            if in_recovery_window and entry_pct_b >= Decimal("-0.15"):
+            if in_recovery_window and condition_unmet("c_entry_limit", context):
                 return create_transition_outcome(
                     "C-13",
                     state,
@@ -210,17 +211,17 @@ def handle_case_c_signal_transition(
                 )
 
             # 어느 전이도 선택되지 않으면 다음 실제 시장 변화까지 setup 감시를 유지한다.
-            should_watch = market.realtime_pct_b < Decimal("0.25") and (
+            should_watch = condition_unmet("c_recovery", context) and (
                 (
                     runtime.flush_low is None
-                    and market.realtime_pct_b > Decimal("-0.25")
+                    and condition_unmet("c_flush", context)
                 )
                 or (
                     runtime.flush_low is not None
                     and entry_pct_b is not None
-                    and market.realtime_price >= runtime.flush_low
-                    and market.case_c_timer_elapsed <= THREE_MINUTES
-                    and market.realtime_pct_b < entry_pct_b
+                    and condition_unmet("c_new_low", context)
+                    and condition_met("c_recovery_window", context)
+                    and condition_unmet("c_rebound", context)
                 )
             )
             if should_watch:
@@ -289,8 +290,8 @@ def _is_setup_guard_satisfied(context: TradingContextView) -> bool:
         runtime.allow_new_case_c_setup
         and not runtime.case_c_consumed_for_event
         and runtime.last_case_c_setup_candle_id != market.current_30m_candle_id
-        and market.realtime_pct_b <= Decimal("-0.15")
-        and market.cci_30m_realtime <= Decimal("-140")
+        and condition_met("c_setup_pct_b", context)
+        and condition_met("c_setup_cci", context)
     )
 
 

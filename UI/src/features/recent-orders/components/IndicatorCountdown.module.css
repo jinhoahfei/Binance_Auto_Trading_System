@@ -1,0 +1,55 @@
+.timer {
+    grid-column: 2 / -1;
+    min-height: 40px;
+    padding-bottom: 8px;
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    line-height: 17px;
+}
+
+.line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+}
+
+.time {
+    font-family: var(--font-numeric);
+    font-variant-numeric: tabular-nums; /* 매초 숫자가 바뀌어도 행과 스크롤 위치를 유지한다. */
+}
+
+.status {
+    padding: 1px 6px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    font-size: 10px;
+    line-height: 14px;
+}
+
+/* 타이머 진행 상태의 파랑은 조건 충족값의 초록과 의미를 분리한다. */
+.running {
+    color: #7faeff;
+}
+
+.completed {
+    color: var(--color-text-positive);
+}
+
+.expired {
+    color: var(--color-text-negative);
+}
+
+.waiting,
+.stopped,
+.pending,
+.unavailable {
+    color: var(--color-text-secondary);
+}
+
+.reason {
+    display: block;
+    min-height: 15px; /* 리셋 사유가 생겨도 목록 높이를 바꾸지 않는다. */
+    font-size: 10px;
+    line-height: 15px;
+}

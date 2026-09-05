@@ -25,6 +25,11 @@ from binance_auto_trader.adapters.binance.websocket_gateway import (
 from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
+from binance_auto_trader.application.trading_indicator_snapshot import TradingIndicatorStore
+from binance_auto_trader.application.trading_logic_snapshot import (
+    TradingLogicSnapshot,
+    create_trading_logic_snapshot,
+)
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.history import Trade
 from binance_auto_trader.domain.market import MarketSnapshot
@@ -758,6 +763,7 @@ class TradingSessionSnapshot:
     daily_loss_scope: DailyLossScope | None = None
     manual_kill_behavior: ManualKillBehavior | None = None
     position_average_entry_price: Decimal | None = None  # 열린 Position의 표시용 평단가다.
+    active_logic: TradingLogicSnapshot | None = None  # 실제 실행 STM의 전략만 공개한다.
 
 
 @dataclass(frozen=True, slots=True)
@@ -1266,6 +1272,7 @@ class TradingController:
         self._market_stream_monitoring_started = False
         self._market_stream_reconciliation_required = False
         self._market_stream_interrupted_running_session = False
+        self._indicator_store = TradingIndicatorStore()  # 지표는 세션 처리 lock 아래에서만 변경한다.
         self._latest_market_evaluation_version = 0
         self._event_runtime_failed = False  # 이 process에서는 worker failure 뒤 command gate를 다시 열지 않는다.
         self._process_ownership_ambiguous = False  # Parent/runtime identity 손실은 fresh process 전까지 해제하지 않는다.
@@ -2428,6 +2435,19 @@ class TradingController:
                 else None
             )
 
+            # 상태 전이와 같은 lock에서 실행 Case를 읽어 polling과 실시간 event가 같은 값을 보게 한다.
+            active_logic = create_trading_logic_snapshot(
+                self._active_stm,
+                self._context.runtime,
+            )  # 선택된 REGIME의 이름으로 실행 전략을 추측하지 않는다.
+
+            # 지표와 ACTIVE STATE를 같은 처리 단위의 상태로 publication에 묶는다.
+            if active_logic is not None and self._active_stm is not None:
+                active_logic = replace(
+                    active_logic,
+                    indicators=self._indicator_store.snapshot(self._active_stm, self._context.snapshot()),
+                )
+
             # mutable Context의 각 값을 session lock 아래 같은 publication에 묶는다.
             return TradingSessionSnapshot(
                 status=self._status,
@@ -2437,6 +2457,7 @@ class TradingController:
                 scale_out=self._context.scale_out_ratio,
                 has_open_position=has_open_position,
                 position_average_entry_price=position_average_entry_price,
+                active_logic=active_logic,
                 command_enabled=self.command_enabled,
                 selected=self._selected_regime,
                 support_status=(
@@ -2732,6 +2753,7 @@ class TradingController:
                     order_finished_observer=self._record_order_finished_trace,
                     event_processing_observer=self._observe_processing_event,
                     event_context_preparer=self._prepare_market_event_context,
+                    result_observer=self._record_indicator_evaluation,
                 )
                 self._scheduler.clear()
                 self._action_trace.clear()
@@ -3001,6 +3023,7 @@ class TradingController:
                     order_finished_observer=self._record_order_finished_trace,
                     event_processing_observer=self._observe_processing_event,
                     event_context_preparer=self._prepare_market_event_context,
+                    result_observer=self._record_indicator_evaluation,
                 )
                 self._scheduler.clear()
                 self._action_trace.clear()
@@ -5750,6 +5773,8 @@ class TradingController:
                 "TradingSTM result context version is stale"
             )
 
+        evaluation_context = self._context.snapshot()  # action 이전의 비교 기준을 보존한다.
+
         # patch도 원래 위치에서 적용해 Context mutation과 외부 요청의 순서를 보존한다.
         returned_events: list[TradingEvent] = []
         for action in result.action_requests:
@@ -5778,6 +5803,25 @@ class TradingController:
             self._enqueue_order_outcomes(
                 returned_events
             )  # message 14는 재귀 호출 없이 worker의 다음 bounded cycle에서만 실행한다.
+
+        self._record_indicator_evaluation(result, evaluation_context)
+
+    def _record_indicator_evaluation(self, result: TradingSTMResult, context: TradingContextView) -> None:
+        """
+        함수 이름: _record_indicator_evaluation()
+        기능: 성공한 STM 처리의 입력과 출력 상태를 같은 lock에서 지표 저장소에 반영한다.
+        인자: result -> action 적용이 끝난 전이 결과
+            context -> 실제 Guard가 판단한 원본 Context
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        # 시작·종료 직접 호출과 queue 처리 모두 같은 저장 경계를 사용한다.
+        if self._active_stm is not None:
+            self._indicator_store.observe(
+                self._active_stm, result, context, self._context.snapshot(),
+                self._latest_market_evaluation_version,
+                entered_at=self._position.entered_at if self._position is not None else None,
+            )  # 표시를 위해 주문 로직을 실행하거나 Context를 수정하지 않는다.
 
     def _execute_action(
         self,

@@ -4,3 +4,4 @@ export {
     format_quote_amount,
     format_signed_quote_amount,
 } from './decimalText';
+export { format_trading_logic_state } from './tradingLogicState';

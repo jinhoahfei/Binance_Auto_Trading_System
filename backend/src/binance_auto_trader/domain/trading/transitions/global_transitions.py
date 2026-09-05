@@ -14,6 +14,8 @@ from ..action_requests import (
     StopTradingRuntime,
     patch,
 )
+# 표시와 주문 판단이 같은 순수 조건 평가를 공유한다.
+from ..conditions import condition_met
 from ..context import TradingContextView
 from ..events import ForceSellOutcomePayload, TradingEvent, TradingEventType
 from ..states import RootState, TradingPhase, TradingStateConfiguration
@@ -233,7 +235,7 @@ def handle_global_transition(
     if (
         state.root_state is RootState.TRADE_MANAGEMENT
         and event_type is TradingEventType.UPPER_BAND_TOUCHED
-        and context.market.realtime_price >= context.market.upper_band
+        and condition_met("upper_safe_exit", context)
     ):
         return _handle_upper_band_safe_termination(context)
 
@@ -290,7 +292,7 @@ def handle_global_transition(
         and runtime.position_owner is None
         and runtime.pending_order_id is None
         and context.market.current_30m_candle_id != runtime.touch_candle_id
-        and context.market.current_30m_low <= context.market.lower_band
+        and condition_met("lower_close", context)
         and (
             not runtime.case_c_consumed_for_event
             or runtime.case_c_recovery_confirmed

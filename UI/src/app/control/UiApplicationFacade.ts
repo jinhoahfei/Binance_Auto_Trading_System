@@ -33,6 +33,7 @@ import type {
     BackendDecimalString,
     BackendManualKillBehavior,
     BackendTradingStatus,
+    BackendTradingIndicatorSnapshot,
     BackendRiskBudgetSnapshot,
     BackendRiskBlockReason,
     BackendRiskPolicyAvailability,
@@ -122,6 +123,7 @@ export interface UiApplicationFacadeOptions {
     readonly recommended_regime?: RegimeType | null;
     readonly applied_regime?: RegimeType | null;
     readonly regime_metrics?: ReadonlyArray<RegimeMetric>;
+    readonly strategy_indicators?: BackendTradingIndicatorSnapshot | null;
     readonly logic_coverage?: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled?: boolean;
     readonly risk_policy_availability?: BackendRiskPolicyAvailability;
@@ -165,6 +167,7 @@ export interface UiServerOwnedSnapshot {
     readonly recommended_regime: RegimeType | null;
     readonly applied_regime: RegimeType | null;
     readonly regime_metrics: ReadonlyArray<RegimeMetric>;
+    readonly strategy_indicators?: BackendTradingIndicatorSnapshot | null;
     readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
     readonly command_enabled: boolean;
     readonly risk_policy_availability: BackendRiskPolicyAvailability;
@@ -228,6 +231,7 @@ export type UiApplicationIntent =
     | { readonly type: 'POSITION_UPDATED'; readonly has_open_position: boolean }
     | {
         readonly type: 'TRADING_SESSION_SYNCHRONIZED';
+        readonly strategy_indicators?: BackendTradingIndicatorSnapshot | null;
         readonly status: BackendTradingStatus;
         readonly version: number;
         readonly session_id: string | null;
@@ -258,6 +262,7 @@ export type UiApplicationIntent =
         readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
         readonly strategy_status: string;
         readonly strategy_status_tone: 'positive' | 'neutral';
+        readonly strategy_state_label?: string;  // Backend mapper가 두 표시 영역에 전달할 단일 문구다.
     }
     | {
         readonly type: 'ACCOUNT_STRATEGY_UPDATED';
@@ -437,6 +442,8 @@ export interface AppViewModel {
         readonly active_tab: 'recent_orders' | 'realtime_indicators';
         readonly trades: ReadonlyArray<TradeRecord>;
         readonly realtime_indicators: ReadonlyArray<RegimeMetric>;
+        readonly strategy_indicators: BackendTradingIndicatorSnapshot | null;
+        readonly strategy_indicators_received_at: number | null;
     };
     readonly split_order: {
         readonly scale_in_percentage: number;
@@ -586,6 +593,8 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
                 : 'realtime_indicators',
             trades: snapshot.recent_orders.context.trades,
             realtime_indicators: snapshot.recent_orders.context.realtime_indicators,
+            strategy_indicators: snapshot.recent_orders.context.strategy_indicators,
+            strategy_indicators_received_at: snapshot.recent_orders.context.strategy_indicators_received_at,
         },
         split_order: {
             scale_in_percentage: snapshot.split_order.context.scale_in_percentage,
@@ -708,6 +717,10 @@ export class UiApplicationFacade {
                     : { get_current_kst_date: options.get_current_kst_date }),
             })),
             chart: createActor(create_chart_machine({
+                // 최초 snapshot에서도 계좌 카드와 차트가 같은 실행 전략으로 시작하도록 seed한다.
+                ...(options.account_strategy === undefined
+                    ? {}
+                    : { active_trading_logic_state: options.account_strategy.appliedState }),
                 ...(options.chart_interval === undefined
                     ? {}
                     : { interval: options.chart_interval }),
@@ -719,9 +732,7 @@ export class UiApplicationFacade {
                 ...(options.recent_trades === undefined
                     ? {}
                     : { trades: options.recent_trades }),
-                ...(options.regime_metrics === undefined
-                    ? {}
-                    : { realtime_indicators: options.regime_metrics }),
+                strategy_indicators: options.strategy_indicators ?? null,
             })),
             regime: createActor(create_regime_machine(command_port, {
                 ...(options.recommended_regime === undefined
@@ -995,67 +1006,89 @@ export class UiApplicationFacade {
             case 'TRADING_SESSION_SYNCHRONIZED': {
                 const is_trading = intent.status !== 'not_started'
                     && intent.status !== 'terminated';
+                const strategy_state_label = intent.strategy_state_label
+                    ?? intent.strategy_status;  // 이전 호출자는 실행 Case를 추측하지 않고 상태 문구를 쓴다.
 
-                // 한 backend lifecycle event의 ratio, position과 state를 동일한 source 값으로 적용한다.
-                this.actors.split_order.send({
-                    type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED',
-                    scale_in_percentage: intent.scale_in_percentage,
-                    scale_out_percentage: intent.scale_out_percentage,
-                });
-                this.actors.trading.send({
-                    type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
-                    selected_regime: this.actors.regime.getSnapshot().context.applied_regime,
-                    logic_coverage: intent.logic_coverage,
-                    command_enabled: intent.command_enabled,
-                    risk_policy_availability: intent.risk_policy_availability,
-                    configured_risk_policy_version: intent.configured_risk_policy_version,
-                    max_order_notional: intent.max_order_notional,
-                    max_position_notional: intent.max_position_notional,
-                    max_daily_loss: intent.max_daily_loss,
-                    daily_loss_scope: intent.daily_loss_scope,
-                    manual_kill_behavior: intent.manual_kill_behavior,
-                    session_risk_policy_version: intent.session_risk_policy_version,
-                    risk_control_version: intent.risk_control_version,
-                    manual_kill_active: intent.manual_kill_active,
-                    manual_kill_cleanup_complete:
-                        intent.manual_kill_cleanup_complete,
-                    manual_kill_activation_behavior:
-                        intent.manual_kill_activation_behavior,
-                    manual_kill_activation_policy_version:
-                        intent.manual_kill_activation_policy_version,
-                    last_risk_decision_allowed: intent.last_risk_decision_allowed,
-                    last_risk_budget: intent.last_risk_budget,
-                    risk_block_reason: intent.risk_block_reason,
-                    process_ownership_ambiguous: intent.process_ownership_ambiguous,
-                    is_trading,
-                    has_open_position: intent.has_open_position,
-                    lifecycle_status: intent.status,
-                    position_average_entry_price: intent.position_average_entry_price ?? null,
-                });
-                // 종료 actor도 같은 authoritative lifecycle과 Position 조합을 받아 shutdown barrier를 판정한다.
-                this.actors.app_exit.send({
-                    type: 'TRADING_SESSION_UPDATED',
-                    version: intent.version,
-                    status: intent.status,
-                    has_open_position: intent.has_open_position,
-                });
-                this.actors.chart.send({
-                    type: 'TRADING_LOGIC_STATE_CHANGED',
-                    state_label: intent.status,
-                });
-                const current_strategy = this.actors.account_summary.getSnapshot().context.strategy;
-                this.actors.account_summary.send({
-                    type: 'TRADING_STATUS_UPDATED',
-                    strategy: {
-                        ...current_strategy,
-                        appliedState: intent.status,
-                        status: intent.strategy_status,
-                        statusTone: intent.strategy_status_tone,
-                    },
-                });
+                // Case·단계·목록이 다른 시점으로 노출되지 않도록 actor 알림을 묶는다.
+                this.notification_batch_depth += 1;
+                try {
+                    this.actors.recent_orders.send({
+                        type: 'STRATEGY_INDICATORS_SYNCHRONIZED',
+                        indicators: is_trading ? intent.strategy_indicators ?? null : null,
+                    });
+
+                    // 한 backend lifecycle event의 ratio, position과 state를 동일한 source 값으로 적용한다.
+                    this.actors.split_order.send({
+                        type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED',
+                        scale_in_percentage: intent.scale_in_percentage,
+                        scale_out_percentage: intent.scale_out_percentage,
+                    });
+                    this.actors.trading.send({
+                        type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
+                        selected_regime: this.actors.regime.getSnapshot().context.applied_regime,
+                        logic_coverage: intent.logic_coverage,
+                        command_enabled: intent.command_enabled,
+                        risk_policy_availability: intent.risk_policy_availability,
+                        configured_risk_policy_version: intent.configured_risk_policy_version,
+                        max_order_notional: intent.max_order_notional,
+                        max_position_notional: intent.max_position_notional,
+                        max_daily_loss: intent.max_daily_loss,
+                        daily_loss_scope: intent.daily_loss_scope,
+                        manual_kill_behavior: intent.manual_kill_behavior,
+                        session_risk_policy_version: intent.session_risk_policy_version,
+                        risk_control_version: intent.risk_control_version,
+                        manual_kill_active: intent.manual_kill_active,
+                        manual_kill_cleanup_complete:
+                            intent.manual_kill_cleanup_complete,
+                        manual_kill_activation_behavior:
+                            intent.manual_kill_activation_behavior,
+                        manual_kill_activation_policy_version:
+                            intent.manual_kill_activation_policy_version,
+                        last_risk_decision_allowed: intent.last_risk_decision_allowed,
+                        last_risk_budget: intent.last_risk_budget,
+                        risk_block_reason: intent.risk_block_reason,
+                        process_ownership_ambiguous: intent.process_ownership_ambiguous,
+                        is_trading,
+                        has_open_position: intent.has_open_position,
+                        lifecycle_status: intent.status,
+                        position_average_entry_price: intent.position_average_entry_price ?? null,
+                    });
+                    // 종료 actor도 같은 authoritative lifecycle과 Position 조합을 받아 shutdown barrier를 판정한다.
+                    this.actors.app_exit.send({
+                        type: 'TRADING_SESSION_UPDATED',
+                        version: intent.version,
+                        status: intent.status,
+                        has_open_position: intent.has_open_position,
+                    });
+                    this.actors.chart.send({
+                        type: 'TRADING_LOGIC_STATE_CHANGED',
+                        state_label: strategy_state_label,
+                    });
+                    const current_strategy = this.actors.account_summary.getSnapshot().context.strategy;
+                    this.actors.account_summary.send({
+                        type: 'TRADING_STATUS_UPDATED',
+                        strategy: {
+                            ...current_strategy,
+                            appliedState: strategy_state_label,
+                            status: intent.strategy_status,
+                            statusTone: intent.strategy_status_tone,
+                        },
+                    });
+                } finally {
+                    this.notification_batch_depth -= 1;
+                }
+                if (this.notification_batch_depth === 0 && this.notification_is_pending) {
+                    this.notification_is_pending = false;
+                    this.handle_actor_update();  // 모든 상태 교체가 끝난 화면만 발행한다.
+                }
                 break;
             }
             case 'ACCOUNT_STRATEGY_UPDATED':
+                // 계좌 전략을 직접 갱신하는 demo와 기존 intent 경로도 차트에 같은 상태를 전달한다.
+                this.actors.chart.send({
+                    type: 'TRADING_LOGIC_STATE_CHANGED',
+                    state_label: intent.strategy.appliedState,
+                });
                 this.actors.account_summary.send({
                     type: 'TRADING_STATUS_UPDATED',
                     strategy: intent.strategy,
@@ -1133,6 +1166,14 @@ export class UiApplicationFacade {
                 this.actors.chart.send({
                     type: 'TRADING_LOGIC_STATE_CHANGED',
                     state_label: intent.state_label,
+                });
+                // 차트 전용 legacy intent도 계좌의 수익률·작동 상태를 보존하며 전략 문구만 맞춘다.
+                this.actors.account_summary.send({
+                    type: 'TRADING_STATUS_UPDATED',
+                    strategy: {
+                        ...this.actors.account_summary.getSnapshot().context.strategy,
+                        appliedState: intent.state_label,
+                    },
                 });
                 break;
             case 'CHART_LINE_HOVER_ENTERED':
@@ -1485,7 +1526,11 @@ export class UiApplicationFacade {
             this.actors.recent_orders.send({
                 type: 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED',
                 trades: synchronized_snapshot.recent_trades,
-                indicators: synchronized_snapshot.regime_metrics,
+                indicators: [],  // REGIME actor의 4시간봉 값을 전략 지표에 복사하지 않는다.
+            });
+            this.actors.recent_orders.send({
+                type: 'STRATEGY_INDICATORS_SYNCHRONIZED',
+                indicators: synchronized_snapshot.strategy_indicators ?? null,
             });
             const history_is_active = this.actors.shell.getSnapshot().context.route
                 === 'trade_history';
@@ -1553,7 +1598,7 @@ export class UiApplicationFacade {
             });
             this.actors.chart.send({
                 type: 'TRADING_LOGIC_STATE_CHANGED',
-                state_label: synchronized_snapshot.trading_state_label,
+                state_label: synchronized_snapshot.account_strategy.appliedState,  // 재연결도 동일한 전략을 복원한다.
             });
             this.actors.connection.send({
                 type: 'API_CONNECTED',

@@ -27,7 +27,8 @@ export function StrategyCard({
             <dl>
                 <div>
                     <dt>현재 상태</dt>
-                    <dd>{appliedState}</dd>
+                    {/* 차트와 공유하는 실행 전략 문구를 축약 없이 접근 가능한 원문으로 보존한다. */}
+                    <dd title={appliedState}>{appliedState}</dd>
                 </div>
                 <div>
                     <dt>해당 상태 수익률</dt>

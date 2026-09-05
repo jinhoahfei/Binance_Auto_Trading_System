@@ -1,17 +1,21 @@
 import { assign, setup } from 'xstate';
-import type { RegimeMetric, TradeRecord } from '../../../shared/contracts';
+import type { BackendTradingIndicatorSnapshot, RegimeMetric, TradeRecord } from '../../../shared/contracts';
 
 export interface RecentOrdersMachineContext {
     readonly trades: ReadonlyArray<TradeRecord>;
+    readonly strategy_indicators: BackendTradingIndicatorSnapshot | null;
+    readonly strategy_indicators_received_at: number | null;
     readonly realtime_indicators: ReadonlyArray<RegimeMetric>;
 }
 
 export interface RecentOrdersMachineOptions {
     readonly trades?: ReadonlyArray<TradeRecord>;
+    readonly strategy_indicators?: BackendTradingIndicatorSnapshot | null;
     readonly realtime_indicators?: ReadonlyArray<RegimeMetric>;
 }
 
 export type RecentOrdersMachineEvent =
+    | { readonly type: 'STRATEGY_INDICATORS_SYNCHRONIZED'; readonly indicators: BackendTradingIndicatorSnapshot | null }
     | {
         readonly type: 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED';
         readonly trades: ReadonlyArray<TradeRecord>;
@@ -44,6 +48,16 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
             events: {} as RecentOrdersMachineEvent,
         },
         actions: {
+            // REGIME 수치와 독립된 상태를 유지해 거래 단계와 지표를 함께 교체한다.
+            synchronize_strategy_indicators: assign(({ context, event }) => {
+                if (event.type !== 'STRATEGY_INDICATORS_SYNCHRONIZED') return {};
+                // 동일 payload의 재전송은 최초 수신 기준점을 보존해 남은 시간을 늘리지 않는다.
+                const duplicate = JSON.stringify(context.strategy_indicators) === JSON.stringify(event.indicators);
+                return {
+                    strategy_indicators: event.indicators,
+                    strategy_indicators_received_at: duplicate ? context.strategy_indicators_received_at : performance.now(),
+                };  // 이 시각은 화면 전용이며 서버의 전략 상태나 경과 시간에 전달하지 않는다.
+            }),
             synchronize_recent_orders: assign({
                 trades: ({ context, event }) => {
                     return event.type === 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED'
@@ -78,9 +92,12 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
         initial: 'trade_history_displayed',
         context: {
             trades: options.trades ?? [],
+            strategy_indicators: options.strategy_indicators ?? null,  // 구버전 연결은 예시값 대신 대기한다.
+            strategy_indicators_received_at: options.strategy_indicators ? performance.now() : null,
             realtime_indicators: options.realtime_indicators ?? [],
         },
         on: {
+            STRATEGY_INDICATORS_SYNCHRONIZED: { actions: 'synchronize_strategy_indicators' },
             RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED: {
                 actions: 'synchronize_recent_orders',
             },

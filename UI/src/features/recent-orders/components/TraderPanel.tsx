@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import type { KeyboardEvent } from 'react';
 
 import { RealtimeIndicators } from './RealtimeIndicators';
@@ -262,13 +262,28 @@ export function TraderPanel({
     onIntent,
     orders,
     process_ownership_ambiguous,
-    residenceTime,
     risk_block_reason,
     risk_policy_availability,
     session_risk_policy_version,
 }: TraderPanelProps) {
     // Roving focus element와 authoritative 안전 경고 projection을 render마다 같은 props에서 만든다.
     const tab_button_refs = useRef<Partial<Record<TraderPanelTab, HTMLButtonElement | null>>>({});
+    const panel_ref = useRef<HTMLElement | null>(null);
+    const indicator_panel_ref = useRef<HTMLDivElement | null>(null);
+    const phase_key = indicatorGroups.map((group) => group.id).join('|');
+    const previous_phase_key = useRef(phase_key);
+
+    // 수치만 바뀌면 DOM과 스크롤을 유지하고, 보이는 단계가 바뀔 때만 목록 처음으로 이동한다.
+    useLayoutEffect(() => {
+        if (previous_phase_key.current === phase_key || activeTab !== 'realtime') return;
+        previous_phase_key.current = phase_key;
+        const panel = panel_ref.current;
+        const indicators = indicator_panel_ref.current;
+        if (panel === null || indicators === null) return;
+        const target = panel.scrollTop + indicators.getBoundingClientRect().top
+            - panel.getBoundingClientRect().top - 62;
+        panel.scrollTop = Math.max(0, target);  // sticky 탭 바로 아래에 새 제목을 둔다.
+    }, [activeTab, phase_key]);
     const risk_operator_notices = create_risk_operator_notices(
         risk_block_reason,
         risk_policy_availability,
@@ -316,7 +331,7 @@ export function TraderPanel({
     }
 
     return (
-        <aside aria-labelledby="trader-panel-title" className={styles.panel}>
+        <aside aria-labelledby="trader-panel-title" className={styles.panel} ref={panel_ref} tabIndex={0}>
             <header>
                 <h2 id="trader-panel-title">트레이딩 패널</h2>
                 <p>거래 결과와 실시간 지표</p>
@@ -463,9 +478,11 @@ export function TraderPanel({
                 className={styles.tabPanel}
                 hidden={activeTab !== 'realtime'}
                 id="trader-tabpanel-realtime"
+                ref={indicator_panel_ref}
                 role="tabpanel"
+                tabIndex={0}
             >
-                <RealtimeIndicators groups={indicatorGroups} residenceTime={residenceTime} />
+                <RealtimeIndicators groups={indicatorGroups} visible={activeTab === 'realtime'} />
             </div>
         </aside>
     );

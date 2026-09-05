@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ..action_requests import ReevaluationTrigger, ScheduleReevaluation, patch
+from ..conditions import condition_met
 from ..context import TradingContextView
 from ..events import (
     BuyAttemptPayload,
@@ -24,7 +25,7 @@ from ..states import (
     TradingStateConfiguration,
 )
 from .base import TransitionOutcome, create_transition_outcome
-from .helpers import THREE_HOURS, create_entry_order_actions, create_queue_event_action
+from .helpers import create_entry_order_actions, create_queue_event_action
 
 
 def handle_ownership_transition(
@@ -130,7 +131,7 @@ def handle_ownership_transition(
             and runtime.pending_order_id is None
             and not runtime.case_b_entry_paused
             and runtime.signal_created
-            and context.market.signal_elapsed <= THREE_HOURS
+            and condition_met("b_signal_age", context)  # 재시도 시 유효시간도 같은 평가 결과를 사용한다.
         ):
             actions = create_entry_order_actions(
                 StrategyType.CASE_B,

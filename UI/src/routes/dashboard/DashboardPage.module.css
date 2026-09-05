@@ -26,6 +26,6 @@
     }
 
     .page > aside {
-        min-height: 640px;
+        height: 640px; /* 단일 열에서도 패널 내부 스크롤 높이를 확정한다. */
     }
 }

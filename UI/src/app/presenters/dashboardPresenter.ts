@@ -1,3 +1,4 @@
+import { present_trading_indicators } from '../../features/recent-orders/tradingIndicatorPresenter';
 import {
     create_realtime_chart_view_model,
     type PriceChartIntent,
@@ -21,14 +22,6 @@ import type { UiApplicationController } from '../runtime';
 const DASHBOARD_ORDER_BY_ID = new Map(
     DEFAULT_DASHBOARD_PROPS.trader.orders.map((order) => [order.id, order]),
 );
-
-const STRATEGY_LABEL_BY_REGIME: Readonly<Record<NonNullable<AppViewModel['regime']['applied']>, string>> = {
-    type0: 'Basic Iterative',
-    type1: 'First Buy',
-    type2: 'Momentum',
-    type3: 'Risk Off',
-    type4: 'Defensive',
-};
 
 /**
  * 함수 이름: format_recent_trade_time()
@@ -231,9 +224,8 @@ export function present_dashboard_props(
     controller: UiApplicationController,
     market_snapshot?: RealtimeChartDataSnapshot | RealtimeChartDataRuntime,
 ): DashboardPageProps {
-    const applied_strategy = view_model.regime.applied === null
-        ? '선택 필요'
-        : STRATEGY_LABEL_BY_REGIME[view_model.regime.applied];
+    // 두 Boundary는 계좌 전략 snapshot의 같은 문구를 읽어 REGIME 선택과 실행 Case를 혼동하지 않는다.
+    const active_strategy_state = view_model.account_summary.strategy.appliedState;
     const strategy_status = view_model.connection.is_online
         ? view_model.trading.is_trading
             ? '정상 작동'
@@ -242,22 +234,13 @@ export function present_dashboard_props(
     const strategy_status_tone = view_model.connection.is_online && view_model.trading.is_trading
         ? 'positive' as const
         : 'negative' as const;
-    const fixture_indicator_groups = DEFAULT_DASHBOARD_PROPS.trader.indicatorGroups;
-    const primary_indicator_group = fixture_indicator_groups[0];
-    const dynamic_indicator_groups = primary_indicator_group === undefined
-        ? fixture_indicator_groups
-        : [
-            {
-                ...primary_indicator_group,
-                indicators: view_model.trader_panel.realtime_indicators.map((indicator, index) => ({
-                    id: primary_indicator_group.indicators[index]?.id ?? indicator.id,
-                    label: indicator.label,
-                    tone: indicator.tone,
-                    value: indicator.value,
-                })),
-            },
-            ...fixture_indicator_groups.slice(1),
-        ];
+    const dynamic_indicator_groups = present_trading_indicators(
+        view_model.trader_panel.strategy_indicators,
+        active_strategy_state,
+        view_model.connection.is_online,
+        view_model.trading.is_trading,
+        view_model.trader_panel.strategy_indicators_received_at,
+    );  // REGIME의 4시간봉 지표와 현재 전략 조건은 독립된 데이터 흐름을 사용한다.
     const realtime_chart_view_model = market_snapshot === undefined
         || market_snapshot.data_status === 'idle'
         ? null
@@ -293,7 +276,7 @@ export function present_dashboard_props(
                         realtime_chart_runtime.load_earlier_klines(view_model.chart.interval);
                     },
                 }),
-            activeState: applied_strategy,
+            activeState: active_strategy_state,  // 계좌의 현재 상태와 같은 source에서 표시한다.
             // ETHUSDT의 열린 포지션 평단가만 전달하고 캔들·최근 체결 가격으로 대체하지 않는다.
             position_average_entry_price: view_model.trading.has_open_position
                 && realtime_chart_view_model?.symbol === 'ETHUSDT'
@@ -349,7 +332,7 @@ export function present_dashboard_props(
                 ...view_model.account_summary.strategy,
                 status: strategy_status,
                 statusTone: strategy_status_tone,
-                appliedState: applied_strategy,
+                appliedState: active_strategy_state,
             },
         },
         splitOrder: {

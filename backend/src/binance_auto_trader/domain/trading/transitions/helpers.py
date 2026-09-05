@@ -14,6 +14,8 @@ from ..action_requests import (
     SubmitOrder,
     patch,
 )
+# 표시와 주문 판단이 같은 순수 조건 평가를 공유한다.
+from ..conditions import condition_met
 from ..context import TradingContextView
 from ..events import TradingEvent, TradingEventType
 from ..states import (
@@ -42,8 +44,8 @@ def is_lower_touch_condition_met(context: TradingContextView) -> bool:
     작성 날짜: 2026/08/14
     """
     market = context.market
-    return market.realtime_price <= market.lower_band or (
-        market.confirmed_30m_close and market.current_30m_low <= market.lower_band
+    return condition_met("lower_price", context) or (
+        market.confirmed_30m_close and condition_met("lower_close", context)
     )
 
 

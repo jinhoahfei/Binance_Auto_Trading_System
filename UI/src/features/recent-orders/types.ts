@@ -4,6 +4,7 @@ import type {
     BackendManualKillBehavior,
     BackendRiskBudgetSnapshot,
     BackendRiskPolicyAvailability,
+    BackendTradingTimer,
 } from '../../shared/contracts';
 
 export type TraderPanelTab = 'recent' | 'realtime';
@@ -32,12 +33,21 @@ export interface RealtimeIndicatorViewModel {
     readonly label: string;
     readonly tone: MetricTone;
     readonly value: string;
+    readonly criterion?: string;
+    readonly timer?: RealtimeIndicatorTimerViewModel;
+}
+
+export interface RealtimeIndicatorTimerViewModel {
+    readonly snapshot: BackendTradingTimer | null;
+    readonly server_time: string | null;
+    readonly received_at: number | null;
 }
 
 export interface RealtimeIndicatorGroupViewModel {
     readonly id: string;
     readonly indicators: ReadonlyArray<RealtimeIndicatorViewModel>;
     readonly title: string;
+    readonly notice?: string | undefined;
 }
 
 export interface TraderPanelProps {
@@ -59,7 +69,6 @@ export interface TraderPanelProps {
     readonly onIntent?: ((intent: TraderPanelIntent) => void) | undefined;
     readonly orders: ReadonlyArray<RecentOrderViewModel>;
     readonly process_ownership_ambiguous?: boolean | undefined;
-    readonly residenceTime?: string | undefined;
     readonly risk_block_reason?: string | null | undefined;
     readonly risk_policy_availability?: TraderPanelRiskPolicyAvailability | undefined;
     readonly session_risk_policy_version?: number | null | undefined;

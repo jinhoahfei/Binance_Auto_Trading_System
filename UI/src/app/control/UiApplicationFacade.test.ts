@@ -810,9 +810,9 @@ describe('UiApplicationFacade', () => {
             scale_in_percentage: 40,
             scale_out_percentage: 60,
         });
-        expect(facade.get_view_model().chart.active_trading_logic_state).toBe('stopping');
+        expect(facade.get_view_model().chart.active_trading_logic_state).toBe('자동매매 중지 처리 중');
         expect(facade.get_view_model().account_summary.strategy).toMatchObject({
-            appliedState: 'stopping',
+            appliedState: '자동매매 중지 처리 중',  // 실행 Case가 없는 legacy intent는 상태 문구를 공유한다.
             status: '자동매매 중지 처리 중',
             statusTone: 'neutral',
         });

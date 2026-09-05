@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
 
 from ..action_requests import (
     CancelScheduledEvaluation,
@@ -15,6 +14,8 @@ from ..action_requests import (
     ResetCaseCContext,
     patch,
 )
+# 표시와 주문 판단이 같은 순수 조건 평가를 공유한다.
+from ..conditions import condition_met
 from ..context import TradingContextView
 from ..events import SellAttemptPayload, TradingEvent, TradingEventType
 from ..states import (
@@ -29,7 +30,6 @@ from ..states import (
 )
 from .base import TransitionOutcome, create_transition_outcome
 from .helpers import (
-    SIX_HOURS,
     create_exit_order_actions,
     create_lower_event_initialization_patch,
     is_lower_touch_condition_met,
@@ -406,22 +406,22 @@ def _is_holding_exit_guard_satisfied(
     if event_type is TradingEventType.CASE_B_EMERGENCY_STOP:
         return (
             entry_price is not None
-            and market.realtime_price <= entry_price * Decimal("0.99")
+            and condition_met("b_emergency_stop", context)
         )
     if event_type is TradingEventType.CASE_B_STOP:
         return (
             market.confirmed_30m_close
-            and market.ema_slope_30m_close < Decimal("-0.08")
+            and condition_met("b_stop", context)
         )
     if event_type is TradingEventType.CASE_B_UPPER_TREND:
         return _is_upper_trend_guard_satisfied(context)
     if event_type is TradingEventType.CASE_B_TAKE_PROFIT:
         return (
-            market.pct_b_at_least_060_for_5s
-            and market.realtime_ema_slope <= Decimal("0.08")
+            condition_met("b_profit_zone", context)
+            and condition_met("b_take_profit_slope", context)
         )
     if event_type is TradingEventType.CASE_B_TIME_EXIT:
-        return market.holding_elapsed >= SIX_HOURS
+        return condition_met("b_time_exit", context)
     return False
 
 
@@ -433,11 +433,10 @@ def _is_upper_trend_guard_satisfied(context: TradingContextView) -> bool:
     반환값: Trend Hold 진입 가능 여부
     작성 날짜: 2026/08/14
     """
-    market = context.market
+    # 시장 평가기가 확정한 연속 유지 결과를 전략과 표시가 공유한다.
     return (
-        market.pct_b_at_least_060_for_5s
-        and market.realtime_ema_slope > Decimal("0.08")
-        and market.realtime_slope_above_008_for_5s
+        condition_met("b_profit_zone", context)
+        and condition_met("b_trend_slope", context)
     )
 
 
@@ -449,10 +448,10 @@ def _is_trend_hold_exit_guard_satisfied(context: TradingContextView) -> bool:
     반환값: Trend Hold 청산 조건 만족 여부
     작성 날짜: 2026/08/14
     """
-    market = context.market
+    # 시장 평가기가 확정한 연속 유지 결과를 전략과 표시가 공유한다.
     return (
-        market.realtime_slope_at_most_004_for_5s
-        or market.pct_b_below_060_for_5s
+        condition_met("b_trend_exit_slope", context)
+        or condition_met("b_trend_exit_pct_b", context)
     )
 
 

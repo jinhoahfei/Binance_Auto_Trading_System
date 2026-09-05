@@ -20,6 +20,7 @@ from .action_requests import (
     RuntimeFieldChange,
 )
 from .results import TradingSTMResult
+from .timers import TradingTimerSnapshot
 from .states import (
     ExitReason,
     OrderAttemptKind,
@@ -68,6 +69,7 @@ class MarketEvaluationSnapshot:
     realtime_slope_at_most_004_for_5s: bool = False
     pct_b_below_060_for_5s: bool = False
     realtime_slope_at_most_minus_055_for_3m: bool = False
+    condition_timers: tuple[TradingTimerSnapshot, ...] = ()
 
     def __post_init__(self) -> None:
         """
@@ -109,6 +111,14 @@ class MarketEvaluationSnapshot:
 
         if len(self.previous_3_closed_candle_lows) not in (0, 3):
             raise ValueError("Previous candle lows must be empty or contain exactly 3 values")
+
+        # 표시 정보가 mutable collection이나 중복 조건을 통해 다른 평가에 섞이지 않게 한다.
+        if not isinstance(self.condition_timers, tuple) or any(
+            not isinstance(timer, TradingTimerSnapshot) for timer in self.condition_timers
+        ):
+            raise TypeError("Condition timers must be an immutable timer tuple")
+        if len({timer.condition_id for timer in self.condition_timers}) != len(self.condition_timers):
+            raise ValueError("Condition timer IDs must be unique")  # 한 평가에는 조건별 회차 하나만 허용한다.
 
 
 @dataclass(frozen=True, slots=True)
