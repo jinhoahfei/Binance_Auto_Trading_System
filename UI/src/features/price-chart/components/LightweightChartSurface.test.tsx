@@ -186,6 +186,44 @@ afterEach(() => {
 });
 
 describe('LightweightChartSurface', () => {
+    it('차트 가격은 2자리, ETH 거래량은 4자리로 반올림하고 원본 봉 값은 유지한다', () => {
+        const candle = {
+            close: 2451.425,
+            high: 2452.5678,
+            low: 2449.1234,
+            open: 2450.9876,
+            open_time: INITIAL_OPEN_TIME,
+            volume: 330.86914999,
+        };
+        render(
+            <LightweightChartSurface
+                bollingerLower={[]}
+                bollingerUpper={[]}
+                candles={[candle]}
+                ema={[]}
+                indicatorSettings={INDICATOR_SETTINGS}
+                interval="1m"
+                symbol="ETHUSDT"
+            />,
+        );
+        const information = screen.getByLabelText('선택한 봉 정보');
+        const price_formatter = vi.mocked(createChart).mock.calls[0]?.[1]
+            ?.localization?.priceFormatter as ((price: number) => string) | undefined;
+
+        expect(information).toHaveTextContent('시가 2,450.99');
+        expect(information).toHaveTextContent('고가 2,452.57');
+        expect(information).toHaveTextContent('저가 2,449.12');
+        expect(information).toHaveTextContent('종가 2,451.43');
+        expect(information).toHaveTextContent('거래량(ETH) 330.8691');
+        expect(price_formatter?.(0.125)).toBe('0.13');
+        expect(chart_harness.candle_series.setData).toHaveBeenCalledWith([
+            expect.objectContaining({ close: 2451.425, open: 2450.9876 }),
+        ]);
+        expect(chart_harness.volume_series.setData).toHaveBeenCalledWith([
+            expect.objectContaining({ value: 330.86914999 }),
+        ]);
+    });
+
     it('Binance형 zoom, pan, 동적 축과 crosshair option을 활성화한다', () => {
         const { unmount } = render(
             <LightweightChartSurface
@@ -400,7 +438,7 @@ describe('LightweightChartSurface', () => {
         expect(candle_information).toHaveTextContent('종가 110.00');
         expect(candle_information).toHaveTextContent('등락 10.00%');
         expect(candle_information).toHaveTextContent('변동폭 30.00%');
-        expect(candle_information).toHaveTextContent('거래량(BTC) 4,567.891234');
+        expect(candle_information).toHaveTextContent('거래량(BTC) 4,567.8912');
 
         act(() => {
             chart_harness.emit_crosshair_move({

@@ -9,6 +9,7 @@ import {
     decode_backend_http_envelope,
     map_backend_event_to_intents,
     map_backend_snapshot,
+    map_trade_history_summary,
     parse_backend_web_socket_message,
     validate_backend_snapshot,
 } from './backendEventMapper';
@@ -610,6 +611,37 @@ describe('backend runtime contract validation', () => {
 });
 
 describe('backend snapshot and event mapping', () => {
+    it('거래 요약과 실시간 성과 갱신에 동일한 소수점 표시 규칙을 적용한다', () => {
+        const performance = {
+            ...create_backend_snapshot_fixture().performance,
+            daily_return_rate: '-0.04275529',
+            win_rate: '25.00000000',
+            average_sell_return_rate: '-0.02645909',
+            realized_pnl: '-0.0212870000000000',
+            daily_fee: '0.000000000000000000',
+        };
+        const summary = map_trade_history_summary(performance, '1.00000000');
+
+        expect(summary).toMatchObject({
+            dailyReturn: { value: '-0.04%' },
+            sellPerformance: {
+                winRate: '25.00%',
+                averageRealizedReturn: '-0.03%',
+                totalRealizedPnl: '-0.02 USDT',
+            },
+            position: { quantity: '1.0000 ETH' },
+            fees: { amount: '0.00 USDT' },
+        });
+        expect(map_backend_event_to_intents(create_backend_event_fixture(
+            10, 'PERFORMANCE_UPDATED', { performance },
+        ))).toEqual([{
+            type: 'TRADE_HISTORY_PERFORMANCE_UPDATED',
+            daily_return: summary.dailyReturn,
+            sell_performance: summary.sellPerformance,
+            fees: summary.fees,
+        }]);
+    });
+
     it('USDT와 nullable/unavailable 의미를 보존하고 금액 값을 JS Number로 계산하지 않는다', () => {
         const mapped = map_backend_snapshot(
             create_backend_snapshot_fixture(),
@@ -673,8 +705,8 @@ describe('backend snapshot and event mapping', () => {
         expect(mapped.server_snapshot.account_asset).toMatchObject({
             quoteAsset: 'USDT',
             quoteValue: '120.00 USDT',
-            ethAmount: '1.75',
-            ethValue: '7,562.625000 USDT',
+            ethAmount: '1.7500',
+            ethValue: '7,562.63 USDT',
             totalValue: '-',
             profitLoss: '-',
         });
@@ -687,13 +719,16 @@ describe('backend snapshot and event mapping', () => {
             entry_price: null,
             total: '432.150',
         });
-        expect(mapped.server_snapshot.trade_history_summary.position.quantity).toBe('1.75 ETH');
+        expect(mapped.server_snapshot.regime_metrics.map((metric) => metric.value)).toEqual([
+            '0.12% / 4H', '4,242.42 USDT', '4,200.00 USDT', '4,500.00 USDT',
+        ]);
+        expect(mapped.server_snapshot.trade_history_summary.position.quantity).toBe('1.7500 ETH');
         expect(mapped.server_snapshot.trade_history_summary.sellPerformance).toMatchObject({
             averageRealizedReturn: '-0.10%',
             totalRealizedPnl: '-0.40 USDT',
         });
         expect(mapped.server_snapshot.trade_history_summary.fees).toMatchObject({
-            amount: '0.43215 USDT',
+            amount: '0.43 USDT',
             totalExecutedAmount: '-',
             averageSlippage: '-',
         });
@@ -821,7 +856,7 @@ describe('backend snapshot and event mapping', () => {
             expect.objectContaining({ type: 'ACCOUNT_ASSETS_UPDATED' }),
             {
                 type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
-                position: { quantity: '1.75 ETH' },
+                position: { quantity: '1.7500 ETH' },
             },
         ]);
         expect(map_backend_event_to_intents(unknown_event)).toEqual([]);
@@ -839,7 +874,7 @@ describe('backend snapshot and event mapping', () => {
 
         expect(map_backend_event_to_intents(account_event)).toContainEqual({
             type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
-            position: { quantity: '0 ETH' },
+            position: { quantity: '0.0000 ETH' },
         });
     });
 

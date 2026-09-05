@@ -6,7 +6,7 @@ import {
 } from '../../features/trade-history';
 import type { TradeHistoryPageProps } from '../../routes/trade-history';
 import type { TradeRecord } from '../../shared/contracts';
-import { format_quote_amount } from '../../shared/formatting';
+import { format_decimal_text, format_eth_quantity, format_quote_amount } from '../../shared/formatting';
 import type { AppViewModel } from '../control';
 import type { UiApplicationController } from '../runtime';
 
@@ -170,12 +170,12 @@ function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewMod
             ? '-'
             : format_quote_amount(trade_record.entry_price, trade_record.quote_asset),
         executionPrice: format_quote_amount(trade_record.price, trade_record.quote_asset),
-        quantity: trade_record.quantity,
+        quantity: format_eth_quantity(trade_record.quantity),
         orderAmount: format_quote_amount(trade_record.total, trade_record.quote_asset),
         fee: format_quote_amount(trade_record.fee, trade_record.quote_asset),
         previousBuyReturn: trade_record.profit_rate === null
             ? '-'
-            : `${trade_record.profit_rate}%`,
+            : `${format_decimal_text(trade_record.profit_rate)}%`,
         realizedPnl: trade_record.realized_pnl === null
             ? '-'
             : format_quote_amount(trade_record.realized_pnl, trade_record.quote_asset),

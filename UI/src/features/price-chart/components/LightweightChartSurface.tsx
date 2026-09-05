@@ -327,13 +327,13 @@ function read_color_token(token_name: string, fallback: string): string {
  * 함수 이름: format_chart_price()
  * 기능: 가격축과 봉 정보에 사용할 ETH/USDT 가격 문자열을 만든다.
  * 인자: price -> 표시할 가격
- * 반환값: 천 단위 구분과 최대 여섯 소수 자릿수를 적용한 가격
+ * 반환값: 천 단위 구분과 소수점 2자리 반올림을 적용한 가격
  * 작성 날짜: 2026/08/20
  */
 function format_chart_price(price: number): string {
     return new Intl.NumberFormat('en-US', {
         minimumFractionDigits: 2,
-        maximumFractionDigits: Math.abs(price) >= 1 ? 2 : 6,
+        maximumFractionDigits: 2,
     }).format(price);
 }
 
@@ -341,12 +341,13 @@ function format_chart_price(price: number): string {
  * 함수 이름: format_chart_volume()
  * 기능: 선택 봉의 실제 base asset 거래량을 읽기 쉬운 문자열로 만든다.
  * 인자: volume -> 표시할 거래량
- * 반환값: 천 단위 구분과 최대 여섯 소수 자릿수를 적용한 거래량
+ * 반환값: 천 단위 구분과 소수점 4자리 반올림을 적용한 ETH 거래량
  * 작성 날짜: 2026/08/20
  */
 function format_chart_volume(volume: number): string {
     return new Intl.NumberFormat('en-US', {
-        maximumFractionDigits: 6,
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
     }).format(volume);
 }
 

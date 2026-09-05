@@ -298,7 +298,7 @@ describe('BackendUiAdapter HTTP contract', () => {
                 quote_asset: 'USDT',
             })],
             summary: {
-                position: { quantity: '1.75 ETH' },
+                position: { quantity: '1.7500 ETH' },
                 dailyReturn: expect.any(Object),
                 sellPerformance: expect.any(Object),
                 fees: expect.any(Object),

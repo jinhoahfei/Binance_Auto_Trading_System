@@ -26,6 +26,7 @@ import type {
 } from '../contracts';
 import {
     format_decimal_text,
+    format_eth_quantity,
     format_quote_amount,
 } from '../formatting';
 import type {
@@ -1395,7 +1396,7 @@ function map_account_asset(account: BackendAccountSnapshot): UiServerOwnedSnapsh
     return {
         ethAmount: eth_balance === undefined
             ? '-'
-            : format_decimal_text(eth_balance.total),
+            : format_eth_quantity(eth_balance.total),
         ethValue: account.valuation === null
             ? '-'
             : format_quote_amount(account.valuation, account.quote_asset),
@@ -1449,7 +1450,7 @@ export function map_trade_history_summary(
         position: {
             quantity: holdings === null
                 ? '-'
-                : `${format_decimal_text(holdings)} ETH`,
+                : `${format_eth_quantity(holdings)} ETH`,
         },
         fees: {
             amount: format_quote_amount(performance.daily_fee, 'USDT'),
@@ -1623,7 +1624,7 @@ export function map_backend_event_to_intents(
                 {
                     type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
                     position: {
-                        quantity: `${format_decimal_text(holdings)} ETH`,
+                        quantity: `${format_eth_quantity(holdings)} ETH`,
                     },
                 },
             ];

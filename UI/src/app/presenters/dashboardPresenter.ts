@@ -12,6 +12,7 @@ import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard/dashboardFixture
 import type { TradeRecord } from '../../shared/contracts';
 import {
     format_decimal_text,
+    format_eth_quantity,
     format_quote_amount,
 } from '../../shared/formatting';
 import type { AppViewModel } from '../control';
@@ -72,10 +73,10 @@ function create_recent_order_view_model(trade_record: TradeRecord): RecentOrderV
             ? `₩ ${format_decimal_text(trade_record.price)}`
             : format_quote_amount(trade_record.price, trade_record.quote_asset),
         secondaryValue: trade_record.side === 'buy'
-            ? `${trade_record.quantity} ETH`
+            ? `${format_eth_quantity(trade_record.quantity)} ETH`
             : trade_record.profit_rate === null
                 ? '-'
-                : `${trade_record.profit_rate}%`,
+                : `${format_decimal_text(trade_record.profit_rate)}%`,
     };
 }
 

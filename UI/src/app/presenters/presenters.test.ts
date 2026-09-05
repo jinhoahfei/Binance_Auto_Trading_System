@@ -4,6 +4,7 @@ import type {
 } from '../../features/price-chart';
 import type { NormalizedKline } from '../../features/price-chart/data';
 import { DEFAULT_DASHBOARD_PROPS } from '../../routes/dashboard';
+import type { TradeRecord } from '../../shared/contracts';
 import type { AppViewModel, UiApplicationIntent } from '../control';
 import { create_demo_ui_application, initialize_demo_ui_application } from '../bootstrap';
 import type { UiApplicationController } from '../runtime';
@@ -80,6 +81,72 @@ function create_market_kline(
 }
 
 describe('application presenters', () => {
+    it('최근 체결과 상세 거래의 ETH 수량은 4자리, 금액과 수익률은 2자리로 표시한다', () => {
+        const view_model = create_demo_view_model();
+        const buy_trade: TradeRecord = Object.freeze({
+            id: 'live-buy',
+            quote_asset: 'USDT',
+            occurred_at: '2026-09-05T00:00:00Z',
+            side: 'buy',
+            regime: 'type0',
+            strategy: 'CASE_C',
+            price: '2451.42500000',
+            entry_price: null,
+            market_price_at_decision: '2451.42000000',
+            quantity: '0.00415000',
+            total: '10.1734137500',
+            fee: '0.000000000000000000',
+            profit_rate: null,
+            realized_pnl: null,
+            exit_reason: null,
+        });
+        const sell_trade: TradeRecord = Object.freeze({
+            ...buy_trade,
+            id: 'live-sell',
+            side: 'sell',
+            entry_price: '2450.00500000',
+            profit_rate: '-0.38233420',
+            realized_pnl: '-0.03837600',
+        });
+        const records = [buy_trade, sell_trade];
+        const live_view_model: AppViewModel = {
+            ...view_model,
+            trader_panel: { ...view_model.trader_panel, trades: records },
+            trade_history: { ...view_model.trade_history, records },
+        };
+        const { controller } = create_recording_controller(live_view_model);
+        const dashboard_props = present_dashboard_props(live_view_model, controller);
+        const history_props = present_trade_history_props(live_view_model, controller);
+
+        expect(dashboard_props.trader.orders).toMatchObject([
+            { price: '2,451.43 USDT', secondaryValue: '0.0042 ETH' },
+            { price: '2,451.43 USDT', secondaryValue: '-0.38%' },
+        ]);
+        expect(history_props.rows).toMatchObject([
+            {
+                entryPrice: '-',
+                executionPrice: '2,451.43 USDT',
+                quantity: '0.0042',
+                orderAmount: '10.17 USDT',
+                fee: '0.00 USDT',
+                previousBuyReturn: '-',
+                realizedPnl: '-',
+            },
+            {
+                entryPrice: '2,450.01 USDT',
+                executionPrice: '2,451.43 USDT',
+                quantity: '0.0042',
+                orderAmount: '10.17 USDT',
+                fee: '0.00 USDT',
+                previousBuyReturn: '-0.38%',
+                realizedPnl: '-0.04 USDT',
+            },
+        ]);
+        expect(buy_trade.quantity).toBe('0.00415000');
+        expect(buy_trade.price).toBe('2451.42500000');
+        expect(sell_trade.realized_pnl).toBe('-0.03837600');
+    });
+
     it('authoritative risk와 process ownership 상태를 계산 없이 TraderPanel 경계에 전달한다', () => {
         const view_model = create_demo_view_model();
         const last_risk_budget = {

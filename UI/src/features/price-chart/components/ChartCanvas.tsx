@@ -335,12 +335,9 @@ function format_axis_price(price: number): string {
     if (absolute_price >= 1_000_000) {
         return `${(price / 1_000_000).toFixed(2)}M`;
     }
-    if (absolute_price >= 1_000) {
-        return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(price);
-    }
-
     return new Intl.NumberFormat('en-US', {
-        maximumFractionDigits: absolute_price >= 1 ? 2 : 6,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
     }).format(price);
 }
 
