@@ -3,14 +3,15 @@
 | 항목 | 내용 |
 |---|---|
 | 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 개인용 ad-hoc desktop package·credential·shutdown 검증 완료, Phase 13 부분 구현·live readiness `NO_GO` |
-| 기준일 | 2026-09-04 (Asia/Seoul) |
+| 기준일 | 2026-09-05 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. Phase 13은 장애 복구, configured-unbounded 위험 정책, `CANCEL_AND_LIQUIDATE`, 30분 EMA9/OLS production 계산, 전 interval 원자 경계와 public local Case 2를 구현했고 Communication `126/126`, 실제 native picker 선택·취소와 actual-browser axe `16/16 Violations 0`을 검증했다. 2026-09-05에는 Session 3 current-source Spot Testnet E2E의 `ETHUSDT` BUY decision notional `9.7814300211721854636528636815 USDT` 한 건과 same-run exact `0.0041 ETH` STOP SELL 한 건, fresh zero exposure를 canonical SUCCESS evidence로 봉인해 Session 4 진입을 `GO`로 판정했다. 다만 visual SSIM `4/16` PASS·`12/16` FAIL 및 third-party supply-chain `NO_GO`가 남았으므로 Phase 13 전체와 live endpoint는 계속 미완료다. |
+| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. Phase 13은 장애 복구, configured-unbounded 위험 정책, `CANCEL_AND_LIQUIDATE`, 30분 EMA9/OLS production 계산, 전 interval 원자 경계와 public local Case 2를 구현했고 Communication `126/126`, 실제 native picker 선택·취소와 actual-browser axe `16/16 Violations 0`을 검증했다. 2026-09-05에는 Session 3 current-source Spot Testnet E2E의 `ETHUSDT` BUY decision notional `9.9490331561080558036145263224 USDT` 한 건과 same-run exact `0.0042 ETH` STOP SELL 한 건, fresh zero exposure를 canonical SUCCESS evidence로 봉인했다. 같은 checkpoint `c28544e4d22c9c5512c380286d1dfc6dd618e14e`에서 Session 4 arm64 fresh ad-hoc app/DMG의 Keychain read-only `READY`, 핵심 UI, native picker 선택·취소, safe shutdown과 orphan `0`을 통과해 `macOS package ready`를 완료했고 Session 5 진입은 `GO`다. 다만 Cross-platform package, Private Beta master, visual SSIM `4/16` PASS·`12/16` FAIL 및 공개 배포용 full supply-chain track은 남았으므로 Phase 13 전체와 live endpoint는 계속 미완료다. |
 | 2026-09-01 최신 갱신 | 공식 `/myFilters` strict composite, account-wide empty-state와 고정 30초 submit guard를 유지한 채 reconciliation first cause를 여섯 secret-free category와 monotonic `MISSING\|EXACT\|DUPLICATE\|CONFLICT` latch로 구현했다. Failure writer v2는 raw logical ID를 기록하지 않고 exception-bound `first_cause`, 15개 stable fresh stage, account-wide empty truth와 source/copy descriptor-bound isolated durability snapshot을 봉인한다. Leaf content restore, absent-sidecar와 ancestor rename/restore ABA, producer error 순서, no-attempt zero truth와 serial pending cap까지 fail closed하며 preserved v1 FAILED와 trace v2는 소급 변경 없이 검증한다. V3는 exact session/intent client ID, 2/4/6 Kline batch, account converse, trace command와 fill order를 production producer에 결속한다. Credential/order 환경을 제거한 current tree에서 Backend `Ran 962 tests`, `OK (skipped=8)`, scripts `183/183`, runner `14/14`, cause integration `50/50`, Case 2 helper `29/29`·external actual `1` safe skip, Communication `126/126`을 통과했다. 이번 local 작업의 Keychain·Binance target·주문은 모두 0회이고 historical actual FAILED/INCOMPLETE는 그대로다. Visual `4/16`, supply/readiness `NO_GO`이므로 Phase 13과 live는 계속 `[ ]`/disabled이며 최신 재개 계약은 §16.18이다. |
 | 2026-09-04 최신 갱신 | §16.18 이후 중단 지점을 `e402673`에서 복원해 V3 source/provenance/order-ID/zero-fee 계약, process-lifetime startup·direct-start gate, final source→copy→source durability, 모든 cleanup best-effort와 lifecycle `CLOSED` publication을 보강했다. Credential/order 환경을 제거한 Backend는 `Ran 967 tests in 32.817s`, `OK (skipped=8)`이고 focused trace/Case 2 `58`, startup·reconciliation `74`, lifecycle `10`, cause integration `51`, runner `14`, baseline/trace `33`, public Case 2 integration `9`, Communication `126/126`이 통과했다. Root scripts는 source 회귀가 아니라 ignored historical Phase 12 app만 남고 결속된 DMG가 누락된 현재 local artifact 상태를 fail closed해 `Ran 183`, `FAILED (failures=1, errors=2)`다. 원래 DMG를 찾거나 검증된 pair를 정직하게 정리하기 전 supply gate를 PASS로 쓰지 않는다. 이번 작업도 Keychain·Binance target·주문은 모두 0회이며 Phase 13/live는 계속 `[ ]`/disabled다. 최신 유일 재개 계약은 §16.19다. |
 | 2026-09-05 최신 갱신 | §16.20.6 Session 3을 current source에서 완료했다. Keychain 두 item의 memory-only read와 signed read-only preflight 뒤 `ETHUSDT` BUY decision notional `9.7814300211721854636528636815 USDT <= 10 USDT` 한 건, same-run exact `0.0041 ETH` STOP SELL 한 건을 실행했다. Canonical SUCCESS trace는 actual order `2`, durable Trade `2`, retry/cancel/duplicate/범위 밖 mutation `0`, fresh Position/pending/unknown/open order `0`, reconciliation `false`를 봉인했다. Post-run signed read-only도 account-wide open order/list `0`을 확인했고 Backend `993`, actual local+external `40`, secure runner/Communication `32`, trace schema `28`, order fault/actual helper `47`, Communication matrix `126/126`이 통과했다. 따라서 Session 4는 `GO`지만 fresh package와 macOS smoke, Phase 13 dependency/license/SBOM gap, live endpoint 승인은 아직 수행하지 않았다. 상세 source checkpoint와 artifact digest는 §16.20.6에 기록했다. |
+| 2026-09-05 Session 4 최신 갱신 | §16.20.7 Session 4를 `c28544e4d22c9c5512c380286d1dfc6dd618e14e == origin/main`과 unchanged lockfile 세 개에서 완료했다. 격리 target에 arm64 app/DMG를 fresh build하고 PyInstaller one-file과 hardened ad-hoc library-validation 불일치를 실제 실행에서 발견해 해당 후보를 기각했다. 최종 채택본은 outer seal을 포함한 non-hardened ad-hoc app과 read-only DMG이며 app tree SHA-256 `7e790832c97447df819d08c65c8a080bfd8f32ffbcab9ee18a5a59cbdb931853`, DMG SHA-256 `2c95e0fa33cca0cbf1fd263814be87f761440722237796b13d91d8b5f6b7df7b`다. Network-deny offline OSV 결과 High/Critical `0`, 최종 secret scan `2` canary/`2781` files PASS다. macOS arm64에서 Keychain read-only `READY`, Dashboard/History/stop, picker selected/cancelled, Command-Q safe shutdown, `RELEASED` owner와 orphan `0`을 확인했고 postflight `5/5`도 open order/list `0`을 유지했다. 실제 신규 주문은 `0`회다. 따라서 Session 5는 `GO`지만 Windows native PASS, Cross-platform package, Private Beta, live와 공개 release track은 완료하지 않았다. 상세 증거와 ad-hoc trust 절차는 §16.20.7에 기록했다. |
 
 ---
 
@@ -5356,6 +5357,154 @@ smoke하라. Windows compatibility, live endpoint, historical DMG 복구, SSIM 1
 license/notice와 Developer ID/notarization은 하지 마라.
 ```
 
+**2026-09-05 실행 결과:** `[x] 완료`
+
+- 입력 checkpoint는 clean `main == origin/main ==
+  c28544e4d22c9c5512c380286d1dfc6dd618e14e`이며 parent는 Session 3 actual source
+  `96d3d9e1d05ffab955793a3945f1c45e4b617003`이다. Session 3 review와 재검증을 포함한 이
+  checkpoint 뒤 production/order-critical source와 lockfile은 변경하지 않았다. SHA-256은
+  `backend/uv.lock` =
+  `cfecb5e02854f90c2c8fabbc67d2692c370dc81df767127329a40489e708084f`,
+  `UI/pnpm-lock.yaml` =
+  `dd1834c32ee46752104f3dde32558e5f661f605d88bfa9c1ac1062678bc0e24f`,
+  `UI/apps/desktop/src-tauri/Cargo.lock` =
+  `759f9787c88a67c4d7b356adfe1842b14d087bf48c7825db3f186d5bedef7783`다. Historical
+  Phase 12 retained app, 누락 DMG와 validator는 찾거나 수정·대체하지 않았다.
+- Package 생성·실제 smoke와 완료 증거 수집 뒤 `2026-09-05 02:47:26 KST`에
+  `UI/apps/desktop/src-tauri/Cargo.toml`의 `default-run = "binance-auto-trader"` 한 줄이 새
+  uncommitted 변경으로 나타났다. Final DMG 생성 시각 `02:28:52 KST`보다 뒤이므로 위 package
+  checkpoint의 build input으로 소급 포함하지 않았고, 변경 출처를 filesystem evidence만으로
+  단정하거나 사용자 상태를 되돌리지 않고 그대로 보존했다. 이 selector-only manifest 상태에서도
+  `cargo fmt --all --check`와 `cargo test --locked --offline`의 `40/40`이 재통과했다. Session 5는
+  이 dirty input을 보존한 채 변경 소유권과 채택 여부를 먼저 재확인한다.
+- Credential·certificate·notarization·Binance 환경을 제거하고
+  `CARGO_NET_OFFLINE=true`, 별도
+  `CARGO_TARGET_DIR=UI/apps/desktop/src-tauri/target/session4-c28544e`에서
+  `pnpm desktop:build -- --bundles app,dmg`를 실행했다. Python `3.11.14`, PyInstaller
+  `6.22.2`, Rust host `aarch64-apple-darwin`의 fresh build이며 production/test source 변경은
+  `0`개다.
+- Fresh package 중간 후보를 최종본과 구분했다. Tauri가 처음 만든 generic DMG의 outer app은
+  nested sidecar만 서명되고 outer resource seal이 없어 `codesign --verify --deep --strict`를
+  통과하지 못했으므로 기각했다. Outer app을 `--options runtime`으로 ad-hoc 재서명한 두 번째
+  후보도 실제 sidecar 실행에서 PyInstaller가 푼 `libpython3.11.dylib`와 one-file executable의
+  Team ID가 달라 macOS Library Validation에 차단됐으므로 기각했다. 이 실패를 숨기거나 해당
+  두 DMG를 최종 경로로 승격하지 않았다.
+- 최종 개인용 후보는 Session 4의 ad-hoc 범위에 맞춰
+  `codesign --force --deep --sign -`로 outer app과 nested executable을 다시 봉인했다. 이 후보는
+  `Signature=adhoc`, `TeamIdentifier=not set`, strict deep verification PASS이며 hardened runtime,
+  Developer ID, notarization 또는 Gatekeeper 공개 배포 신뢰를 주장하지 않는다. Developer ID
+  release에서는 기존 `package_sidecar.sh`가 real identity를 PyInstaller one-file 내부 dylib까지
+  전달하는 별도 공개 release 계약을 그대로 유지한다.
+- 최종 app은
+  `UI/apps/desktop/src-tauri/target/session4-c28544e/release/bundle/macos/Binance Auto Trader.app`,
+  최종 DMG는
+  `UI/apps/desktop/src-tauri/target/session4-c28544e/release/bundle/dmg/Binance Auto Trader_0.1.0_aarch64_session4-c28544e-adhoc.dmg`다.
+  DMG는 `21,959,066 bytes`, SHA-256
+  `2c95e0fa33cca0cbf1fd263814be87f761440722237796b13d91d8b5f6b7df7b`이고
+  `hdiutil verify`가 통과했다. Source app과 read-only mounted app은 `diff -qr` 결과가 없고,
+  deterministic app tree는 양쪽 모두 SHA-256
+  `7e790832c97447df819d08c65c8a080bfd8f32ffbcab9ee18a5a59cbdb931853`, regular file
+  `5`, total `28,871,823 bytes`다. `/Applications` symlink도 exact다.
+- Mounted main executable은 Mach-O `arm64`, minimum macOS `11.0`, SHA-256
+  `a38de4178f67f121930250cb8fdfae6d75a4148bdaaed9542ad6f3523d0012fe`이고 Apple system
+  framework/dylib만 링크한다. Sidecar는 Mach-O `arm64`, minimum macOS `11.0`, SHA-256
+  `8280f10bfc9a2faa6ab3c08425f58c49d632f467a0beb31f3e00d089949d8082`이며
+  `libSystem`과 `libz`만 외부 링크한다. 현재 macOS PC는 `arm64`, macOS `26.6.2`
+  build `25G83`이고 package/host architecture가 일치한다.
+- Ad-hoc 후보의 `spctl --assess` 거부는 Developer ID/notarization이 없다는 예상 결과다. 비공개
+  전달 절차는 DMG를 열고 app을 `/Applications`에 복사한 뒤 Control-click `열기`를 사용하며,
+  차단되면 System Settings의 Privacy & Security에서 해당 app의 `Open Anyway`를 한 번만 선택하는
+  것으로 고정한다. 출처를 확인하지 않은 다른 binary의 global Gatekeeper 완화, `xattr` 일괄 제거나
+  SIP 변경은 허용하지 않는다. 현재 host의 locally built non-quarantined DMG는 `open -n`으로 실제
+  실행했으며, 전달본의 quarantine 여부와 관계없이 위 수동 절차 밖의 우회는 사용하지 않는다.
+  이어서 fixed Keychain service
+  `com.binance-auto.trader.testnet`의 `api-key`, `api-secret` 요청에 macOS 로그인 창에서만
+  `항상 허용`을 선택하며 비밀번호나 secret을 terminal/chat에 전달하지 않는다.
+- `python3 scripts/run_phase13_offline_osv.py vulnerability`을 OS-level network deny와 scanner
+  offline mode에서 실행했다. 최초 실행은 host에 offline vulnerability DB가 없어 exit `127`로
+  fail closed했다. OSV Scanner의 공식
+  [offline database 전환 절차](https://google.github.io/osv-scanner/migration-guide.html)에 따라
+  public database cache만 한 번 초기화한 뒤, 최종 판정은 다시 repository의 fixed canonical
+  network-deny wrapper로만 수행했다. 그 결과 세 fixed lockfile 전체가 `0 Critical, 0 High, 1 Medium,
+  0 Low, 16 Unknown`이다. 유일한 Medium `glib 0.18.5`의
+  [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)는 CVSS `6.9`이며
+  `cargo tree --locked --offline --target aarch64-apple-darwin -i glib@0.18.5`에 node가 없어
+  macOS target graph에 도달하지 않는다. Severity가 없는 나머지는 GTK/UNIC/proc-macro 계열의
+  unmaintained advisory이며, 예시는
+  [RUSTSEC-2025-0081](https://rustsec.org/advisories/RUSTSEC-2025-0081.html)과
+  [RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370.html)이다. 따라서 이
+  Session의 판정 대상인 unresolved reachable exploitable High/Critical은 `0`이다. 전체 SBOM,
+  license/notice와 공개 provenance는 의도대로 실행하지 않았다.
+- Keychain 값은 출력하지 않고 memory-only canary로만 읽었다. Repository, final source app, final
+  DMG, mounted app, Application Support와 DiagnosticReports를 포함한 최종 scan은
+  `phase12-secret-scan: PASS: 2 credential canaries absent from 2781 files.`다. Actual smoke와
+  postflight 뒤 같은 scan을 다시 통과했다. 문서 갱신과 DMG detach 뒤 mounted copy만 제외한 마지막
+  scan도 `2 credential canaries absent from 2776 files`로 통과했다.
+- Smoke 전 3일 이상 남아 있던 별도 debug package의 parent/runtime PID `99065/99066`과
+  `ORPHANED` owner record를 발견했다. 먼저 canonical Session 3 history로 signed read-only
+  `5/5`와 account-wide open order/list `0`을 확인한 뒤 exact parent에 `SIGTERM`만 보내 두 PID가
+  모두 종료되는 것을 확인했고 `SIGKILL`은 사용하지 않았다. 기존 6행 history SHA-256
+  `7553c789cea3b536f573176661c50d9129e1584416d17f550c51cc452b072b34`와 owner record는
+  `target/session4-c28544e/evidence/` 아래 mode `0600`으로 백업했다.
+- Session 3 canonical 16행 history와 pending journal을 Application Support에 atomic publication하고
+  mode `0600`으로 고정했다. 최종 history SHA-256은
+  `ed436eecc1e0e44037248d625ee37ce0d9ff857c6ddad524a616e9e887ba16b2`, pending journal은
+  `d46cfc86774143f606e06b4770b27b53c8b4abb395c04c69001870a9afcffed7`이며 smoke 전후
+  동일하다.
+- Final mounted app은 Keychain 두 item을 read-only로 조회한 뒤 native main window를 만들었다.
+  코드상 이 window는 sidecar strict FD4 `READY`, token framing과 one-shot descriptor staging 뒤에만
+  생성된다. Main PID `69753`, PyInstaller launcher `69782`, actual runtime `69783`을 관찰했고 owner
+  record는 exact runtime/process-start ID로 `ACTIVE`였다. Dashboard의 live chart/account,
+  `매매 중지`와 `자동매매 실행`, configured-unbounded 운영자 경고, History 16건과 상세 table을
+  실제 WebView에서 확인했다. `매매 중지`를 이미 중지된 상태에서 한 번 호출해도 history digest와
+  process ownership이 유지됐다. 신규 매매 시작은 누르지 않았다.
+- Production Tauri dialog command를 그대로 쓰는 current-host harness를 실제 실행했다.
+  `cargo run --locked --offline --features native-picker-smoke --bin
+  native-picker-current-host-smoke -- selected`는
+  `PASS outcome=selected-absolute-utf8 source=tauri-dialog-plugin`, 같은 명령의 `cancelled`는
+  `PASS outcome=cancelled-null source=tauri-dialog-plugin`이다. 선택 path는 evidence나 log에
+  출력하지 않았다.
+- Command-Q는 AppKit 즉시 종료를 취소하고 renderer의 `프로그램을 종료할까요?` modal로 라우팅됐다.
+  Modal은 강제 매도 분기가 아닌 일반 `종료 준비` 경로를 표시했고 `종료` 확인 뒤 backend shutdown,
+  CLOSED, launcher/runtime/main 종료 순서를 완료했다. 별도 signed account postflight가 열린 주문
+  `0`을 확인했다. 최종 owner는 같은 runtime identity로
+  `RELEASED`, `binance-auto-trader`/`binance-auto-sidecar` 잔여 process는 `0`, DMG도 정상
+  detach했다. 강제 종료, 주문 취소나 position mutation은 수행하지 않았다.
+- 종료 후 `backend/.venv/bin/python scripts/run_testnet_from_keychain.py read-only
+  --baseline-history <canonical-16-trade-history>`는
+  `PHASE13_READ_ONLY_BASELINE all_open_order_count=0 all_recent_order_count=16`, `Ran 5 tests in
+  4.425s`, `OK`다. System Python `3.14`로 잘못 실행한 선행 진단 한 번은 REST empty-state 뒤
+  `websocket-client` 미설치로 `2`개 중 WebSocket 한 개가 실패했다. 제품 결함이나 package 결과로
+  사용하지 않았고, package와 같은 Python `3.11.14` environment에서 즉시 전부 재실행해 통과했다.
+  이 postflight가 소유한 runtime PID `76002`도 종료 뒤 exact owner를 `RELEASED`로 남겼고 최종
+  process 조회는 orphan `0`이다. 이번 Session의 actual order submit/cancel은 모두 `0`회다.
+- Credential/order 환경을 제거한 회귀는 Backend `Ran 996, OK (skipped=9)`, UI `41` files
+  `373/373`, Rust/Tauri `40/40`, package/secret/release focused scripts `109/109`다.
+  `cargo fmt --all --check`, `cargo clippy --locked --offline --all-targets -- -D warnings`,
+  `tsc -b --pretty false`, Python `compileall`, `git diff --check`도 통과했고 Communication matrix는
+  `126 COMPLETE / 0 GAP`이다. Loopback bind와 실제 child fixture가 macOS sandbox에서 거부된 최초
+  실행만 local socket/process 허용 환경으로 동일 suite를 재실행했다. 구현 source가 바뀌지 않아 새
+  convention 대상 함수/클래스/블록 주석은 없고 기존 convention/architecture 회귀가 그대로
+  통과했다.
+- Reference SSIM, historical DMG 복구, full SBOM/license/notice, Developer ID/notarization,
+  Windows compatibility와 live endpoint는 실행하거나 완료로 바꾸지 않았다. 따라서 이 결과는
+  `macOS package ready`에만 해당하고 Cross-platform package와 Private Beta master를 의미하지 않는다.
+
+**Session 5 진입 판정:** `GO`.
+
+- Session 3 actual PASS와 Session 4 package가 같은 clean commit과 세 lockfile에 결속됐고, macOS
+  adapter의 Keychain, fixed FD sidecar IPC, runtime ownership, picker와 Command-Q shutdown을 실제
+  package에서 끝까지 통과했다. Secret 노출과 이 범위의 reachable High/Critical blocker도 `0`이며
+  전체 code-critical 회귀가 유지되므로 Windows compatibility source를 추가하기 전에 해결해야 할
+  macOS code/package blocker가 없다.
+- Session 5는 macOS에서 Windows 11 x64용 adapter와 platform contract를 구현·격리하는 source
+  session이므로 지금 시작해도 된다. 다만 기존 macOS ad-hoc non-hardened private candidate의 동작과
+  안전 불변식을 회귀로 보존하고, Keychain/Binance signed endpoint/Testnet·live order는 모두 `0`회로
+  유지해야 한다.
+- 이 `GO`는 Windows binary, Credential Manager, NSIS 또는 Windows PC smoke의 PASS가 아니다.
+  PyInstaller는 cross-compiler가 아니므로 그 증거와 `Cross-platform package master`는 Windows native
+  build host에서 Session 6을 완료할 때까지 계속 `[ ]`로 둔다.
+
 #### 16.20.8 Session 5 — Windows 11 x64 호환 계층 구현
 
 **목표:** macOS 동작과 안전 불변식을 유지하면서 Windows 11 x64가 요구하는 credential, process IPC,
@@ -5511,9 +5660,9 @@ BUY/SELL 또는 STOP과 fresh restart zero exposure가 확인된 뒤에만 Windo
 
 - [x] Session 1 — 범위 동결과 code-critical baseline
 - [x] Session 2 — 결정론적 production-path E2E
-- [ ] Session 3 — current-source Spot Testnet actual E2E와 fresh zero exposure
-- [ ] Session 4 — macOS fresh package와 macOS PC smoke
-- [ ] **macOS package ready**
+- [x] Session 3 — current-source Spot Testnet actual E2E와 fresh zero exposure
+- [x] Session 4 — macOS fresh package와 macOS PC smoke
+- [x] **macOS package ready**
 - [ ] Session 5 — Windows 11 x64 호환 계층 구현
 - [ ] Session 6 — Windows native build와 Windows 11 x64 PC read-only smoke
 - [ ] **Cross-platform package master**

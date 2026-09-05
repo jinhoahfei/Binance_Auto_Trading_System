@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Binance Auto Trader desktop shell"
 authors = ["Binance Auto Trader"]
 edition = "2021"
+default-run = "binance-auto-trader"
 publish = false
 license-file = "../../../../LICENSE"
 
