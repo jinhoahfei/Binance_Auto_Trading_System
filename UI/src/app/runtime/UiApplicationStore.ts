@@ -6,7 +6,7 @@ import type {
     UiApplicationFactory,
     UiApplicationRuntime,
 } from '../bootstrap';
-import type { BackendBinanceConnectionStatus } from '../../shared/contracts';
+import type { BackendBinanceConnectionStatus, BackendRuntimeEnvironment } from '../../shared/contracts';
 
 type StoreListener = () => void;
 
@@ -88,6 +88,17 @@ export class UiApplicationStore implements UiApplicationController {
      */
     get_view_model(): AppViewModel {
         return this.current_view_model;
+    }
+
+    /**
+     * 함수 이름: get_environment()
+     * 기능: 현재 session의 검증된 시세·계좌·주문 환경을 화면에 제공한다.
+     * 인자: 없음
+     * 반환값: runtime 환경 또는 미확인 null
+     * 작성 날짜: 2026/09/05
+     */
+    get_environment(): BackendRuntimeEnvironment | null {
+        return this.application?.environment ?? null;  // 정보가 없으면 실거래 환경으로 추측하지 않는다.
     }
 
     /**

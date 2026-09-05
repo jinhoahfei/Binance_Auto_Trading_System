@@ -331,6 +331,7 @@ def _create_sidecar_runtime_factory(
             history_path=configuration.history_path,
             environment=configuration.to_testnet_environment(),
             risk_policy_state=approved_risk_policy,
+            use_mainnet_market_data=True,  # 차트와 REGIME은 실제 시세를 공유하고 계좌는 Testnet으로 유지한다.
         )
 
     return runtime_factory

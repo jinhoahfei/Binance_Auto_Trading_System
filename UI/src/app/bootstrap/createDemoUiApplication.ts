@@ -60,6 +60,7 @@ export function create_demo_ui_application(): DemoUiApplication {
     return {
         command_adapter,
         facade,
+        environment: { market_data: 'fake', account: 'fake', orders_enabled: true },
         load_binance_connection_status: async () => ({
             api: 'online',
             market_stream: 'online',

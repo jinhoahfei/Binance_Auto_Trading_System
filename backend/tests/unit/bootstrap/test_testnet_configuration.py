@@ -381,6 +381,34 @@ class TestnetConfigurationTests(unittest.TestCase):
         socket_connect.assert_not_called()
         http_open.assert_not_called()  # 환경 load와 client 생성도 explicit factory 호출까지 지연된다.
 
+    def test_mainnet_analysis_is_read_only_and_reports_its_environment(self) -> None:
+        """
+        함수 이름: test_mainnet_analysis_is_read_only_and_reports_its_environment()
+        기능: 실제 시세 runtime의 환경 표기와 Testnet 주문 차단을 network 전에 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        # 실제 client 조립을 사용하되 startup을 호출하지 않아 외부 조회 없이 설정을 검증한다.
+        environment = _read_only_environment()
+        with TemporaryDirectory() as temporary_directory:
+            runtime = testnet_module.create_testnet_application_runtime(
+                history_path=Path(temporary_directory) / "history.jsonl",
+                environment=environment, use_mainnet_market_data=True,
+            )
+            self.assertEqual(runtime.market_data_environment, "mainnet")
+            self.assertEqual(runtime.execution_mode.value, "testnet")
+            self.assertFalse(runtime.order_execution_enabled)
+
+            # 실제 시세 분석과 다른 시장의 주문 실행은 opt-in이 있어도 함께 켜지지 않는다.
+            environment["BINANCE_RUN_TESTNET_ORDERS"] = "1"
+            environment["BINANCE_TESTNET_MAX_NOTIONAL"] = "10"
+            with self.assertRaisesRegex(testnet_module.TestnetConfigurationError, "disabled Testnet orders"):
+                testnet_module.create_testnet_application_runtime(
+                    history_path=Path(temporary_directory) / "orders.jsonl",
+                    environment=environment, use_mainnet_market_data=True,
+                )
+
     def test_actual_client_runtime_construction_stays_offline(self) -> None:
         """
         함수 이름: test_actual_client_runtime_construction_stays_offline()

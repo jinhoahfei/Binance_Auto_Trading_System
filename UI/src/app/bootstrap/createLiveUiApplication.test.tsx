@@ -91,7 +91,13 @@ function create_snapshot_fetch(snapshot: unknown): typeof fetch {
 describe('create_live_ui_application', () => {
     it('snapshot을 먼저 받은 뒤 StrictMode App에 실제 USDT 상태를 render한다', async () => {
         const lifecycle_order: Array<string> = [];
-        const snapshot = create_backend_snapshot_fixture();
+        // 실제 시세와 Testnet 계좌를 구분한 backend 환경 정보가 화면까지 전달되어야 한다.
+        const base_snapshot = create_backend_snapshot_fixture();
+        const snapshot = {
+            ...base_snapshot,
+            environment: { market_data: 'mainnet', account: 'testnet', orders_enabled: false },
+            trading: { ...base_snapshot.trading, mode: 'testnet' },
+        };
         const snapshot_fetch = create_snapshot_fetch(snapshot);
         const application = await create_live_ui_application(create_descriptor(), {
             today: '2026-08-21',
@@ -116,7 +122,13 @@ describe('create_live_ui_application', () => {
             </StrictMode>,
         );
 
-        expect(await screen.findByText('LIVE')).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: 'Binance 연결 상태: 연결됨' })).toBeInTheDocument();
+        expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('시세·REGIME 실제 시장');
+        expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('계좌 Testnet · 주문 비활성');
+        expect(screen.getByRole('button', { name: '자동매매 실행' })).toBeDisabled();
+        await screen.findByRole('region', { name: 'REGIME 판단 패널' });  // 지연 로딩된 대시보드가 표시된 뒤 검사한다.
+        expect(document.querySelector('[data-metric-id="swingLow"] strong')).toHaveTextContent('HL');
+        expect(document.querySelector('[data-metric-id="swingHigh"] strong')).toHaveTextContent('HH');
         expect(lifecycle_order).toEqual(['snapshot', 'web_socket']);
         expect(await screen.findByRole('button', { name: 'type2 강상승 적용 요청' })).toHaveAttribute(
             'aria-pressed',

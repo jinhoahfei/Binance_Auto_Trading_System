@@ -1332,6 +1332,14 @@ def build_snapshot_dto(
         {
             "session_id": session_id,
             "last_sequence": last_sequence,
+            # 시세·계좌 환경과 주문 권한을 독립적으로 공개하며 연결 상태에서 추측하지 않는다.
+            "environment": {
+                "market_data": getattr(runtime, "market_data_environment", "unavailable"),
+                "account": {
+                    "testnet": "testnet", "fake": "fake", "live": "mainnet",
+                }.get(getattr(runtime.execution_mode, "value", runtime.execution_mode), "unavailable"),
+                "orders_enabled": getattr(runtime, "order_execution_enabled", False),
+            },
             "connection": {
                 "status": "online",
                 "ready": runtime.ready,
@@ -1609,7 +1617,14 @@ export interface BackendCsvExportReceipt {{
     readonly exported_row_count: number;
 }}
 
+export interface BackendRuntimeEnvironment {{
+    readonly market_data: 'mainnet' | 'testnet' | 'fake' | 'unavailable';
+    readonly account: 'mainnet' | 'testnet' | 'fake' | 'unavailable';
+    readonly orders_enabled: boolean;
+}}
+
 export interface BackendSnapshot {{
+    readonly environment?: BackendRuntimeEnvironment;
     readonly session_id: string;
     readonly last_sequence: number;
     readonly connection: BackendConnectionSnapshot;

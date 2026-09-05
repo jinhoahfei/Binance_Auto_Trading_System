@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
@@ -46,6 +47,70 @@ const SIDECAR_MONITOR_INTERVAL: Duration = Duration::from_millis(50);
 const PROVEN_PRE_RUNTIME_ABORT_GRACE: Duration = Duration::from_millis(500);
 const DEFAULT_EXIT_TIMEOUT_MS: u64 = 30_000;
 const MAXIMUM_EXIT_TIMEOUT_MS: u64 = 120_000;
+
+/// 함수 이름: is_trusted_renderer_url()
+/// 기능: 현재 실행 환경의 메인 화면 origin만 navigation과 descriptor 요청에 허용한다.
+/// 인자: url -> 요청·이동 대상 URL, is_development -> 개발 서버 사용 여부
+/// 반환값: 정확한 origin과 인증 정보 없는 URL이면 true
+/// 작성 날짜: 2026/09/05
+pub(crate) fn is_trusted_renderer_url(url: &tauri::Url, is_development: bool) -> bool {
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    // HTTP와 custom protocol의 기본 port 해석을 섞지 않고 각 환경을 따로 검증한다.
+    if is_development {
+        url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(5173)
+    } else {
+        url.scheme() == "tauri" && url.host_str() == Some("localhost") && url.port().is_none()
+    }
+}
+
+/// 함수 이름: development_renderer_is_available()
+/// 기능: 실제 개발 화면의 HTML 응답을 확인해 서버 없는 흰 창 생성을 방지한다.
+/// 인자: 없음
+/// 반환값: 고정된 개발 서버가 HTML을 제공하면 true
+/// 작성 날짜: 2026/09/05
+pub(crate) fn development_renderer_is_available() -> bool {
+    probe_renderer_server(SocketAddr::from(([127, 0, 0, 1], 5173)))
+}
+
+/// 함수 이름: probe_renderer_server()
+/// 기능: credential 없는 bounded HEAD 요청으로 화면 서버의 HTTP 상태와 HTML 유형을 확인한다.
+/// 인자: address -> localhost 화면 서버 주소
+/// 반환값: 정상 HTML 응답이면 true, 연결·응답 오류이면 false
+/// 작성 날짜: 2026/09/05
+fn probe_renderer_server(address: SocketAddr) -> bool {
+    // 첫 연결과 응답 모두 timeout을 두고 최대 4 KiB만 읽어 시작 작업이 무한 대기하지 않게 한다.
+    let timeout = Duration::from_millis(750);
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    if stream.set_read_timeout(Some(timeout)).is_err()
+        || stream.set_write_timeout(Some(timeout)).is_err()
+    {
+        return false;
+    }
+    let request = format!("HEAD / HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.take(4096).read_to_string(&mut response).is_err() {
+        return false;
+    }
+    let mut lines = response.lines();
+    let has_success_status = matches!(
+        lines.next().and_then(|line| line.split_whitespace().nth(1)),
+        Some("200")
+    );
+    has_success_status
+        && lines.any(|line| {
+            let normalized = line.to_ascii_lowercase(); // HTTP header 이름과 media type은 대소문자를 구분하지 않는다.
+            normalized.split_once(':').is_some_and(|(name, value)| {
+                name == "content-type" && value.trim().starts_with("text/html")
+            })
+        })
+}
 
 /// Spawned child failure가 forced abort 가능한 pre-runtime인지 exposure ambiguous 보존 구간인지 표현한다.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1121,7 +1186,7 @@ pub fn prepare_backend_sidecar(
 }
 
 /// 함수 이름: build_connection_descriptor()
-/// 기능: strict READY와 zeroizing token을 복사 없이 renderer one-shot descriptor로 이전한다.
+/// 기능: strict READY와 zeroizing token을 복사 없이 native session descriptor로 이전한다.
 /// 인자: ready -> 검증된 FD4 wire, token -> CSPRNG token owner
 /// 반환값: native connection descriptor
 /// 작성 날짜: 2026/08/24
@@ -1182,7 +1247,7 @@ pub fn start_late_ready_recovery(
 }
 
 /// 함수 이름: publish_late_ready_descriptor()
-/// 기능: late READY와 preserved token을 main thread에서 one-shot stage한 뒤에만 renderer window를 만든다.
+/// 기능: late READY와 preserved token을 main thread에서 session stage한 뒤에만 renderer window를 만든다.
 /// 인자: ready -> strict late descriptor, token -> zeroizing session token,
 ///      app_handle -> Tauri publication owner, process_state -> live child guard
 /// 반환값: 없음
@@ -1340,6 +1405,8 @@ pub fn create_ready_main_window(
     // Tauri protocol response의 nonce/hash 보강을 보존하면서 sentinel만 assigned origin으로 바꾼다.
     WebviewWindowBuilder::from_config(app_handle, &window_configuration)
         .map_err(|_| SidecarFailure::startup())?
+        .background_color(tauri::utils::config::Color(11, 14, 17, 255))
+        .on_navigation(|url| is_trusted_renderer_url(url, tauri::is_dev()))
         .on_web_resource_request(move |request, response| {
             if request.uri().scheme_str() != Some("tauri") {
                 return;
@@ -1421,6 +1488,10 @@ fn monitor_child_exit(
         match status_result {
             Ok(Some(status)) => {
                 let (payload, should_emit) = state.record_exit(status.code());
+                // 새로고침 복구용 native token도 backend 수명이 끝나는 즉시 폐기한다.
+                app_handle
+                    .state::<crate::BackendConnectionDescriptorState>()
+                    .clear();
                 if should_emit
                     && app_handle
                         .emit_to("main", BACKEND_SIDECAR_EXIT_EVENT, payload)
@@ -1919,6 +1990,77 @@ fn recover_child_lock(child_handle: &Arc<Mutex<Child>>) -> MutexGuard<'_, Child>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 함수 이름: descriptor_access_and_navigation_require_the_exact_renderer_origin()
+    /// 기능: 새로고침은 허용하지만 외부 URL과 다른 실행 환경에는 session 정보를 제공하지 않는다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/05
+    #[test]
+    fn descriptor_access_and_navigation_require_the_exact_renderer_origin() {
+        for (url, development, allowed) in [
+            ("http://127.0.0.1:5173/", true, true),
+            ("http://127.0.0.1:5173/index.html", true, true),
+            ("tauri://localhost/index.html", false, true),
+            ("https://example.com/", true, false),
+            ("http://localhost:5173/", true, false),
+            ("http://127.0.0.1:5174/", true, false),
+            ("http://user@127.0.0.1:5173/", true, false),
+            ("http://127.0.0.1:5173/", false, false),
+            ("tauri://localhost/", true, false),
+            ("tauri://external/", false, false),
+        ] {
+            let parsed = tauri::Url::parse(url).expect("valid test URL");
+            assert_eq!(
+                is_trusted_renderer_url(&parsed, development),
+                allowed,
+                "{url}"
+            );
+        }
+    }
+
+    /// 함수 이름: renderer_startup_waits_for_an_actual_html_server()
+    /// 기능: 개발 서버 부재·오류·다른 서비스 응답에서는 창 생성을 거부하고 HTML 준비 후 허용한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/05
+    #[test]
+    fn renderer_startup_waits_for_an_actual_html_server() {
+        use std::net::TcpListener;
+        // 실제 localhost 응답을 사용해 포트만 열려 있는 상태를 HTML 준비로 오인하지 않는지 검증한다.
+        for (response, expected) in [
+            (
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n",
+                true,
+            ),
+            (
+                "HTTP/1.1 503 Unavailable\r\nContent-Type: text/html\r\n\r\n",
+                false,
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+            let address = listener.local_addr().expect("test address");
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept probe");
+                let mut request = [0; 1024];
+                let count = stream.read(&mut request).expect("read HEAD request");
+                assert!(request[..count].starts_with(b"HEAD / HTTP/1.1\r\n"));
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write test response");
+            });
+            assert_eq!(probe_renderer_server(address), expected);
+            server.join().expect("test server finished");
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind absent server address");
+        let address = listener.local_addr().expect("test address");
+        drop(listener); // 서버가 닫힌 상태는 흰 창을 열기 전에 감지해야 한다.
+        assert!(!probe_renderer_server(address));
+    }
     use serde_json::Value;
 
     const TEST_SESSION_ID: &str = "3c73d583-c1c8-4830-8393-cc31639a40fd";

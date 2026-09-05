@@ -128,7 +128,7 @@ describe('production main bootstrap recovery', () => {
                 || command === 'arm_native_exit_intent_bridge') {
                 return { armed: true };
             }
-            if (command === 'take_backend_connection_descriptor') {
+            if (command === 'get_backend_connection_descriptor') {
                 return create_live_descriptor();
             }
             if (command === 'await_backend_sidecar_exit') {
@@ -144,6 +144,73 @@ describe('production main bootstrap recovery', () => {
         vi.unstubAllGlobals();
         Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
         document.body.innerHTML = '';
+    });
+
+    it.each(['연결 다시 확인', '안전 종료'] as const)('연결 정보가 없던 화면의 %s 버튼도 native 연결을 복구한다', async (action_name) => {
+        const original_invoke = invoke_mock.getMockImplementation()!;
+        let descriptor_attempts = 0;
+        invoke_mock.mockImplementation(async (command) => {
+            if (command === 'get_backend_connection_descriptor' && ++descriptor_attempts === 1) {
+                throw { code: 'BACKEND_DESCRIPTOR_UNAVAILABLE' };
+            }
+            return original_invoke(command);
+        });
+        const snapshot = create_backend_snapshot_fixture();
+        const requested_paths: string[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const request_id = request_headers(init).request_id!;
+            const path = new URL(input.toString()).pathname;
+            requested_paths.push(path);
+            if (path === '/v1/snapshot') {
+                // 연결 복구 성공 이후의 snapshot 재시도를 actor 실행과 분리해 관찰한다.
+                return create_success_response(request_id, {
+                    ...snapshot, connection: { ...snapshot.connection, ready: false },
+                });
+            }
+            if (path === '/v1/shutdown/state') {
+                return create_success_response(request_id, {
+                    session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started',
+                });
+            }
+            if (path === '/v1/shutdown') {
+                return create_success_response(request_id, { accepted: true, status: 'accepted', version: 0 }, 202);
+            }
+            throw new Error('Unexpected recovery request');
+        }));
+
+        await act(async () => { await import('./main'); });
+        expect(await screen.findByText('BACKEND_DESCRIPTOR_UNAVAILABLE')).toBeInTheDocument();
+        expect(screen.getByText(/현재 화면에 백엔드 연결 정보가 없습니다/u)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: '연결 다시 확인' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: '안전 종료' })).toBeEnabled();
+        fireEvent.click(screen.getByRole('button', { name: action_name }));
+        if (action_name === '연결 다시 확인') {
+            expect(await screen.findByText('BACKEND_NOT_READY')).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: '안전 종료' }));
+        }
+
+        // 두 action 모두 같은 adapter를 보존해 202와 native code 0 이후에만 창을 닫는다.
+        await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
+        expect(descriptor_attempts).toBe(2);
+        expect(requested_paths).toEqual([
+            ...(action_name === '연결 다시 확인' ? ['/v1/snapshot'] : []),
+            '/v1/shutdown/state', '/v1/shutdown',
+        ]);
+        expect(document.body).not.toHaveTextContent(TEST_BACKEND_TOKEN);
+    });
+
+    it('새 화면에서 backend 종료를 확인하면 동작하지 않는 복구 버튼 대신 창 닫기를 제공한다', async () => {
+        const original_invoke = invoke_mock.getMockImplementation()!;
+        invoke_mock.mockImplementation(async (command) => {
+            if (command === 'get_backend_connection_descriptor') {
+                throw { code: 'BACKEND_SIDECAR_EXITED' };
+            }
+            return original_invoke(command);
+        });
+        await act(async () => { await import('./main'); });
+        fireEvent.click(await screen.findByRole('button', { name: '창 닫기' }));
+        await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
+        expect(screen.queryByRole('button', { name: '연결 다시 확인' })).not.toBeInTheDocument();
     });
 
     it('전체 snapshot이 계속 malformed여도 안전 종료는 별도 상태를 읽고 실제 종료 확인까지 진행한다', async () => {
@@ -234,7 +301,7 @@ describe('production main bootstrap recovery', () => {
             await import('./main');
             expect(await screen.findByText('백엔드 연결 복구가 필요합니다.')).toBeInTheDocument();
             expect(screen.getByText('BACKEND_NOT_READY')).toBeInTheDocument();
-            expect(invoke_mock).toHaveBeenCalledWith('take_backend_connection_descriptor');
+            expect(invoke_mock).toHaveBeenCalledWith('get_backend_connection_descriptor');
             expect(native_unlisteners.get('backend-sidecar-exited')).not.toHaveBeenCalled();
             expect(native_unlisteners.get('native-exit-requested')).not.toHaveBeenCalled();
 
@@ -266,7 +333,7 @@ describe('production main bootstrap recovery', () => {
             // 같은 descriptor/token으로 snapshot을 복구하고 202 및 native code 0 뒤에만 창을 닫는다.
             await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
             expect(invoke_mock.mock.calls.filter(
-                ([command]) => command === 'take_backend_connection_descriptor',
+                ([command]) => command === 'get_backend_connection_descriptor',
             )).toHaveLength(1);
             expect(invoke_mock).toHaveBeenCalledWith('await_backend_sidecar_exit');
             expect(fetch_mock).toHaveBeenCalledTimes(4);

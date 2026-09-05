@@ -164,6 +164,23 @@
   gap: 28px;
 }
 
+/* 시세와 계좌 환경을 항상 함께 노출해 연결 배지의 의미와 구분한다. */
+.environment {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-left: 24px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.environment strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
 .headerButton {
   display: inline-flex;
   align-items: center;

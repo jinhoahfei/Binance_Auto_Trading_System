@@ -1151,6 +1151,7 @@ def create_testnet_application_runtime(
     clock: Callable[[], datetime] | None = None,
     monotonic_clock: Callable[[], int] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
+    use_mainnet_market_data: bool = False,
 ) -> ApplicationRuntime:
     """
     함수 이름: create_testnet_application_runtime()
@@ -1164,6 +1165,7 @@ def create_testnet_application_runtime(
         clock -> runtime 전체가 공유할 optional UTC clock
         monotonic_clock -> 30분 연속 조건 전용 optional nanosecond monotonic clock
         kline_limit -> interval별 REST 초기 조회 개수
+        use_mainnet_market_data -> 주문 비활성 runtime에서 실제 시장의 REST·WS 시세를 함께 사용할지 여부
     반환값: live endpoint와 분리된 ApplicationRuntime
     작성 날짜: 2026/08/22
     """
@@ -1197,6 +1199,13 @@ def create_testnet_application_runtime(
 
     # 모든 설정을 client 생성 전에 검증해 잘못된 opt-in에서 객체나 network가 만들어지지 않게 한다.
     configuration = load_testnet_configuration(environment)
+    # 실제 시장 분석과 Testnet 주문 실행의 혼합을 막고 데스크톱 조회 용도로만 허용한다.
+    if type(use_mainnet_market_data) is not bool:
+        raise TypeError("use_mainnet_market_data must be a bool")
+    if use_mainnet_market_data and configuration.allow_testnet_orders:
+        raise TestnetConfigurationError(
+            "mainnet market data requires disabled Testnet orders"
+        )
     if configuration.allow_phase13_public_case2:
         require_phase13_public_case2_permission(
             configuration
@@ -1207,6 +1216,8 @@ def create_testnet_application_runtime(
         "secret_key": configuration.api_secret,
         "maximum_order_notional": configuration.max_notional,
     }
+    if use_mainnet_market_data:
+        rest_client_arguments["use_mainnet_market_data"] = True  # 기존 Testnet 실행의 기본 시세를 보존한다.
     if (
         configuration.allow_phase13_public_case2
         or configuration.allow_phase13_recovery_only
@@ -1223,6 +1234,7 @@ def create_testnet_application_runtime(
         api_key=configuration.api_key,
         api_secret=configuration.api_secret,
         timestamp_provider=rest_client.get_server_timestamp_milliseconds,
+        **({"use_mainnet_market_data": True} if use_mainnet_market_data else {}),
     )
     permission_checked_rest_client = _TestnetOrderPermissionRESTClient(
         rest_client,
@@ -1238,6 +1250,7 @@ def create_testnet_application_runtime(
         web_socket_client,
         history_path=history_path,
         execution_mode="testnet",
+        market_data_environment="mainnet" if use_mainnet_market_data else "testnet",
         allow_testnet_orders=configuration.allow_testnet_orders,
         testnet_maximum_order_notional=configuration.max_notional,
         maximum_order_submissions_per_intent=(

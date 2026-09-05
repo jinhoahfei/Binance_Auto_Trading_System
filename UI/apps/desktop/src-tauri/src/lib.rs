@@ -1,4 +1,4 @@
-//! Tauri 데스크톱 앱의 최상위 네이티브 오케스트레이션 파일, UI와 sidecar backend를 안전하게 연결하고, renderer에 secret 없는 descriptor를 한 번만 전달하며, OS picker와 native dialog를 안전하게 호출한다.
+//! Tauri 데스크톱 앱과 sidecar를 연결하며, 현재 메인 화면의 인증 연결 복구와 native lifecycle을 소유한다.
 mod dialog;
 mod exit_bridge;
 #[cfg(target_os = "macos")]
@@ -8,7 +8,7 @@ mod sidecar;
 use serde::Serialize;
 use std::error::Error;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zeroize::Zeroize;
 
@@ -40,8 +40,8 @@ fn retain_release_provenance_marker() {
     std::hint::black_box(RELEASE_PROVENANCE_MARKER);
 }
 
-/// renderer에 한 번만 전달되는 loopback 연결 descriptor이다.
-#[derive(Serialize)]
+/// 현재 backend 실행 동안 native 메모리에만 보존하는 loopback 연결 descriptor이다.
+#[derive(Clone, Serialize)]
 pub struct BackendConnectionDescriptor {
     pub port: u16,
     pub session_id: String,
@@ -51,7 +51,7 @@ pub struct BackendConnectionDescriptor {
 
 impl BackendConnectionDescriptor {
     /// 함수 이름: new()
-    /// 기능: sidecar ready 값을 one-shot renderer descriptor로 옮기기 전에 strict shape를 검증한다.
+    /// 기능: sidecar ready 값을 renderer 연결 descriptor로 옮기기 전에 strict shape를 검증한다.
     /// 인자: port -> 127.0.0.1 random port
     ///      session_id -> backend session canonical UUID
     ///      schema_version -> transport major schema
@@ -89,7 +89,7 @@ impl BackendConnectionDescriptor {
 
 impl Drop for BackendConnectionDescriptor {
     /// 함수 이름: drop()
-    /// 기능: one-shot IPC 직렬화 또는 startup rollback 뒤 native token backing memory를 덮어쓴다.
+    /// 기능: IPC 응답 복사본과 종료된 native 연결 정보의 token 메모리를 덮어쓴다.
     /// 인자: 없음
     /// 반환값: 없음
     /// 작성 날짜: 2026/08/24
@@ -119,7 +119,7 @@ impl BackendDescriptorFailure {
     }
 
     /// 함수 이름: unavailable()
-    /// 기능: Phase 12가 descriptor를 stage하지 않았거나 이미 소비된 상태를 fail closed한다.
+    /// 기능: 현재 backend의 연결 정보가 준비되지 않은 상태를 공개 가능한 오류로 반환한다.
     /// 인자: 없음
     /// 반환값: BACKEND_DESCRIPTOR_UNAVAILABLE failure
     /// 작성 날짜: 2026/08/21
@@ -141,12 +141,24 @@ impl BackendDescriptorFailure {
             message: "Backend connection descriptor state is unavailable.",
         }
     }
+
+    /// 함수 이름: backend_exited()
+    /// 기능: 종료된 backend의 token을 다시 반환하지 않고 창 닫기가 가능한 상태를 알린다.
+    /// 인자: 없음
+    /// 반환값: BACKEND_SIDECAR_EXITED failure
+    /// 작성 날짜: 2026/09/05
+    fn backend_exited() -> Self {
+        Self {
+            code: "BACKEND_SIDECAR_EXITED",
+            message: "Backend sidecar has exited.",
+        }
+    }
 }
 
-/// Phase 12 sidecar owner와 one-shot renderer command 사이의 memory-only native state이다.
+/// 새로고침한 메인 화면이 같은 backend로 재연결할 수 있게 연결 정보를 native 메모리에 보존한다.
 #[derive(Default)]
 pub struct BackendConnectionDescriptorState {
-    pending_descriptor: Mutex<Option<BackendConnectionDescriptor>>,
+    session_descriptor: Mutex<Option<BackendConnectionDescriptor>>,
 }
 
 impl BackendConnectionDescriptorState {
@@ -159,34 +171,49 @@ impl BackendConnectionDescriptorState {
         &self,
         descriptor: BackendConnectionDescriptor,
     ) -> Result<(), BackendDescriptorFailure> {
-        let mut pending_descriptor = match self.pending_descriptor.lock() {
-            Ok(pending_descriptor) => pending_descriptor,
+        let mut session_descriptor = match self.session_descriptor.lock() {
+            Ok(session_descriptor) => session_descriptor,
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        if pending_descriptor.is_some() {
+        if session_descriptor.is_some() {
             return Err(BackendDescriptorFailure::unavailable());
         }
 
         // Descriptor와 token은 filesystem, environment 또는 log를 거치지 않고 memory slot으로 이동한다.
-        *pending_descriptor = Some(descriptor);
+        *session_descriptor = Some(descriptor);
         Ok(())
     }
 
-    /// 함수 이름: take()
-    /// 기능: pending descriptor를 정확히 한 번 꺼내 slot의 token 참조를 즉시 제거한다.
+    /// 함수 이름: get()
+    /// 기능: 현재 backend의 연결 정보를 복사해 새 renderer와 복구 재시도에 전달한다.
     /// 인자: 없음
     /// 반환값: renderer에 직렬화할 descriptor 또는 unavailable failure
     /// 작성 날짜: 2026/08/21
-    fn take(&self) -> Result<BackendConnectionDescriptor, BackendDescriptorFailure> {
-        let mut pending_descriptor = self
-            .pending_descriptor
+    fn get(&self) -> Result<BackendConnectionDescriptor, BackendDescriptorFailure> {
+        let session_descriptor = self
+            .session_descriptor
             .lock()
             .map_err(|_| BackendDescriptorFailure::state_unavailable())?;
 
-        pending_descriptor
-            .take()
+        session_descriptor
+            .as_ref()
+            .cloned()
             .ok_or_else(BackendDescriptorFailure::unavailable)
+    }
+
+    /// 함수 이름: clear()
+    /// 기능: backend 종료 시 native 원본을 제거하고 Drop에서 token을 즉시 덮어쓴다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/05
+    pub(crate) fn clear(&self) {
+        // Poison 상태에서도 종료된 session의 인증 정보를 메모리에 남기지 않는다.
+        let mut descriptor = self
+            .session_descriptor
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *descriptor = None; // 원본 descriptor의 Drop이 token을 zeroize한다.
     }
 }
 
@@ -214,16 +241,29 @@ fn is_canonical_uuid(value: &str) -> bool {
     matches!(bytes[14], b'1'..=b'8') && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
 }
 
-/// 함수 이름: take_backend_connection_descriptor()
-/// 기능: managed native state의 descriptor를 renderer invoke caller 하나에만 반환한다.
-/// 인자: state -> memory-only descriptor state
-/// 반환값: one-shot descriptor 또는 typed unavailable failure
-/// 작성 날짜: 2026/08/21
+/// 함수 이름: get_backend_connection_descriptor()
+/// 기능: 허용된 메인 창에만 실행 중 backend의 연결 정보를 제공해 화면 새로고침을 복구한다.
+/// 인자: window -> IPC 호출 창, state -> native 연결 정보, sidecar_state -> 현재 backend 수명주기
+/// 반환값: 메모리에서만 직렬화한 descriptor 또는 공개 가능한 오류
+/// 작성 날짜: 2026/09/05
 #[tauri::command]
-fn take_backend_connection_descriptor(
+fn get_backend_connection_descriptor(
+    window: WebviewWindow,
     state: State<'_, BackendConnectionDescriptorState>,
+    sidecar_state: State<'_, sidecar::SidecarProcessState>,
 ) -> Result<BackendConnectionDescriptor, BackendDescriptorFailure> {
-    state.take()
+    // Capability에 더해 실제 호출 창과 URL도 확인해 외부 문서의 token 재발급을 막는다.
+    let url = window
+        .url()
+        .map_err(|_| BackendDescriptorFailure::unavailable())?;
+    if window.label() != "main" || !sidecar::is_trusted_renderer_url(&url, tauri::is_dev()) {
+        return Err(BackendDescriptorFailure::unavailable());
+    }
+    if !sidecar_state.is_running() {
+        state.clear();
+        return Err(BackendDescriptorFailure::backend_exited());
+    }
+    state.get()
 }
 
 /// Late READY recovery task 설치 결과를 native operator surface 경로와 분리한다.
@@ -268,45 +308,63 @@ fn setup_backend_and_window(app: &mut tauri::App) -> Result<(), Box<dyn Error>> 
         schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
         return Ok(());
     }
-    match sidecar::inspect_stale_runtime_owner(app.handle()) {
+    continue_backend_startup(app.handle());
+    Ok(())
+}
+
+/// 함수 이름: continue_backend_startup()
+/// 기능: 최초 실행과 만료 소유권 해제 뒤의 준비를 동일 프로세스에서 계속한다.
+/// 인자: app_handle -> 기존 event loop와 개발 서버 연결을 유지하는 앱 handle
+/// 반환값: 없음
+/// 작성 날짜: 2026/09/05
+fn continue_backend_startup(app_handle: &AppHandle) {
+    // 화면 서버가 없을 때는 backend를 먼저 띄우거나 빈 WebView를 만들지 않는다.
+    if tauri::is_dev() && !sidecar::development_renderer_is_available() {
+        schedule_renderer_startup_recovery(app_handle.clone());
+        return;
+    }
+    match sidecar::inspect_stale_runtime_owner(app_handle) {
         Ok(Some(attestation)) => {
             // Python startup보다 먼저 stale identity를 공개해 새 owner가 기록을 덮어쓰지 않게 한다.
-            schedule_stale_runtime_owner_release(app.handle().clone(), attestation);
-            return Ok(());
+            schedule_stale_runtime_owner_release(app_handle.clone(), attestation);
+            return;
         }
         Ok(None) => {}
         Err(failure) => {
-            schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
-            return Ok(());
+            schedule_pre_ready_startup_failure(app_handle.clone(), failure.code);
+            return;
         }
     }
-    let preparation = match sidecar::prepare_backend_sidecar(app.handle()) {
+    let preparation = match sidecar::prepare_backend_sidecar(app_handle) {
         Ok(preparation) => preparation,
         Err(failure) => {
-            schedule_pre_ready_startup_failure(app.handle().clone(), failure.code);
-            return Ok(());
+            schedule_pre_ready_startup_failure(app_handle.clone(), failure.code);
+            return;
         }
     };
     let prepared_sidecar = match preparation {
         sidecar::BackendSidecarPreparation::Ready(prepared_sidecar) => prepared_sidecar,
         sidecar::BackendSidecarPreparation::Ambiguous(ambiguous_sidecar) => {
-            let sidecar_state = app.state::<sidecar::SidecarProcessState>().inner().clone();
+            let sidecar_state = app_handle
+                .state::<sidecar::SidecarProcessState>()
+                .inner()
+                .clone();
             let sidecar::AmbiguousBackendSidecar {
                 child,
                 stop_writer,
                 late_ready_recovery,
             } = ambiguous_sidecar;
             if sidecar_state
-                .install(child, stop_writer, app.handle().clone())
+                .install(child, stop_writer, app_handle.clone())
                 .is_err()
             {
-                schedule_ready_fatal_recovery(app.handle().clone());
-                return Ok(());
+                schedule_ready_fatal_recovery(app_handle.clone());
+                return;
             }
             if let Some(recovery) = late_ready_recovery {
                 let recovery_started = sidecar::start_late_ready_recovery(
                     recovery,
-                    app.handle().clone(),
+                    app_handle.clone(),
                     sidecar_state.clone(),
                 )
                 .is_ok();
@@ -315,16 +373,16 @@ fn setup_backend_and_window(app: &mut tauri::App) -> Result<(), Box<dyn Error>> 
                 // Task 시작 failure나 child exit race는 headless return 없이 fatal surface가 안전 종료를 결정한다.
                 match select_late_ready_startup_route(recovery_started, child_is_running) {
                     LateReadyStartupRoute::AwaitWithNativeStatus => {
-                        schedule_late_ready_status(app.handle().clone(), sidecar_state);
+                        schedule_late_ready_status(app_handle.clone(), sidecar_state);
                     }
                     LateReadyStartupRoute::FatalRecovery => {
-                        schedule_ready_fatal_recovery(app.handle().clone());
+                        schedule_ready_fatal_recovery(app_handle.clone());
                     }
                 }
             } else {
-                schedule_ready_fatal_recovery(app.handle().clone());
+                schedule_ready_fatal_recovery(app_handle.clone());
             }
-            return Ok(());
+            return;
         }
     };
     let sidecar::PreparedBackendSidecar {
@@ -335,28 +393,66 @@ fn setup_backend_and_window(app: &mut tauri::App) -> Result<(), Box<dyn Error>> 
     } = prepared_sidecar;
 
     // READY child를 먼저 native lifecycle에 유지해 후속 UI 실패가 process orphan/kill로 바뀌지 않게 한다.
-    let sidecar_state = app.state::<sidecar::SidecarProcessState>().inner().clone();
+    let sidecar_state = app_handle
+        .state::<sidecar::SidecarProcessState>()
+        .inner()
+        .clone();
     if sidecar_state
-        .install(child, stop_writer, app.handle().clone())
+        .install(child, stop_writer, app_handle.clone())
         .is_err()
     {
-        schedule_ready_fatal_recovery(app.handle().clone());
-        return Ok(());
+        schedule_ready_fatal_recovery(app_handle.clone());
+        return;
     }
 
-    // Ready 검증 결과를 one-shot native slot에 넣기 전에는 renderer window를 만들지 않는다.
-    let descriptor_state = app.state::<BackendConnectionDescriptorState>();
+    // 검증된 session 정보를 native 메모리에 보존한 뒤에만 renderer window를 만든다.
+    let descriptor_state = app_handle.state::<BackendConnectionDescriptorState>();
     if descriptor_state.stage(descriptor).is_err() {
-        schedule_ready_fatal_recovery(app.handle().clone());
-        return Ok(());
+        schedule_ready_fatal_recovery(app_handle.clone());
+        return;
     }
 
     // Window build 실패에는 READY process를 kill하지 않고 native dialog에서 복구를 계속 시도한다.
-    if sidecar::create_ready_main_window(app.handle(), port).is_err() {
-        schedule_ready_window_recovery(app.handle().clone(), port);
+    if sidecar::create_ready_main_window(app_handle, port).is_err() {
+        schedule_ready_window_recovery(app_handle.clone(), port);
     }
+}
 
-    Ok(())
+/// 함수 이름: schedule_renderer_startup_recovery()
+/// 기능: 개발 화면 서버 부재를 빈 창 대신 재시도·종료가 가능한 native 안내로 표시한다.
+/// 인자: app_handle -> backend를 아직 시작하지 않은 앱 handle
+/// 반환값: 없음
+/// 작성 날짜: 2026/09/05
+fn schedule_renderer_startup_recovery(app_handle: AppHandle) {
+    let retry_handle = app_handle.clone();
+    // 서버 재개 후 확인하면 같은 앱에서 시작하므로 개발 서버의 수명주기를 끊지 않는다.
+    app_handle.dialog()
+        .message("화면 서버에 연결할 수 없습니다. 개발 서버를 실행한 뒤 다시 시도하세요. 백엔드는 아직 시작하지 않았습니다.")
+        .title("화면을 불러올 수 없습니다")
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::OkCancelCustom("다시 시도".to_owned(), "종료".to_owned()))
+        .show(move |retry| {
+            if retry {
+                resume_backend_startup(retry_handle);
+            } else {
+                retry_handle.exit(0);  // 시작 전이므로 종료할 거래·backend가 없다.
+            }
+        });
+}
+
+/// 함수 이름: resume_backend_startup()
+/// 기능: native 대화상자 callback에서 기존 main event loop로 시작 작업을 돌려보낸다.
+/// 인자: app_handle -> 동일 프로세스에서 준비를 계속할 앱 handle
+/// 반환값: 없음
+/// 작성 날짜: 2026/09/05
+fn resume_backend_startup(app_handle: AppHandle) {
+    let resume_handle = app_handle.clone();
+    if app_handle
+        .run_on_main_thread(move || continue_backend_startup(&resume_handle))
+        .is_err()
+    {
+        schedule_pre_ready_startup_failure(app_handle, "BACKEND_SIDECAR_STARTUP_FAILED");
+    }
 }
 
 /// 함수 이름: pre_ready_failure_copy()
@@ -403,7 +499,7 @@ fn stale_runtime_owner_prompt_copy(
     process_start_id: &str,
 ) -> (&'static str, String) {
     let message = format!(
-        "이전 백엔드 소유권 기록을 발견했습니다.\n\n상태: {}\n런타임 PID: {}\n프로세스 시작 ID: {}\n\n현재 PID 부재를 확인했지만 자동으로 소유권을 해제하지 않았습니다. 계속하면 이 exact 기록의 상태만 RELEASED로 저장한 뒤 애플리케이션을 재시작합니다. 실행 중인 프로세스 종료, 주문 취소 또는 포지션 청산은 수행하지 않습니다. 이 실행을 직접 확인한 운영자만 계속하세요.",
+        "이전 백엔드 소유권 기록을 발견했습니다.\n\n상태: {}\n런타임 PID: {}\n프로세스 시작 ID: {}\n\n현재 PID 부재를 확인했지만 자동으로 소유권을 해제하지 않았습니다. 계속하면 이 exact 기록의 상태만 RELEASED로 저장한 뒤 현재 애플리케이션에서 시작을 계속합니다. 실행 중인 프로세스 종료, 주문 취소 또는 포지션 청산은 수행하지 않습니다. 이 실행을 직접 확인한 운영자만 계속하세요.",
         owner_state.as_str(),
         runtime_pid,
         process_start_id,
@@ -412,8 +508,8 @@ fn stale_runtime_owner_prompt_copy(
 }
 
 /// 함수 이름: schedule_stale_runtime_owner_release()
-/// 기능: stale identity를 native dialog로 확인받고 재검증된 같은 inode만 RELEASED fsync 후 재시작한다.
-/// 인자: app_handle -> native dialog와 restart owner,
+/// 기능: stale identity를 확인받아 같은 inode를 RELEASED fsync한 뒤 동일 프로세스에서 시작을 계속한다.
+/// 인자: app_handle -> native dialog와 현재 시작 작업의 owner,
 ///      attestation -> lock·PID 검증을 통과해 화면에 고정할 stale identity snapshot
 /// 반환값: 없음
 /// 작성 날짜: 2026/08/29
@@ -435,7 +531,7 @@ fn schedule_stale_runtime_owner_release(
         .title(title)
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "확인 후 해제·재시작".to_owned(),
+            "확인 후 해제·계속".to_owned(),
             "취소".to_owned(),
         ))
         .show(move |confirmed| {
@@ -444,7 +540,7 @@ fn schedule_stale_runtime_owner_release(
                 return;
             }
             match sidecar::release_stale_runtime_owner(&release_handle, &attestation) {
-                Ok(()) => release_handle.restart(),
+                Ok(()) => resume_backend_startup(release_handle),
                 Err(failure) => {
                     schedule_pre_ready_startup_failure(release_handle, failure.code);
                 }
@@ -587,7 +683,7 @@ pub fn run() {
         .manage(sidecar_state)
         .manage(exit_intent_bridge)
         .invoke_handler(tauri::generate_handler![
-            take_backend_connection_descriptor,
+            get_backend_connection_descriptor,
             dialog::choose_csv_export_directory,
             sidecar::await_backend_sidecar_exit,
             exit_bridge::arm_native_exit_intent_bridge,
@@ -652,7 +748,7 @@ mod tests {
     }
 
     /// 함수 이름: create_descriptor()
-    /// 기능: native one-shot state test에 사용할 valid descriptor를 생성한다.
+    /// 기능: native session state test에 사용할 valid descriptor를 생성한다.
     /// 인자: 없음
     /// 반환값: valid descriptor
     /// 작성 날짜: 2026/08/21
@@ -676,7 +772,7 @@ mod tests {
     #[test]
     fn descriptor_is_absent_until_phase12_stages_it() {
         let state = BackendConnectionDescriptorState::default();
-        let failure = match state.take() {
+        let failure = match state.get() {
             Ok(_) => panic!("empty state must fail closed"),
             Err(failure) => failure,
         };
@@ -684,27 +780,35 @@ mod tests {
         assert_eq!(failure.code, "BACKEND_DESCRIPTOR_UNAVAILABLE");
     }
 
-    /// 함수 이름: descriptor_can_be_taken_exactly_once()
-    /// 기능: stage한 token-bearing descriptor가 한 번 이동하고 native slot에서 제거되는지 검증한다.
+    /// 함수 이름: renderer_reload_reuses_descriptor_until_backend_exit()
+    /// 기능: 새 화면이 같은 backend에 재연결하고 종료 후에는 인증 정보가 제거되는지 검증한다.
     /// 인자: 없음
     /// 반환값: 없음
     /// 작성 날짜: 2026/08/21
     #[test]
-    fn descriptor_can_be_taken_exactly_once() {
+    fn renderer_reload_reuses_descriptor_until_backend_exit() {
         let state = BackendConnectionDescriptorState::default();
         assert!(state.stage(create_descriptor()).is_ok());
 
-        let descriptor = match state.take() {
+        let descriptor = match state.get() {
             Ok(descriptor) => descriptor,
-            Err(_) => panic!("staged descriptor must be available once"),
+            Err(_) => panic!("staged descriptor must be available"),
         };
         assert_eq!(descriptor.port, 42_123);
         assert_eq!(descriptor.session_id, TEST_SESSION_ID);
         assert_eq!(descriptor.schema_version, BACKEND_SCHEMA_VERSION);
         assert_eq!(descriptor.token, TEST_TOKEN);
 
-        let second_failure = match state.take() {
-            Ok(_) => panic!("descriptor must not be reusable"),
+        // 이전 renderer의 응답 복사본을 버린 뒤에도 reload가 같은 session에 연결해야 한다.
+        drop(descriptor);
+        let reloaded_descriptor = state
+            .get()
+            .unwrap_or_else(|_| panic!("reload must retain connection"));
+        assert_eq!(reloaded_descriptor.session_id, TEST_SESSION_ID);
+        assert_eq!(reloaded_descriptor.token, TEST_TOKEN);
+        state.clear();
+        let second_failure = match state.get() {
+            Ok(_) => panic!("exited backend descriptor must be unavailable"),
             Err(failure) => failure,
         };
         assert_eq!(second_failure.code, "BACKEND_DESCRIPTOR_UNAVAILABLE");
@@ -747,7 +851,7 @@ mod tests {
         let failure = state
             .stage(create_descriptor())
             .expect_err("duplicate descriptor stage must fail closed");
-        let retained = match state.take() {
+        let retained = match state.get() {
             Ok(retained) => retained,
             Err(_) => panic!("first staged descriptor must remain available"),
         };
@@ -818,6 +922,8 @@ mod tests {
             assert!(combined.contains("프로세스 종료"));
             assert!(combined.contains("주문 취소"));
             assert!(combined.contains("포지션 청산"));
+            assert!(combined.contains("현재 애플리케이션에서 시작을 계속"));
+            assert!(!combined.contains("애플리케이션을 재시작"));
             assert!(!combined.contains(".backend-runtime.lock"));
             assert!(!combined.contains("api-key"));
             assert!(!combined.contains("api-secret"));

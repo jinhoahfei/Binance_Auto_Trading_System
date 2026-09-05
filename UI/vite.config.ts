@@ -12,8 +12,8 @@ const smoke_mode = process.env.BINANCE_DESKTOP_SMOKE;
  * 작성 날짜: 2026/08/12
  */
 export default defineConfig({
-  plugins: [react(), ...(smoke_mode === '1' || smoke_mode === 'recovery-shutdown'
-    ? [desktop_smoke_plugin(smoke_mode === '1' ? 'connections' : 'recovery-shutdown')]
+  plugins: [react(), ...(smoke_mode === '1' || smoke_mode === 'recovery-shutdown' || smoke_mode === 'recovery-reload'
+    ? [desktop_smoke_plugin(smoke_mode === '1' ? 'connections' : smoke_mode)]
     : [])],
   server: {
     strictPort: true,

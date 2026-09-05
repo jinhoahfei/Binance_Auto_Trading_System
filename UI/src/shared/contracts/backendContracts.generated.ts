@@ -228,7 +228,14 @@ export interface BackendCsvExportReceipt {
     readonly exported_row_count: number;
 }
 
+export interface BackendRuntimeEnvironment {
+    readonly market_data: 'mainnet' | 'testnet' | 'fake' | 'unavailable';
+    readonly account: 'mainnet' | 'testnet' | 'fake' | 'unavailable';
+    readonly orders_enabled: boolean;
+}
+
 export interface BackendSnapshot {
+    readonly environment?: BackendRuntimeEnvironment;
     readonly session_id: string;
     readonly last_sequence: number;
     readonly connection: BackendConnectionSnapshot;

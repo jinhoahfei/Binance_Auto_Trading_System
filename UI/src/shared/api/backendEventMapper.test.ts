@@ -735,8 +735,9 @@ describe('backend snapshot and event mapping', () => {
             entry_price: null,
             total: '432.150',
         });
+        // EMA9의 수치·단위와 스윙의 확정 구조 판정이 같은 snapshot에서 표시되는지 확인한다.
         expect(mapped.server_snapshot.regime_metrics.map((metric) => metric.value)).toEqual([
-            '0.12% / 4H', '4,242.42 USDT', '4,200.00 USDT', '4,500.00 USDT',
+            '0.12% / 4H', '4,242.42 USDT', 'HL', 'HH',
         ]);
         expect(mapped.server_snapshot.trade_history_summary.position.quantity).toBe('1.7500 ETH');
         expect(mapped.server_snapshot.trade_history_summary.sellPerformance).toMatchObject({
@@ -748,6 +749,33 @@ describe('backend snapshot and event mapping', () => {
             totalExecutedAmount: '-',
             averageSlippage: '-',
         });
+    });
+
+    it.each(['market_data', 'account'] as const)('%s 환경 값이 문자열이 아니면 거부한다', (field_name) => {
+        // 배열은 문자열로 변환하면 유효한 환경 이름이 되더라도 계약 위반으로 거부한다.
+        const snapshot = create_backend_snapshot_fixture();
+        const malformed_snapshot = {
+            ...snapshot,
+            trading: { ...snapshot.trading, mode: 'testnet' },
+            environment: {
+                market_data: 'mainnet',
+                account: 'testnet',
+                orders_enabled: false,
+                [field_name]: [field_name === 'market_data' ? 'mainnet' : 'testnet'],
+            },
+        };
+        expect(() => validate_backend_snapshot(malformed_snapshot)).toThrow(BackendContractError);
+    });
+
+    it('실제 시세와 Testnet 주문 활성의 모순된 환경 정보를 거부한다', () => {
+        // 시세 환경은 표시 정보여도 backend 주문 mode와 모순되면 startup에서 거부한다.
+        const snapshot = create_backend_snapshot_fixture();
+        const conflicting_snapshot = {
+            ...snapshot,
+            trading: { ...snapshot.trading, mode: 'testnet' },
+            environment: { market_data: 'mainnet', account: 'testnet', orders_enabled: true },
+        };
+        expect(() => validate_backend_snapshot(conflicting_snapshot)).toThrow(BackendContractError);
     });
 
     it('configured-unbounded 정책을 null 상한과 typed provenance 그대로 facade에 전달한다', () => {

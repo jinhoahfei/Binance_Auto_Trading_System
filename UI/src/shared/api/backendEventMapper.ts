@@ -1068,6 +1068,25 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
     }
     assert_boolean(connection.ready, 'connection.ready');
     assert_schema_version(connection.schema_version);
+    // 구버전 snapshot은 환경 미확인으로 남기고, 제공된 환경 정보는 엄격하게 검증한다.
+    if (snapshot.environment !== undefined) {
+        const environment = assert_record(snapshot.environment, 'snapshot.environment');
+        const allowed_environments = ['mainnet', 'testnet', 'fake', 'unavailable'];
+        for (const field_name of ['market_data', 'account'] as const) {
+            const environment_value = environment[field_name];  // 배열 등의 문자열 강제 변환을 허용하지 않는다.
+            if (typeof environment_value !== 'string' || !allowed_environments.includes(environment_value)) {
+                throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Invalid runtime environment');
+            }
+        }
+        assert_boolean(environment.orders_enabled, 'environment.orders_enabled');
+        const expected_account = trading.mode === 'live' ? 'mainnet'
+            : trading.mode === 'disabled' ? 'unavailable' : trading.mode;
+        if (environment.account !== expected_account
+            || (environment.market_data === 'mainnet' && environment.account === 'testnet'
+                && environment.orders_enabled)) {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Inconsistent runtime environment');
+        }
+    }
     if (connection.ready !== true) {
         throw new BackendContractError(
             'BACKEND_NOT_READY',
@@ -1311,7 +1330,7 @@ function decimal_tone(decimal_text: string): RegimeMetric['tone'] {
 
 /**
  * 함수 이름: map_indicator_metrics()
- * 기능: raw indicator Decimal과 swing point를 계산 없이 기존 REGIME metric 표시로 변환한다.
+ * 기능: backend EMA9 수치와 확정 스윙 판정을 계산 없이 REGIME metric 표시로 변환한다.
  * 인자: indicator -> validated backend indicator 또는 null
  * 반환값: 기존 facade가 수용하는 네 metric 목록
  * 작성 날짜: 2026/08/21
@@ -1323,9 +1342,7 @@ function map_indicator_metrics(
         return [];
     }
 
-    const latest_swing_low = indicator.swing.lows.at(-1);
-    const latest_swing_high = indicator.swing.highs.at(-1);
-
+    // EMA9는 수치로 표시하고 스윙은 추천 REGIME과 동일한 backend threshold 판정을 표시한다.
     return [
         {
             id: 'emaSlope',
@@ -1342,9 +1359,11 @@ function map_indicator_metrics(
         {
             id: 'swingLow',
             label: 'Swing Low',
-            value: latest_swing_low === undefined
-                ? '-'
-                : `${format_decimal_text(latest_swing_low)} USDT`,
+            value: indicator.swing.has_higher_low
+                ? 'HL'
+                : indicator.swing.has_lower_low
+                    ? 'LL'
+                    : '-',  // 저점 변화가 threshold에 미달하면 방향을 단정하지 않는다.
             tone: indicator.swing.has_higher_low
                 ? 'positive'
                 : indicator.swing.has_lower_low
@@ -1354,9 +1373,11 @@ function map_indicator_metrics(
         {
             id: 'swingHigh',
             label: 'Swing High',
-            value: latest_swing_high === undefined
-                ? '-'
-                : `${format_decimal_text(latest_swing_high)} USDT`,
+            value: indicator.swing.has_higher_high
+                ? 'HH'
+                : indicator.swing.has_lower_high
+                    ? 'LH'
+                    : '-',  // 고점 변화가 threshold에 미달하면 방향을 단정하지 않는다.
             tone: indicator.swing.has_higher_high
                 ? 'positive'
                 : indicator.swing.has_lower_high

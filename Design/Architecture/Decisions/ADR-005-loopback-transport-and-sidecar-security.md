@@ -37,9 +37,13 @@ React/Tauri renderer와 Python backend는 별도 process다. Communication Diagr
   `.backend-runtime.lock`의 durable artifact는 `schema_version`, `runtime_pid`,
   `process_start_id`, `owner_state` 네 field만 포함하며 port·parent PID·token을 기록하지
   않는다.
-- Tauri는 renderer의 live adapter에 connection descriptor를 한 번 전달한다. token은
-  adapter closure의 메모리에만 두고 local/session storage, IndexedDB, Redux/XState
-  snapshot, URL, error message와 console에 넣지 않는다. shutdown 시 참조를 지운다.
+- Tauri는 현재 backend 실행의 connection descriptor를 native 메모리에 보존한다.
+  `get_backend_connection_descriptor`는 `main` 창과 실행 환경의 정확한 화면 origin을
+  확인한 뒤 live adapter에 전달한다. 화면 새로고침과 연결 복구는 같은 backend session으로
+  재연결하며, process 전체에서 한 번만 소비하여 복구 버튼을 막지 않는다.
+- token은 native와 adapter closure 메모리 밖의 local/session storage, IndexedDB,
+  Redux/XState snapshot, URL, error message와 console에 넣지 않는다. native IPC 응답
+  복사본은 직렬화 후 zeroize하고, 원본도 backend 종료 시 즉시 제거·zeroize한다.
 
 token은 “한 요청에 한 번 쓰는 token”이 아니라 **한 process launch에서만 유효한
 session token**이라는 의미로 one-time이다. backend 재시작 시 기존 token과 session ID는

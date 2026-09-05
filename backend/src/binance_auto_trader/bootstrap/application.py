@@ -993,6 +993,8 @@ class ApplicationRuntime:
         repr=False,
         compare=False,
     )
+    market_data_environment: str = "unavailable"
+    order_execution_enabled: bool = False
 
     def __post_init__(self) -> None:
         """
@@ -1225,6 +1227,7 @@ def create_application_runtime(
     clock: Callable[[], datetime] | None = None,
     monotonic_clock: Callable[[], int] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
+    market_data_environment: str | None = None,
 ) -> ApplicationRuntime:
     """
     함수 이름: create_application_runtime()
@@ -1246,6 +1249,7 @@ def create_application_runtime(
         clock -> market, gateway, repository와 performance가 공유할 optional UTC clock
         monotonic_clock -> 5초·3분 연속 시장 조건이 공유할 optional nanosecond monotonic clock
         kline_limit -> 각 market interval에서 조회할 Kline 개수
+        market_data_environment -> UI에 공개할 시세 환경 또는 실행 mode에서 유도할 None
     반환값: 동일 객체 identity와 단일 RLock을 보존하는 ApplicationRuntime
     작성 날짜: 2026/08/21
     """
@@ -1316,6 +1320,16 @@ def create_application_runtime(
     # Application lock과 entity를 만들며 실행 mode도 gate 조립 전에 canonicalize한다.
     application_lock = RLock()
     selected_execution_mode = parse_execution_mode(execution_mode)
+    # 시세 출처는 연결 여부와 별도로 보존해 UI가 LIVE 표시로 계좌 환경을 추측하지 않게 한다.
+    selected_market_environment = market_data_environment or (
+        selected_execution_mode.value
+        if selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.FAKE)
+        else "unavailable"
+    )
+    if selected_market_environment not in {"mainnet", "testnet", "fake", "unavailable"}:
+        raise ValueError("invalid market_data_environment")
+    if selected_market_environment == "mainnet" and allow_testnet_orders:
+        raise ValueError("mainnet analysis requires disabled Testnet orders")
     requested_fake_order_gate = (
         selected_execution_mode is ExecutionMode.FAKE
     )
@@ -1812,6 +1826,8 @@ def create_application_runtime(
 
     return ApplicationRuntime(
         execution_mode=selected_execution_mode,
+        market_data_environment=selected_market_environment,
+        order_execution_enabled=testnet_order_gate or fake_order_gate,
         application_lock=application_lock,
         startup_command_id=startup_command_id,
         api_gateway=api_gateway,

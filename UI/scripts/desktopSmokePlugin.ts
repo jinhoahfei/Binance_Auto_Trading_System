@@ -1,11 +1,15 @@
+import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 
 const stages = new Set([
     'dashboard-ready',
+    'market-parity',
     'tooltip-status',
     'tooltip-hidden',
     'tooltip-reopened',
     'recovery-visible',
+    'recovery-retry-passed',
+    'renderer-reload-passed',
     'recovery-shutdown-state',
     'recovery-shutdown-accepted',
     'passed',
@@ -19,18 +23,31 @@ const stages = new Set([
  * 반환값: Vite serve 전용 검증 plugin
  * 작성 날짜: 2026/09/05
  */
-export function desktop_smoke_plugin(mode: 'connections' | 'recovery-shutdown'): Plugin {
+export function desktop_smoke_plugin(mode: 'connections' | 'recovery-shutdown' | 'recovery-reload'): Plugin {
+    // 검증 시나리오는 명시한 개발 실행에서만 고정된 entry로 연결한다.
+    const entry_points = {
+        connections: '/src/test/desktopSmoke.ts',
+        'recovery-shutdown': '/src/test/desktopRecoveryShutdownSmoke.ts',
+        'recovery-reload': '/src/test/desktopRecoveryReloadSmoke.ts',
+    } as const;
     return {
         name: 'desktop-smoke',
         apply: 'serve',
+        enforce: 'pre',
+        resolveId(source, importer) {
+            // 실제 Tauri API는 유지하고 명시한 검증 실행의 main import 하나에만 fault seam을 연결한다.
+            if (mode === 'recovery-reload' && source === '@tauri-apps/api/core'
+                && importer?.split('?')[0]?.endsWith('/src/main.tsx')) {
+                return fileURLToPath(new URL('../src/test/recoverySmokeInvoke.ts', import.meta.url));
+            }
+            return null;
+        },
         transformIndexHtml() {
             return [{
                 tag: 'script',
                 attrs: {
                     type: 'module',
-                    src: mode === 'connections'
-                        ? '/src/test/desktopSmoke.ts'
-                        : '/src/test/desktopRecoveryShutdownSmoke.ts',
+                    src: entry_points[mode],
                 },
                 injectTo: 'head-prepend',
             }];
@@ -54,6 +71,13 @@ export function desktop_smoke_plugin(mode: 'connections' | 'recovery-shutdown'):
                     }
                 }
                 const code = url.searchParams.get('code');
+                // 실제 시세 대조 결과는 공개 스윙 분류만 남기며 원본 snapshot을 기록하지 않는다.
+                for (const key of ['swing_low', 'swing_high']) {
+                    const value = url.searchParams.get(key);
+                    if (value !== null && ['HL', 'LL', 'HH', 'LH', '-'].includes(value)) {
+                        result[key] = value;
+                    }
+                }
                 if (code !== null && /^[A-Z][A-Z0-9_]{1,63}$/u.test(code)) {
                     result.code = code;
                 }

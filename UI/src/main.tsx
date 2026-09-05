@@ -183,7 +183,9 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             ? '백엔드 프로세스가 이미 종료되었습니다. 새 주문은 차단되었으며 창만 닫을 수 있습니다.'
             : pending_native_exit_request
                 ? '창 닫기 또는 Command-Q 요청을 감지했습니다. 아래 안전 종료를 확인해 주세요.'
-                : '실행 중인 백엔드와 인증 연결을 보존했습니다. 연결을 다시 확인하거나 안전 종료할 수 있습니다.';
+                : recovery_adapter === null
+                    ? '현재 화면에 백엔드 연결 정보가 없습니다. 연결 다시 확인으로 복구하거나 안전 종료를 시도할 수 있습니다.'
+                    : '실행 중인 백엔드와 인증 연결을 보존했습니다. 연결을 다시 확인하거나 안전 종료할 수 있습니다.';
         const action_style = {
             background: '#f0b90b',
             border: 0,
@@ -191,6 +193,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             color: '#0b0e11',
             cursor: recovery_is_pending ? 'wait' : 'pointer',
             fontWeight: 600,
+            opacity: recovery_is_pending ? 0.55 : 1,
             padding: '9px 14px',
         } as const;
 
@@ -211,7 +214,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
                     ) : (
                         <>
                             <button
-                                disabled={recovery_is_pending || recovery_adapter === null}
+                                disabled={recovery_is_pending}
                                 onClick={() => {
                                     void retry_live_bootstrap();
                                 }}
@@ -221,7 +224,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
                                 연결 다시 확인
                             </button>
                             <button
-                                disabled={recovery_is_pending || recovery_adapter === null}
+                                disabled={recovery_is_pending}
                                 onClick={() => {
                                     void safely_shutdown_recovery_child();
                                 }}
@@ -242,6 +245,36 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
                 </BootstrapStatus>
             </StrictMode>,
         );
+    }
+
+    /**
+     * 함수 이름: get_recovery_adapter()
+     * 기능: 현재 화면에 인증 연결이 없으면 native에서 다시 받고, 이미 있으면 같은 종료 요청 상태를 유지한다.
+     * 인자: 없음
+     * 반환값: 현재 backend session의 adapter
+     * 작성 날짜: 2026/09/05
+     */
+    async function get_recovery_adapter(): Promise<BackendUiAdapter> {
+        if (recovery_adapter !== null) {
+            return recovery_adapter;
+        }
+        if (!is_tauri_runtime()) {
+            throw new BackendAdapterError('LIVE_DESCRIPTOR_UNAVAILABLE', '데스크톱 앱에서 실행해 주세요.', false);
+        }
+
+        // Native는 현재 메인 창에만 session 정보를 제공하며 browser 저장소에는 보관하지 않는다.
+        try {
+            const descriptor = validate_connection_descriptor(
+                await invoke<unknown>('get_backend_connection_descriptor'),
+            );
+            recovery_adapter = new BackendUiAdapter(descriptor);
+            return recovery_adapter;
+        } catch (error) {
+            if (safe_bootstrap_failure_code(error) === 'BACKEND_SIDECAR_EXITED') {
+                recovery_sidecar_has_exited = true;  // 이미 끝난 backend는 재시도 대신 창 닫기를 표시한다.
+            }
+            throw error;
+        }
     }
 
     /**
@@ -280,14 +313,15 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
      * 작성 날짜: 2026/08/24
      */
     async function safely_shutdown_recovery_child(): Promise<void> {
-        if (recovery_adapter === null || recovery_is_pending || recovery_sidecar_has_exited) {
+        if (recovery_is_pending || recovery_sidecar_has_exited) {
             return;
         }
 
         recovery_is_pending = true;
         render_bootstrap_recovery();
         try {
-            await recovery_adapter.shutdown_recovery_application();
+            const adapter = await get_recovery_adapter();
+            await adapter.shutdown_recovery_application();
             recovery_sidecar_has_exited = true;
             await finalize_recovery_window();
         } catch (error) {
@@ -338,20 +372,21 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
 
     /**
      * 함수 이름: retry_live_bootstrap()
-     * 기능: descriptor를 다시 소비하지 않고 보존한 adapter로 snapshot hydration만 재시도한다.
+     * 기능: 연결 정보가 사라진 화면도 native에서 복구한 뒤 전체 snapshot hydration을 재시도한다.
      * 인자: 없음
      * 반환값: 재시도 완료 Promise
      * 작성 날짜: 2026/08/24
      */
     async function retry_live_bootstrap(): Promise<void> {
-        if (recovery_adapter === null || recovery_is_pending || recovery_sidecar_has_exited) {
+        if (recovery_is_pending || recovery_sidecar_has_exited) {
             return;
         }
 
         recovery_is_pending = true;
         render_bootstrap_recovery();
         try {
-            const application = await hydrate_live_ui_application(recovery_adapter);
+            const adapter = await get_recovery_adapter();
+            const application = await hydrate_live_ui_application(adapter);
             if (recovery_sidecar_has_exited) {
                 application.deactivate();
                 render_bootstrap_recovery();
@@ -509,13 +544,10 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         const bridge_receipt = await invoke<unknown>('arm_native_exit_intent_bridge');
         validate_native_exit_intent_bridge_receipt(bridge_receipt);
 
-        // Native one-shot command는 Phase 12 launcher가 stage한 descriptor만 반환한다.
-        const descriptor = validate_connection_descriptor(
-            await invoke<unknown>('take_backend_connection_descriptor'),
-        );
-        recovery_adapter = new BackendUiAdapter(descriptor);
+        // 새 document도 실행 중인 동일 backend에 인증하고 최신 snapshot부터 화면을 다시 구성한다.
+        const adapter = await get_recovery_adapter();
         recovery_is_pending = true;
-        const application = await hydrate_live_ui_application(recovery_adapter);
+        const application = await hydrate_live_ui_application(adapter);
         install_live_application(application);
     } catch (error) {
         // READY child가 살아 있을 수 있으므로 token/listener를 버리지 않고 operator recovery로 남긴다.
@@ -531,5 +563,15 @@ if (root_element === null) {
     throw new Error('React 애플리케이션을 연결할 root 요소가 없습니다.');
 }
 
-const react_root = createRoot(root_element);
-void bootstrap_live_renderer(react_root);
+// HMR로 entry가 재평가되면 root·listener를 중복 생성하지 않고 새 document에서 다시 연결한다.
+const bootstrap_hot_data = import.meta.hot?.data;
+if (bootstrap_hot_data?.bootstrap_started === true) {
+    window.location.reload();
+} else {
+    if (import.meta.hot !== undefined && bootstrap_hot_data !== undefined) {
+        bootstrap_hot_data.bootstrap_started = true;  // HMR에는 실행 여부만 보관하며 token·adapter는 넣지 않는다.
+        import.meta.hot.accept();
+    }
+    const react_root = createRoot(root_element);
+    void bootstrap_live_renderer(react_root);
+}

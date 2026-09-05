@@ -569,6 +569,35 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
     작성 날짜: 2026/08/22
     """
 
+    def test_mainnet_klines_preserve_testnet_account_authentication(self) -> None:
+        """
+        함수 이름: test_mainnet_klines_preserve_testnet_account_authentication()
+        기능: 실제 시세 GET에는 인증을 보내지 않고 계좌·시간 조회는 Testnet에 유지하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        # 공개 시세와 서명 계좌 조회를 연속 실행해 endpoint 및 credential 분리를 관찰한다.
+        transport = QueueHTTPTransport([
+            _json_response([]),
+            _json_response({"serverTime": FIXED_TIME_MILLISECONDS}),
+            _json_response({"balances": []}),
+        ])
+        client = BinanceSpotRESTClient(
+            API_KEY, SECRET_KEY, transport=transport, clock=_fixed_clock,
+            use_mainnet_market_data=True,
+        )
+        client.get_klines(symbol="ETHUSDT", interval="4h", limit=1000)
+        client.get_account()
+
+        market_request, time_request, account_request = transport.requests
+        self.assertEqual(urlsplit(market_request["url"]).netloc, "data-api.binance.vision")
+        self.assertNotIn("X-MBX-APIKEY", market_request["headers"])
+        self.assertNotIn("signature", market_request["url"])
+        self.assertEqual(urlsplit(time_request["url"]).netloc, "testnet.binance.vision")
+        self.assertEqual(urlsplit(account_request["url"]).netloc, "testnet.binance.vision")
+        self.assertEqual(account_request["headers"]["X-MBX-APIKEY"], API_KEY)  # 인증은 계좌 host에만 전달한다.
+
     def test_production_origin_is_rejected_even_with_explicit_transport(
         self,
     ) -> None:

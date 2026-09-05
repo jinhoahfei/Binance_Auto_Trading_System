@@ -57,6 +57,7 @@ export type {
     BackendRiskBlockReason,
     BackendRiskPolicyAvailability,
     BackendSnapshot,
+    BackendRuntimeEnvironment,
     BackendShutdownState,
     BackendSuccessEnvelope,
     BackendStrategyType,

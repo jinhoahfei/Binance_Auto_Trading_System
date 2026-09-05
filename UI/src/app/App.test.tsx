@@ -17,7 +17,7 @@ describe('App runtime wiring', () => {
             load_binance_connection_status: load_status,
         })} />);
 
-        const live_badge = await screen.findByRole('button', { name: 'Binance 연결 상태: LIVE' });
+        const live_badge = await screen.findByRole('button', { name: 'Binance 연결 상태: 연결됨' });
         expect(load_status).not.toHaveBeenCalled();
         expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
 
@@ -41,7 +41,7 @@ describe('App runtime wiring', () => {
             </StrictMode>,
         );
 
-        expect(await screen.findByText('LIVE')).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: 'Binance 연결 상태: 연결됨' })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: '자동매매 실행' })).toBeEnabled();
         expect(screen.getByRole('button', { name: '매매 중지' })).toBeDisabled();
         expect(await screen.findByRole('button', { name: 'type0 횡보 적용 요청' })).toHaveAttribute(

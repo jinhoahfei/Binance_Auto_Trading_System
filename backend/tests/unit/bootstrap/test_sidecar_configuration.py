@@ -156,6 +156,8 @@ class SidecarConfigurationTests(unittest.TestCase):
                 )
 
         self.assertIs(expected_runtime, actual_runtime)
+        # Desktop의 실제 시세 사용은 runtime 조립에서 명시하고 주문 설정은 변경하지 않는다.
+        self.assertIs(create_runtime.call_args.kwargs["use_mainnet_market_data"], True)
         policy = create_runtime.call_args.kwargs["risk_policy_state"]
         self.assertIsInstance(policy, RiskPolicy)
         self.assertEqual(1, policy.version)

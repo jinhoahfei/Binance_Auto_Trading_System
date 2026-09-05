@@ -443,6 +443,38 @@ class SpotWebSocketClientTests(unittest.TestCase):
         subscription.close()
         self.assertEqual(disconnects, [])
 
+    def test_mainnet_market_stream_preserves_testnet_account_stream(self) -> None:
+        """
+        함수 이름: test_mainnet_market_stream_preserves_testnet_account_stream()
+        기능: 실제 시세 구독·재구독과 서명 계좌 구독이 서로 다른 공식 host를 유지하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/05
+        """
+        # 같은 client에서 시장 구독을 다시 열어도 계좌 구독 endpoint에는 영향을 주지 않는다.
+        factory = _ScriptedSocketFactory()
+        client = BinanceSpotWebSocketClient(
+            API_KEY, API_SECRET, socket_factory=factory,
+            timestamp_provider=lambda: FIXED_TIMESTAMP_MILLISECONDS,
+            use_mainnet_market_data=True,
+        )
+        for _attempt in range(2):
+            subscription = client.subscribe_all_kline_streams(
+                symbol="ETHUSDT", intervals=("4h",),
+                on_message=lambda _message: None, on_disconnect=lambda: None,
+            )
+            self.assertEqual(factory.sockets[-1].url,
+                "wss://data-stream.binance.vision/stream?streams=ethusdt@kline_4h")
+            self.assertEqual(factory.sockets[-1].sent_payloads, [])  # 공개 구독은 서명 frame을 보내지 않는다.
+            subscription.close()
+        account_subscription = client.subscribe_account_info(
+            on_message=lambda _message: None, on_disconnect=lambda: None,
+        )
+        self.addCleanup(account_subscription.close)
+        self.assertEqual(factory.sockets[-1].url,
+            "wss://ws-api.testnet.binance.vision/ws-api/v3")
+        self.assertEqual(len(factory.sockets[-1].sent_payloads), 1)
+
     def test_public_kline_disconnect_notifies_once_after_start(self) -> None:
         """
         함수 이름: test_public_kline_disconnect_notifies_once_after_start()

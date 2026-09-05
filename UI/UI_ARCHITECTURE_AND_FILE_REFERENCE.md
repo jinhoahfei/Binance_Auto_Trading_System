@@ -42,7 +42,7 @@
 - backend 계좌·REGIME·성과 read model은 ETHUSDT/USDT 단위를 유지하고 없는 position·entry price·slippage를 추측하지 않는다.
 - 가격 차트는 Binance 공개 market-data REST/WebSocket에서 `ETHUSDT`의 `1m`, `30m`, `4h`, `1d` 봉을 조회·구독한다.
 - 실시간 시장 데이터는 WebSocket을 먼저 시작한 뒤 REST 과거 봉과 병합하고, 동일 `symbol + interval + open_time`에는 WebSocket 값을 우선한다.
-- Tauri는 1440×1024 데스크톱 창, memory-only one-shot backend descriptor와 native CSV
+- Tauri는 1440×1024 데스크톱 창, memory-only backend session descriptor와 native CSV
   directory picker command를 제공한다. sidecar 실행·패키징·종료는 Phase 12에 남아 있다.
 - Storybook의 공통 harness가 Figma 16개 프레임을 상태 fixture로 재현한다.
 - 스타일은 semantic CSS token, CSS Modules, Radix primitive를 중심으로 구성한다.
@@ -212,7 +212,7 @@ apps/desktop/src-tauri/
 | `build.rs` | Tauri build-time code generation을 실행한다. |
 | `src/main.rs` | native executable entry이며 library의 `run()`을 호출한다. |
 | `src/dialog.rs` | 공식 dialog plugin의 folder picker를 absolute UTF-8 `string`, 취소 `null`, path-free typed failure로 제한한다. |
-| `src/lib.rs` | 최소 권한 `tauri::Builder`, strict descriptor와 memory-only one-shot command, dialog plugin과 `choose_csv_export_directory` command를 등록한다. 초기 descriptor slot은 Phase 12 launcher가 stage하기 전까지 fail closed한다. |
+| `src/lib.rs` | 최소 권한 `tauri::Builder`, strict descriptor와 memory-only session 복구 command, dialog plugin과 `choose_csv_export_directory` command를 등록한다. 초기 descriptor slot은 Phase 12 launcher가 stage하기 전까지 fail closed한다. |
 | `tauri.conf.json` | 1440×1024 기본 창, 1180×760 최소 크기, Vite dev URL, frontend build 경로, CSP와 bundle 설정을 정의한다. |
 | `capabilities/main-window.json` | 메인 창의 기본 API와 상태머신 종료 완료 후 `destroy` 권한만 허용한다. |
 
@@ -279,7 +279,7 @@ src/app/
 | `App.module.css` | 앱 canvas, 대시보드 여백, route loading 상태와 종료 final 화면의 layout을 정의한다. |
 | `App.test.tsx` | 지연 로딩된 dashboard를 기다린 뒤 REGIME 선택, 자동매매 시작, route 이동, CSV, 중지까지 실제 runtime wiring을 통합 검증한다. |
 | `bootstrap/createDemoUiApplication.ts` | `FakeUiCommandAdapter`와 모든 actor를 포함한 `UiApplicationFacade`를 Figma 기준 초기값으로 생성하고 demo online event를 주입한다. route barrel을 거치지 않고 `dashboardFixture.ts`를 직접 읽어 초기 chunk 경계를 보존한다. |
-| `bootstrap/createLiveUiApplication.ts` | descriptor를 검증하고 전체 snapshot을 먼저 받은 뒤에만 facade를 생성한다. activation 시 actor startup, 단일 server-state sync와 WebSocket 연결을 수행하며 StrictMode와 one-shot token 수명주기를 보존한다. |
+| `bootstrap/createLiveUiApplication.ts` | descriptor를 검증하고 전체 snapshot을 먼저 받은 뒤에만 facade를 생성한다. activation 시 actor startup, 단일 server-state sync와 WebSocket 연결을 수행하며 StrictMode와 session token 수명주기를 보존한다. |
 | `bootstrap/createLiveUiApplication.test.tsx` | snapshot-first 순서, StrictMode App render, USDT/음수 손익과 not-ready 무표시를 검증한다. |
 | `bootstrap/createLiveUiApplication.process.test.mjs` | 실제 Python child process의 loopback snapshot을 React App에 표시하고 Communication 메시지 1~5 통합 trace를 검증한다. |
 | `bootstrap/demoFixtures.ts` | Figma 거래 행과 지표를 공통 `TradeRecord`, `RegimeMetric` 계약으로 정규화한다. dashboard 표시 fixture는 route component와 분리된 직접 경로로 읽는다. |
@@ -862,7 +862,7 @@ src/shared/
 
 | 파일 | 역할 |
 |---|---|
-| `src/main.tsx` | loading boundary를 먼저 표시하고 Tauri one-shot descriptor와 ready snapshot을 받은 경우에만 React StrictMode, `AppProviders`, live `App`을 mount한다. browser/IPC/snapshot 실패는 demo 없이 safe failure code를 표시한다. |
+| `src/main.tsx` | loading boundary를 먼저 표시하고 Tauri session descriptor와 ready snapshot을 받은 경우에만 React StrictMode, `AppProviders`, live `App`을 mount한다. browser/IPC/snapshot 실패는 demo 없이 safe failure code를 표시한다. |
 | `src/vite-env.d.ts` | Vite의 `import.meta`와 asset module type을 TypeScript에 제공한다. |
 | `src/test/setup.ts` | 모든 Vitest 파일에 `@testing-library/jest-dom` matcher를 등록한다. |
 
@@ -1043,7 +1043,7 @@ snapshot/event가 소유한다.
 | REGIME 계산 | backend 추천/지표 read와 sole-writer `set_regime_type` 적용 command 완료. active 변경은 `TRADING_ACTIVE` | 새 REGIME 전략은 Event-Action Table/registry 선행 |
 | 계좌/포지션 | live Account와 Phase 7 authoritative `PositionSnapshot`/보유 여부 read 완료 | Phase 8 mutable Position과 execution 반영 |
 | shutdown | live route는 typed unavailable, demo는 fake 완료 | Phase 12 거래 engine flush, stream close, sidecar 종료 |
-| native sidecar | one-shot descriptor state/command만 구현 | Phase 12 process spawn, stage, package와 crash lifecycle |
+| native sidecar | session descriptor state/command만 구현 | Phase 12 process spawn, stage, package와 crash lifecycle |
 | E2E | actual Python process→React read와 real Repository→Controller→CSV gateway temporary-directory E2E 존재 | packaged Tauri/real testnet E2E는 Phase 12~13 |
 
 후속 업무 owner를 추가할 때 React 표시 component가 Binance SDK, Tauri file API 또는

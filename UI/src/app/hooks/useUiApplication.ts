@@ -1,7 +1,7 @@
 import { useCallback, useState, useSyncExternalStore } from 'react';
 
 import type { AppViewModel } from '../control';
-import type { BackendBinanceConnectionStatus } from '../../shared/contracts';
+import type { BackendBinanceConnectionStatus, BackendRuntimeEnvironment } from '../../shared/contracts';
 import {
     UiApplicationStore,
     type UiApplicationController,
@@ -12,6 +12,7 @@ import type { UiApplicationFactory } from '../bootstrap';
  * React App Boundary가 facade snapshot과 intent controller를 사용하는 결과이다.
  */
 export interface UseUiApplicationResult {
+    readonly environment: BackendRuntimeEnvironment | null;
     readonly controller: UiApplicationController;
     readonly view_model: AppViewModel;
     readonly load_binance_connection_status: (signal?: AbortSignal) => Promise<BackendBinanceConnectionStatus>;
@@ -59,6 +60,7 @@ export function use_ui_application(
 
     return {
         controller: application_store,
+        environment: application_store.get_environment(),
         view_model,
         load_binance_connection_status,
     };

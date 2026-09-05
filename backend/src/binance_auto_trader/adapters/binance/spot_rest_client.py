@@ -47,6 +47,7 @@ from .mappers import (
 
 
 SPOT_TESTNET_API_BASE_URL = "https://testnet.binance.vision/api"
+SPOT_PUBLIC_MARKET_API_BASE_URL = "https://data-api.binance.vision/api"
 SPOT_TESTNET_ALTERNATE_API_BASE_URL = "https://api1.testnet.binance.vision/api"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 12
 DEFAULT_RECV_WINDOW_MILLISECONDS = 5_000
@@ -596,6 +597,7 @@ class BinanceSpotRESTClient:
         recv_window_milliseconds: int = DEFAULT_RECV_WINDOW_MILLISECONDS,
         maximum_order_notional: Decimal | None = None,
         allow_order_timestamp_retry: bool = True,
+        use_mainnet_market_data: bool = False,
     ) -> None:
         """
         함수 이름: __init__()
@@ -610,9 +612,14 @@ class BinanceSpotRESTClient:
             recv_window_milliseconds -> 1~60000ms signed request window
             maximum_order_notional -> STOP cleanup 외 주문에 적용할 선택 Testnet quote 금액 상한
             allow_order_timestamp_retry -> POST /v3/order의 -1021 단일 재전송 허용 여부
+            use_mainnet_market_data -> 공개 Kline만 실제 시장 데이터 전용 host에서 조회할지 여부
         반환값: 없음
         작성 날짜: 2026/08/25
         """
+        # 시세 환경 선택은 인증 API base URL과 분리하며 임의 host 입력을 허용하지 않는다.
+        if type(use_mainnet_market_data) is not bool:
+            raise TypeError("use_mainnet_market_data must be a bool")
+        self._use_mainnet_market_data = use_mainnet_market_data
         selected_transport = transport or UrllibHTTPTransport()
         if not callable(getattr(selected_transport, "request", None)):
             raise TypeError("transport must provide request")
@@ -1727,7 +1734,12 @@ class BinanceSpotRESTClient:
             encoded_parameters = f"{encoded_parameters}&signature={signature}"
 
         # GET은 query string, POST/DELETE는 form body를 사용해 공식 method별 규칙을 따른다.
-        request_url = f"{self._base_url}{endpoint}"
+        request_base_url = self._base_url
+        if self._use_mainnet_market_data and endpoint == "/v3/klines":
+            if method != "GET" or signed:
+                raise ValueError("mainnet Klines require unsigned GET")
+            request_base_url = SPOT_PUBLIC_MARKET_API_BASE_URL  # 인증 정보는 공개 시세 host로 보내지 않는다.
+        request_url = f"{request_base_url}{endpoint}"
         request_body: bytes | None = None
         if method == "GET" and encoded_parameters:
             request_url = f"{request_url}?{encoded_parameters}"

@@ -16,6 +16,7 @@ from uuid import uuid4
 _TESTNET_COMBINED_STREAM_URL = (
     "wss://stream.testnet.binance.vision/stream?streams="
 )
+_PUBLIC_COMBINED_STREAM_URL = "wss://data-stream.binance.vision/stream?streams="
 _TESTNET_WEBSOCKET_API_URL = (
     "wss://ws-api.testnet.binance.vision/ws-api/v3"
 )
@@ -752,6 +753,7 @@ class BinanceSpotWebSocketClient:
         account_event_queue_capacity: int = (
             _DEFAULT_ACCOUNT_EVENT_QUEUE_CAPACITY
         ),
+        use_mainnet_market_data: bool = False,
     ) -> None:
         """
         함수 이름: __init__()
@@ -764,6 +766,7 @@ class BinanceSpotWebSocketClient:
             recv_window_milliseconds -> SIGNED 요청 허용 시간 창
             startup_timeout_seconds -> open 또는 subscription ACK 최대 대기 시간
             account_event_queue_capacity -> downstream 처리 전 대기할 최대 account event 수
+            use_mainnet_market_data -> 공개 Kline을 실제 시장 stream에서 구독할지 여부
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -799,7 +802,14 @@ class BinanceSpotWebSocketClient:
         if account_event_queue_capacity <= 0:
             raise ValueError("account_event_queue_capacity must be positive")
 
-        # Endpoint는 외부 설정을 받지 않아 testnet credential이 다른 host로 전송되지 않게 한다.
+        # 공개 시세만 두 공식 host 중 선택하며 서명 계좌 구독은 고정 Testnet URL을 사용한다.
+        if type(use_mainnet_market_data) is not bool:
+            raise TypeError("use_mainnet_market_data must be a bool")
+        self._market_stream_url = (
+            _PUBLIC_COMBINED_STREAM_URL
+            if use_mainnet_market_data
+            else _TESTNET_COMBINED_STREAM_URL
+        )
         self._socket_factory = socket_factory or _default_socket_factory
         self._timestamp_provider = (
             timestamp_provider or _utc_timestamp_milliseconds
@@ -819,7 +829,7 @@ class BinanceSpotWebSocketClient:
     ) -> _SocketSubscription:
         """
         함수 이름: subscribe_all_kline_streams()
-        기능: 고정 testnet combined URL에서 한 symbol의 모든 project Kline stream을 구독한다.
+        기능: 선택한 공식 시장의 combined URL에서 한 symbol의 모든 Kline stream을 구독한다.
         인자: symbol -> 구독할 정규화 Spot symbol
             intervals -> 구독할 공식 interval 문자열 tuple
             on_message -> combined Kline payload callback
@@ -834,7 +844,7 @@ class BinanceSpotWebSocketClient:
             f"{normalized_symbol.lower()}@kline_{interval}"
             for interval in normalized_intervals
         )
-        url = f"{_TESTNET_COMBINED_STREAM_URL}{stream_names}"
+        url = f"{self._market_stream_url}{stream_names}"  # 재연결도 최초와 같은 시세 환경을 사용한다.
         lifecycle = _ConnectionLifecycle(on_disconnect)
 
         def handle_open(_socket: object) -> None:

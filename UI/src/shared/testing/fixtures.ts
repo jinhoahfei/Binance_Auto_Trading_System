@@ -25,16 +25,17 @@ export const REGIME_METRIC_FIXTURES: ReadonlyArray<RegimeMetric> = [
         value: '3,421.18',
         tone: 'neutral',
     },
+    // 스윙 fixture도 가격 대신 구조 판정을 사용해 실제 REGIME 패널의 표시 계약을 따른다.
     {
         id: 'swingLow',
         label: 'Swing Low',
-        value: '3,315.00',
+        value: 'LL',  // 낮아진 저점 판정은 기존 negative tone과 일치시킨다.
         tone: 'negative',
     },
     {
         id: 'swingHigh',
         label: 'Swing High',
-        value: '3,488.20',
+        value: 'HH',  // 높아진 고점 판정은 기존 positive tone과 일치시킨다.
         tone: 'positive',
     },
 ];

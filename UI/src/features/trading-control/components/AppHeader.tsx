@@ -5,11 +5,12 @@ import logo_glyph_url from '../../../assets/figma/logo-glyph.svg';
 import start_icon_url from '../../../assets/figma/header-start.svg';
 import stop_icon_url from '../../../assets/figma/header-stop-icon.svg';
 import { Button } from '../../../shared/ui';
-import type { BackendBinanceConnectionStatus } from '../../../shared/contracts';
+import type { BackendBinanceConnectionStatus, BackendRuntimeEnvironment } from '../../../shared/contracts';
 
 import styles from './AppHeader.module.css';
 
 export interface AppHeaderProps {
+  environment?: BackendRuntimeEnvironment | null;
   connectionDetails?: BackendBinanceConnectionStatus | null;
   connectionDetailsError?: boolean;
   isConnected: boolean;
@@ -29,6 +30,7 @@ export interface AppHeaderProps {
  * 작성 날짜: 2026/08/12
  */
 export function AppHeader({
+  environment = null,
   connectionDetails = null,
   connectionDetailsError = false,
   isConnected,
@@ -44,6 +46,14 @@ export function AppHeader({
   // 정지 상태의 열린 Position은 재시작으로 복구된 exposure이므로 시작 대신 청산만 허용한다.
   const has_recovered_position = !isTrading && hasOpenPosition;
   const stop_button_label = has_recovered_position ? '복구 포지션 청산' : '매매 중지';
+
+  // 연결 유무와 시장·계좌 환경을 구분하고 주문 권한은 backend의 명시값으로 표시한다.
+  const environment_labels = { mainnet: '실제 시장', testnet: 'Testnet', fake: '데모', unavailable: '확인 불가' };
+  const market_label = environment_labels[environment?.market_data ?? 'unavailable'];
+  const account_label = environment?.account === 'mainnet'
+    ? '실계좌' : environment_labels[environment?.account ?? 'unavailable'];
+  const order_label = environment === null ? '확인 불가'
+    : environment.orders_enabled ? '활성' : '비활성';
 
   /**
    * 함수 이름: set_connection_tooltip_open()
@@ -71,7 +81,7 @@ export function AppHeader({
         <span className={styles.connectionAnchor}>
           <button
             aria-describedby={is_connection_tooltip_open ? connection_tooltip_id : undefined}
-            aria-label={`Binance 연결 상태: ${isConnected ? 'LIVE' : 'OFFLINE'}`}
+            aria-label={`Binance 연결 상태: ${isConnected ? '연결됨' : '연결 끊김'}`}
             className={`${styles.connection} ${isConnected ? styles.online : styles.offline}`}
             onBlur={() => set_connection_tooltip_open(false)}
             onFocus={() => set_connection_tooltip_open(true)}
@@ -85,7 +95,7 @@ export function AppHeader({
             type="button"
           >
             <span className={styles.dot} aria-hidden="true" />
-            {isConnected ? 'LIVE' : 'OFFLINE'}
+            {isConnected ? '연결됨' : '연결 끊김'}
           </button>
           {is_connection_tooltip_open && (
             <div className={styles.connectionTooltip} id={connection_tooltip_id} role="tooltip">
@@ -117,6 +127,16 @@ export function AppHeader({
             </div>
           )}
         </span>
+        <div
+          aria-label="시세 및 거래 환경"
+          className={styles.environment}
+          data-market-environment={environment?.market_data ?? 'unavailable'}
+          data-account-environment={environment?.account ?? 'unavailable'}
+          data-orders-enabled={environment?.orders_enabled ?? 'unavailable'}
+        >
+          <span>시세·REGIME <strong>{market_label}</strong></span>
+          <span>계좌 <strong>{account_label}</strong> · 주문 <strong>{order_label}</strong></span>
+        </div>
       </div>
 
       <div className={styles.actions}>
@@ -131,7 +151,7 @@ export function AppHeader({
         </Button>
         <Button
           className={styles.headerButton}
-          disabled={isTrading || has_recovered_position || isCommandPending}
+          disabled={isTrading || has_recovered_position || isCommandPending || environment?.orders_enabled === false}
           onClick={onStartRequested}
           tone="positive"
         >

@@ -6,8 +6,13 @@
     <meta name="theme-color" content="#0b0e11" />
     <title>ETH AUTO · Binance Trading</title>
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="margin: 0; background: #0b0e11; color: #eaecef;">
+    <!-- 모듈 로딩 전에도 비어 있는 흰 화면 대신 현재 시작 상태를 표시한다. -->
+    <div id="root">
+      <main role="status" style="display: grid; min-height: 100vh; place-items: center; font-family: sans-serif;">
+        화면을 불러오는 중입니다.
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

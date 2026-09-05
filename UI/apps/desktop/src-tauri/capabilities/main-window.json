@@ -1,11 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "메인 창의 one-shot backend 연결, native picker, exit wait와 최종 창 제거만 허용합니다.",
+  "description": "메인 창의 backend 연결 복구, native picker, exit wait와 최종 창 제거만 허용합니다.",
   "windows": ["main"],
   "platforms": ["macOS"],
   "permissions": [
-    "allow-take-backend-connection-descriptor",
+    "allow-get-backend-connection-descriptor",
     "allow-choose-csv-export-directory",
     "allow-await-backend-sidecar-exit",
     "allow-arm-native-exit-intent-bridge",

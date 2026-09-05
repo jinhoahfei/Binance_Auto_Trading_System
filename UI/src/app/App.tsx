@@ -43,7 +43,7 @@ export interface AppProps {
  * 작성 날짜: 2026/08/20
  */
 export function App({ applicationFactory }: AppProps) {
-    const { controller, view_model, load_binance_connection_status } = use_ui_application(applicationFactory);
+    const { controller, view_model, environment, load_binance_connection_status } = use_ui_application(applicationFactory);
     const connection_details = use_binance_connection_status(
         load_binance_connection_status,
         !view_model.app_exit.is_final,
@@ -69,6 +69,7 @@ export function App({ applicationFactory }: AppProps) {
     return (
         <div className={styles.application}>
             <AppHeader
+                environment={environment}
                 connectionDetails={connection_details.connection_details}
                 connectionDetailsError={connection_details.has_error}
                 hasOpenPosition={view_model.trading.has_open_position}

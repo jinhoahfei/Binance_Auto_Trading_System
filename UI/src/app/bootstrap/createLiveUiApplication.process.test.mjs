@@ -242,7 +242,7 @@ describe('Phase 5 actual process live read', () => {
                     ),
                 }),
             ));
-            expect(await screen.findByText('LIVE')).toBeInTheDocument();
+            expect(await screen.findByRole('button', { name: 'Binance 연결 상태: 연결됨' })).toBeInTheDocument();
             expect(await screen.findByRole('article', { name: '보유 자산' })).toHaveTextContent(
                 'USDT',
             );
@@ -259,7 +259,7 @@ describe('Phase 5 actual process live read', () => {
 
             // Case 3의 production adapter가 실제 Python `/v1/trades` empty 결과까지 렌더링해야 한다.
             const user = userEvent.setup();
-            const connection_badge = screen.getByRole('button', { name: 'Binance 연결 상태: LIVE' });
+            const connection_badge = screen.getByRole('button', { name: 'Binance 연결 상태: 연결됨' });
             await user.hover(connection_badge);
             const connection_tooltip = await screen.findByRole('tooltip');
             await waitFor(() => {
