@@ -220,18 +220,21 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
         original_fsync = repository_module.os.fsync
 
         # 같은 거부를 두 번 기록해도 PREPARED 뒤 TRANSITION 하나만 durable append한다.
-        with patch.object(
-            repository_module.os,
-            "fsync",
-            wraps=original_fsync,
-        ) as fsync_spy:
+        with (
+            patch.object(repository_module.os, "fsync", wraps=original_fsync) as fsync_spy,
+            patch.object(
+                repository_module, "flush_created_file_metadata",
+                wraps=repository_module.flush_created_file_metadata,
+            ) as metadata_spy,
+        ):
             self.repository.mark_pending_order_submission_rejected(
                 order.client_order_id
             )
             self.repository.mark_pending_order_submission_rejected(
                 order.client_order_id
             )
-        self.assertEqual(fsync_spy.call_count, 2)  # 첫 transition의 file과 directory만 sync한다.
+        self.assertEqual(fsync_spy.call_count, 1 if repository_module.os.name == "nt" else 2)
+        metadata_spy.assert_called_once_with(self.repository.pending_order_storage_path)
         event_lines = self.repository.pending_order_storage_path.read_text(
             encoding="utf-8"
         ).splitlines()
@@ -267,7 +270,7 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
         del current_event["order"]["exit_pct_b_at_intent"]
         sidecar_path.write_text(
             json.dumps(current_event, separators=(",", ":")) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
 
         # Legacy record에는 제출 거부 증거가 없으므로 부재 삭제 권한을 절대 부여하지 않는다.
@@ -312,7 +315,7 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
                 json.dumps(event, separators=(",", ":")) + "\n"
                 for event in legacy_events
             ),
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
 
         # V2는 SUBMISSION_REJECTED_CONFIRMED만 전이했으며 policy version은 추측하지 않는다.
@@ -349,7 +352,7 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
         del schema_three_event["order"]["exit_pct_b_at_intent"]
         sidecar_path.write_text(
             json.dumps(schema_three_event, separators=(",", ":")) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
 
         restarted_record = TradeHistoryRepository(
@@ -390,7 +393,7 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
                 json.dumps(event, separators=(",", ":")) + "\n"
                 for event in (legacy_event, current_event)
             ),
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
         with self.assertRaises(PendingOrderJournalCorruptedError) as raised:
             TradeHistoryRepository(
@@ -479,15 +482,18 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
         original_fsync = repository_module.os.fsync
 
         # 실제 fsync를 유지한 spy로 UPSERT와 REMOVE의 두 durability 경계를 각각 센다.
-        with patch.object(
-            repository_module.os,
-            "fsync",
-            wraps=original_fsync,
-        ) as fsync_spy:
+        with (
+            patch.object(repository_module.os, "fsync", wraps=original_fsync) as fsync_spy,
+            patch.object(
+                repository_module, "flush_created_file_metadata",
+                wraps=repository_module.flush_created_file_metadata,
+            ) as metadata_spy,
+        ):
             self.repository.save_pending_order(order)
             self.repository.delete_pending_order(order.client_order_id)
 
-        self.assertEqual(fsync_spy.call_count, 4)  # event마다 file과 parent directory를 한 번씩 sync한다.
+        self.assertEqual(fsync_spy.call_count, 2 if repository_module.os.name == "nt" else 4)
+        self.assertEqual(metadata_spy.call_count, 2)  # Windows FlushFileBuffers도 event마다 실제 실행한다.
 
     def test_remove_is_idempotent_and_replays_to_empty_state(self) -> None:
         """
@@ -528,7 +534,7 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
         decoded_event["order"]["raw_response"] = {"api_key": secret_canary}
         sidecar_path.write_text(
             json.dumps(decoded_event, separators=(",", ":")) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
 
         # fail-closed 오류는 손상 line과 안전한 타입만 노출하고 record 원문은 포함하지 않는다.
@@ -756,7 +762,7 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
                 json.dumps(event, separators=(",", ":")) + "\n"
                 for event in journal_events
             ),
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
         with self.assertRaises(PendingOrderJournalCorruptedError) as raised:
             TradeHistoryRepository(
@@ -783,7 +789,7 @@ class PendingOrderRecoveryRepositoryTests(unittest.TestCase):
         decoded_event["order"]["risk_policy_version"] = True
         sidecar_path.write_text(
             json.dumps(decoded_event, separators=(",", ":")) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
 
         # Python bool은 int 하위 타입이지만 policy version으로는 받지 않는다.

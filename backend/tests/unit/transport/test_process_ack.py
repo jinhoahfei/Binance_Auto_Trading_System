@@ -114,6 +114,7 @@ class _ParentLossHistoryController:
             raise RuntimeError("injected durable flush failure")
 
 
+@unittest.skipUnless(os.name == "posix", "FD5 select(pipe) protocol is POSIX; Windows framed ACK has separate tests")
 class ProcessAcknowledgementTests(unittest.TestCase):
     """
     클래스 이름: ProcessAcknowledgementTests

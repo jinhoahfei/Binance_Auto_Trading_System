@@ -241,7 +241,7 @@ class ManualKillControlRepositoryTests(unittest.TestCase):
         journal_path = self.repository.manual_kill_control_storage_path
         journal_path.write_text(
             json.dumps(legacy_record, separators=(",", ":")) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="",
         )
         restarted_repository = TradeHistoryRepository(self.history_path)
         self.assertEqual(

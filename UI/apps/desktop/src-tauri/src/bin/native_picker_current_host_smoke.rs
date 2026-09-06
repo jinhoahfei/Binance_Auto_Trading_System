@@ -1,14 +1,14 @@
-#[cfg(not(target_os = "macos"))]
-compile_error!("native-picker-current-host-smoke supports only the current macOS host");
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+compile_error!("native-picker-current-host-smoke requires macOS or Windows");
 
-#[cfg(target_os = "macos")]
-mod macos_smoke {
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod current_host_smoke {
     use binance_auto_trader_lib::choose_csv_export_directory_for_current_host_smoke;
     use std::path::Path;
     use std::time::Duration;
     use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-    const CURRENT_HOST_INTERACTION_TIMEOUT: Duration = Duration::from_secs(60);
+    const CURRENT_HOST_INTERACTION_TIMEOUT: Duration = Duration::from_secs(180);
     const EXIT_SUCCESS: i32 = 0;
     const EXIT_CONTRACT_FAILURE: i32 = 2;
     const EXIT_HOST_FAILURE: i32 = 3;
@@ -55,7 +55,7 @@ mod macos_smoke {
     }
 
     /// 함수 이름: schedule_interaction_timeout()
-    /// 기능: operator가 native picker에 응답하지 않은 current-host run을 60초 뒤 fail closed한다.
+    /// 기능: operator가 native picker에 응답하지 않은 current-host run을 180초 뒤 fail closed한다.
     /// 인자: 없음
     /// 반환값: 없음
     /// 작성 날짜: 2026/08/29
@@ -167,7 +167,7 @@ mod macos_smoke {
             // Selected 결과는 absolute UTF-8만 허용하고 relative 또는 explicit cancel은 거부한다.
             assert!(picker_result_matches_expected_outcome(
                 ExpectedPickerOutcome::Selected,
-                &Some("/private/tmp".to_owned()),
+                &Some(std::env::temp_dir().to_string_lossy().into_owned()),
             ));
             assert!(!picker_result_matches_expected_outcome(
                 ExpectedPickerOutcome::Selected,
@@ -200,11 +200,11 @@ mod macos_smoke {
 }
 
 /// 함수 이름: main()
-/// 기능: macOS current-host native picker smoke를 실행하고 정확한 process exit code를 반환한다.
+/// 기능: macOS 또는 Windows native picker smoke를 실행하고 정확한 process exit code를 반환한다.
 /// 인자: 없음
 /// 반환값: 없음
 /// 작성 날짜: 2026/08/29
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn main() {
-    std::process::exit(macos_smoke::run());
+    std::process::exit(current_host_smoke::run());
 }

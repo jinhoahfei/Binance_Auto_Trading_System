@@ -37,3 +37,6 @@ dist/
 
 # JavaScript package stores
 .pnpm-store/
+
+# Local Windows development toolchains and caches
+.dev-tools/

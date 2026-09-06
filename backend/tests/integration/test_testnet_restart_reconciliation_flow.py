@@ -2799,7 +2799,7 @@ class TestnetRestartReconciliationFlowTests(unittest.TestCase):
                             separators=(",", ":"),
                         )
                         + "\n",
-                        encoding="utf-8",
+                        encoding="utf-8", newline="",
                     )
                     legacy_journal = sidecar_path.read_bytes()
                     replayed_record = TradeHistoryRepository(

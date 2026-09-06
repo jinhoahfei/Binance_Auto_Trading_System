@@ -52,6 +52,7 @@ SENSITIVE_PACKAGING_ENVIRONMENT = {
 }
 
 
+@unittest.skipUnless(os.name == "posix", "macOS packaging shell 및 POSIX executable fixture 전용")
 class PhaseTwelvePackageSidecarTests(unittest.TestCase):
     """
     클래스 이름: PhaseTwelvePackageSidecarTests

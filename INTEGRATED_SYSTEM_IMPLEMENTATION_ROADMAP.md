@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 개인용 ad-hoc desktop package·credential·shutdown 검증 완료, Phase 13 부분 구현·live readiness `NO_GO` |
-| 기준일 | 2026-09-06 (Asia/Seoul) |
+| 기준일 | 2026-09-07 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
@@ -13,6 +13,7 @@
 | 2026-09-05 최신 갱신 | §16.20.6 Session 3을 current source에서 완료했다. Keychain 두 item의 memory-only read와 signed read-only preflight 뒤 `ETHUSDT` BUY decision notional `9.7814300211721854636528636815 USDT <= 10 USDT` 한 건, same-run exact `0.0041 ETH` STOP SELL 한 건을 실행했다. Canonical SUCCESS trace는 actual order `2`, durable Trade `2`, retry/cancel/duplicate/범위 밖 mutation `0`, fresh Position/pending/unknown/open order `0`, reconciliation `false`를 봉인했다. Post-run signed read-only도 account-wide open order/list `0`을 확인했고 Backend `993`, actual local+external `40`, secure runner/Communication `32`, trace schema `28`, order fault/actual helper `47`, Communication matrix `126/126`이 통과했다. 따라서 Session 4는 `GO`지만 fresh package와 macOS smoke, Phase 13 dependency/license/SBOM gap, live endpoint 승인은 아직 수행하지 않았다. 상세 source checkpoint와 artifact digest는 §16.20.6에 기록했다. |
 | 2026-09-05 Session 4 최신 갱신 | §16.20.7 Session 4를 `c28544e4d22c9c5512c380286d1dfc6dd618e14e == origin/main`과 unchanged lockfile 세 개에서 완료했다. 격리 target에 arm64 app/DMG를 fresh build하고 PyInstaller one-file과 hardened ad-hoc library-validation 불일치를 실제 실행에서 발견해 해당 후보를 기각했다. 최종 채택본은 outer seal을 포함한 non-hardened ad-hoc app과 read-only DMG이며 app tree SHA-256 `7e790832c97447df819d08c65c8a080bfd8f32ffbcab9ee18a5a59cbdb931853`, DMG SHA-256 `2c95e0fa33cca0cbf1fd263814be87f761440722237796b13d91d8b5f6b7df7b`다. Network-deny offline OSV 결과 High/Critical `0`, 최종 secret scan `2` canary/`2781` files PASS다. macOS arm64에서 Keychain read-only `READY`, Dashboard/History/stop, picker selected/cancelled, Command-Q safe shutdown, `RELEASED` owner와 orphan `0`을 확인했고 postflight `5/5`도 open order/list `0`을 유지했다. 실제 신규 주문은 `0`회다. 따라서 Session 5는 `GO`지만 Windows native PASS, Cross-platform package, Private Beta, live와 공개 release track은 완료하지 않았다. 상세 증거와 ad-hoc trust 절차는 §16.20.7에 기록했다. |
 | 2026-09-06 Session 5 최신 갱신 | §16.20.8의 Windows 11 x64 호환 source를 개발 실행 범위로 완료했다. `pnpm desktop:dev`가 Windows debug Tauri/Vite와 source Python venv를 직접 실행하도록 구성했고 Credential Manager, framed stdio, LockFileEx·LocalAppData adapter를 macOS 구현에서 분리했다. Backend `1046` 실행·`10` safe skip, UI `481`, Rust `45`, 도구 `38`, Communication `126/126`이 통과했다. Session 6 native 개발 실행 검증은 `GO`이며 Windows native PASS·설치 package·Private Beta/live 완료를 의미하지 않는다. |
+| 2026-09-07 Session 6 완료 | 사용자 지시에 따라 Windows 10 x64 개발 실행 통과를 완료 조건으로 확정했다. venv·Node/pnpm·Rust/MSVC를 준비하고 Vite EBUSY·main-window Windows capability 누락을 수정했다. Credential Manager와 Mac 이력 복원 후 read-only READY, Dashboard/History, picker, 정상 종료, fresh restart/renderer reload를 통과했다. 최종 RELEASED·잔여 process/port 0·이력 불변이다. Session 6은 완료이며 Windows 11 검증과 설치 배포는 별도 후속 작업이다. 상세 결과와 실패 기록은 §16.20.9 및 `WINDOWS_DEVELOPMENT_VALIDATION.md`에 보존했다. |
 
 ---
 
@@ -5508,7 +5509,9 @@ license/notice와 Developer ID/notarization은 하지 마라.
 
 #### 16.20.8 Session 5 — Windows 11 x64 호환 계층 구현
 
-**상태:** `[x]` source compatibility 구현·macOS 회귀 완료. Windows native 실행은 미검증이다.
+**상태:** `[x]` source compatibility 구현·macOS 회귀 완료. 완료 당시 Windows native 실행은 미검증이었다.
+2026-09-07 Windows 10 x64 개발 실행 후속 검증과 수정은 §16.20.9 및
+`WINDOWS_DEVELOPMENT_VALIDATION.md`에 별도로 기록했다.
 
 **이번 작업의 유효 범위 — 2026-09-06 사용자 지시 우선:** Windows에서도 현재 macOS처럼
 `UI`의 **`pnpm desktop:dev`**로 개발 실행하는 것이 목표다. 완성 패키지·배포 `.exe`를 만들지 않는다.
@@ -5624,37 +5627,62 @@ parent EOF/orphan recovery와 fresh restart를 확인하라. Windows에서 실�
 표시하지 말며 Testnet 주문과 모든 live signed/order 동작은 0회로 유지하라.
 ```
 
-#### 16.20.9 Session 6 — Windows 11 x64 native build와 read-only smoke
+#### 16.20.9 Session 6 — Windows 10 x64 개발 실행과 read-only smoke
 
-**목표:** Windows native build host에서 Session 5 구현을 실제 compile/test/package하고 Windows 11
-x64 PC의 read-only lifecycle을 검증한다.
+**상태:** `[x]` 완료 — 2026-09-07 사용자 지시에 따라 **Windows 10 x64 개발 실행 통과**를
+완료 조건으로 적용한다. Windows 11 검증은 추후 수행하며 이번 완료의 선행 조건이 아니다.
+기존 개발 모드 요청에 따라 설치 패키지도 별도 후속 작업으로 유지한다. 아래 기준이 앞선
+Session 6의 Windows 11/package 필수 표현보다 우선하며, 미실행 검사를 PASS로 바꾸는 것은 아니다.
+
+**2026-09-07 현재 PC의 개발 모드 검증:** Windows 10 Enterprise 22H2 build 19045 x64에서
+source venv·Node/pnpm·Rust/MSVC 환경을 준비하고 `pnpm desktop:dev`를 실제 실행했다.
+Vite의 Windows locked executable 감시 EBUSY와 macOS-only main-window capability를 수정했다.
+사용자가 등록한 Credential Manager 키와 제공한 Mac history 16건/pending 0건으로 read-only READY,
+Dashboard/History, native picker 선택·취소, 정상 종료 취소·확정, fresh restart/renderer reload/안전 종료를
+통과했다. 최종 owner는 RELEASED, runtime과 project process·Vite listener는 0이며 이력은 불변이다.
+
+Backend 1,046 실행(979 PASS/67 skip), UI 480 PASS/2 skip, Rust 37 PASS,
+도구 38 실행(20 PASS/18 platform skip), Communication 126/126을 확인했다.
+거래 opt-in과 실제 신규 주문·취소·청산·live signed 호출은 0회다.
+최초 실패와 원인이 확정되지 않은 첫 fresh restart 종료는 성공으로 세지 않고
+[Windows 개발 검증 보고서](WINDOWS_DEVELOPMENT_VALIDATION.md)에 보존했다.
+
+이는 **현재 Windows 10 PC의 개발 실행 검증**이며 변경된 Session 6 완료 조건을 충족한다.
+Windows 11 native PASS나 Cross-platform package master 완료를 의미하지 않는다.
+이 변경 tree의 macOS 재실행, Windows 11 검증과 PyInstaller/NSIS·설치 배포는 별도 범위로 남는다.
+
+**목표:** Windows 10 x64에서 Session 5 구현을 실제 compile/test하고 source 개발 앱의
+read-only lifecycle을 검증한다.
 
 **실행 범위:**
 
-1. Windows native build host에 MSVC Build Tools, Rust stable MSVC, WebView2, Node/pnpm, Python x64와
-   pinned PyInstaller를 준비한다.
+1. Windows 10 x64에 MSVC Build Tools, Rust stable MSVC, WebView2, Node/pnpm, Python x64와
+   source 실행용 venv를 준비한다.
 2. Windows에서 backend, UI와 Rust의 platform-neutral/Windows focused suite를 native 실행한다.
    POSIX-only test는 이유가 명시된 platform skip만 허용하고 module import 실패를 skip으로 숨기지 않는다.
 3. Windows Credential Manager 설정 도구의 canary set/read/delete, bounded printable credential,
    zeroization과 secret 비노출을 확인한다. 실제 credential은 renderer나 test log에 넣지 않는다.
-4. PyInstaller로 `binance-auto-sidecar-x86_64-pc-windows-msvc.exe`, Tauri로 unsigned NSIS installer를
-   native build한다. SmartScreen 수동 신뢰 허용은 macOS ad-hoc trust와 같은 비공개 배포 범위다.
-5. Windows 11 x64 PC에서 Testnet credential read-only READY, Dashboard/History/stop UI, native picker,
-   parent exit/orphan recovery, safe shutdown, process 잔여 `0`과 fresh restart를 smoke한다.
-6. Windows installer 재설치 시 실행 중 sidecar를 강제 종료하거나 history/credential을 삭제하지 않는다.
-   실행 중이면 fail closed 안내 후 정상 종료 뒤 재설치한다.
-7. Testnet order, live signed endpoint와 live order는 모두 `0`회다.
+4. `pnpm desktop:dev`로 Testnet credential read-only READY, Dashboard/History/종료 UI,
+   native picker, safe shutdown, process 잔여 `0`과 fresh restart를 검증한다.
+   parent EOF/orphan 경계는 실제 Windows fixture subprocess 결과와 계좌 앱 결과를 구분해 기록한다.
+5. Testnet order, live signed endpoint와 live order는 모두 `0`회로 유지한다.
 
-**완료 조건:** Windows native test와 unsigned NSIS package read-only smoke가 통과하고 macOS package
-regression도 유지된다. 이 시점에 `Cross-platform package master`만 `[x]`로 변경한다.
+**완료 조건:** 위 Windows 10 x64 native test와 개발 앱 read-only 검증이 통과하고,
+정상 종료 후 RELEASED·잔여 process/port `0`과 이력 보존을 확인한다. 확보한 증거로 충족했으므로
+Session 6을 `[x]`로 변경한다. 최초 실패 기록은 보존하며 재검증 성공을 모든 시작 시도의 성공으로
+일반화하지 않는다. Cross-platform package master, Private Beta 및 live 완료 표시는 변경하지 않는다.
+
+**별도 후속 작업:** Windows 11 x64 재검증, 이 변경 tree의 macOS 회귀 검증,
+PyInstaller sidecar·unsigned NSIS 제작과 설치·재설치 검증. 재설치 시 실행 중 sidecar를 강제 종료하거나
+history/credential을 삭제하지 않고 정상 종료 뒤 진행한다.
 
 **세션 요청문:**
 
 ```text
-INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 6만 Windows native build host에서 수행하라.
-Windows 11 x64 native backend/UI/Rust test, Credential Manager canary, PyInstaller sidecar, unsigned NSIS와
-read-only startup/shutdown/orphan recovery를 검증하라. Testnet 주문과 모든 live signed/order 동작은
-0회로 유지하라.
+Session 6은 Windows 10 x64 개발 실행 기준으로 완료했다. 재검증이 필요하면
+WINDOWS_DEVELOPMENT_VALIDATION.md의 native backend/UI/Rust test, Credential Manager canary,
+source 개발 앱 read-only startup/shutdown과 fixture orphan 검증을 따른다.
+Windows 11과 설치 패키지는 별도 후속 작업이다. Testnet 주문과 모든 live signed/order 동작은 0회로 유지한다.
 ```
 
 #### 16.20.10 Session 7 — live bootstrap과 양 OS live-readiness
@@ -5742,7 +5770,7 @@ BUY/SELL 또는 STOP과 fresh restart zero exposure가 확인된 뒤에만 Windo
 - [x] Session 4 — macOS fresh package와 macOS PC smoke
 - [x] **macOS package ready**
 - [x] Session 5 — Windows 11 x64 호환 계층 구현 (source 개발 실행 범위; native 검증은 Session 6)
-- [ ] Session 6 — Windows native build와 Windows 11 x64 PC read-only smoke
+- [x] Session 6 — Windows 10 x64 개발 실행과 read-only smoke (2026-09-07 사용자 지정 완료 조건; Windows 11·설치 배포는 후속)
 - [ ] **Cross-platform package master**
 - [ ] Session 7 — live bootstrap과 양 OS signed read-only readiness
 - [ ] **Private Beta master — macOS·Windows 비공개 live 준비 완료, 주문은 별도 승인**

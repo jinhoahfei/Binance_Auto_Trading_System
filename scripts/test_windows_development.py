@@ -37,6 +37,20 @@ class WindowsDevelopmentContractTests(unittest.TestCase):
         self.assertEqual(windows["bundle"]["targets"], [])
         self.assertNotIn("app", windows)  # Origin/CSP/capability를 Windows에서 넓히지 않는다.
 
+        # Native READY 뒤 renderer가 event bridge와 descriptor를 사용할 수 있어야 한다.
+        # macOS에만 capability를 적용하면 Windows에서는 startup과 안전 종료가 함께 차단된다.
+        capability = json.loads((TAURI_DIRECTORY / "capabilities/main-window.json").read_text())
+        self.assertIn("windows", capability["platforms"])
+        self.assertIn("macOS", capability["platforms"])
+        self.assertEqual(capability["windows"], ["main"])
+        self.assertNotIn("remote", capability)
+        self.assertTrue({
+            "core:event:allow-listen", "core:event:allow-unlisten",
+            "allow-get-backend-connection-descriptor", "allow-await-backend-sidecar-exit",
+            "allow-arm-native-exit-intent-bridge", "allow-arm-sidecar-exit-event-bridge",
+            "core:window:allow-destroy",
+        }.issubset(capability["permissions"]))
+
         # Tauri Windows debug resource도 ICO가 필요하며 기존 256px PNG의 픽셀을 그대로 포함한다.
         icon_path = TAURI_DIRECTORY / windows["bundle"]["icon"][0]
         icon_bytes = icon_path.read_bytes()

@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import secrets
+import select
 import socket
 import struct
 from time import monotonic, sleep
@@ -416,7 +417,11 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
                     client_socket.sendall(bytes((frame_byte,)))
                 except OSError:
                     break
-                sleep(0.35)
+                # Windows에서는 close 이후 추가 write가 unread close frame을 reset으로
+                # 덮을 수 있다. Byte 간격 동안 응답을 관찰해 server의 실제 close를 먼저 읽는다.
+                readable, _, _ = select.select((client_socket,), (), (), 0.35)
+                if readable:
+                    break
 
             close_opcode, close_payload = _receive_server_frame(client_socket)
             elapsed_seconds = monotonic() - start_time

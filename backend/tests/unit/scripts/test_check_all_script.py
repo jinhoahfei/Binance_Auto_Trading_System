@@ -15,6 +15,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 CHECK_ALL_SCRIPT = REPOSITORY_ROOT / "scripts" / "check_all.sh"
 
 
+@unittest.skipUnless(os.name == "posix", "POSIX shell runner and executable fixtures require POSIX")
 class CheckAllScriptTests(unittest.TestCase):
     """
     클래스 이름: CheckAllScriptTests

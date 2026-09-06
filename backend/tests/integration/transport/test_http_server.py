@@ -3,7 +3,9 @@
 from http.client import HTTPConnection
 from collections.abc import Mapping
 import json
+from pathlib import Path
 import secrets
+from tempfile import gettempdir
 from threading import RLock, Thread, local
 from time import sleep
 from types import SimpleNamespace
@@ -40,7 +42,7 @@ def _encode_csv_export_body(file_name: str) -> str:
     # 실제 command parser가 요구하는 여섯 option field와 schema version을 모두 제공한다.
     request_payload = {
         "schema_version": 3,
-        "directory": "/tmp",
+        "directory": gettempdir(),
         "file_name": file_name,
         "period": "custom",
         "start_date": "2026-08-23",
@@ -86,7 +88,7 @@ class _SuccessfulCSVExportController:
         self.received_options.append(options)
 
         return CSVExportResult(
-            file_path=f"/tmp/{options.file_name}",
+            file_path=str(Path(gettempdir()) / options.file_name),
             exported_row_count=2,
         )  # HTTP test는 filesystem 대신 이미 게시가 끝난 typed 결과 경계를 재현한다.
 
@@ -588,7 +590,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
         self.assertEqual(
             first_payload["data"],
             {
-                "file_path": "/tmp/http-idempotent.csv",
+                "file_path": str(Path(gettempdir()) / "http-idempotent.csv"),
                 "exported_row_count": 2,
             },
         )

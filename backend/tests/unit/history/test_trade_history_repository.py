@@ -294,20 +294,22 @@ class TradeHistoryRepositoryTests(unittest.TestCase):
         original_bytes = valid_prefix + corrupt_tail
         self.history_path.write_bytes(original_bytes)
 
-        with patch.object(
-            os,
-            "fsync",
-            side_effect=(None, OSError("directory fsync failed")),
-        ) as fsync_mock:
-            with patch.object(os, "close", wraps=os.close) as close_mock:
-                with self.assertRaisesRegex(OSError, "directory fsync failed"):
-                    self.repository.get_trade_history()
+        # OS별 metadata barrier가 실패해도 backup file fsync 뒤 원본 truncate는 금지된다.
+        with (
+            patch.object(os, "fsync", wraps=os.fsync) as fsync_mock,
+            patch(
+                "binance_auto_trader.adapters.persistence.trade_history_repository.flush_created_file_metadata",
+                side_effect=OSError("metadata flush failed"),
+            ) as metadata_mock,
+        ):
+            with self.assertRaisesRegex(OSError, "metadata flush failed"):
+                self.repository.get_trade_history()
 
         backup_path = self.history_path.with_name(
             "trades.jsonl.corrupt-20260821T000102345678Z"
         )
-        self.assertEqual(fsync_mock.call_count, 2)
-        self.assertEqual(close_mock.call_count, 1)
+        self.assertEqual(fsync_mock.call_count, 1)
+        metadata_mock.assert_called_once_with(backup_path)
         self.assertEqual(self.history_path.read_bytes(), original_bytes)
         self.assertEqual(backup_path.read_bytes(), corrupt_tail)
         self.assertEqual(self.repository.loaded_order_ids, frozenset())

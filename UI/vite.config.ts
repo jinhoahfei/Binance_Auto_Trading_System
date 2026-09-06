@@ -17,5 +17,8 @@ export default defineConfig({
     : [])],
   server: {
     strictPort: true,
+    // Tauri가 관리하는 Rust source/build 경로는 Vite에서 감시하지 않는다.
+    // Windows linker가 점유한 target의 exe를 watch하면 EBUSY로 개발 서버가 종료된다.
+    watch: { ignored: ['**/apps/desktop/src-tauri/**'] },
   },
 });

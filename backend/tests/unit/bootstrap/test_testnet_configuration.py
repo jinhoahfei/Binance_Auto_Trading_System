@@ -1184,7 +1184,8 @@ class TestnetConfigurationTests(unittest.TestCase):
                 "assert BinanceTestnetFaultInjectionTests.__unittest_skip__ is True",
                 "assert BinanceTestnetOrderLifecycleTests.__unittest_skip__ is True",
                 "assert BinanceTestnetColdRestartTests.__unittest_skip__ is True",
-                "assert getattr(BinanceTestnetPhaseThirteenPublicMarketCase2Tests, '__unittest_skip__', False) is False",
+                "import os",
+                "assert getattr(BinanceTestnetPhaseThirteenPublicMarketCase2Tests, '__unittest_skip__', False) is (os.name != 'posix')",
             )
         )
 

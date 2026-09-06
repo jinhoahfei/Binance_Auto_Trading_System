@@ -1,6 +1,8 @@
 """CSV export transport parser, mapper와 route의 strict 성공·실패 계약을 검증한다."""
 
 from datetime import date
+from pathlib import Path
+from tempfile import gettempdir
 from threading import RLock
 from types import SimpleNamespace
 import unittest
@@ -26,6 +28,8 @@ from binance_auto_trader.transport.routes.csv_export import create_csv_export
 
 TEST_REQUEST_ID = "3c73d583-c1c8-4830-8393-cc31639a40fd"
 TEST_COMMAND_ID = "f5a4f621-25f8-4dd2-bfb7-1b80e9561423"
+TEST_EXPORT_DIRECTORY = str(Path(gettempdir()) / "binance-export-contract")
+TEST_EXPORT_PATH = str(Path(TEST_EXPORT_DIRECTORY) / "phase11-trades.csv")
 
 
 def _create_valid_request_body() -> dict[str, object]:
@@ -39,7 +43,7 @@ def _create_valid_request_body() -> dict[str, object]:
     # UI adapter가 전송하는 key와 wire value를 별도 default 없이 그대로 고정한다.
     return {
         "schema_version": SCHEMA_VERSION,
-        "directory": "/Users/oscar/Exports",
+        "directory": TEST_EXPORT_DIRECTORY,
         "file_name": "phase11-trades.csv",
         "period": "custom",
         "start_date": "2026-08-17",
@@ -215,7 +219,7 @@ class CsvExportContractTests(unittest.TestCase):
                 options = parse_csv_export_options(request_body)
 
                 self.assertIs(options.period, expected_period)
-                self.assertEqual(options.save_location, "/Users/oscar/Exports")
+                self.assertEqual(options.save_location, TEST_EXPORT_DIRECTORY)
                 self.assertEqual(options.file_name, "phase11-trades.csv")
                 self.assertEqual(options.start_date, date(2026, 8, 17))
                 self.assertEqual(options.end_date, date(2026, 8, 23))
@@ -334,14 +338,14 @@ class CsvExportContractTests(unittest.TestCase):
         작성 날짜: 2026/08/23
         """
         result = CSVExportResult(
-            file_path="/Users/oscar/Exports/phase11-trades.csv",
+            file_path=TEST_EXPORT_PATH,
             exported_row_count=17,
         )
 
         self.assertEqual(
             map_csv_export_result(result),
             {
-                "file_path": "/Users/oscar/Exports/phase11-trades.csv",
+                "file_path": TEST_EXPORT_PATH,
                 "exported_row_count": 17,
             },
         )
@@ -379,7 +383,7 @@ class CsvExportRouteTests(unittest.TestCase):
         작성 날짜: 2026/08/23
         """
         result = CSVExportResult(
-            file_path="/Users/oscar/Exports/phase11-trades.csv",
+            file_path=TEST_EXPORT_PATH,
             exported_row_count=17,
         )
         context, controller = _create_route_context(result=result)
@@ -396,7 +400,7 @@ class CsvExportRouteTests(unittest.TestCase):
         self.assertEqual(
             response.payload["data"],
             {
-                "file_path": "/Users/oscar/Exports/phase11-trades.csv",
+                "file_path": TEST_EXPORT_PATH,
                 "exported_row_count": 17,
             },
         )

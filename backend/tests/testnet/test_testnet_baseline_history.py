@@ -206,6 +206,7 @@ class TestnetBaselineHistoryTests(unittest.TestCase):
                 copied_repository.get_pending_order_recovery_records(),
             )
 
+    @unittest.skipUnless(os.name == "posix", "Historical baseline descriptor requires POSIX inode and uid primitives")
     def test_inherited_descriptor_is_digest_bound_and_durably_copied(
         self,
     ) -> None:

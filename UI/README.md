@@ -20,6 +20,19 @@ Figma의 1440×1024 데스크톱 화면을 TypeScript, React, Vite와 XState 기
 
 ### Windows 11 x64 개발 실행
 
+2026-09-07 현재 이 PC에는 개발 환경이 준비되어 있습니다. 실제 검증 OS는 **Windows 10
+Enterprise 22H2 x64**이며 Windows 11에서 실행한 결과는 아닙니다.
+저장소 루트에서 다음 명령으로 로컬 도구 경로와 venv를 적용해 시작합니다.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\start_windows_development.ps1
+```
+
+이 스크립트는 이 checkout의 `.dev-tools`와 `backend/.venv`를 사용합니다.
+일반 개발 PowerShell에는 `scripts/enter_windows_development.ps1`을 dot-source할 수 있습니다.
+현재 shell에만 경로를 설정하며 전역 PATH와 영구 실행 정책은 바꾸지 않습니다.
+설치 구성·실제 READY/종료 결과·실패 기록은 [Windows 개발 검증 보고서](../WINDOWS_DEVELOPMENT_VALIDATION.md)에 있습니다.
+
 Windows에서도 `UI`에서 **`pnpm desktop:dev`**를 사용합니다. Tauri debug 앱과 Vite를 실행하고
 `backend/.venv/Scripts/python.exe`가 현재 Python 소스를 직접 실행합니다. Python 변경 후에는 앱을
 정상 종료하고 다시 실행합니다. PyInstaller, sidecar 배포 `.exe`, NSIS 설치 프로그램은 필요하지 않습니다.
@@ -55,9 +68,10 @@ PowerShell 실행 정책이 로컬 script를 차단하면 조직 정책을 확�
 `com.binance-auto.trader`에 보존됩니다. 창 닫기 → 일반 종료를 완료한 뒤 개발 터미널을 닫습니다.
 소유권 복구가 표시되면 살아 있는 backend와 계좌 상태를 먼저 확인하고 native 복구 안내를 따릅니다.
 
-Session 5는 macOS에서 source와 공통 계약을 검증한 단계입니다. **Windows native compile,
-Credential Manager canary, 실제 `pnpm desktop:dev` READY·picker·종료는 Session 6에서 검증해야 합니다.**
-Windows release build는 native Origin 확인 전 명시적으로 차단됩니다.
+Session 5는 macOS에서 source와 공통 계약을 검증한 단계입니다. 2026-09-07에는 위 Windows 10 PC에서
+native compile, Credential Manager canary, 실제 READY·picker·정상 종료·fresh restart를 검증했습니다.
+사용자 지시에 따라 이 Windows 10 x64 개발 실행 통과로 Session 6을 완료했습니다.
+Windows 11 native 검증과 설치 배포는 별도 후속 작업이며 Windows release build는 계속 명시적으로 차단됩니다.
 
 ```bash
 pnpm install

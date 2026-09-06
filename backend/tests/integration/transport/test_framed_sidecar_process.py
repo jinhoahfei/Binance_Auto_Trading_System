@@ -22,6 +22,30 @@ from binance_auto_trader.transport.framing import read_json_frame, write_json_fr
 TEST_ORIGIN = "http://localhost:5173"
 
 
+def _terminate_fixture_process_tree(child: subprocess.Popen) -> None:
+    """
+    함수 이름: _terminate_fixture_process_tree()
+    기능: 테스트가 시작한 launcher와 Windows venv의 runtime child를 함께 회수한다.
+    인자: child -> 이 테스트가 직접 생성한 fixture subprocess
+    반환값: 없음
+    작성 날짜: 2026/09/07
+    """
+    if child.poll() is not None:
+        return
+    # Windows venv redirector만 종료하면 실제 Python이 orphan으로 남아 lock을 보유한다.
+    if os.name == "nt":
+        subprocess.run(
+            [os.path.join(os.environ["SystemRoot"], "System32", "taskkill.exe"),
+             "/PID", str(child.pid), "/T", "/F"],
+            capture_output=True, check=False, timeout=10,
+        )
+        # Runtime 종료가 redirector 종료를 유발하면 taskkill은 이미 사라진 parent에
+        # nonzero를 반환할 수 있다. 아래 wait와 실제 artifact read로 종료를 검증한다.
+    else:
+        child.terminate()
+    child.wait(timeout=5)  # Production 종료 정책 대신 fixture 정리에만 사용한다.
+
+
 class FramedSidecarProcessTests(unittest.TestCase):
     """
     클래스 이름: FramedSidecarProcessTests
@@ -110,7 +134,9 @@ class FramedSidecarProcessTests(unittest.TestCase):
                 self.assertEqual(set(descriptor), {
                     "port", "session_id", "runtime_pid", "process_start_id", "schema_version",
                 })
-                self.assertEqual(descriptor["runtime_pid"], child.pid)
+                self.assertGreater(descriptor["runtime_pid"], 0)
+                if os.name != "nt":
+                    self.assertEqual(descriptor["runtime_pid"], child.pid)
                 self.assertNotIn(token, json.dumps(descriptor))
                 self.assertNotIn("fixture-secret", json.dumps(descriptor))
 
@@ -134,6 +160,7 @@ class FramedSidecarProcessTests(unittest.TestCase):
                     self.assertEqual(child.wait(timeout=5), 0)
                     artifact = json.loads(ownership_path.read_text(encoding="utf-8"))
                     self.assertEqual(artifact["owner_state"], "RELEASED")
+                    self.assertEqual(artifact["runtime_pid"], descriptor["runtime_pid"])
                     self.assertEqual(child.stdout.read(), b"")  # Protocol stream에 log/secret frame이 없어야 한다.
                 else:
                     if failure_mode == "malformed_control":
@@ -165,14 +192,13 @@ class FramedSidecarProcessTests(unittest.TestCase):
                         self.assertIs(snapshot["data"]["trading"]["process_ownership_ambiguous"], True)
 
                     # Test 소유 orphan child를 회수한 뒤 OS lock이 해제된 actual artifact를 확인한다.
-                    child.terminate()
-                    child.wait(timeout=5)
+                    _terminate_fixture_process_tree(child)
                     artifact = json.loads(ownership_path.read_text(encoding="utf-8"))
                     self.assertEqual(artifact["owner_state"], "ORPHANED")
+                    self.assertEqual(artifact["runtime_pid"], descriptor["runtime_pid"])
             finally:
                 # Fixture orphan는 production의 자동 relaunch 대상이 아니며 test만 child를 회수한다.
-                if child.poll() is None:
-                    child.terminate()
+                _terminate_fixture_process_tree(child)
                 child.wait(timeout=5)
                 for stream in (child.stdin, child.stdout, child.stderr):
                     stream.close()

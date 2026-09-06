@@ -329,7 +329,7 @@ class TransportProcessRunnerTests(unittest.TestCase):
                 raise TypeError("trading session observer must be callable")
             return runtime
 
-        with self.assertRaises(BrokenPipeError):
+        with self.assertRaises(OSError) as raised:
             run_transport_process(
                 runtime_factory,
                 token_fd=token_read_fd,
@@ -340,6 +340,10 @@ class TransportProcessRunnerTests(unittest.TestCase):
                 close_runtime=cleanup_calls.append,
             )
 
+        if os.name == "nt":
+            self.assertEqual(raised.exception.errno, 22)  # Windows CRT의 broken pipe write는 EINVAL이다.
+        else:
+            self.assertIsInstance(raised.exception, BrokenPipeError)
         os.close(stop_write_fd)
         self.assertEqual(cleanup_calls, [runtime])
         with self.assertRaisesRegex(RuntimeError, "closed"):

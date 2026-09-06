@@ -340,15 +340,20 @@ def main() -> None:
     반환값: 없음
     작성 날짜: 2026/09/05
     """
-    # 실수로 실제 REST 경로가 연결되어도 외부 통신 전에 즉시 실패하도록 검사 범위를 고정한다.
-    with patch("socket.socket.connect", side_effect=AssertionError("Offline replay forbids network")), patch(
-        "socket.create_connection", side_effect=AssertionError("Offline replay forbids network"),
-    ):
-        report = {
-            "network_connections_allowed": False,
-            "scenarios": [replay_entry_scenario(strategy) for strategy in ("CASE_B", "CASE_C")],
-            "timer_scenario": replay_recovery_timer_scenario(),
-        }
+    # Windows asyncio는 self-pipe를 local socketpair로 만든다. 검증 전 loop만 준비하고
+    # 모든 시나리오를 같은 Runner에서 실행해 실제 replay의 외부 연결 차단은 유지한다.
+    with asyncio.Runner() as runner:
+        runner.get_loop()
+        with (
+            patch("asyncio.run", side_effect=runner.run),
+            patch("socket.socket.connect", side_effect=AssertionError("Offline replay forbids network")),
+            patch("socket.create_connection", side_effect=AssertionError("Offline replay forbids network")),
+        ):
+            report = {
+                "network_connections_allowed": False,
+                "scenarios": [replay_entry_scenario(strategy) for strategy in ("CASE_B", "CASE_C")],
+                "timer_scenario": replay_recovery_timer_scenario(),
+            }
     print(json.dumps(report, ensure_ascii=False))  # UI test가 실제 wire DTO를 동일한 bytes로 재사용한다.
 
 

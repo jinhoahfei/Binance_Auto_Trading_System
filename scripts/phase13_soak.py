@@ -12,11 +12,13 @@ from enum import Enum
 import json
 import os
 from pathlib import Path
-import resource
 import sys
 from threading import active_count
 from time import monotonic, sleep
 from typing import BinaryIO
+
+if os.name == "posix":
+    import resource  # Windows에는 POSIX getrusage module이 없다.
 
 
 # 기존 Testnet configuration loader를 복제하지 않고 backend source에서 직접 재사용한다.
@@ -309,6 +311,8 @@ def _read_rss_high_water_bytes() -> int | None:
     반환값: 음이 아닌 byte 수 또는 관찰 실패 시 None
     작성 날짜: 2026/08/24
     """
+    if os.name != "posix":
+        return None  # 관찰하지 않은 Windows RSS를 0이나 POSIX 단위로 보고하지 않는다.
     try:
         raw_high_water = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     except (OSError, ValueError):

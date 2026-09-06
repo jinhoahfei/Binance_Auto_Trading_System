@@ -3,7 +3,7 @@
   "identifier": "main-window",
   "description": "메인 창의 backend 연결 복구, native picker, exit wait와 최종 창 제거만 허용합니다.",
   "windows": ["main"],
-  "platforms": ["macOS"],
+  "platforms": ["macOS", "windows"],
   "permissions": [
     "allow-get-backend-connection-descriptor",
     "allow-choose-csv-export-directory",
