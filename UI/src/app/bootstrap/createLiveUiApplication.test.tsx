@@ -191,10 +191,11 @@ describe('create_live_ui_application', () => {
         expect(regime_panel).toHaveAttribute('data-highlighted', 'true');
         expect(request_paths).toEqual(['/v1/snapshot']);
 
+        // 선택 확인 문구가 바뀌어도 기존 REGIME 선택 요청을 통해 후보를 적용한다.
         const regime_button = screen.getByRole('button', { name: 'type0 횡보 적용 요청' });
         await user.click(regime_button);
-        const regime_confirmation = await screen.findByRole('dialog', { name: 'REGIME type을 실행할까요?' });
-        await user.click(within(regime_confirmation).getByRole('button', { name: '실행' }));
+        const regime_confirmation = await screen.findByRole('dialog', { name: 'REGIME type을 선택할까요?' });
+        await user.click(within(regime_confirmation).getByRole('button', { name: '확인' }));  // 선택 확정 뒤 적용 상태를 기다린다.
         await waitFor(() => expect(regime_button).toHaveAttribute('aria-pressed', 'true'));
 
         await user.click(start_button);

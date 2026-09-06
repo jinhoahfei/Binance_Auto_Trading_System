@@ -28,26 +28,29 @@ export function RegimeChangeDialog({
   onCancel,
   onConfirm,
 }: RegimeChangeDialogProps) {
+  // 제목, 안내와 확인 버튼 문구를 REGIME 선택을 확정하는 의미로 일치시킨다.
+  const confirm_label = pending ? '적용 중…' : '확인';  // 처리 중에는 기존 진행 상태 문구를 표시한다.
+
   return (
     <ModalSurface
       open={open}
       fixedHeight={!error}
-      title="REGIME type을 실행할까요?"
-      description="확인을 누르면 선택한 REGIME type이 즉시 적용되어 실행됩니다."
+      title="REGIME type을 선택할까요?"
+      description="확인을 누르면 선택한 REGIME type이 선택됩니다."
       leadingVisual={<StatusIndicatorIcon tone="positive" />}
     >
       <div className={styles.notice}>
         <span>선택 REGIME type</span>
         <strong>
           <i aria-hidden="true" />
-          {regimeKey} · {regimeLabel}으로 실행하시겠습니까?
+          {regimeKey} · {regimeLabel}으로 선택하시겠습니까?
         </strong>
       </div>
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <div className={styles.actions}>
         <Button disabled={pending} onClick={onCancel}>취소</Button>
         <Button disabled={pending} onClick={onConfirm} tone="positive">
-          {pending ? '적용 중…' : '실행'}
+          {confirm_label}
         </Button>
       </div>
     </ModalSurface>

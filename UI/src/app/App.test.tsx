@@ -59,11 +59,12 @@ describe('App runtime wiring', () => {
             'true',
         );
 
+        // 변경된 REGIME 선택 확인 문구를 통해 기존 후보 적용 흐름을 검증한다.
         await user.click(screen.getByRole('button', { name: 'type0 횡보 적용 요청' }));
         const regime_dialog = await screen.findByRole('dialog', {
-            name: 'REGIME type을 실행할까요?',
+            name: 'REGIME type을 선택할까요?',
         });
-        await user.click(within(regime_dialog).getByRole('button', { name: '실행' }));
+        await user.click(within(regime_dialog).getByRole('button', { name: '확인' }));  // 후보 REGIME 선택을 확정한다.
         await waitFor(() => {
             expect(screen.getByRole('button', { name: 'type0 횡보 적용 요청' })).toHaveAttribute(
                 'aria-pressed',
