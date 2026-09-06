@@ -17,8 +17,8 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "tauri": "tauri",
-    "desktop:dev": "tauri dev --config apps/desktop/src-tauri/tauri.conf.json",
-    "desktop:build": "tauri build --config apps/desktop/src-tauri/tauri.conf.json"
+    "desktop:dev": "node scripts/desktopLauncher.mjs dev",
+    "desktop:build": "node scripts/desktopLauncher.mjs build"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans-kr": "5.3.0",

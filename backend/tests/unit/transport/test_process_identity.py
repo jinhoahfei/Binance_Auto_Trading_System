@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from binance_auto_trader.transport.app import (
@@ -15,8 +16,28 @@ from binance_auto_trader.transport.app import (
     ServerDescriptor,
     _get_runtime_process_identity,
     _RuntimeOwnershipLock,
+    _read_runtime_ownership_artifact,
 )
 from binance_auto_trader.transport.contracts import TransportContractError
+from binance_auto_trader.adapters.platform import windows_runtime
+from binance_auto_trader.adapters.platform.runtime_lock import close_runtime_directory_handles
+
+
+def _acquire_test_runtime_lock(directory: Path, *, runtime_pid: int, process_start_id: str):
+    """
+    함수 이름: _acquire_test_runtime_lock()
+    기능: isolated temp directory에서 실제 OS lock primitive와 ownership lifecycle을 검증한다.
+    인자: directory -> 테스트가 소유한 temporary directory
+        runtime_pid -> synthetic owner의 positive PID
+        process_start_id -> synthetic owner의 canonical UUID
+    반환값: 실제 OS lock을 획득한 runtime ownership 객체
+    작성 날짜: 2026/09/06
+    """
+    # Native Windows known-folder의 exact path 검증만 fixture root로 바꾸고 handle·lock은 실제 실행한다.
+    with patch.object(windows_runtime, "get_local_app_data_directory", return_value=directory):
+        return _RuntimeOwnershipLock.acquire(
+            directory, runtime_pid=runtime_pid, process_start_id=process_start_id
+        )
 
 
 class ProcessIdentityTests(unittest.TestCase):
@@ -141,7 +162,7 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
         process_start_id = str(uuid4())
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
-            ownership_lock = _RuntimeOwnershipLock.acquire(
+            ownership_lock = _acquire_test_runtime_lock(
                 directory,
                 runtime_pid=runtime_pid,
                 process_start_id=process_start_id,
@@ -152,14 +173,14 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
                     RuntimeError,
                     "runtime ownership lock is unavailable",
                 ):
-                    _RuntimeOwnershipLock.acquire(
+                    _acquire_test_runtime_lock(
                         directory,
                         runtime_pid=runtime_pid,
                         process_start_id=str(uuid4()),
                     )
 
                 # Artifact는 credential 없이 current runtime identity와 ACTIVE 상태만 exact JSON으로 보존한다.
-                artifact = json.loads(lock_path.read_text(encoding="utf-8"))
+                artifact = _read_runtime_ownership_artifact(ownership_lock._descriptor)
                 self.assertEqual(
                     artifact,
                     {
@@ -169,10 +190,11 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
                         "owner_state": "ACTIVE",
                     },
                 )
-                self.assertEqual(
-                    stat.S_IMODE(lock_path.stat().st_mode),
-                    0o600,
-                )
+                if os.name == "posix":
+                    self.assertEqual(
+                        stat.S_IMODE(lock_path.stat().st_mode),
+                        0o600,
+                    )  # Windows owner 경계는 POSIX mode 대신 native known folder를 사용한다.
             finally:
                 ownership_lock.release()
 
@@ -191,7 +213,7 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
         # 첫 owner를 정상 release한 뒤 같은 inode를 삭제하지 않고 다음 identity로 갱신한다.
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
-            first_lock = _RuntimeOwnershipLock.acquire(
+            first_lock = _acquire_test_runtime_lock(
                 directory,
                 runtime_pid=os.getpid(),
                 process_start_id=str(uuid4()),
@@ -201,15 +223,13 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
             original_inode = lock_path.stat().st_ino
             next_start_id = str(uuid4())
 
-            second_lock = _RuntimeOwnershipLock.acquire(
+            second_lock = _acquire_test_runtime_lock(
                 directory,
                 runtime_pid=os.getpid(),
                 process_start_id=next_start_id,
             )
             try:
-                refreshed_artifact = json.loads(
-                    lock_path.read_text(encoding="utf-8")
-                )
+                refreshed_artifact = _read_runtime_ownership_artifact(second_lock._descriptor)
                 self.assertEqual(refreshed_artifact["process_start_id"], next_start_id)
                 self.assertEqual(lock_path.stat().st_ino, original_inode)
             finally:
@@ -226,32 +246,34 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             process_start_id = str(uuid4())
-            ownership_lock = _RuntimeOwnershipLock.acquire(
+            ownership_lock = _acquire_test_runtime_lock(
                 directory,
                 runtime_pid=os.getpid(),
                 process_start_id=process_start_id,
             )
             lock_path = directory / ".backend-runtime.lock"
-            active_artifact = lock_path.read_text(encoding="utf-8")
+            active_artifact = _read_runtime_ownership_artifact(ownership_lock._descriptor)
 
             # 정상 release marker 없이 FD만 닫아 kernel이 crash process의 flock을 회수한 상태를 만든다.
             abandoned_descriptor = ownership_lock._descriptor
             self.assertIsNotNone(abandoned_descriptor)
             ownership_lock._descriptor = None
             os.close(abandoned_descriptor)
+            close_runtime_directory_handles(ownership_lock._directory_handles)
+            ownership_lock._directory_handles = ()  # Crash처럼 OS lock과 ancestor pin을 함께 반환한다.
 
             with self.assertRaisesRegex(
                 RuntimeError,
                 "runtime ownership lock is unavailable",
             ):
-                _RuntimeOwnershipLock.acquire(
+                _acquire_test_runtime_lock(
                     directory,
                     runtime_pid=os.getpid(),
                     process_start_id=str(uuid4()),
                 )
 
             self.assertEqual(
-                lock_path.read_text(encoding="utf-8"),
+                json.loads(lock_path.read_text(encoding="utf-8")),
                 active_artifact,
             )  # 새 PID/UUID로 덮어쓰지 않아 operator reconciliation 근거를 남긴다.
 
@@ -265,7 +287,7 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
-            ownership_lock = _RuntimeOwnershipLock.acquire(
+            ownership_lock = _acquire_test_runtime_lock(
                 directory,
                 runtime_pid=os.getpid(),
                 process_start_id=str(uuid4()),
@@ -283,7 +305,7 @@ class RuntimeOwnershipLockTests(unittest.TestCase):
                 RuntimeError,
                 "runtime ownership lock is unavailable",
             ):
-                _RuntimeOwnershipLock.acquire(
+                _acquire_test_runtime_lock(
                     directory,
                     runtime_pid=os.getpid(),
                     process_start_id=str(uuid4()),

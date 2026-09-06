@@ -3,15 +3,16 @@
 | 항목 | 내용 |
 |---|---|
 | 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 개인용 ad-hoc desktop package·credential·shutdown 검증 완료, Phase 13 부분 구현·live readiness `NO_GO` |
-| 기준일 | 2026-09-05 (Asia/Seoul) |
+| 기준일 | 2026-09-06 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
-| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. Phase 13은 장애 복구, configured-unbounded 위험 정책, `CANCEL_AND_LIQUIDATE`, 30분 EMA9/OLS production 계산, 전 interval 원자 경계와 public local Case 2를 구현했고 Communication `126/126`, 실제 native picker 선택·취소와 actual-browser axe `16/16 Violations 0`을 검증했다. 2026-09-05에는 Session 3 current-source Spot Testnet E2E의 `ETHUSDT` BUY decision notional `9.9490331561080558036145263224 USDT` 한 건과 same-run exact `0.0042 ETH` STOP SELL 한 건, fresh zero exposure를 canonical SUCCESS evidence로 봉인했다. 같은 checkpoint `c28544e4d22c9c5512c380286d1dfc6dd618e14e`에서 Session 4 arm64 fresh ad-hoc app/DMG의 Keychain read-only `READY`, 핵심 UI, native picker 선택·취소, safe shutdown과 orphan `0`을 통과해 `macOS package ready`를 완료했고 Session 5 진입은 `GO`다. 다만 Cross-platform package, Private Beta master, visual SSIM `4/16` PASS·`12/16` FAIL 및 공개 배포용 full supply-chain track은 남았으므로 Phase 13 전체와 live endpoint는 계속 미완료다. |
+| 현재 결론 | Phase 9 actual Testnet 범위를 완료했다. Keychain credential의 authenticated read-only 3/3 뒤, 사용자가 승인한 BUY 진입 cap `10 USDT`를 적용했다. 주문 전 실제 `ETHUSDT` `exchangeInfo`의 `LOT_SIZE`, `MARKET_LOT_SIZE`, `NOTIONAL`을 조회해 최신 4시간봉 종가 `2461.41000000`, 제출 수량 `0.0040 ETH`, decision notional `9.845640000000 USDT`가 cap과 모든 filter를 만족할 때만 진행했다. lifecycle과 별도 process cold restart에서 각 BUY를 STOP/recovery SELL로 전량 청산했고, 최종 fresh runtime이 `READY`, history 6건, pending 0건, Position 0, open order 0건임을 실제 Testnet에서 재확인했다. 복구 SELL은 자동 resume 없이 free ETH·filter 뒤 정확한 Position 전량만 허용하며 BUY 진입 cap을 재사용하지 않는다. 개인용·친구용 배포는 App Store/Developer ID 없는 ad-hoc app을 사용자가 직접 신뢰 허용하는 범위로 확정했다. Phase 13은 장애 복구, configured-unbounded 위험 정책, `CANCEL_AND_LIQUIDATE`, 30분 EMA9/OLS production 계산, 전 interval 원자 경계와 public local Case 2를 구현했고 Communication `126/126`, 실제 native picker 선택·취소와 actual-browser axe `16/16 Violations 0`을 검증했다. 2026-09-05에는 Session 3 current-source Spot Testnet E2E의 `ETHUSDT` BUY decision notional `9.9490331561080558036145263224 USDT` 한 건과 same-run exact `0.0042 ETH` STOP SELL 한 건, fresh zero exposure를 canonical SUCCESS evidence로 봉인했다. 같은 checkpoint `c28544e4d22c9c5512c380286d1dfc6dd618e14e`에서 Session 4 arm64 fresh ad-hoc app/DMG의 Keychain read-only `READY`, 핵심 UI, native picker 선택·취소, safe shutdown과 orphan `0`을 통과해 `macOS package ready`를 완료했다. 2026-09-06 Session 5는 Windows의 `pnpm desktop:dev` source 실행 경로와 호환 adapter를 구현하고 macOS 회귀를 통과해 완료했으며, Session 6 Windows native 개발 실행 검증은 `GO`다. 다만 Cross-platform package, Private Beta master, visual SSIM `4/16` PASS·`12/16` FAIL 및 공개 배포용 full supply-chain track은 남았으므로 Phase 13 전체와 live endpoint는 계속 미완료다. |
 | 2026-09-01 최신 갱신 | 공식 `/myFilters` strict composite, account-wide empty-state와 고정 30초 submit guard를 유지한 채 reconciliation first cause를 여섯 secret-free category와 monotonic `MISSING\|EXACT\|DUPLICATE\|CONFLICT` latch로 구현했다. Failure writer v2는 raw logical ID를 기록하지 않고 exception-bound `first_cause`, 15개 stable fresh stage, account-wide empty truth와 source/copy descriptor-bound isolated durability snapshot을 봉인한다. Leaf content restore, absent-sidecar와 ancestor rename/restore ABA, producer error 순서, no-attempt zero truth와 serial pending cap까지 fail closed하며 preserved v1 FAILED와 trace v2는 소급 변경 없이 검증한다. V3는 exact session/intent client ID, 2/4/6 Kline batch, account converse, trace command와 fill order를 production producer에 결속한다. Credential/order 환경을 제거한 current tree에서 Backend `Ran 962 tests`, `OK (skipped=8)`, scripts `183/183`, runner `14/14`, cause integration `50/50`, Case 2 helper `29/29`·external actual `1` safe skip, Communication `126/126`을 통과했다. 이번 local 작업의 Keychain·Binance target·주문은 모두 0회이고 historical actual FAILED/INCOMPLETE는 그대로다. Visual `4/16`, supply/readiness `NO_GO`이므로 Phase 13과 live는 계속 `[ ]`/disabled이며 최신 재개 계약은 §16.18이다. |
 | 2026-09-04 최신 갱신 | §16.18 이후 중단 지점을 `e402673`에서 복원해 V3 source/provenance/order-ID/zero-fee 계약, process-lifetime startup·direct-start gate, final source→copy→source durability, 모든 cleanup best-effort와 lifecycle `CLOSED` publication을 보강했다. Credential/order 환경을 제거한 Backend는 `Ran 967 tests in 32.817s`, `OK (skipped=8)`이고 focused trace/Case 2 `58`, startup·reconciliation `74`, lifecycle `10`, cause integration `51`, runner `14`, baseline/trace `33`, public Case 2 integration `9`, Communication `126/126`이 통과했다. Root scripts는 source 회귀가 아니라 ignored historical Phase 12 app만 남고 결속된 DMG가 누락된 현재 local artifact 상태를 fail closed해 `Ran 183`, `FAILED (failures=1, errors=2)`다. 원래 DMG를 찾거나 검증된 pair를 정직하게 정리하기 전 supply gate를 PASS로 쓰지 않는다. 이번 작업도 Keychain·Binance target·주문은 모두 0회이며 Phase 13/live는 계속 `[ ]`/disabled다. 최신 유일 재개 계약은 §16.19다. |
 | 2026-09-05 최신 갱신 | §16.20.6 Session 3을 current source에서 완료했다. Keychain 두 item의 memory-only read와 signed read-only preflight 뒤 `ETHUSDT` BUY decision notional `9.7814300211721854636528636815 USDT <= 10 USDT` 한 건, same-run exact `0.0041 ETH` STOP SELL 한 건을 실행했다. Canonical SUCCESS trace는 actual order `2`, durable Trade `2`, retry/cancel/duplicate/범위 밖 mutation `0`, fresh Position/pending/unknown/open order `0`, reconciliation `false`를 봉인했다. Post-run signed read-only도 account-wide open order/list `0`을 확인했고 Backend `993`, actual local+external `40`, secure runner/Communication `32`, trace schema `28`, order fault/actual helper `47`, Communication matrix `126/126`이 통과했다. 따라서 Session 4는 `GO`지만 fresh package와 macOS smoke, Phase 13 dependency/license/SBOM gap, live endpoint 승인은 아직 수행하지 않았다. 상세 source checkpoint와 artifact digest는 §16.20.6에 기록했다. |
 | 2026-09-05 Session 4 최신 갱신 | §16.20.7 Session 4를 `c28544e4d22c9c5512c380286d1dfc6dd618e14e == origin/main`과 unchanged lockfile 세 개에서 완료했다. 격리 target에 arm64 app/DMG를 fresh build하고 PyInstaller one-file과 hardened ad-hoc library-validation 불일치를 실제 실행에서 발견해 해당 후보를 기각했다. 최종 채택본은 outer seal을 포함한 non-hardened ad-hoc app과 read-only DMG이며 app tree SHA-256 `7e790832c97447df819d08c65c8a080bfd8f32ffbcab9ee18a5a59cbdb931853`, DMG SHA-256 `2c95e0fa33cca0cbf1fd263814be87f761440722237796b13d91d8b5f6b7df7b`다. Network-deny offline OSV 결과 High/Critical `0`, 최종 secret scan `2` canary/`2781` files PASS다. macOS arm64에서 Keychain read-only `READY`, Dashboard/History/stop, picker selected/cancelled, Command-Q safe shutdown, `RELEASED` owner와 orphan `0`을 확인했고 postflight `5/5`도 open order/list `0`을 유지했다. 실제 신규 주문은 `0`회다. 따라서 Session 5는 `GO`지만 Windows native PASS, Cross-platform package, Private Beta, live와 공개 release track은 완료하지 않았다. 상세 증거와 ad-hoc trust 절차는 §16.20.7에 기록했다. |
+| 2026-09-06 Session 5 최신 갱신 | §16.20.8의 Windows 11 x64 호환 source를 개발 실행 범위로 완료했다. `pnpm desktop:dev`가 Windows debug Tauri/Vite와 source Python venv를 직접 실행하도록 구성했고 Credential Manager, framed stdio, LockFileEx·LocalAppData adapter를 macOS 구현에서 분리했다. Backend `1046` 실행·`10` safe skip, UI `481`, Rust `45`, 도구 `38`, Communication `126/126`이 통과했다. Session 6 native 개발 실행 검증은 `GO`이며 Windows native PASS·설치 package·Private Beta/live 완료를 의미하지 않는다. |
 
 ---
 
@@ -5507,43 +5508,120 @@ license/notice와 Developer ID/notarization은 하지 마라.
 
 #### 16.20.8 Session 5 — Windows 11 x64 호환 계층 구현
 
-**목표:** macOS 동작과 안전 불변식을 유지하면서 Windows 11 x64가 요구하는 credential, process IPC,
-runtime ownership, path와 packaging adapter를 추가한다. PyInstaller는 cross-compiler가 아니므로 이
-세션의 macOS PC에서는 Windows binary를 만들거나 Windows native PASS를 주장하지 않는다.
+**상태:** `[x]` source compatibility 구현·macOS 회귀 완료. Windows native 실행은 미검증이다.
 
-**실행 범위:**
+**이번 작업의 유효 범위 — 2026-09-06 사용자 지시 우선:** Windows에서도 현재 macOS처럼
+`UI`의 **`pnpm desktop:dev`**로 개발 실행하는 것이 목표다. 완성 패키지·배포 `.exe`를 만들지 않는다.
+따라서 원래 항목 6~7의 NSIS/externalBin/PyInstaller packaging script는 현재 완료 gate에서 제외하고,
+Windows debug Tauri + Vite + repository Python source 실행으로 대체했다. macOS 기존 package 설정과
+과거 Session 3/4 증거는 보존한다. Windows packaged Origin은 실제 native 확인 전 허용하지 않는다.
 
-1. platform-neutral lifecycle/contract와 macOS·Windows adapter를 분리한다. 기존 macOS Keychain,
-   AppKit quit guard와 fixed FD `3`~`6` 구현은 macOS adapter에 보존한다.
-2. Windows credential은 renderer와 분리된 hidden-prompt 설정 도구가 Windows Credential Manager의
-   fixed generic credential target에 저장·조회·삭제하도록 설계한다. secret을 command argument,
-   environment, log, URL, renderer 또는 일반 파일에 전달하지 않는다.
-3. Windows sidecar IPC는 stdin/stdout의 bounded framed protocol을 사용한다. 최초 parent→child frame은
-   token과 strict bootstrap configuration, 최초 child→parent frame은 secret 없는 READY descriptor다.
-   이후 control frame과 CLOSED ACK를 같은 방향별 stream에서 처리한다. Parent 종료의 stdin EOF는
-   기존 FD5 EOF와 동일하게 신규 BUY를 잠그고 orphan recovery를 요구한다.
-4. Python `fcntl/flock`과 Rust Unix lock/process/path 구현을 platform adapter로 분리한다. Windows는
-   non-blocking `LockFileEx`, process handle 기반 liveness, non-reparse per-user app-data 경계를 사용한다.
-5. Windows packaged Tauri origin을 실제 native runtime에서 확인하고 exact Origin/CORS/CSP allowlist에만
-   추가한다. 임의 Origin이나 wildcard를 허용하지 않는다.
-6. Tauri platform configuration을 분리한다. macOS는 `app`·`dmg`·`.icns`, Windows는 `nsis`·`.ico`와
-   `x86_64-pc-windows-msvc` externalBin suffix를 사용한다.
-7. Native Windows에서 실행할 PowerShell sidecar packaging script를 추가한다. PyInstaller credential,
-   certificate와 exchange environment를 제거하고 pinned PyInstaller와 x64 Python만 허용한다.
-8. macOS regression과 platform-neutral frame/contract test만 실행한다. Keychain, Binance signed endpoint,
-   Testnet/live order는 모두 `0`회다.
+**착수 기준과 책임:** §1을 적용해 Session 5만 구현했다. `CODING_CONVENTIONS.md`,
+Communication Case 1의 startup `1`~`5`와 stop `8.1.1`~`8.1.1.3`, ADR-003/005의 safe shutdown,
+owner lifetime·exact Origin 계약을 확인했다. 새 모듈과 구조체는 기술 adapter/불변 wire/test helper이며
+새 업무 Controller나 Communication Operation을 추가하지 않았다. 신규 함수·클래스 설명과 논리 블록·
+문장 주석을 함께 작성했다. 시작 HEAD는 `25b1d04f91539ddbe86cf85eabf4bfc407227f42`이고 별도 commit은
+만들지 않았다. 시작 전 존재한 이미지 한 건의 삭제 상태는 건드리지 않았다.
 
-**완료 조건:** macOS existing lifecycle 회귀가 유지되고 Windows-specific source/config/build script가
-명시적 `cfg`와 platform contract 뒤에 격리된다. Windows native build와 smoke는 Session 6 전까지
-미검증으로 기록한다.
+**구현 완료:**
 
-**세션 요청문:**
+- [x] Rust 공통 sidecar lifecycle에서 macOS Keychain·FD pipe·Unix filesystem/process 구현을
+  `sidecar/macos.rs`로 분리했다. Windows는 `sidecar/windows.rs`와 `windows/{credentials,files,ipc,process}.rs`
+  뒤에 격리했다. 기존 AppKit quit guard, late READY, 종료 receipt·orphan 복구 흐름은 유지했다.
+- [x] `scripts/configure_testnet_credentials.ps1`와 별도 `scripts/windows/CredentialManager.cs`로 hidden
+  prompt set/check/delete 및 별도 canary를 구현했다. Generic target은
+  `com.binance-auto.trader.testnet/api-key`, `com.binance-auto.trader.testnet/api-secret`이고 ASCII
+  1~512 bytes만 허용한다. Secret을 argv/environment/renderer/일반 파일에 넣지 않으며 native 임시
+  buffer와 Rust 복사본을 zeroize한다. Python immutable 문자열의 물리적 zeroization까지 주장하지 않는다.
+- [x] Windows는 stdin/stdout에 4-byte big-endian 길이 + strict UTF-8 JSON frame을 사용한다.
+  최초 BOOTSTRAP은 token·read-only configuration이고 최초 READY는 기존 secret-free descriptor다.
+  전역 1 MiB, Windows BOOTSTRAP 16 KiB/내부 configuration 8 KiB/READY 4 KiB/control 256 bytes를
+  제한한다. 분할 read·중간 EOF·duplicate/unknown field·잘못된 타입을 거부한다. HTTP CLOSED와 response
+  flush 뒤 parent `CLOSED_ACK`만 종료로 인정하고 early ACK는 버린다. EOF·malformed control은
+  ORPHANED, 신규 BUY 차단, listener와 owner lock 유지로 처리한다. macOS FD `3`~`6`은 바꾸지 않았다.
+- [x] Python `adapters/platform/`으로 `fcntl/flock`, Windows native ABI/path/lock와 durability를 분리했다.
+  Windows는 native current-user `LocalAppData/com.binance-auto.trader`의 no-reparse ancestor handle을
+  delete sharing 없이 pin한다. Rust/Python이 같은 byte offset `0`, length `1`의 nonblocking exclusive
+  `LockFileEx`를 사용한다. Rust liveness는 process handle 기반이며 접근 거부/미확정은 fail closed다.
+  ACTIVE/ORPHANED를 비어 있는 lock만 보고 자동 덮어쓰지 않는다.
+- [x] Windows 파일 persistence에는 명시적 `FlushFileBuffers` adapter를 추가하고 macOS의 parent directory
+  fsync를 보존했다. Windows의 crash durability가 POSIX directory fsync와 같다고 단정하지 않는다.
+  한국 시간대 import에는 Windows-only `tzdata==2026.2`를 lockfile에 추가했다.
+- [x] `tauri.windows.conf.json`, `desktopLauncher.mjs`, `desktopFrontend.mjs`로 Windows 개발 경로를
+  연결했다. Backend는 `.venv/Scripts/python.exe -I -m binance_auto_trader.sidecar`로 소스를 직접 실행한다.
+  시작 전에 Python x64·설치된 backend/websocket/timezone을 검사하고 Vite 5173 strictPort를 사용한다.
+  CLI가 platform 설정 뒤 `--config`를 병합하는 점을 확인해 Windows override가 macOS 기본 hook으로
+  덮이지 않게 수정했다. `.ico`는 기존 `.icns`의 256px PNG bytes를 그대로 container에 넣었다.
+- [x] Windows 개발 Origin은 exact `http://127.0.0.1:5173`만 사용한다. Origin/CORS/CSP wildcard를
+  추가하지 않았고 Windows release build/startup은 native Origin 미검증으로 차단했다. NSIS,
+  PyInstaller Windows 배포본, 서명·설치 작업은 수행하지 않았다.
+- [x] Windows 사용 절차는 `UI/README.md`의 **Windows 11 x64 개발 실행**에 기록했다.
+  Backend `uv sync --locked` → Credential Manager canary/set → UI `pnpm install --frozen-lockfile`
+  → `pnpm desktop:dev` 순서다. 정상 창 종료를 먼저 완료하고 터미널을 닫는다.
+
+**완료 증거 — macOS host에서 수행:**
+
+| 검증 | 실행 명령과 결과 |
+|---|---|
+| Backend 전체 회귀 | `cd backend && PYTHONPATH=src PYTHONWARNINGS=error .venv/bin/python -m unittest discover -s tests -q` — 최종 `Ran 1046 tests in 35.863s`, `OK (skipped=10)`; 거래 opt-in 세 개는 `0`, credential·baseline 환경은 명시 제거했다. |
+| Python IPC 집중 | `cd backend && .venv/bin/python -m unittest tests.unit.bootstrap.test_sidecar_stdio tests.unit.bootstrap.test_sidecar_configuration tests.integration.transport.test_framed_sidecar_process tests.integration.transport.test_production_sidecar_process tests.architecture.test_phase12_sidecar_boundaries -q` — 최종 `26` PASS. 실제 local child에서 READY/early ACK/HTTP 202/final ACK/RELEASED, READY·CLOSED 중 EOF와 malformed control의 ORPHANED·listener 보존, outer16KiB/inner8KiB/ASCII512 경계를 검증했다. |
+| Python platform 집중 | `cd backend && .venv/bin/python -m unittest tests.unit.platform.test_windows_platform tests.unit.transport.test_process_identity tests.unit.history.test_trade_history_repository tests.unit.filesystem.test_csv_file_gateway -q` — `52` 실행, `51` PASS·Windows-native 전용 `1` skip. Windows ABI/mock/path contract와 fcntl 없이 import를 검증했다. |
+| UI | `cd UI && node node_modules/typescript/bin/tsc -b --pretty false`, `node node_modules/vitest/vitest.mjs run` — typecheck PASS, `47` files/`481` tests PASS. `node node_modules/vite/bin/vite.js build` — `295` modules build PASS. |
+| 실행·설정 도구 | `python3 -m unittest scripts.test_windows_development scripts.test_package_sidecar scripts.test_check_communication_traceability -q` — `38` PASS. `pnpm desktop:dev --help`로 실제 pnpm→Node→Tauri 진입을 앱 실행 없이 확인했다. |
+| Communication | `python3 scripts/check_communication_traceability.py` — `total=126 complete=126 gap=0`. 기존 HEAD에서 parameterized UI test 제목과 manifest alias가 불일치하던 부분을 colon-prefix 계약에 맞췄다. Validator는 완화하지 않았다. |
+| Rust | `cd UI/apps/desktop/src-tauri && cargo test --locked --offline` — `45/45` PASS. `cargo check --tests --locked --offline`, `cargo clippy --lib --locked --offline -- -D warnings`, `cargo fmt --all --check` PASS. Windows-only source의 native compile 결과로 해석하지 않는다. |
+| 정적 검증 | 두 `.mjs` launcher의 `node --check`, Python `compileall`, 신규 Python AST의 함수·클래스 주석 필드 확인, `git diff --check` PASS. |
+
+Sandbox가 local bind를 차단한 최초 실행과 pnpm registry fetch를 차단한 최초 실행은 PASS로 세지
+않았다. 사용자 사전 승인 범위에서 허용된 실행으로 재검증했고 pnpm `11.16.0` registry 검증도
+통과했다. `pmOnFail` 등 검증 우회 설정은 쓰지 않았다. 실제 Windows native API·PowerShell 실행 결과는
+위 macOS contract/static 결과에 포함하지 않는다.
+
+Framed subprocess test는 실제 `mark_orphaned` fsync가 완료된 뒤 fixture-only marker로 동기화한다.
+Listener와 BUY gate를 검사하고 test가 소유한 child를 회수한 뒤 실제 artifact의 ORPHANED를 읽는다.
+이 방식으로 파일 쓰기 중간의 JSON read 경합과 Windows byte lock 위반을 함께 제거했으며 production
+소유권 파일을 atomic 교체하거나 잠금을 풀어 테스트를 통과시키지 않았다.
+
+**변경한 lockfile과 source 증거의 범위:**
+
+- `backend/uv.lock`: SHA-256 `cfecb5e02854f90c2c8fabbc67d2692c370dc81df767127329a40489e708084f`
+  → `0347322723c810df54581b9cd634e0e0b36eb69d6b38cd464df608b1ac373ccf`.
+  `uv lock`으로 Windows-only tzdata를 추가했고 기존 dependency version은 바꾸지 않았다.
+- `UI/apps/desktop/src-tauri/Cargo.lock`: SHA-256
+  `759f9787c88a67c4d7b356adfe1842b14d087bf48c7825db3f186d5bedef7783`
+  → `00eb3a55aac1ccff40bed9a2e76ad2a4e6195fb343d58036a2f7815c2261f54a`.
+  이미 잠긴 `windows-sys 0.61.2`를 Windows direct dependency로 연결했다.
+- `UI/pnpm-lock.yaml`은 unchanged, SHA-256
+  `cd48652d053fef9ef8c30d8eb14543c25a5988de1f301c9aa1f3408a00d64e97`다.
+- Session 3/4의 historical current-source actual/package PASS를 이번 변경 tree의 동일 source 증거로
+  재사용하지 않았다. 거래 algorithm/endpoint 계약은 변경하지 않았으며 Keychain·Credential Manager
+  실제 read, Binance target 호출, Testnet/live 주문은 모두 **0회**다. 기존 실패·미완료 historical evidence와
+  full supply/visual gate는 그대로 남긴다.
+
+**Session 6 진입 판정:** `GO` — Windows native build host에서 **개발 모드 검증을 시작해도 된다**.
+
+이유는 Windows-only import/process/path/credential 의존성이 공통 업무 계층에서 분리됐고, exact
+framing·orphan/shutdown 계약의 실제 local child 검증 및 macOS/UI/Communication 회귀가 통과했기
+때문이다. 더 이상 macOS에서 native PASS를 추정해 source 기능을 확장하기보다 실제 Windows에서
+MSVC compile와 runtime seam을 확인할 단계다. **Windows 실행이 이미 검증됐다는 뜻은 아니다.**
+
+다음 세션은 현재 사용자 요청에 따라 `pnpm desktop:dev`의 native compile/test, Credential Manager
+canary set/check/delete와 secret 비노출, exact development Origin, read-only READY,
+Dashboard/History/stop, native picker 선택·취소, parent EOF/orphan 복구, safe shutdown·process 잔여 `0`,
+fresh restart를 확인한다. Windows 파일 flush/crash 경계도 실제 host에서 검증한다. 실제 credential을
+쓰는 read-only smoke는 다음 세션의 승인 범위를 확인하고 Testnet 주문·live 동작은 `0`회로 유지한다.
+§16.20.9에 남은 NSIS/PyInstaller 설치 배포 항목은 **현재 개발 실행 요청의 선행 조건이 아니며**, 별도
+배포 작업으로 남긴다. 따라서 Session 6, Cross-platform package master, Private Beta master와 Phase 13/live는
+아직 `[ ]`다. Windows 개발 실행 PASS만으로 package master를 체크하지 않는다.
+
+**다음 세션 요청문:**
 
 ```text
-INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 5만 수행하라. macOS 동작을 보존하면서
-Windows 11 x64 credential, framed stdio sidecar IPC, ownership/path adapter와 platform-specific Tauri/
-PyInstaller 설정을 구현하라. Windows binary PASS를 macOS에서 주장하지 말고 외부 Binance 호출과
-주문은 모두 0회로 유지하라.
+§16.20.8의 2026-09-06 사용자 범위를 이어 Session 6만 Windows 11 x64 native host에서 수행하라.
+완성 package·배포 exe·NSIS를 만들지 말고 UI의 pnpm desktop:dev와 backend source venv를 사용한다.
+Windows backend/UI/Rust native test, Credential Manager canary, read-only startup/shutdown/picker,
+parent EOF/orphan recovery와 fresh restart를 확인하라. Windows에서 실행하지 않은 항목을 PASS로
+표시하지 말며 Testnet 주문과 모든 live signed/order 동작은 0회로 유지하라.
 ```
 
 #### 16.20.9 Session 6 — Windows 11 x64 native build와 read-only smoke
@@ -5663,7 +5741,7 @@ BUY/SELL 또는 STOP과 fresh restart zero exposure가 확인된 뒤에만 Windo
 - [x] Session 3 — current-source Spot Testnet actual E2E와 fresh zero exposure
 - [x] Session 4 — macOS fresh package와 macOS PC smoke
 - [x] **macOS package ready**
-- [ ] Session 5 — Windows 11 x64 호환 계층 구현
+- [x] Session 5 — Windows 11 x64 호환 계층 구현 (source 개발 실행 범위; native 검증은 Session 6)
 - [ ] Session 6 — Windows native build와 Windows 11 x64 PC read-only smoke
 - [ ] **Cross-platform package master**
 - [ ] Session 7 — live bootstrap과 양 OS signed read-only readiness

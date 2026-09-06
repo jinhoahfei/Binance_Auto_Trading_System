@@ -28,8 +28,11 @@ import {
 function load_backend_replay() {
     // 개발 서버를 띄우지 않고 기존 backend 테스트 환경에서 시장·가짜 체결 조건을 실행한다.
     const backend_directory = path.resolve(process.cwd(), '..', 'backend');
-    const virtual_environment_python = path.join(backend_directory, '.venv', 'bin', 'python');
-    const python_executable = existsSync(virtual_environment_python) ? virtual_environment_python : 'python3';
+    const virtual_environment_python = process.platform === 'win32'
+        ? path.join(backend_directory, '.venv', 'Scripts', 'python.exe')
+        : path.join(backend_directory, '.venv', 'bin', 'python');
+    const python_executable = existsSync(virtual_environment_python)
+        ? virtual_environment_python : (process.platform === 'win32' ? 'python' : 'python3');
     const output = execFileSync(python_executable, [
         '-m', 'tests.integration.active_trading_logic_replay',
     ], {

@@ -254,3 +254,48 @@ abnormal exit bridge를 검증했다. DMG를 read-only mount한 뒤 app/sidecar 
 signature와 DMG checksum도 확인했다. actual Keychain credential, clean-machine 실행과
 Developer ID 서명·notarization은 이 ADR의 contract 구현 증거와 구분해 Phase 12 roadmap의
 남은 external release smoke로 유지한다.
+
+## 10. Windows source development adapter — 2026-09-06
+
+Session 5의 현재 사용자 범위는 Windows 11 x64에서도 `UI/pnpm desktop:dev`로 실행하는 개발 환경이다.
+Windows native compile/smoke는 Session 6의 별도 증거이며 unsigned installer와 PyInstaller 배포본은
+현재 작업의 산출물이 아니다. macOS의 Keychain, AppKit quit guard와 FD `3`/`4`/`5`/`6` ABI는 보존한다.
+업무 Controller와 Communication Operation은 추가하거나 변경하지 않는다.
+
+- Windows debug shell은 repository `backend/.venv/Scripts/python.exe -I -m binance_auto_trader.sidecar`를
+  실행한다. Credential과 token은 argument/environment에 넣지 않고 anonymous stdin 첫 frame에만 담는다.
+  Child environment는 Windows 시스템 경로와 앱 전용 임시 경로로 제한한다.
+- Frame은 **4-byte unsigned big-endian byte length + UTF-8 JSON object**이다. 전역 상한 1 MiB 안에서
+  BOOTSTRAP은 16 KiB, 내부 기존 configuration은 8 KiB, READY는 4 KiB, control은 256 bytes로 제한한다.
+  최초 parent frame은 exact `{type: "BOOTSTRAP", token, configuration}`이다. Configuration은 기존
+  schema와 exact read-only 필드를 그대로 사용하며 duplicate field, nonfinite JSON, 잘못된 타입과
+  미완성 frame을 거부한다.
+- 최초 child frame은 기존 READY descriptor의 `port`, `session_id`, `runtime_pid`, `process_start_id`,
+  `schema_version`만 포함한다. READY stream의 partial prefix/body는 native timeout 후에도 보존하며
+  공통 late-ready recovery가 이어 읽는다. 일반 stdout과 credential은 protocol output에 포함하지 않는다.
+- 이후 parent control은 `{type: "CLOSED_ACK"}`다. HTTP shutdown으로 실제 CLOSED에 도달하고 응답을
+  flush한 뒤의 ACK만 process 종료를 허용한다. early ACK는 버린다. stdin EOF 또는 잘못된 control은
+  기존 FD5 EOF처럼 ORPHANED를 기록하고 신규 BUY를 잠그며 listener와 lifetime lock을 유지한다.
+- Credential Manager는 current user의 generic target `com.binance-auto.trader.testnet/api-key`와
+  `com.binance-auto.trader.testnet/api-secret`을 사용한다. Blob은 trim하지 않은 printable ASCII
+  1~512 bytes다. PowerShell hidden prompt와 C# native bridge는 set/check/delete를 제공하고,
+  canary는 별도 고정 target만 사용한다. Native secret buffer는 해제 전 zeroize한다. Python의
+  immutable 문자열까지 물리적으로 zeroize했다고 주장하지 않으며 참조 수명을 bootstrap/runtime으로 제한한다.
+- App-data는 환경변수 대신 current-user `FOLDERID_LocalAppData/com.binance-auto.trader`로 결정한다.
+  Root부터 ancestor handle을 `FILE_FLAG_OPEN_REPARSE_POINT`, delete sharing 없이 고정하고 reparse point를
+  거부한다. Artifact는 regular/single-link 파일이며 Rust·Python 모두 offset 0, length 1의 nonblocking
+  exclusive `LockFileEx`를 사용한다. Liveness는 `OpenProcess`/`WaitForSingleObject`로 확인하고
+  접근 거부나 미확정 상태를 stale로 해제하지 않는다.
+- Windows file durability는 writable file의 `FlushFileBuffers`를 명시적으로 사용한다. POSIX directory
+  fsync의 동일한 crash 보장을 native 증거 없이 주장하지 않는다. Native filesystem/crash 검증은 Session 6에 남는다.
+- 개발 Origin은 exact `http://127.0.0.1:5173` 한 개다. Packaged Windows Origin은 native에서 확인하지
+  않았으므로 allowlist에 추측 값을 추가하지 않고 Windows release startup/build를 차단한다.
+  기본 CSP와 capability는 확장하지 않는다. Tauri CLI는 platform configuration 뒤 `--config`를
+  병합하므로 launcher는 Windows override를 마지막에 선택한다.
+
+Platform API 근거는 [Microsoft Credential 구조](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw),
+[LockFileEx](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex),
+[SHGetKnownFolderPath](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath),
+[FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers),
+[Tauri configuration](https://v2.tauri.app/reference/config/)을 사용한다. Binance endpoint·인증·주문 의미는
+이번 변경의 대상이 아니므로 새로운 Binance 동작을 추측해서 추가하지 않았다.

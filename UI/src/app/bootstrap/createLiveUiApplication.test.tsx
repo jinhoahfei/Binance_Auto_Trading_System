@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
@@ -125,7 +126,7 @@ describe('create_live_ui_application', () => {
         expect(await screen.findByRole('button', { name: 'Binance 연결 상태: 연결됨' })).toBeInTheDocument();
         expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('시세·REGIME 실제 시장');
         expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('계좌 Testnet · 주문 비활성');
-        expect(screen.getByRole('button', { name: '자동매매 실행' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: '자동매매 실행' })).toBeEnabled();
         await screen.findByRole('region', { name: 'REGIME 판단 패널' });  // 지연 로딩된 대시보드가 표시된 뒤 검사한다.
         expect(document.querySelector('[data-metric-id="swingLow"] strong')).toHaveTextContent('HL');
         expect(document.querySelector('[data-metric-id="swingHigh"] strong')).toHaveTextContent('HH');
@@ -143,6 +144,74 @@ describe('create_live_ui_application', () => {
         expect(strategy_card).toHaveTextContent('(-)');
         expect(strategy_card).not.toHaveTextContent('-0.40 USDT');
         expect(document.body).not.toHaveTextContent(TEST_BACKEND_TOKEN);
+
+        rendered.unmount();
+    });
+
+    it('주문 비활성 상태에서도 시작 클릭으로 REGIME 안내·점멸과 시작 차단 팝업을 표시한다', async () => {
+        const user = userEvent.setup();
+        const base_snapshot = create_backend_snapshot_fixture();
+        const snapshot = {
+            ...base_snapshot,
+            environment: { market_data: 'mainnet', account: 'testnet', orders_enabled: false },
+            trading: { ...base_snapshot.trading, mode: 'testnet', command_enabled: false },
+        };
+        const snapshot_fetch = create_snapshot_fetch(snapshot);
+        const request_paths: string[] = [];
+        const application = await create_live_ui_application(create_descriptor(), {
+            adapter_dependencies: {
+                fetch: async (input, init) => {
+                    const path = new URL(input.toString()).pathname;
+                    request_paths.push(path);
+                    if (path === '/v1/snapshot') {
+                        return snapshot_fetch(input, init);
+                    }
+                    if (path === '/v1/regime/selection') {
+                        expect(JSON.parse(init?.body as string)).toMatchObject({ regime_type: 'type0' });
+                        return create_snapshot_fetch({
+                            selected: 'type0', support_status: 'supported', version: 1,
+                        })(input, init);
+                    }
+                    throw new Error(`Unexpected request: ${path}`);
+                },
+                create_uuid: () => TEST_REQUEST_ID,
+                create_web_socket: () => new BootstrapFakeWebSocket(),
+            },
+        });
+        const start_trading = vi.spyOn(application.command_adapter, 'start_trading');
+        const rendered = render(<App applicationFactory={create_live_ui_application_factory(application)} />);
+
+        const regime_panel = await screen.findByRole('region', { name: 'REGIME 판단 패널' });
+        const start_button = screen.getByRole('button', { name: '자동매매 실행' });
+        expect(start_button).toBeEnabled();
+        await user.click(start_button);
+        const regime_notice = await screen.findByRole('dialog', { name: 'REGIME type을 먼저 선택해주세요' });
+        await user.click(within(regime_notice).getByRole('button', { name: 'REGIME 선택' }));
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(regime_panel).toHaveAttribute('data-highlighted', 'true');
+        expect(request_paths).toEqual(['/v1/snapshot']);
+
+        const regime_button = screen.getByRole('button', { name: 'type0 횡보 적용 요청' });
+        await user.click(regime_button);
+        const regime_confirmation = await screen.findByRole('dialog', { name: 'REGIME type을 실행할까요?' });
+        await user.click(within(regime_confirmation).getByRole('button', { name: '실행' }));
+        await waitFor(() => expect(regime_button).toHaveAttribute('aria-pressed', 'true'));
+
+        await user.click(start_button);
+        const unavailable_notice = await screen.findByRole('dialog', { name: '자동매매를 시작할 수 없습니다' });
+        expect(unavailable_notice).toHaveTextContent('거래 시작 명령이 아직 활성화되지 않았습니다.');
+        expect(within(unavailable_notice).queryByRole('button', { name: '거래 시작' })).not.toBeInTheDocument();
+        await user.click(within(unavailable_notice).getByRole('button', { name: '확인' }));
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+        // 안내를 닫은 뒤 키보드로 다시 눌러도 실행 명령 없이 같은 차단 안내가 열린다.
+        start_button.focus();
+        await user.keyboard('{Enter}');
+        expect(await screen.findByRole('dialog', { name: '자동매매를 시작할 수 없습니다' })).toBeInTheDocument();
+        expect(start_trading).not.toHaveBeenCalled();
+        expect(request_paths).toEqual(['/v1/snapshot', '/v1/regime/selection']);
+        expect(application.facade.get_view_model().trading.is_trading).toBe(false);
+        expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('계좌 Testnet · 주문 비활성');
 
         rendered.unmount();
     });

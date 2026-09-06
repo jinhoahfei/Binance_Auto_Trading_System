@@ -231,7 +231,35 @@ def read_sidecar_configuration_from_fd(
     if type(expected_schema_version) is not int or expected_schema_version <= 0:
         raise ValueError("expected_schema_version must be a positive int")
 
+    # macOS FD와 Windows frame은 전송만 다르고 설정의 exact validation은 공유한다.
     payload = _read_bounded_fd_payload(configuration_fd)
+    return parse_sidecar_configuration_payload(
+        payload,
+        expected_schema_version=expected_schema_version,
+    )
+
+
+def parse_sidecar_configuration_payload(
+    payload: bytes,
+    *,
+    expected_schema_version: int,
+) -> SidecarConfiguration:
+    """
+    함수 이름: parse_sidecar_configuration_payload()
+    기능: OS 전송과 분리된 bounded strict JSON 설정 검증을 수행한다.
+    인자: payload -> 메모리 안의 configuration JSON bytes
+        expected_schema_version -> 현재 transport schema version
+    반환값: 검증된 read-only SidecarConfiguration
+    작성 날짜: 2026/09/06
+    """
+    # 전송 종류와 무관하게 bootstrap의 크기 및 schema 상한을 같은 경계에서 강제한다.
+    if type(expected_schema_version) is not int or expected_schema_version <= 0:
+        raise ValueError("expected_schema_version must be a positive int")
+    if not isinstance(payload, bytes) or not payload:
+        raise ValueError("sidecar configuration payload is empty or invalid")
+    if len(payload) > MAX_SIDECAR_CONFIGURATION_BYTES:
+        raise ValueError("sidecar configuration payload is too large")
+
     try:
         payload_text = payload.decode("utf-8")
     except UnicodeDecodeError as error:

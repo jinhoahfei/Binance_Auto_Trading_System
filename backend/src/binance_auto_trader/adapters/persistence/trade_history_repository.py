@@ -11,6 +11,9 @@ from threading import RLock
 from typing import BinaryIO
 from zoneinfo import ZoneInfo
 
+from binance_auto_trader.adapters.platform.file_durability import (
+    flush_created_file_metadata,
+)
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.history import (
     FeeAssetConversionRequiredError,
@@ -381,18 +384,14 @@ def _trade_from_decoded_json(decoded_record: object) -> Trade:
 def _fsync_parent_directory(file_path: Path) -> None:
     """
     함수 이름: _fsync_parent_directory()
-    기능: 새 backup 이름이 durable해진 뒤에만 원본 truncate가 가능하도록 부모를 fsync한다.
+    기능: POSIX parent fsync 또는 Windows file-buffer barrier로 생성 완료 파일의 durability를 확인한다.
     인자: file_path -> directory entry를 보존할 생성 완료 파일 경로
     반환값: 없음
     작성 날짜: 2026/08/21
     """
-    # backup file fsync 뒤 directory entry 자체도 durable하게 만들 descriptor를 연다.
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    directory_descriptor = os.open(file_path.parent, directory_flags)
-    try:
-        os.fsync(directory_descriptor)
-    finally:
-        os.close(directory_descriptor)  # 성공·실패와 관계없이 descriptor 누수를 막는다.
+    # POSIX directory fsync와 Windows writable-file flush 차이는 기술 adapter가 소유한다.
+    flush_created_file_metadata(file_path)  # 지원하지 않는 directory open을 Windows에서 시도하지 않는다.
+
 
 
 def _normalize_order_id(order_id: object) -> str:

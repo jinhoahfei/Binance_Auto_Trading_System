@@ -18,6 +18,47 @@ Figma의 1440×1024 데스크톱 화면을 TypeScript, React, Vite와 XState 기
 
 만료 소유권의 `확인 후 해제·계속`은 동일 앱 프로세스에서 시작을 계속하므로 개발 서버가 함께 종료되지 않습니다. 개발 서버가 꺼져 있으면 backend와 흰 창을 먼저 만들지 않고 native `다시 시도`·`종료` 안내를 표시합니다.
 
+### Windows 11 x64 개발 실행
+
+Windows에서도 `UI`에서 **`pnpm desktop:dev`**를 사용합니다. Tauri debug 앱과 Vite를 실행하고
+`backend/.venv/Scripts/python.exe`가 현재 Python 소스를 직접 실행합니다. Python 변경 후에는 앱을
+정상 종료하고 다시 실행합니다. PyInstaller, sidecar 배포 `.exe`, NSIS 설치 프로그램은 필요하지 않습니다.
+
+먼저 Visual Studio Build Tools의 **Desktop development with C++**와 Windows SDK,
+Rust stable `x86_64-pc-windows-msvc`, WebView2 Runtime, Node.js 및 이 프로젝트의
+`pnpm@11.16.0`, Python **x64 3.11 이상**, `uv`를 준비합니다. Rust toolchain의 host가
+`x86_64-pc-windows-msvc`인지 `rustc -vV`로 확인합니다. Windows ARM64와 32-bit Python은 지원하지 않습니다.
+Tauri의 설치 항목은 [공식 prerequisites](https://v2.tauri.app/start/prerequisites/)를 따릅니다.
+
+저장소 루트의 PowerShell에서 최초 한 번 실행합니다.
+
+```powershell
+cd backend
+uv sync --locked
+cd ..
+powershell -NoProfile -File scripts/configure_testnet_credentials.ps1 -Action canary
+powershell -NoProfile -File scripts/configure_testnet_credentials.ps1 -Action set
+cd UI
+pnpm install --frozen-lockfile
+pnpm desktop:dev
+```
+
+`set`은 키와 secret을 숨김 입력으로 받아 현재 Windows 사용자의 Credential Manager에 저장합니다.
+PowerShell 실행 정책이 로컬 script를 차단하면 조직 정책을 확인한 뒤 허용된 방식으로 실행합니다.
+`check`는 저장된 두 항목의 유효 여부만 확인하고 `delete`는 이 앱의 Testnet 항목만 삭제합니다.
+고정 generic target은 `com.binance-auto.trader.testnet/api-key`,
+`com.binance-auto.trader.testnet/api-secret`이며 canary는 별도 `session5-canary` 항목을 사용하고 지웁니다.
+키를 명령행·환경변수·`.env`·renderer에 넣지 않습니다. 저장 도중 오류가 나면 두 값을 다시 설정한 뒤 시작합니다.
+
+개발 화면 Origin은 정확히 `http://127.0.0.1:5173`입니다. 이미 5173 포트를 사용 중이면 해당 개발 서버를
+정상 종료한 뒤 재시도합니다. History와 runtime 소유권은 Windows의 현재 사용자 LocalAppData 아래
+`com.binance-auto.trader`에 보존됩니다. 창 닫기 → 일반 종료를 완료한 뒤 개발 터미널을 닫습니다.
+소유권 복구가 표시되면 살아 있는 backend와 계좌 상태를 먼저 확인하고 native 복구 안내를 따릅니다.
+
+Session 5는 macOS에서 source와 공통 계약을 검증한 단계입니다. **Windows native compile,
+Credential Manager canary, 실제 `pnpm desktop:dev` READY·picker·종료는 Session 6에서 검증해야 합니다.**
+Windows release build는 native Origin 확인 전 명시적으로 차단됩니다.
+
 ```bash
 pnpm install
 pnpm dev

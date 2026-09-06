@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, localcontext
 from enum import Enum
-import fcntl
 import hashlib
 from io import StringIO
 import json
@@ -25,6 +24,11 @@ from types import MappingProxyType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from uuid import UUID, uuid4
+
+# Historical evidence harness는 POSIX descriptor·flock 계약이므로 Windows import에서 격리한다.
+if os.name == "posix":
+    import fcntl
+
 
 from binance_auto_trader.adapters.binance import (
     AccountAssetFilter,
@@ -5224,6 +5228,7 @@ def _create_failure_v2_test_body() -> dict[str, object]:
     }
 
 
+@unittest.skipUnless(os.name == "posix", "historical evidence harness requires POSIX filesystem primitives")
 class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
     """
     클래스 이름: PhaseThirteenPublicHarnessHelperTests
@@ -11038,6 +11043,7 @@ class PhaseThirteenPublicHarnessHelperTests(unittest.TestCase):
     PHASE13_PUBLIC_CASE2_REQUESTED,
     PHASE13_PUBLIC_CASE2_SKIP_REASON,
 )
+@unittest.skipUnless(os.name == "posix", "historical evidence harness requires POSIX filesystem primitives")
 class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
     """
     클래스 이름: BinanceTestnetPhaseThirteenPublicMarketCase2Tests

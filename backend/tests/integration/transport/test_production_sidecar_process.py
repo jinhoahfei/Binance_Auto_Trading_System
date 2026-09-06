@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 from http.client import HTTPConnection
 import json
 import os
@@ -14,6 +13,10 @@ import tempfile
 from time import monotonic, sleep
 import unittest
 from uuid import UUID, uuid4
+
+# Windows discovery는 Unix-only test를 skip하되 fcntl import에서 먼저 실패하지 않아야 한다.
+if os.name == "posix":
+    import fcntl
 
 from binance_auto_trader.transport import SCHEMA_VERSION
 from tests.integration.transport.test_process_runner import _read_until_eof

@@ -1,5 +1,7 @@
 """Packaged Tauri external binary가 호출하는 production sidecar 진입점을 제공한다."""
 
+import os
+
 from binance_auto_trader.bootstrap.sidecar import (
     READY_DESCRIPTOR_FD,
     SESSION_TOKEN_FD,
@@ -14,11 +16,18 @@ from binance_auto_trader.transport import SCHEMA_VERSION, run_transport_process
 def run_sidecar_process() -> None:
     """
     함수 이름: run_sidecar_process()
-    기능: 고정 FD 3/4/5/6 계약으로 production loopback sidecar를 시작하고 안전 종료까지 기다린다.
+    기능: OS별 anonymous pipe adapter로 production loopback sidecar를 시작하고 안전 종료까지 기다린다.
     인자: 없음
     반환값: application CLOSED 뒤 transport process가 종료되면 없음
     작성 날짜: 2026/08/24
     """
+    # Windows는 표준 pipe frame을 쓰고 macOS의 고정 FD ABI는 그대로 보존한다.
+    if os.name == "nt":
+        from binance_auto_trader.sidecar_stdio import run_stdio_sidecar_process
+
+        run_stdio_sidecar_process(_create_sidecar_runtime_factory)
+        return
+
     # FD 번호 자체가 launcher와 child의 ABI이므로 argv나 환경변수 fallback을 제공하지 않는다.
     configuration = read_sidecar_configuration_from_fd(
         SIDECAR_CONFIGURATION_FD,

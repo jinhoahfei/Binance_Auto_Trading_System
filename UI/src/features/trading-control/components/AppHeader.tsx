@@ -149,9 +149,10 @@ export function AppHeader({
           <img className={styles.actionIcon} src={stop_icon_url} alt="" />
           {stop_button_label}
         </Button>
+        {/* 주문 비활성 상태도 클릭은 허용해 REGIME 안내와 시작 차단 사유를 표시한다. */}
         <Button
           className={styles.headerButton}
-          disabled={isTrading || has_recovered_position || isCommandPending || environment?.orders_enabled === false}
+          disabled={isTrading || has_recovered_position || isCommandPending}
           onClick={onStartRequested}
           tone="positive"
         >

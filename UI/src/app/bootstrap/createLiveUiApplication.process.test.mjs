@@ -177,8 +177,9 @@ async function stop_child_process(child_process) {
     });
 }
 
-describe('Phase 5 actual process live read', () => {
-    it.each([false, true])('Python startup 1~3 뒤 UISTM 4와 AppShell 5가 실제 snapshot을 표시한다 (live tick: %s)', async (advance_market) => {
+// 이 fixture는 POSIX FD 3/4/5 상속 전용이다. Windows stdio process seam은 backend 별도 fixture로 검증한다.
+describe.skipIf(process.platform === 'win32')('Phase 5 actual process live read', () => {
+    it.each([false, true])('Python startup 1~3 뒤 UISTM 4와 AppShell 5가 실제 snapshot을 표시한다: live tick %s', async (advance_market) => {
         const session_token = randomBytes(32).toString('base64url');
         const python_path = [
             path.join(REPOSITORY_ROOT, 'backend', 'src'),

@@ -7,7 +7,6 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
-import fcntl
 import hashlib
 import hmac
 from http import HTTPStatus
@@ -18,12 +17,17 @@ from pathlib import Path
 import re
 import select
 import socket
-import stat
 import struct
 from threading import Event, RLock, Thread
 from time import monotonic, sleep
 from urllib.parse import urlsplit
 from uuid import uuid4
+
+from binance_auto_trader.adapters.platform.runtime_lock import (
+    acquire_runtime_file_lock,
+    close_runtime_directory_handles,
+    unlock_runtime_file,
+)
 
 from .contracts import (
     JsonObject,
@@ -272,13 +276,15 @@ class _RuntimeOwnershipLock:
         *,
         runtime_pid: int,
         process_start_id: str,
+        directory_handles: tuple[int, ...] = (),
     ) -> None:
         """
         함수 이름: __init__()
         기능: exclusive lock FD와 정상 RELEASED commit에 쓸 runtime identity를 인수한다.
-        인자: descriptor -> flock 획득과 identity fsync를 마친 file descriptor
+        인자: descriptor -> OS exclusive lock 획득과 identity fsync를 마친 file descriptor
             runtime_pid -> lock을 보유하는 Python runtime PID
             process_start_id -> lock을 보유하는 process launch UUID
+            directory_handles -> Windows app-data ancestor를 고정한 native handle tuple
         반환값: 없음
         작성 날짜: 2026/08/25
         """
@@ -287,6 +293,7 @@ class _RuntimeOwnershipLock:
         _validate_runtime_pid(runtime_pid)
         validate_uuid_text(process_start_id, "process_start_id")
         self._descriptor: int | None = descriptor
+        self._directory_handles = directory_handles  # Windows는 runtime 종료까지 ancestor 교체를 막는다.
         self._runtime_pid = runtime_pid
         self._process_start_id = process_start_id
 
@@ -314,27 +321,14 @@ class _RuntimeOwnershipLock:
         _validate_runtime_pid(runtime_pid)
         validate_uuid_text(process_start_id, "process_start_id")
 
-        # O_NOFOLLOW와 post-open metadata로 symlink·비정규 파일을 lock identity로 사용하지 못하게 한다.
+        # OS adapter가 owner/path 검사와 nonblocking lock을 함께 완료해야 artifact를 읽는다.
         lock_path = directory / _RUNTIME_OWNERSHIP_LOCK_FILE_NAME
-        open_flags = os.O_CREAT | os.O_RDWR
-        open_flags |= getattr(os, "O_CLOEXEC", 0)
-        open_flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            descriptor = os.open(lock_path, open_flags, 0o600)
-        except OSError as error:
+            descriptor, directory_handles = acquire_runtime_file_lock(lock_path)
+        except (OSError, RuntimeError) as error:
             raise RuntimeError("runtime ownership lock is unavailable") from error
 
         try:
-            lock_metadata = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(lock_metadata.st_mode)
-                or lock_metadata.st_nlink != 1
-                or lock_metadata.st_uid != os.getuid()
-            ):
-                raise RuntimeError("runtime ownership lock file is invalid")
-            os.fchmod(descriptor, 0o600)
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-
             # 이전 process가 정상 RELEASED를 fsync한 경우에만 같은 inode를 새 owner로 갱신한다.
             previous_artifact = _read_runtime_ownership_artifact(descriptor)
             if (
@@ -352,12 +346,14 @@ class _RuntimeOwnershipLock:
             )
         except Exception as error:
             _close_file_descriptor_safely(descriptor)
+            close_runtime_directory_handles(directory_handles)
             raise RuntimeError("runtime ownership lock is unavailable") from error
 
         return cls(
             descriptor,
             runtime_pid=runtime_pid,
             process_start_id=process_start_id,
+            directory_handles=directory_handles,
         )  # 파일은 지우지 않고 actual runtime lifetime 동안 lock FD를 보존한다.
 
     def release(self) -> None:
@@ -391,9 +387,11 @@ class _RuntimeOwnershipLock:
             release_error = error
         finally:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                unlock_runtime_file(descriptor)
             finally:
                 _close_file_descriptor_safely(descriptor)
+                close_runtime_directory_handles(self._directory_handles)
+                self._directory_handles = ()
         if release_error is not None:
             raise RuntimeError(
                 "runtime ownership release could not be persisted"
