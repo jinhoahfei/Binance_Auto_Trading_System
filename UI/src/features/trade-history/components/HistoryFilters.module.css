@@ -88,17 +88,17 @@
   color: var(--color-text-negative);
 }
 
-.all.activeSide {
-  border-color: var(--color-text-secondary);
-  background: var(--color-bg-control-strong);
-}
-
+/* 선택된 거래 구분은 진한 상태색으로 채워 기본 버튼과 명확하게 구분한다. */
 .buy.activeSide {
-  background: color-mix(in srgb, var(--color-status-positive-strong) 26%, var(--color-bg-control));
+  border-color: var(--color-status-positive);
+  background: var(--color-status-positive-strong);
+  color: var(--color-text-on-strong-status);  /* 진한 배경에서도 작은 버튼 글자의 대비를 확보한다. */
 }
 
 .sell.activeSide {
-  background: color-mix(in srgb, var(--color-status-negative-strong) 26%, var(--color-bg-control));
+  border-color: var(--color-status-negative);
+  background: var(--color-status-negative-strong);
+  color: var(--color-text-on-strong-status);  /* 매수와 동일한 선택 상태의 글자 대비를 유지한다. */
 }
 
 .exportButton {
