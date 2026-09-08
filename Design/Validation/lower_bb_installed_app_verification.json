@@ -1,0 +1,16 @@
+{
+  "installed_app": "/Applications/Binance Auto Trader.app",
+  "source_commit": "e75b9e6c7ae336e41df9ad5a32ea650224ddcea4",
+  "signature_verification": "PASS",
+  "installed_matches_build": "PASS",
+  "packaged_source_equivalent_modules": 108,
+  "fixed_fd_loader_smoke": "PASS",
+  "orders_executed": false,
+  "files_sha256": {
+    "Contents/Info.plist": "8d9ef71e4e0b32433149ab77ac2e82169b5fee502cc26b68894c64d4cab5ff81",
+    "Contents/MacOS/binance-auto-sidecar": "886a9b589217a2c3ea803f7104b6c60f0d5350f8dfb275b266d21330c223f986",
+    "Contents/MacOS/binance-auto-trader": "11798581452bd2fe9331111b52e81104d3b168bf2fd83d0084fb963ac83afaa9",
+    "Contents/Resources/icon.icns": "2cc657772e9cecbd47ae4a0572fb3cfed7e198ea236795f5f2573f3fc8736ec3",
+    "Contents/_CodeSignature/CodeResources": "29bf5b616772a5c3065b2fc6978615952b1998186ede055a3bc4fa5fa89b6140"
+  }
+}
