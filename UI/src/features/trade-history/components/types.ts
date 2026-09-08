@@ -21,6 +21,7 @@ export interface TradeRowViewModel {
   quantity: string;
   orderAmount: string;
   fee: string;
+  feeNote?: string;
   previousBuyReturn: string;
   realizedPnl: string;
 }

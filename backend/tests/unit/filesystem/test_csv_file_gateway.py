@@ -31,7 +31,7 @@ from tests.unit.history.factories import make_trade
 # Golden bytes와 private fault seam은 production module 이름 하나를 기준으로 참조한다.
 GATEWAY_MODULE = "binance_auto_trader.adapters.filesystem.csv_file_gateway"
 GOLDEN_FIXTURE_PATH = (
-    Path(__file__).parents[2] / "fixtures" / "csv" / "trades_v1_golden.base64"
+    Path(__file__).parents[2] / "fixtures" / "csv" / "trades_v2_golden.base64"
 )
 
 
@@ -315,10 +315,10 @@ class CSVFileGatewayTests(unittest.TestCase):
         self.assertNotIn(b"\r\r\n", expected_bytes)
         self.assertEqual(self._temporary_paths(), ())
 
-        # v1/v2 Trade 모두 첫 field가 원본 회계 version이 아닌 CSV schema literal 1이다.
+        # v1/v2 Trade 모두 첫 field가 원본 회계 version이 아닌 CSV schema literal 2이며 원본 version은 추가 column에 보존한다.
         decoded_text = expected_bytes.decode("utf-8-sig")
-        self.assertIn("\r\n1,", decoded_text)
-        self.assertNotIn("\r\n2,sell", decoded_text)
+        self.assertIn("\r\n2,", decoded_text)
+        self.assertIn("\r\n2,sell", decoded_text)
 
     def test_empty_stream_fails_before_any_filesystem_entry_and_closes_iterator(
         self,

@@ -15,6 +15,7 @@
 | 2026-09-06 Session 5 최신 갱신 | §16.20.8의 Windows 11 x64 호환 source를 개발 실행 범위로 완료했다. `pnpm desktop:dev`가 Windows debug Tauri/Vite와 source Python venv를 직접 실행하도록 구성했고 Credential Manager, framed stdio, LockFileEx·LocalAppData adapter를 macOS 구현에서 분리했다. Backend `1046` 실행·`10` safe skip, UI `481`, Rust `45`, 도구 `38`, Communication `126/126`이 통과했다. Session 6 native 개발 실행 검증은 `GO`이며 Windows native PASS·설치 package·Private Beta/live 완료를 의미하지 않는다. |
 | 2026-09-07 Session 6 완료 | 사용자 지시에 따라 Windows 10 x64 개발 실행 통과를 완료 조건으로 확정했다. venv·Node/pnpm·Rust/MSVC를 준비하고 Vite EBUSY·main-window Windows capability 누락을 수정했다. Credential Manager와 Mac 이력 복원 후 read-only READY, Dashboard/History, picker, 정상 종료, fresh restart/renderer reload를 통과했다. 최종 RELEASED·잔여 process/port 0·이력 불변이다. Session 6은 완료이며 Windows 11 검증과 설치 배포는 별도 후속 작업이다. 상세 결과와 실패 기록은 §16.20.9 및 `WINDOWS_DEVELOPMENT_VALIDATION.md`에 보존했다. |
 | 2026-09-08 Session 6 재검증 | clean HEAD `e726793`에서 Windows 10 x64 backend 1,046 실행(979 PASS/67 skip), UI 480 PASS/2 skip, Rust 37 PASS, 도구 38 실행(20 PASS/18 skip), Communication 126/126을 재확인했다. 실제 Testnet read-only READY, History 16행, native picker 취소·선택, 정상 종료 취소·확정, fresh restart/renderer reload와 안전 종료를 통과했다. 최종 RELEASED·앱/개발 서버 잔여 0·이력 불변이며 production source와 lockfile 변경은 없다. Session 7 구현 착수는 GO이며, 양 OS package와 별도 승인된 live read-only READY는 Session 7의 남은 완료 조건이다. 상세 증거와 최초 UI timeout은 §16.20.9에 기록했다. |
+| 2026-09-08 Session 7 macOS 기술 검증 마감 | 별도 live root/capability·fixed endpoint·native Keychain/profile/storage와 10 USDT 정책을 구현했다. 기존 Backend 1058/UI 483/Rust 47/Communication 126/126과 이번 도구 47 PASS. 공인 IP 수정 후 signed 읽기 PASS, native 실계좌·주문 비활성 연결/History 0/정상 종료/fresh restart 확인 및 두 독립 runtime의 READY·zero state·CLOSED를 검증했다. 최종 owner RELEASED, native process 0, secret scan 2 canary/751 files PASS, 주문 0. macOS 읽기 전용 기술 검증과 승인된 ETH 잔여 장부 구현을 완료했다. BNB 회계 후속 확장으로 수수료·잔액 사전조건은 PASS이나 macOS 계좌 운영 확인·실제 주문 승인은 남는다. 사용자 지시로 Windows 검증은 macOS pilot 완료 후 수행한다. 새 패키지와 후속 검증은 §16.20.10을 따른다. Windows live와 계좌 격리 운영 확인 및 전체 master는 별도로 남긴다. 상세는 §16.20.10. |
 
 ---
 
@@ -5628,6 +5629,30 @@ parent EOF/orphan recovery와 fresh restart를 확인하라. Windows에서 실�
 표시하지 말며 Testnet 주문과 모든 live signed/order 동작은 0회로 유지하라.
 ```
 
+**2026-09-08 Session 7 macOS 후속 갱신 — 사용자 지정 갱신 대상:**
+
+이번 작업은 §16.20.10의 macOS 범위이며 Session 5의 Windows source compatibility 완료 기록을
+현재 live 검증으로 대체하지 않는다. 시작 HEAD `baeabcd031c69b6e8448946c2d7511f0baf5cfab`에서
+공통 Spot protocol에 private live endpoint 선택 경계를 추가하고 명시적 read facade를 공유했다.
+Windows Credential Manager·stdio·native launcher는 변경하지 않았고 macOS Keychain profile,
+live namespace, 별도 wire와 application live root를 추가했다. 기존 Testnet API와 주문 cap·permission
+경계는 회귀로 보존했다. 새 업무 클래스/Operation은 추가하지 않았다.
+
+macOS Backend `1058` 실행(`10` safe skip), UI `483`, Rust `47`, 최초 도구 집중 `42`,
+Communication `126/126` PASS이며 세 lockfile은 시작 HEAD와 동일하다. Full root scripts `192`의
+기존 supply drift `6` failures·`3` errors는 별도 실패로 보존한다. 새 macOS app/DMG의 서명·무결성과
+secret scan을 통과했다. 과거 signed `-2015`는 공인 IP 허용 설정 수정 뒤 해소됐다. 최신 검증에서
+native 실계좌·주문 비활성 연결, History 0, 정상 종료·fresh restart와 별도 process 두 번의 live
+READY/zero state/CLOSED를 통과했다. 추가 도구 회귀 `47`, 최종 secret scan `2` canary/`751` files
+PASS, owner RELEASED/native process 0/order mutation 0이다. macOS 읽기 전용 기술 검증은
+완료했다. 후속 검증에서 잔액 조건과 ETH 잔여 정책은 해결됐으나 제3 자산 수수료 설정과 운영 조건 때문에 Session 8 actual 주문 NO_GO다. Windows native
+PASS나 양 OS master로 확대하지 않는다. 상세는 §16.20.10과 `MACOS_LIVE_READINESS_VALIDATION.md`.
+추가로 사용자 승인 ETH 잔여 장부·STOP/restart·UI 표시를 구현하고 Backend 1,065(10 skip),
+UI 최종 전체 487 PASS를 검증했다. 새 macOS package와 최신 잔액 충족 관측은 §16.20.10 후속 기록을 따른다.
+2026-09-09 BNB 회계 확장 후 Backend 1,074(10 skip)/UI 488 PASS와 실제 계좌 수수료 사전조건 PASS를
+확인했다. Windows live 검증은 수행하지 않았다. 새 결과는 §16.20.10과 `MACOS_SESSION8_PREPARATION.md`를 따른다.
+별도 commit은 만들지 않았다.
+
 #### 16.20.9 Session 6 — Windows 10 x64 개발 실행과 read-only smoke
 
 **상태:** `[x]` 완료 — 2026-09-07 사용자 지시에 따라 **Windows 10 x64 개발 실행 통과**를
@@ -5740,6 +5765,109 @@ Windows 11과 설치 패키지는 별도 후속 작업이다. Testnet 주문과 
 
 #### 16.20.10 Session 7 — live bootstrap과 양 OS live-readiness
 
+**최신 macOS Session 8 진입 재판정 (2026-09-09T00:41:50+09:00): 기술적 GO.**
+실제 signed preflight `blockers=[]`, BNB 평가·잔액 PASS, 실제 runtime READY/CLOSED 13 checks PASS,
+Position/잔여/pending/unknown/history/open order/list 0, reconciliation clear다. 패키지 manifest의
+변경 production source 45개와 현재 값이 일치한다. 주문 0이며 실제 실행 전 계좌 전용 사용 확인과
+order/position 각각 10 USDT 주문 승인 조건은 유지한다. 아래 과거 NO_GO의 Windows 선행 조건은
+사용자 순서 변경으로 해제됐으며 전체 양 OS master 완료를 뜻하지 않는다.
+
+**2026-09-09 사용자 지정 순서 변경 — 현재 실행 기준:** macOS Session 7 기술 검증 후 macOS
+Session 8 저액 pilot을 먼저 수행한다. macOS terminal lifecycle·수수료/잔여 장부 대조·fresh restart
+검증을 완료한 뒤 Windows Session 7 live-readiness를 검증하고, 통과 후 Windows pilot을 수행한다.
+Windows 검증은 macOS pilot의 선행 조건에서 제외하며 삭제하거나 완료로 표시하지 않는다.
+따라서 macOS Session 8 진입의 기술적 순서 조건은 충족됐다. 실제 주문 시작 전에는 macOS 계좌의
+수동 거래·다른 봇 배제 확인, 최신 사전검사와 order/position 각각 10 USDT 범위의 별도 주문 승인을
+확인한다. 이번 순서 변경으로 주문 profile을 활성화하지 않았다. 양 OS/Private Beta master와 동시
+운영 조건은 양 OS 검증이 끝날 때까지 미완료다. 아래 이전 Windows 선행 조건은 이 지시로 대체한다.
+
+**2026-09-09 BNB 납부 유지 회계 확장:** `[x]` 사용자 승인에 따라 BNB/혼합 수수료의 원 체결·
+직전 완료 1초봉 USDT 평가·JSONL v3/CSV v2·손익·계좌 overlay·잔여 장부·fresh replay를 구현했다.
+기존 BNB OFF 안내를 현재 조건으로 사용하지 않는다. 실제 signed preflight는 `blockers=[]`,
+BNB 평가 포함 PASS, 주문 0이다. Backend 1,074(1,064 PASS/10 skip), UI 488 PASS, 도구 9 PASS.
+정책·주요 파일·명령과 한계는 [BNB_FEE_ACCOUNTING.md](BNB_FEE_ACCOUNTING.md), 운영 절차는
+[MACOS_SESSION8_PREPARATION.md](MACOS_SESSION8_PREPARATION.md)를 따른다.
+새 BNB package는 `session7-bnb-baeabcd`다. App tree SHA-256
+`6f79dcebfce3b621a4bcde9ccbd27a206d9e7b87d6c3e754045afb1fac262991`, DMG SHA-256
+`b6651cfb4e0ddf348ec95a23d9b1653e5edbe20c0f955d870b5455101d66783d`이며 서명·checksum·mount parity·
+secret scan 2 canary/772 files PASS다. 실제 native 읽기 연결·정상 종료·fresh restart와 최종 owner
+RELEASED/잔여 process 0을 확인했다. Source 실제 runtime 13 checks PASS, 최종 추가 회귀 10 PASS.
+별도 commit 없이 기준 HEAD `baeabcd031c69b6e8448946c2d7511f0baf5cfab`의 작업 트리에서 검증했다.
+**macOS Session 8 판정은 아직 실제 주문 NO_GO:** 수수료 차단은 해결됐지만 전용 계좌 운영 확인·
+Windows 별도 계좌/live 읽기 등 원래 양 OS 조건과 플랫폼별 실제 주문 승인은 미완료다.
+아래 2026-09-08 수수료 차단 기록은 당시 증거이며 현재 blocker로 재사용하지 않는다.
+
+**2026-09-08 macOS 실행 상태:** `[x] 읽기 전용 기술 검증 완료` / `[ ] 양 OS·운영 조건 미완료`.
+별도 live source·macOS native 설정·fresh app/DMG, signed 읽기 preflight, native 연결·History 0·
+정상 종료·fresh restart와 두 독립 실제 runtime READY/zero state/CLOSED를 검증했다.
+Windows live와 운영 계좌 분리 확인은 별도로 남기며 Session 8 actual 주문은 NO_GO다.
+권한은 이번 사용자 요청의 사전 승인을 적용했고 Testnet/live 주문 mutation은 **0회**다.
+
+**§1 적용과 완료 증거:** 시작 clean HEAD `baeabcd031c69b6e8448946c2d7511f0baf5cfab`에서
+가장 앞의 미완료 Phase 13의 Session 7만 수행했다. Communication Case 1 startup `1`~`5`,
+start/stop/reconciliation과 Case 2의 기존 Controller/Gateway Operation을 확인했다. 신규 타입은
+configuration/native profile/protocol adapter이며 업무 Controller·STM을 추가하지 않았다.
+함수·클래스 docstring과 블록·문장 주석을 작성했다. 별도 commit은 만들지 않았다.
+
+- [x] `bootstrap/live.py`, `live_configuration.py`, `live_permission.py`에 별도 root·validator·
+  live capability/permission을 구현했다. Native default live disabled, complete live wire,
+  exact `LIVE`와 별도 order opt-in을 적용하며 renderer는 secret·enable 값을 만들지 않는다.
+- [x] `adapters/binance/live_clients.py`·`live_endpoints.py`가 공식 REST/market/account WS 주소를
+  고정한다. Testnet URL allowlist는 유지하고 HTTP read-only method/URL gate와 redirect 거부,
+  live POST timestamp 자동 retry 비활성화를 적용했다.
+- [x] macOS `sidecar/macos_profile.rs`와 `scripts/configure_live_keychain.sh`가 live Keychain
+  namespace와 history/pending/manual-kill/runtime owner directory를 분리한다. Profile은 process
+  lifetime에 고정한다. 기존 Testnet credential/artifact fallback은 없다.
+- [x] 기존 RiskPolicy version `1`, order `10`, position `10`, daily loss `None`, `REALIZED_ONLY`,
+  `CANCEL_AND_LIQUIDATE`를 REST permission과 Controller gate에 결속했다. 기존 fee/dust,
+  STOP과 unknown execution 차단을 보존했다. 이후 승인된 sub-step ETH 분리 정책은 아래 후속 기록을 따른다.
+- [x] Memory HTTP/WS의 exact endpoint·혼용·fallback·cap 누락/초과·policy version·disabled,
+  live root READY/fresh graph restart·unknown external execution negative gate를 검증했다.
+  Backend 전체 `1058` 실행(`1048` PASS/`10` safe skip), live 집중 `12`, UI `483`, Rust `47`,
+  도구 집중 `42`, Communication `126/126` PASS. Full scripts의 retained supply drift 실패는
+  성공으로 세지 않았다. 상세 명령·실패 원인은 아래 linked evidence에 보존했다.
+- [x] macOS arm64 fresh app/DMG를 `target/session7-baeabcd`에 생성했다. Non-hardened ad-hoc
+  strict signature·DMG checksum·read-only mount app byte parity와 live secret scan(`2` canary,
+  `745` files, 유출 `0`) PASS. App tree SHA-256
+  `d1920ab1f2e376d0b5e964bac964f9d20a1ade4f8c47e2b7fdaa65d2656dcd2d`, DMG SHA-256
+  `87284a09a745fe973db02e6ecb4986aae347dfda949f788a1aa73416848953d2`.
+- [x] Actual credential 없는 fixed live 공개 symbol filter/reference price/market WS 연결 PASS.
+- [x] macOS signed account/filter/commission·account-wide empty-state와 native 실계좌·주문 비활성
+  연결/History 0/정상 종료/fresh restart. 과거 `-2015`는 IP 허용 설정 수정 뒤 해소됐으며 실패
+  기록은 linked evidence에 보존했다. Keychain 대기 이후 정상 native 재실행을 확인했다.
+- [x] `scripts/live_runtime_readiness.py`로 같은 live 저장소와 owner lock에서 두 별도 process가
+  READY·Position/pending/unknown/History/open order/list 0·reconciliation 정상·CLOSED를 통과했다.
+  최종 owner RELEASED/native process 0. 추가 도구 회귀 47, secret scan 2 canary/751 files PASS.
+- [ ] API withdrawal 비활성 유지·양 OS 계좌 분리·pilot 중 다른 process/수동 거래 배제 운영 확인.
+  Withdrawal 비활성은 사용자 제공 화면에서 관측했고 계좌 분리 조건은 사용자 답변 대기다.
+- [ ] Windows 별도 live credential/package/readiness와 양 OS Private Beta master.
+
+실행 명령, 주요 파일, immutable package digest, 원래 실패와 현재 한계의 상세 증거는
+[MACOS_LIVE_READINESS_VALIDATION.md](MACOS_LIVE_READINESS_VALIDATION.md)에 기록했다.
+사용자가 지정한 §16.20.8 Session 5에도 이번 macOS 후속 결과와 Windows 증거의 한계를 반영했다.
+
+**macOS Session 8 진입 판정:** **`NO_GO` (실제 주문)**. 이후 사용자 승인으로 ETH fee 잔여 정책을
+구현했다. 현재 signed preflight는 `base_fee_residual_policy=true`,
+`quote_balance_meets_market_minimum=true`이고 `supported_fee_asset=false`만 남았다.
+따라서 과거 잔액 미달과 ETH 잔여 처리 미구현은 현재 blocker가 아니다. 제3 자산 수수료 환산은
+여전히 지원하지 않으므로 그 조건을 해결한 뒤 signed preflight를 다시 확인해야 한다. 양 OS 계좌 분리와 원래 Session 1~7/양 OS 조건도 유지한다. 이번 요청을 실제
+live 주문 실행 승인으로 확대하지 않고 order opt-in은 계속 비활성으로 보존했다.
+
+**2026-09-08 사용자 승인 잔여 정책 후속 구현:** `[x]` ETH 수수료 lot의 전량 매도 후 공식
+LOT_SIZE stepSize 미만 잔여만 수량·미실현 원가·Trade prefix hash로 `residual-ledger.json`에
+저장한다. File/directory fsync 전에는 Position을 닫지 않으며 crash/replay·현재 filter·실계좌
+합계 대조와 risk cap의 잔여 평가액 포함을 구현했다. UI는 “전략 종료 · 잔여 ETH 있음”을 표시한다.
+잔여가 있으면 zero exposure로 부르지 않는다. Domain/저장/application 책임과 승인된 종료 기준은
+[RESIDUAL_ETH_ACCOUNTING.md](RESIDUAL_ETH_ACCOUNTING.md)에 명시했다.
+
+Backend 1,065 실행(1,055 PASS/10 safe skip), UI 최종 전체 487 PASS,
+Communication 126/126, 도구 9 PASS. 새 패키지 target은 `session7-residual-baeabcd`이며 app tree
+SHA-256 `3cda7f30c53c0bd240e2d90e01b8a09cb556ff7043e8d8315e87a81cd0cfbaa3`, DMG SHA-256
+`559e41f160c53f89a603dd90fba7cab41566fc587244e0414eb8bb561b2d3a05`다. Strict signature·checksum·
+read-only mount byte parity·secret scan 2 canary/762 files PASS. 새 app의 actual 실계좌·주문 비활성
+연결/정상 종료와 source actual 읽기 READY/CLOSED를 확인했으며 주문 mutation은 0이다.
+기존 package·실패 기록·Windows master는 보존하고 실제 잔여 생성은 fixture 검증임을 구분한다.
+
 **목표:** 현재 존재하지 않는 live composition root와 capability를 Testnet에서 분리해 구현하고,
 macOS와 Windows package를 실제 주문 없는 signed live read-only 상태까지 검증한다.
 
@@ -5788,9 +5916,10 @@ REALIZED_ONLY, CANCEL_AND_LIQUIDATE를 사용하라. 어떤 live credential read
 
 #### 16.20.11 Session 8 — macOS 후 Windows 순차 저액 live pilot
 
-이 세션은 코드 구현 완료가 아니라 실제 운영 시작이며 Private Beta master와 분리한다. Session 1~7이
-완료된 뒤 live endpoint와 live order를 각 platform/account에 대해 별도로 명시 승인한 경우에만
-수행한다.
+이 세션은 코드 구현 완료가 아니라 실제 운영 시작이며 Private Beta master와 분리한다.
+2026-09-09 사용자 지시에 따라 macOS에 필요한 Session 1~7 검증을 마친 뒤 macOS pilot을 먼저
+수행하며 Windows live-readiness는 macOS pilot 검증 완료 후 수행한다. Live endpoint와 live order는
+각 platform/account에 대해 별도로 명시 승인된 범위에서만 실행한다.
 
 1. macOS account부터 다른 process와 수동 activity를 중지하고 Position/pending/unknown/openOrders/
    openOrderList `0`, filter/reference/balance, reconciliation과 stream READY를 확인한다.
@@ -5798,9 +5927,12 @@ REALIZED_ONLY, CANCEL_AND_LIQUIDATE를 사용하라. 어떤 live credential read
    존재하거나 활성화될 수 없다.
 3. `max_order_notional=10 USDT`, `max_position_notional=10 USDT`를 유지한다.
    `max_daily_loss=None`이며 새로운 일일 손실 차단 로직을 추가하지 않는다.
-4. 첫 terminal BUY/SELL 또는 STOP 청산 뒤 Account, Position, open order, durable History, fee와 fresh
-   restart zero exposure를 확인한다.
-5. macOS lifecycle과 restart가 통과한 뒤에만 Windows account에서 같은 preflight와 pilot을 수행한다.
+4. 첫 terminal BUY/SELL 또는 STOP 뒤 전략 Position/pending/unknown/open order/list 0과 durable
+   History/fee/잔여 장부를 확인한다. 잔여가 있으면 수량·미실현 원가를 명시하고 fresh restart에서
+   실제 ETH = 전략 ETH + 잔여 ETH를 대조한다. 잔여가 있을 때 zero exposure라고 표시하지 않는다.
+5. macOS lifecycle·회계 대조·restart가 통과한 뒤 Windows의 별도 계좌/credential과 Session 7
+   live-readiness(읽기 READY·종료·재시작)를 먼저 검증한다. Windows 검증 통과와 별도 주문 승인
+   후에만 Windows pilot을 수행한다.
 6. Timeout, 5xx, persistence ambiguity, 설명되지 않은 execution 또는 UI/backend 불일치가 있으면 신규
    BUY를 잠그고 자동 재주문하거나 다음 platform으로 확대하지 않는다.
 7. 양 OS가 각각 terminal lifecycle과 재시작 복구를 통과한 뒤에만 동시 운영을 허용한다. Cap 확대와
@@ -5811,8 +5943,8 @@ REALIZED_ONLY, CANCEL_AND_LIQUIDATE를 사용하라. 어떤 live credential read
 ```text
 INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md의 §16.20 Session 8만 수행하라. 각 live credential/order
 범위를 별도로 승인받고 macOS account를 먼저 최대 order/position 10 USDT로 운영하라. terminal
-BUY/SELL 또는 STOP과 fresh restart zero exposure가 확인된 뒤에만 Windows account를 같은 순서로
-진행하라. max_daily_loss는 None으로 유지하고 ambiguity에는 재주문하거나 확대하지 마라.
+BUY/SELL 또는 STOP 뒤 전략 종료와 fresh restart의 수수료·잔여 장부·계좌 일치가 확인된 뒤
+Windows Session 7 live-readiness부터 검증하고, 통과 후 별도 승인된 Windows pilot을 진행하라. max_daily_loss는 None으로 유지하고 ambiguity에는 재주문하거나 확대하지 마라.
 ```
 
 #### 16.20.12 개인용 베타 진행 체크리스트
@@ -5825,7 +5957,7 @@ BUY/SELL 또는 STOP과 fresh restart zero exposure가 확인된 뒤에만 Windo
 - [x] Session 5 — Windows 11 x64 호환 계층 구현 (source 개발 실행 범위; native 검증은 Session 6)
 - [x] Session 6 — Windows 10 x64 개발 실행과 read-only smoke (2026-09-07 사용자 지정 완료 조건; Windows 11·설치 배포는 후속)
 - [ ] **Cross-platform package master**
-- [ ] Session 7 — live bootstrap과 양 OS signed read-only readiness
+- [ ] Session 7 — live bootstrap과 양 OS signed read-only readiness (macOS 읽기 전용 기술 검증 완료; 양 OS·운영 조건 남음)
 - [ ] **Private Beta master — macOS·Windows 비공개 live 준비 완료, 주문은 별도 승인**
 - [ ] Session 8 — macOS 후 Windows 순차 저액 live pilot
 - [ ] **Two-user live pilot — 양 OS terminal lifecycle과 fresh restart 완료**

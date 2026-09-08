@@ -18,6 +18,22 @@ async function wait_for_actor_settlement(): Promise<void> {
 }
 
 describe('tradingCommandMachine', () => {
+    it('종료·재연결 snapshot에도 잔여 자산과 미실현 원가를 보존한다', () => {
+        const actor = createActor(create_trading_command_machine(new FakeUiCommandAdapter()));
+        actor.start();
+        // 재연결은 거래 명령 없이 별도 장부의 원본 Decimal 상태를 복원한다.
+        actor.send({
+            type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED',
+            selected_regime: null, logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE,
+            command_enabled: false, is_trading: false, lifecycle_status: 'not_started',
+            has_open_position: false, residual_quantity: '0.000096', residual_cost_basis: '0.24024024024024024024024024024024',
+        });
+        expect(actor.getSnapshot().context.residual_quantity).toBe('0.000096');
+        expect(actor.getSnapshot().context.residual_cost_basis).toBe('0.24024024024024024024024024024024');
+        expect(actor.getSnapshot().context.has_open_position).toBe(false);
+        actor.stop();
+    });
+
     it('U3-03/VR-01: REGIME 미선택 시작은 명령 없이 안내 상태로 전이한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
         const actor = createActor(create_trading_command_machine(command_adapter));

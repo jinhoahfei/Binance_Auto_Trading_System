@@ -158,6 +158,8 @@ export interface BackendTradingSnapshot {
     readonly has_open_position: boolean;
     /** 구버전 schema v3에서 생략될 수 있는 열린 포지션의 표시용 평단가다. */
     readonly position_average_entry_price?: BackendDecimalString | null;
+    readonly residual_quantity?: BackendDecimalString;
+    readonly residual_cost_basis?: BackendDecimalString;
     readonly session_id: string | null;
     readonly risk_policy_availability: BackendRiskPolicyAvailability;
     readonly configured_risk_policy_version: number | null;
@@ -212,6 +214,7 @@ export interface BackendTradeSnapshot {
     readonly market_price_at_decision: BackendDecimalString;
     readonly fee_amount: BackendDecimalString;
     readonly fee_asset: string;
+    readonly fee_note?: string;
     readonly fee_quote_amount: BackendDecimalString;
     readonly allocated_cost_basis: BackendDecimalString | null;
     readonly realized_pnl: BackendDecimalString | null;

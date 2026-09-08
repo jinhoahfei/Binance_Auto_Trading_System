@@ -3,6 +3,8 @@
 from collections.abc import Iterable, Iterator
 import ctypes
 import csv
+import json
+from binance_auto_trader.domain.history.fill_record import fill_to_record
 from decimal import Decimal
 import errno
 import os
@@ -24,7 +26,7 @@ from binance_auto_trader.domain.history import (
 
 
 # CSV schema version과 column 순서는 ADR-004 5.1의 외부 파일 계약으로 고정한다.
-CSV_SCHEMA_VERSION = 1
+CSV_SCHEMA_VERSION = 2
 CSV_HEADER = (
     "schema_version",
     "trade_id",
@@ -47,6 +49,8 @@ CSV_HEADER = (
     "realized_pnl",
     "realized_return_rate",
     "exit_reason",
+    "trade_schema_version",
+    "fee_evidence_json",
 )
 _KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
 _DARWIN_RENAME_EXCL = 0x00000004
@@ -70,9 +74,9 @@ def _plain_decimal(value: Decimal | None) -> str:
 def _trade_to_csv_row(trade: Trade) -> tuple[str, ...]:
     """
     함수 이름: _trade_to_csv_row()
-    기능: canonical Trade 하나를 ADR-004 CSV schema version 1의 field 순서로 투영한다.
+    기능: canonical Trade 하나를 ADR-004 CSV schema version 2의 field 순서로 투영한다.
     인자: trade -> 직렬화할 검증 완료 Trade
-    반환값: csv.writer에 전달할 21개 문자열 field tuple
+    반환값: csv.writer에 전달할 23개 문자열 field tuple
     작성 날짜: 2026/08/23
     """
     # duck typing 객체가 금융 필드를 임의 문자열로 주입하지 못하게 canonical Trade만 받는다.
@@ -108,6 +112,8 @@ def _trade_to_csv_row(trade: Trade) -> tuple[str, ...]:
         _plain_decimal(trade.realized_pnl),
         _plain_decimal(trade.realized_return_rate),
         "" if trade.exit_reason is None else trade.exit_reason.value,
+        str(trade.schema_version),
+        json.dumps([fill_to_record(fill) for fill in trade.fee_fills], ensure_ascii=False, separators=(",", ":")),
     )
 
 

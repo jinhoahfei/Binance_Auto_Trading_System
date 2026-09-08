@@ -25,6 +25,7 @@ from binance_auto_trader.adapters.binance.websocket_gateway import (
 from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
+from binance_auto_trader.application.residual_settlement import ResidualSettlement
 from binance_auto_trader.application.trading_indicator_snapshot import TradingIndicatorStore
 from binance_auto_trader.application.trading_logic_snapshot import (
     TradingLogicSnapshot,
@@ -208,6 +209,10 @@ def _order_result_accounting_confirms_trade(
         or not result.fills
     ):
         return False
+
+    # v3는 aggregate만 같아도 다른 원 BNB·가격 근거이면 동일 체결로 취급하지 않는다.
+    if trade.schema_version == 3:
+        return {fill.key: fill for fill in result.fills} == {fill.key: fill for fill in trade.fee_fills}
 
     # Durable schema의 단일 fee asset과 같은 Decimal128 정책으로 누적 fill을 다시 집계한다.
     fee_assets = frozenset(fill_value.fee_asset for fill_value in result.fills)
@@ -762,6 +767,8 @@ class TradingSessionSnapshot:
     max_daily_loss: Decimal | None = None
     daily_loss_scope: DailyLossScope | None = None
     manual_kill_behavior: ManualKillBehavior | None = None
+    residual_quantity: Decimal = Decimal("0")
+    residual_cost_basis: Decimal = Decimal("0")
     position_average_entry_price: Decimal | None = None  # 열린 Position의 표시용 평단가다.
     active_logic: TradingLogicSnapshot | None = None  # 실제 실행 STM의 전략만 공개한다.
 
@@ -1003,6 +1010,7 @@ class TradingController:
         position_snapshot: PositionSnapshot | None = None,
         position: Position | None = None,
         trade_history_controller: TradeHistoryController | None = None,
+        residual_settlement: ResidualSettlement | None = None,
         pending_order_recovery_enabled: bool = False,
         market_stream_recovery_enabled: bool = False,
         maximum_order_notional: Decimal | None = None,
@@ -1026,6 +1034,7 @@ class TradingController:
             position_snapshot -> 시작 전에 reconciliation된 포지션
             position -> 실제 fill과 average cost를 소유할 Phase 8 Position 또는 None
             trade_history_controller -> terminal execution을 durable 기록할 Controller 또는 None
+            residual_settlement -> live 전용 잔여 회계 서비스 또는 None
             pending_order_recovery_enabled -> testnet 제출 전 sidecar journal 활성 여부
             market_stream_recovery_enabled -> Kline live 세대와 full-resync gate 강제 여부
             maximum_order_notional -> BUY와 일반 SELL 생성 전 적용하고 force SELL은 제외할 quote 상한
@@ -1126,6 +1135,7 @@ class TradingController:
         self._context = context or TradingContext(clock=self._clock)
         self._position = position
         self._trade_history_controller = trade_history_controller
+        self._residual_settlement = residual_settlement  # Live root만 durable 잔여 정책을 조립한다.
         self._pending_order_recovery_enabled = (
             pending_order_recovery_enabled
         )
@@ -2456,6 +2466,8 @@ class TradingController:
                 scale_in=self._context.scale_in_ratio,
                 scale_out=self._context.scale_out_ratio,
                 has_open_position=has_open_position,
+                residual_quantity=self.residual_totals[0],
+                residual_cost_basis=self.residual_totals[1],
                 position_average_entry_price=position_average_entry_price,
                 active_logic=active_logic,
                 command_enabled=self.command_enabled,
@@ -4469,6 +4481,8 @@ class TradingController:
                 ) from error
 
             position = self._require_position()
+            self._settle_residual_position()
+            self._validate_residual_balance()
             self._validate_testnet_position_provenance(
                 authoritative_order_results
             )
@@ -4667,10 +4681,70 @@ class TradingController:
             or summary.fee_asset != durable_trade.fee_asset
             or summary.fee_quote_amount != durable_trade.fee_quote_amount
             or summary.executed_at != durable_trade.executed_at
+            or (durable_trade.schema_version == 3 and {fill.key: fill for fill in summary.fills} != {fill.key: fill for fill in durable_trade.fee_fills})
         ):
             raise StartupOrderReconciliationError(
                 "pending journal execution conflicts with durable trade"
             )
+
+    @property
+    def residual_totals(self) -> tuple[Decimal, Decimal]:
+        """
+        함수 이름: residual_totals()
+        기능: 전략 Position과 별개인 잔여 ETH·원가를 공개한다.
+        인자: 없음
+        반환값: 수량과 미실현 원가
+        작성 날짜: 2026/09/08
+        """
+        return (Decimal("0"), Decimal("0")) if self._residual_settlement is None else self._residual_settlement.totals
+
+    def _validate_residual_balance(self) -> None:
+        """
+        함수 이름: _validate_residual_balance()
+        기능: 잔여가 있는 전용 계좌는 전략과 잔여의 합이 실제 ETH와 같은지 검사한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/08
+        """
+        residual_quantity = self.residual_totals[0]
+        if residual_quantity > 0:
+            with localcontext() as context:
+                context.prec = 34
+                total = self._require_position().quantity + residual_quantity
+            if total != self._account.get_holdings(_BASE_ASSET):
+                raise StartupOrderReconciliationError("residual ledger differs from exchange ETH balance")
+
+    def _allows_residual_rounding(self, requested: Decimal, submitted: Decimal) -> bool:
+        """
+        함수 이름: _allows_residual_rounding()
+        기능: live의 ETH 수수료 lot 전량 매도에만 sub-step 내림을 허용한다.
+        인자: requested -> 전량, submitted -> filter 후 수량
+        반환값: 승인된 잔여 정책의 준비 조건을 만족하면 True
+        작성 날짜: 2026/09/08
+        """
+        if self._residual_settlement is None or not 0 < submitted < requested:
+            return False
+        rules = self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL)
+        # 전량 매도 전·후 양쪽에서 현재 lot의 durable ETH fee 출처를 확인한다.
+        return self._residual_settlement.allows_rounding(
+            self._require_position(), self._require_trade_history_controller().trade_history.trades,
+            submitted, rules.lot_size.step_size,
+        )
+
+    def _settle_residual_position(self) -> None:
+        """
+        함수 이름: _settle_residual_position()
+        기능: terminal durable history에 결속한 잔여만 저장하고 Context를 다시 게시한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/08
+        """
+        if self._residual_settlement is None or self._require_position().quantity <= 0:
+            return
+        rules = self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL)
+        history = self._require_trade_history_controller().trade_history.trades
+        if self._residual_settlement.settle(self._require_position(), history, rules.lot_size.step_size):
+            self._publish_restored_position_snapshot(self._require_position())
 
     def _restore_position_from_history(
         self,
@@ -4696,8 +4770,14 @@ class TradingController:
 
         # Trade JSONL 원본 순서가 average-cost 적용 순서이므로 재정렬하지 않는다.
         try:
-            for trade in trades:
-                position.apply_historical_trade(trade)
+            if self._residual_settlement is not None:
+                self._residual_settlement.restore(
+                    position, trades,
+                    self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL).lot_size.step_size if trades else None,
+                )
+            else:
+                for trade in trades:
+                    position.apply_historical_trade(trade)
             position.require_history_accounting_compatibility()
         except LegacyFeeAccountingMigrationRequiredError:
             raise  # 열린 v1 base-fee lot은 일반 복원 오류로 지우지 않고 운영 migration code를 보존한다.
@@ -5299,6 +5379,7 @@ class TradingController:
                         "account stream recovery gap snapshot invariant failed"
                     ) from error
                 self._account_free_overlays.clear()  # 두 번째 full account가 재연결 중 fill 보정을 대체한다.
+                self._validate_residual_balance()
                 if position.quantity > self._account.get_holdings(_BASE_ASSET):
                     raise AccountStreamRecoveryBlockedError(
                         "account stream recovery gap Position exceeds Binance balance"
@@ -5595,7 +5676,8 @@ class TradingController:
         replayed_position = Position(_TRADING_SYMBOL)
         open_lot_regime: RegimeType | None = None
         open_lot_owner: StrategyType | None = None
-        for trade in durable_trades:
+        residual_entries = {} if self._residual_settlement is None else {entry.history_count: entry for entry in self._residual_settlement.transfers}
+        for history_count, trade in enumerate(durable_trades, 1):
             if replayed_position.quantity == Decimal("0"):
                 if trade.side is not OrderSide.BUY:
                     raise ValueError("A recovered open lot must begin with BUY")
@@ -5610,6 +5692,9 @@ class TradingController:
                 )
 
             replayed_position.apply_historical_trade(trade)
+            residual = residual_entries.get(history_count)
+            if residual is not None:
+                replayed_position.detach_residual(residual.quantity, residual.cost_basis, residual.step_size)
             if replayed_position.quantity == Decimal("0"):
                 open_lot_regime = None
                 open_lot_owner = None
@@ -6302,7 +6387,8 @@ class TradingController:
             current_position_quantity = self._require_position().quantity
             if (
                 requested_quantity != current_position_quantity
-                or order.submitted_quantity != current_position_quantity
+                or (order.submitted_quantity != current_position_quantity
+                    and not self._allows_residual_rounding(current_position_quantity, order.submitted_quantity))
             ):
                 self._append_order_trace_values(
                     "5",
@@ -6530,7 +6616,7 @@ class TradingController:
         with localcontext() as decimal_context:
             decimal_context.prec = 34
             current_position_notional = (
-                position_state.quantity * decision_price
+                (position_state.quantity + self.residual_totals[0]) * decision_price
             )
             candidate_order_notional = (
                 order.submitted_quantity * decision_price
@@ -6541,7 +6627,7 @@ class TradingController:
                 + candidate_order_notional
             )
             unrealized_pnl = (
-                current_position_notional - position_state.cost_basis
+                current_position_notional - position_state.cost_basis - self.residual_totals[1]
             )
 
             # Unavailable policy는 먼저 차단되므로 진단 snapshot에는 realized-only 손실을 보수적으로 둔다.
@@ -6730,16 +6816,13 @@ class TradingController:
                 base_adjustment = -base_adjustment
             else:
                 quote_adjustment = -quote_adjustment
-            for fill in fills:
-                if fill.fee_asset == _BASE_ASSET:
-                    base_adjustment -= fill.fee_amount
-                else:
-                    quote_adjustment -= fill.fee_amount
-
             adjustments = {
                 _BASE_ASSET: base_adjustment,
                 _QUOTE_ASSET: quote_adjustment,
             }
+            # 실제 수수료는 원자산에서만 차감하며 BNB 평가액을 USDT 잔액에서 빼지 않는다.
+            for fill in fills:
+                adjustments[fill.fee_asset] = adjustments.get(fill.fee_asset, Decimal("0")) - fill.fee_amount
             for asset, adjustment in adjustments.items():
                 balance = self._account.balances.get(asset)
                 observed_free = Decimal("0") if balance is None else balance.free
@@ -7457,6 +7540,12 @@ class TradingController:
         """
         # History durable 성공 뒤 recovery journal 삭제까지 끝나야 외부 성공을 게시할 수 있다.
         order = state.order
+        try:
+            if order.side is OrderSide.SELL:
+                self._settle_residual_position()
+        except Exception:
+            self._enter_order_reconciliation(state, OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED, message_id=None)
+            return ()  # Residual fsync 불명은 pending을 보존하고 새 주문을 차단한다.
         if not self._delete_pending_order_recovery(state):
             return ()
 

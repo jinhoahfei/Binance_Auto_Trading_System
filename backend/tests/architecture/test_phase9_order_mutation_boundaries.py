@@ -30,6 +30,10 @@ class PhaseNineOrderMutationBoundaryTests(unittest.TestCase):
         작성 날짜: 2026/08/24
         """
         allowed_call_sites = {
+            # Session 7의 전용 permission adapter만 기존 Controller→Gateway mutation을 위임한다.
+            ("bootstrap/live_permission.py", "LiveOrderPermissionRESTClient", "prepare_order", "prepare_order"),
+            ("bootstrap/live_permission.py", "LiveOrderPermissionRESTClient", "submit_order", "submit_order"),
+            ("bootstrap/live_permission.py", "LiveOrderPermissionRESTClient", "cancel_order", "cancel_order"),
             (
                 "adapters/binance/api_gateway.py",
                 "APIGateway",

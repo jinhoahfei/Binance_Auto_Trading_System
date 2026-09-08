@@ -7,7 +7,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 import re
 
 from ..common import RegimeType
-from ..trading.order import ExecutionSummary, Order
+from ..trading.order import ExecutionSummary, Order, Fill, _aggregate_fills
+from .fill_record import fill_from_record, fill_to_record
 from ..trading.states import ExitReason, OrderSide, StrategyType
 
 
@@ -18,6 +19,7 @@ SUPPORTED_TRADE_SCHEMA_VERSIONS = frozenset(
     {
         LEGACY_TRADE_SCHEMA_VERSION,
         TRADE_SCHEMA_VERSION,
+        3,
     }
 )
 TRADE_RECORD_TYPE = "trade"
@@ -304,6 +306,7 @@ class Trade:
     realized_return_rate: Decimal | None = None
     exit_reason: ExitReason | None = None
     schema_version: int = TRADE_SCHEMA_VERSION
+    fee_fills: tuple[Fill, ...] = ()
 
     @classmethod
     def from_order_execution(
@@ -389,7 +392,44 @@ class Trade:
             realized_pnl=realized_pnl,
             realized_return_rate=realized_return_rate,
             exit_reason=order.exit_reason,
+            schema_version=3 if any(fill.fee_asset == "BNB" for fill in summary.fills) else TRADE_SCHEMA_VERSION,
+            fee_fills=summary.fills if any(fill.fee_asset == "BNB" for fill in summary.fills) else (),
         )
+
+
+    @property
+    def base_fee_amount(self) -> Decimal:
+        """
+        함수 이름: base_fee_amount()
+        기능: 혼합 수수료에서도 실제 ETH 차감과 추가 취득 비용을 구분한다.
+        인자: 없음
+        반환값: 해당 자산 흐름의 Decimal 합계
+        작성 날짜: 2026/09/09
+        """
+        # 단일 자산 기존 row는 원래 의미를 보존하고 v3는 fill별 원자산을 사용한다.
+        if not self.fee_fills:
+            return self.fee_amount if self.fee_asset == "ETH" else Decimal("0")
+        with localcontext() as context:
+            context.prec = 34
+            context.rounding = ROUND_HALF_EVEN
+            return sum((fill.fee_amount for fill in self.fee_fills if fill.fee_asset == "ETH"), Decimal("0"))
+
+    @property
+    def non_base_fee_quote_amount(self) -> Decimal:
+        """
+        함수 이름: non_base_fee_quote_amount()
+        기능: 혼합 수수료에서도 실제 ETH 차감과 추가 취득 비용을 구분한다.
+        인자: 없음
+        반환값: 해당 자산 흐름의 Decimal 합계
+        작성 날짜: 2026/09/09
+        """
+        # 단일 자산 기존 row는 원래 의미를 보존하고 v3는 fill별 원자산을 사용한다.
+        if not self.fee_fills:
+            return self.fee_quote_amount if self.fee_asset != "ETH" else Decimal("0")
+        with localcontext() as context:
+            context.prec = 34
+            context.rounding = ROUND_HALF_EVEN
+            return sum((fill.fee_quote_amount for fill in self.fee_fills if fill.fee_asset != "ETH"), Decimal("0"))
 
     def __post_init__(self) -> None:
         """
@@ -463,6 +503,19 @@ class Trade:
         if _SYMBOL_PATTERN.fullmatch(self.fee_asset) is None:
             raise ValueError("fee_asset must contain only uppercase ASCII letters and digits")
 
+        # v3는 원 fill과 평가 근거를 함께 저장하고 aggregate를 재계산해 변조를 거부한다.
+        if not isinstance(self.fee_fills, tuple):
+            raise TypeError("fee_fills must be a tuple")
+        if self.schema_version == 3:
+            if not self.fee_fills or any(not isinstance(fill, Fill) or fill.exchange_order_id != self.order_id for fill in self.fee_fills):
+                raise ValueError("v3 requires order-bound fee fills")
+            if len({fill.key for fill in self.fee_fills}) != len(self.fee_fills):
+                raise ValueError("duplicate fee fill evidence")
+            aggregate = _aggregate_fills(self.fee_fills)
+            if aggregate != (self.executed_quantity, self.executed_amount, self.average_fill_price, self.fee_amount, self.fee_asset, self.fee_quote_amount, self.executed_at):
+                raise ValueError("v3 aggregate does not match fee evidence")
+        elif self.fee_fills:
+            raise ValueError("legacy schema cannot contain fee evidence")
         self._validate_fee_conversion()
 
         self._validate_realized_fields()
@@ -475,6 +528,8 @@ class Trade:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        if self.schema_version == 3:
+            return  # 개별 Fill과 aggregate의 정확한 일치를 위에서 검증했다.
         # USDT fee는 별도 환율 없이 원 수수료와 quote 수수료가 정확히 같아야 한다.
         if self.fee_asset == _QUOTE_ASSET:
             if self.fee_quote_amount != self.fee_amount:
@@ -569,7 +624,8 @@ def trade_from_json_object(record: object) -> Trade:
     # domain 생성 전에 object shape와 허용 key 집합을 exact match로 고정한다.
     if not isinstance(record, Mapping):
         raise TypeError("trade record must be a JSON object")
-    if set(record.keys()) != _TRADE_RECORD_FIELDS:
+    expected_fields = _TRADE_RECORD_FIELDS | {"fee_fills"} if record.get("schema_version") == 3 else _TRADE_RECORD_FIELDS
+    if set(record.keys()) != expected_fields:
         raise ValueError("trade record must contain exactly the JSONL fields")
 
     # bool을 integer version으로 오인하지 않고 지원하는 회계 version인지 확인한다.
@@ -644,6 +700,7 @@ def trade_from_json_object(record: object) -> Trade:
         ),
         exit_reason=_parse_optional_exit_reason(record["exit_reason"]),
         schema_version=schema_version,
+        fee_fills=tuple(fill_from_record(fill) for fill in _read_fee_fills(record)) if schema_version == 3 else (),
     )
 
 
@@ -674,6 +731,7 @@ def trade_to_json_object(trade: Trade) -> dict[str, object]:
     # UTC timestamp와 enum을 wire 값으로 바꾸고 schema의 canonical key 순서를 유지한다.
     executed_at_text = trade.executed_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return {
+        **({"fee_fills": [fill_to_record(fill) for fill in trade.fee_fills]} if trade.schema_version == 3 else {}),
         "schema_version": trade.schema_version,
         "record_type": TRADE_RECORD_TYPE,
         "trade_id": trade.trade_id,
@@ -701,3 +759,17 @@ def trade_to_json_object(trade: Trade) -> dict[str, object]:
             None if trade.exit_reason is None else trade.exit_reason.value
         ),
     }
+
+
+def _read_fee_fills(record: Mapping) -> list:
+    """
+    함수 이름: _read_fee_fills()
+    기능: v3 증거 배열의 shape와 최대 크기를 제한한다.
+    인자: record -> 검증 중인 Trade record
+    반환값: 실제 fill record 목록
+    작성 날짜: 2026/09/09
+    """
+    fills = record["fee_fills"]
+    if not isinstance(fills, list) or not 1 <= len(fills) <= 1000:
+        raise ValueError("v3 requires 1..1000 fee fills")
+    return fills  # 상세 필드는 전용 decoder가 검증한다.

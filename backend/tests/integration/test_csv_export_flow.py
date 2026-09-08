@@ -190,17 +190,17 @@ class CSVExportFlowTests(unittest.TestCase):
                 "strategy,average_fill_price,market_price_at_decision,"
                 "executed_quantity,executed_amount,fee_amount,fee_asset,"
                 "fee_quote_amount,allocated_cost_basis,realized_pnl,"
-                "realized_return_rate,exit_reason\r\n"
-                '1,매수-시작,101,"주문, ""한국어""",'
+                "realized_return_rate,exit_reason,trade_schema_version,fee_evidence_json\r\n"
+                '2,매수-시작,101,"주문, ""한국어""",'
                 "2026-08-22T15:00:00.000000Z,"
                 "2026-08-23T00:00:00.000000+09:00,"
                 "ETHUSDT,BUY,TYPE_0,CASE_B,100,100,2,200,"
-                "0.002,ETH,0.20,,,,\r\n"
-                "1,매도-끝,102,client-102,"
+                "0.002,ETH,0.20,,,,,2,[]\r\n"
+                "2,매도-끝,102,client-102,"
                 "2026-08-23T14:59:59.999999Z,"
                 "2026-08-23T23:59:59.999999+09:00,"
                 "ETHUSDT,SELL,TYPE_0,CASE_B,110,110,1,110,"
-                "0.11,USDT,0.11,100.10,9.79,9.78021978,TAKE_PROFIT\r\n"
+                "0.11,USDT,0.11,100.10,9.79,9.78021978,TAKE_PROFIT,2,[]\r\n"
             )
             expected_bytes = expected_text.encode("utf-8-sig")
 

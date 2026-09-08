@@ -53,6 +53,7 @@ from binance_auto_trader.domain.trading import (
 # Generic dependency-injection factory가 mode 문자열만으로 외부 주문 권한을 만들지 못하게 한다.
 _FAKE_ORDER_CAPABILITY = object()
 _TESTNET_ORDER_CAPABILITY = object()
+_LIVE_ORDER_CAPABILITY = object()  # Testnet 표식으로는 live 주문 gate를 얻지 못한다.
 _DEFAULT_MAXIMUM_ORDER_SUBMISSIONS_PER_INTENT = 5
 
 
@@ -1216,6 +1217,10 @@ def create_application_runtime(
     risk_policy_state: RiskPolicy | RiskPolicyUnavailable | None = None,
     _fake_order_capability: object | None = None,
     _testnet_order_capability: object | None = None,
+    _live_order_capability: object | None = None,
+    live_maximum_order_notional: Decimal | None = None,
+    residual_settlement: object | None = None,
+    bnb_fee_resolver: object | None = None,
     account_update_observer: Callable[[Account], object] | None = None,
     trade_history_update_observer: Callable[[Trade, Performance], object]
     | None = None,
@@ -1234,6 +1239,8 @@ def create_application_runtime(
     기능: 주입 client와 history port로 기존 entity, gateway와 controller를 순환 없이 조립한다.
     인자: rest_client -> Kline과 account payload를 제공할 REST client
         web_socket_client -> Kline과 account 구독을 제공할 WebSocket client
+        residual_settlement -> live 전용 durable 잔여 정책 또는 None
+        bnb_fee_resolver -> live BNB 체결 평가 조회 함수 또는 None
         history_path -> local JSONL storage 경로 또는 None
         history_repository -> 주입할 TradeHistory repository port 또는 None
         execution_mode -> fail-closed parser에 전달할 외부 mode 값
@@ -1243,6 +1250,8 @@ def create_application_runtime(
         risk_policy_state -> 모든 신규 BUY에 주입할 versioned 정책 또는 명시적 미설정 상태
         _fake_order_capability -> 검증된 in-process fake 조립기만 전달하는 내부 권한 표식
         _testnet_order_capability -> 고정 endpoint Testnet 조립기만 전달하는 내부 권한 표식
+        _live_order_capability -> 별도 live 조립기의 주문 표식
+        live_maximum_order_notional -> live 표식에 결속된 exact 10 USDT cap
         account_update_observer -> 실제 Account 변경 뒤 호출할 optional observer
         trade_history_update_observer -> durable Trade와 전체 Performance 게시 후 호출할 observer
         trading_session_update_observer -> event cycle 뒤 authoritative session을 게시할 observer
@@ -1320,6 +1329,10 @@ def create_application_runtime(
     # Application lock과 entity를 만들며 실행 mode도 gate 조립 전에 canonicalize한다.
     application_lock = RLock()
     selected_execution_mode = parse_execution_mode(execution_mode)
+    if bnb_fee_resolver is not None and (selected_execution_mode is not ExecutionMode.LIVE or not callable(bnb_fee_resolver)):
+        raise ValueError("BNB resolver is only available in the live root")
+    if residual_settlement is not None and selected_execution_mode is not ExecutionMode.LIVE:
+        raise ValueError("residual policy is only available in the live root")
     # 시세 출처는 연결 여부와 별도로 보존해 UI가 LIVE 표시로 계좌 환경을 추측하지 않게 한다.
     selected_market_environment = market_data_environment or (
         selected_execution_mode.value
@@ -1377,6 +1390,28 @@ def create_application_runtime(
         raise ValueError(
             "testnet_maximum_order_notional requires enabled testnet orders"
         )
+    # Live 권한은 별도 표식·고정 정책·cap 세 가지가 모두 같은 root에서 전달될 때만 열린다.
+    live_order_gate = _live_order_capability is _LIVE_ORDER_CAPABILITY
+    if _live_order_capability is not None:
+        from binance_auto_trader.bootstrap.live_configuration import create_live_risk_policy
+
+        if (
+            not live_order_gate
+            or selected_execution_mode is not ExecutionMode.LIVE
+            or allow_testnet_orders
+            or _testnet_order_capability is not None
+            or _fake_order_capability is not None
+            or type(live_maximum_order_notional) is not Decimal
+            or live_maximum_order_notional != Decimal("10")
+            or risk_policy_state != create_live_risk_policy()
+        ):
+            raise ValueError("live capability requires exact live policy and cap")
+    elif live_maximum_order_notional is not None:
+        raise ValueError("live cap requires dedicated live capability")
+    if selected_execution_mode is ExecutionMode.LIVE and (
+        allow_testnet_orders or _testnet_order_capability is not None or _fake_order_capability is not None
+    ):
+        raise ValueError("other execution capabilities cannot authorize live")
     market_snapshot = MarketSnapshot(clock=clock)
     account = Account()
     regime_stm = RegimeSTM()
@@ -1461,7 +1496,7 @@ def create_application_runtime(
                         selected_execution_mode,
                     )
                 recovery_can_start = (
-                    selected_execution_mode is ExecutionMode.TESTNET
+                    selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
                     and application_state_store.state.status
                     is ApplicationStatus.READY
                     and trading_controller.startup_reconciliation_complete
@@ -1514,7 +1549,7 @@ def create_application_runtime(
                     selected_execution_mode,
                 )  # 모든 stream 장애의 authoritative fail-close를 recovery 시작 전에 정확히 한 번 게시한다.
             recovery_can_start = (
-                selected_execution_mode is ExecutionMode.TESTNET
+                selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
@@ -1535,6 +1570,7 @@ def create_application_runtime(
         account_snapshot_callback=apply_account_stream_snapshot,
         order_result_callback=apply_order_stream_result,
         reconciliation_required_callback=require_stream_reconciliation,
+        bnb_fee_resolver=bnb_fee_resolver,
     )
 
     # Persistence 구현 또는 주입 port를 먼저 조립해 order outcome 전에 durable owner를 준비한다.
@@ -1564,17 +1600,19 @@ def create_application_runtime(
         command_gate=(
             fake_order_gate
             or testnet_order_gate
-        ),  # live mode는 allow flag와 무관하게 Phase 13 전까지 항상 잠긴다.
+            or live_order_gate
+        ),  # Live는 전용 root의 정책 결속을 통과해야만 주문할 수 있다.
         position=position,
         trade_history_controller=trade_history_controller,
+        residual_settlement=residual_settlement,
         clock=clock,
         application_lock=application_lock,
         # 실제 전송이 가능한 testnet 경로만 제출 전 복구 저널을 강제한다.
         pending_order_recovery_enabled=(
-            selected_execution_mode is ExecutionMode.TESTNET
+            selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
         ),
         market_stream_recovery_enabled=True,
-        maximum_order_notional=testnet_maximum_order_notional,
+        maximum_order_notional=(live_maximum_order_notional if live_order_gate else testnet_maximum_order_notional),
         maximum_order_submissions_per_intent=(
             maximum_order_submissions_per_intent
         ),
@@ -1644,7 +1682,7 @@ def create_application_runtime(
         # Lifecycle publication과 Controller readiness를 같은 application RLock에서 읽는다.
         with application_lock:
             return (
-                selected_execution_mode is ExecutionMode.TESTNET
+                selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
@@ -1729,7 +1767,7 @@ def create_application_runtime(
                 trading_controller.mark_event_runtime_failed()
                 return False  # 상태 publication 실패 뒤 backend gate도 영구 fail closed한다.
             recovery_can_start = (
-                selected_execution_mode is ExecutionMode.TESTNET
+                selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
@@ -1752,7 +1790,7 @@ def create_application_runtime(
         # 종료·복구 완료·ownership 상실 뒤에는 대기 중인 worker가 새 public I/O를 시작하지 않는다.
         with application_lock:
             return (
-                selected_execution_mode is ExecutionMode.TESTNET
+                selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
@@ -1787,7 +1825,7 @@ def create_application_runtime(
         return market_result
 
     # 실제 authenticated stream을 사용하는 testnet에만 자동 복구 owner를 조립한다.
-    if selected_execution_mode is ExecutionMode.TESTNET:
+    if selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE):
         account_stream_recovery_worker = _AccountStreamRecoveryWorker(
             recover_account_stream,
             account_stream_recovery_allowed,
@@ -1813,7 +1851,7 @@ def create_application_runtime(
         market_stream_state_observer=trading_controller,
         market_stream_recovery_requester=request_market_stream_recovery,
     )
-    if selected_execution_mode is ExecutionMode.TESTNET:
+    if selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE):
         # 실제 주문 effect가 가능한 Testnet에만 public market 자동 복구 owner를 추가한다.
         market_stream_recovery_worker = _AccountStreamRecoveryWorker(
             recover_market_stream,
@@ -1827,7 +1865,7 @@ def create_application_runtime(
     return ApplicationRuntime(
         execution_mode=selected_execution_mode,
         market_data_environment=selected_market_environment,
-        order_execution_enabled=testnet_order_gate or fake_order_gate,
+        order_execution_enabled=testnet_order_gate or fake_order_gate or live_order_gate,
         application_lock=application_lock,
         startup_command_id=startup_command_id,
         api_gateway=api_gateway,

@@ -1,6 +1,7 @@
 """주문 의도와 정규화된 거래소 결과를 체결 요약으로 조정하는 Order aggregate를 정의한다."""
 
 from __future__ import annotations
+from .fee_valuation import BnbFeeValuation
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -323,6 +324,7 @@ class Fill:
     fee_asset: str
     fee_quote_amount: Decimal
     executed_at: datetime
+    fee_valuation: BnbFeeValuation | None = None
 
     def __post_init__(self) -> None:
         """
@@ -354,7 +356,7 @@ class Fill:
 
         # 직접 검증 가능한 ETH와 USDT fee는 fill 가격과 일관된 quote 값을 요구한다.
         _validate_fee_asset(self.fee_asset, "fee_asset")
-        if self.fee_asset not in ("ETH", "USDT"):
+        if self.fee_asset not in ("ETH", "USDT", "BNB"):
             raise FeeAssetReconciliationRequiredError(self.fee_asset)
         if self.fee_asset == "USDT" and self.fee_quote_amount != self.fee_amount:
             raise ValueError("USDT fee_quote_amount must equal fee_amount")
@@ -363,6 +365,15 @@ class Fill:
             self.price,
         ):
             raise ValueError("ETH fee_quote_amount must use the fill price")
+
+        # BNB는 체결에 결속된 평가 근거가 없으면 0원 비용으로 통과하지 않는다.
+        if self.fee_asset == "BNB":
+            if not isinstance(self.fee_valuation, BnbFeeValuation):
+                raise FeeAssetReconciliationRequiredError(self.fee_asset)
+            if self.fee_quote_amount != self.fee_valuation.quote_amount(self.fee_amount, self.executed_at):
+                raise ValueError("BNB quote fee does not match valuation")
+        elif self.fee_valuation is not None:
+            raise ValueError("only BNB fills may carry BNB valuation")
 
         normalized_time = _normalize_utc_datetime(self.executed_at, "executed_at")
         object.__setattr__(self, "executed_at", normalized_time)  # frozen 값에는 canonical UTC만 남긴다.
@@ -486,9 +497,10 @@ def _aggregate_fills(
 
     # 단일 fee asset durable schema가 서로 다른 자산의 명목 수수료를 더하지 못하게 차단한다.
     fee_assets = frozenset(fill_value.fee_asset for fill_value in fills)
-    if len(fee_assets) != 1:
+    if len(fee_assets) != 1 and "BNB" not in fee_assets:
         raise MixedFeeAssetError(fee_assets)
-    fee_asset = next(iter(fee_assets))
+    # BNB 부족 fallback은 fill별 원자산을 유지하며 서로 다른 단위의 명목액을 합산하지 않는다.
+    fee_asset = next(iter(fee_assets)) if len(fee_assets) == 1 else "MIXED"
 
     # 모든 금융 합계와 나눗셈은 float를 거치지 않고 Decimal128 정책으로 수행한다.
     with localcontext() as decimal_context:
@@ -503,10 +515,10 @@ def _aggregate_fills(
             start=_DECIMAL_ZERO,
         )
         average_fill_price = executed_amount / executed_quantity
-        fee_amount = sum(
+        fee_amount = (sum(
             (fill_value.fee_amount for fill_value in fills),
             start=_DECIMAL_ZERO,
-        )
+        ) if fee_asset != "MIXED" else _DECIMAL_ZERO)
         fee_quote_amount = sum(
             (fill_value.fee_quote_amount for fill_value in fills),
             start=_DECIMAL_ZERO,
@@ -551,6 +563,41 @@ class ExecutionSummary:
     fee_quote_amount: Decimal
     executed_at: datetime
     fills: tuple[Fill, ...]
+
+
+    @property
+    def base_fee_amount(self) -> Decimal:
+        """
+        함수 이름: base_fee_amount()
+        기능: 혼합 수수료에서도 실제 ETH 차감과 추가 취득 비용을 구분한다.
+        인자: 없음
+        반환값: 해당 자산 흐름의 Decimal 합계
+        작성 날짜: 2026/09/09
+        """
+        # 단일 자산 기존 row는 원래 의미를 보존하고 v3는 fill별 원자산을 사용한다.
+        if not self.fills:
+            return self.fee_amount if self.fee_asset == "ETH" else Decimal("0")
+        with localcontext() as context:
+            context.prec = 34
+            context.rounding = ROUND_HALF_EVEN
+            return sum((fill.fee_amount for fill in self.fills if fill.fee_asset == "ETH"), Decimal("0"))
+
+    @property
+    def non_base_fee_quote_amount(self) -> Decimal:
+        """
+        함수 이름: non_base_fee_quote_amount()
+        기능: 혼합 수수료에서도 실제 ETH 차감과 추가 취득 비용을 구분한다.
+        인자: 없음
+        반환값: 해당 자산 흐름의 Decimal 합계
+        작성 날짜: 2026/09/09
+        """
+        # 단일 자산 기존 row는 원래 의미를 보존하고 v3는 fill별 원자산을 사용한다.
+        if not self.fills:
+            return self.fee_quote_amount if self.fee_asset != "ETH" else Decimal("0")
+        with localcontext() as context:
+            context.prec = 34
+            context.rounding = ROUND_HALF_EVEN
+            return sum((fill.fee_quote_amount for fill in self.fills if fill.fee_asset != "ETH"), Decimal("0"))
 
     def __post_init__(self) -> None:
         """

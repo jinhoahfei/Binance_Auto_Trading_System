@@ -173,6 +173,7 @@ function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewMod
         quantity: format_eth_quantity(trade_record.quantity),
         orderAmount: format_quote_amount(trade_record.total, trade_record.quote_asset),
         fee: format_quote_amount(trade_record.fee, trade_record.quote_asset),
+        ...(trade_record.fee_note === undefined ? {} : { feeNote: trade_record.fee_note }),
         previousBuyReturn: trade_record.profit_rate === null
             ? '-'
             : `${format_decimal_text(trade_record.profit_rate)}%`,

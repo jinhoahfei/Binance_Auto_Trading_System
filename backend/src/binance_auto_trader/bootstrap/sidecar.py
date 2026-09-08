@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import json
+from decimal import Decimal
 import os
 from pathlib import Path
 import re
@@ -63,7 +64,12 @@ class SidecarConfiguration:
     api_key: str = field(repr=False)
     api_secret: str = field(repr=False)
     allow_testnet_orders: bool = False
-    max_notional: None = None
+    max_notional: str | None = None
+    execution_mode: str = "testnet"
+    credential_namespace: str = "com.binance-auto.trader.testnet"
+    allow_live_orders: bool = False
+    live_confirmation: str | None = None
+    policy_version: int = 1
 
     def __post_init__(self) -> None:
         """
@@ -80,8 +86,22 @@ class SidecarConfiguration:
             raise ValueError("schema_version must be positive")
         if self.allow_testnet_orders is not False:
             raise ValueError("packaged sidecar must disable testnet orders")
-        if self.max_notional is not None:
-            raise ValueError("read-only sidecar max_notional must be null")
+        # Legacy Testnet wire는 기존 read-only 계약을 유지하고 live wire는 별도 validator로만 연다.
+        if self.execution_mode == "live":
+            from binance_auto_trader.bootstrap.live_configuration import validate_live_history_path
+
+            self.to_live_configuration()
+            validate_live_history_path(self.history_path)
+        elif (
+            self.execution_mode != "testnet"
+            or self.credential_namespace != "com.binance-auto.trader.testnet"
+            or self.allow_live_orders is not False
+            or self.live_confirmation is not None
+            or type(self.policy_version) is not int
+            or self.policy_version != 1
+            or self.max_notional is not None
+        ):
+            raise ValueError("invalid Testnet sidecar profile")
 
         # Origin과 path는 보정하지 않고 Tauri가 보낸 canonical identity를 그대로 요구한다.
         if (
@@ -130,8 +150,29 @@ class SidecarConfiguration:
             f"allowed_origin={self.allowed_origin!r}, "
             f"history_path={self.history_path!r}, "
             "api_key=<redacted>, api_secret=<redacted>, "
-            "allow_testnet_orders=False, max_notional=None)"
+            f"execution_mode={self.execution_mode!r}, orders={self.allow_live_orders!r})"
         )  # Credential의 실제 문자열과 길이는 어떤 진단 표현에도 포함하지 않는다.
+
+    def to_live_configuration(self):
+        """
+        함수 이름: to_live_configuration()
+        기능: live 전용 wire를 별도 immutable validator에 전달한다.
+        인자: 없음
+        반환값: 검증된 LiveConfiguration
+        작성 날짜: 2026/09/08
+        """
+        from binance_auto_trader.bootstrap.live_configuration import LiveConfiguration
+
+        # Live cap 문자열은 exact 10만 허용하며 환경 mapping을 생성하지 않는다.
+        if self.execution_mode != "live" or self.max_notional not in (None, "10"):
+            raise ValueError("invalid live sidecar configuration")
+        return LiveConfiguration(
+            api_key=self.api_key, api_secret=self.api_secret,
+            credential_namespace=self.credential_namespace, confirmation=self.live_confirmation,
+            enabled=True, allow_live_orders=self.allow_live_orders,
+            max_notional=Decimal("10") if self.max_notional == "10" else None,
+            policy_version=self.policy_version,
+        )
 
     def to_testnet_environment(self) -> Mapping[str, str]:
         """
@@ -141,6 +182,9 @@ class SidecarConfiguration:
         반환값: os.environ을 읽지 않는 최소 Testnet configuration mapping
         작성 날짜: 2026/08/24
         """
+        # Live credential을 Testnet 환경으로 변환하는 fallback을 명시적으로 거부한다.
+        if self.execution_mode != "testnet":
+            raise ValueError("live credentials cannot become Testnet credentials")
         # Order flag는 명시적 0으로 고정하고 max notional key 자체를 만들지 않는다.
         return {
             BINANCE_RUN_TESTNET_ENV: "1",
@@ -278,7 +322,10 @@ def parse_sidecar_configuration_payload(
         raise ValueError("sidecar configuration must be a JSON object")
 
     actual_fields = frozenset(parsed_value)
-    if actual_fields != _CONFIGURATION_FIELDS:
+    live_fields = frozenset({
+        "execution_mode", "credential_namespace", "allow_live_orders", "live_confirmation", "policy_version",
+    })
+    if actual_fields not in (_CONFIGURATION_FIELDS, _CONFIGURATION_FIELDS | live_fields):
         raise ValueError("sidecar configuration fields do not match the contract")
     if parsed_value["schema_version"] != expected_schema_version:
         raise ValueError("sidecar schema_version is not supported")
@@ -306,6 +353,8 @@ def parse_sidecar_configuration_payload(
         api_secret=parsed_value["api_secret"],
         allow_testnet_orders=parsed_value["allow_testnet_orders"],
         max_notional=parsed_value["max_notional"],
+        **({field_name: parsed_value[field_name] for field_name in live_fields}
+           if actual_fields != _CONFIGURATION_FIELDS else {}),
     )
 
 
@@ -343,6 +392,14 @@ def _create_sidecar_runtime_factory(
         반환값: read-only Testnet ApplicationRuntime
         작성 날짜: 2026/08/24
         """
+        # Native profile이 live일 때는 Testnet environment mapping을 거치지 않는다.
+        if configuration.execution_mode == "live":
+            from binance_auto_trader.bootstrap.live import create_live_application_runtime
+
+            return create_live_application_runtime(
+                account_update_observer, trade_history_update_observer, trading_session_update_observer,
+                configuration=configuration.to_live_configuration(), history_path=configuration.history_path,
+            )
         # Mapping은 os.environ에 게시하지 않고 runtime 생성 호출의 명시 인자로만 전달한다.
         approved_risk_policy = RiskPolicy(
             version=_APPROVED_RISK_POLICY_VERSION,

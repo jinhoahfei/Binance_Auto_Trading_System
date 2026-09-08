@@ -909,9 +909,22 @@ def map_trade(trade: object) -> JsonObject:
     작성 날짜: 2026/08/21
     """
     exit_reason = getattr(trade, "exit_reason")
+    fee_note = None
+    fee_fills = getattr(trade, "fee_fills", ())
+    if fee_fills:
+        # 원자산별 수량은 서로 합치지 않으며 화면에서도 USDT 환산이 평가임을 명시한다.
+        from decimal import localcontext
+        amounts: dict[str, Decimal] = {}
+        with localcontext() as context:
+            context.prec = 34
+            for fill in fee_fills:
+                amounts[fill.fee_asset] = amounts.get(fill.fee_asset, Decimal("0")) + fill.fee_amount
+        original_fees = " + ".join(f"{format(amount, 'f')} {asset}" for asset, amount in sorted(amounts.items()))
+        fee_note = f"원 수수료 {original_fees} · BNB는 체결 직전 1초봉 종가로 USDT 평가"
 
     return normalize_json_object(
         {
+            **({"fee_note": fee_note} if fee_note is not None else {}),
             "trade_id": getattr(trade, "trade_id"),
             "order_id": getattr(trade, "order_id"),
             "client_order_id": getattr(trade, "client_order_id"),
@@ -1291,6 +1304,8 @@ def map_trading_snapshot(
             "command_enabled": getattr(session_snapshot, "command_enabled"),
             "scale_in": getattr(session_snapshot, "scale_in"),
             "scale_out": getattr(session_snapshot, "scale_out"),
+            "residual_quantity": getattr(session_snapshot, "residual_quantity", Decimal("0")),
+            "residual_cost_basis": getattr(session_snapshot, "residual_cost_basis", Decimal("0")),
             "has_open_position": getattr(
                 session_snapshot,
                 "has_open_position",
@@ -1619,6 +1634,8 @@ export interface BackendTradingSnapshot {{
     readonly has_open_position: boolean;
     /** 구버전 schema v3에서 생략될 수 있는 열린 포지션의 표시용 평단가다. */
     readonly position_average_entry_price?: BackendDecimalString | null;
+    readonly residual_quantity?: BackendDecimalString;
+    readonly residual_cost_basis?: BackendDecimalString;
     readonly session_id: string | null;
     readonly risk_policy_availability: BackendRiskPolicyAvailability;
     readonly configured_risk_policy_version: number | null;
@@ -1673,6 +1690,7 @@ export interface BackendTradeSnapshot {{
     readonly market_price_at_decision: BackendDecimalString;
     readonly fee_amount: BackendDecimalString;
     readonly fee_asset: string;
+    readonly fee_note?: string;
     readonly fee_quote_amount: BackendDecimalString;
     readonly allocated_cost_basis: BackendDecimalString | null;
     readonly realized_pnl: BackendDecimalString | null;

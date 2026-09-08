@@ -103,7 +103,7 @@ class PhaseElevenCSVBoundaryTests(unittest.TestCase):
     def test_csv_header_is_the_exact_adr_004_schema(self) -> None:
         """
         함수 이름: test_csv_header_is_the_exact_adr_004_schema()
-        기능: CSV schema version 1의 21개 column 이름과 순서를 고정한다.
+        기능: CSV schema version 2의 23개 column 이름과 순서를 고정한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/23
@@ -130,6 +130,8 @@ class PhaseElevenCSVBoundaryTests(unittest.TestCase):
             "realized_pnl",
             "realized_return_rate",
             "exit_reason",
+            "trade_schema_version",
+            "fee_evidence_json",
         )
 
         self.assertEqual(CSV_HEADER, expected_header)  # 순서 변경도 schema drift로 처리한다.

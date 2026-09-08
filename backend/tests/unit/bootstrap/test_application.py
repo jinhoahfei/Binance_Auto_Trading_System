@@ -461,7 +461,7 @@ class ApplicationFactoryTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_testnet_orders_require_separate_opt_in_and_live_stays_locked()
-        기능: testnet 이중 gate와 Phase 13 전 live 불변 잠금을 검증한다.
+        기능: Testnet 이중 gate와 별도 live capability 없는 구성의 잠금을 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/22
@@ -480,8 +480,12 @@ class ApplicationFactoryTests(unittest.TestCase):
         locked_live = create_application_runtime(
             **common_arguments,
             execution_mode="live",
-            allow_testnet_orders=True,
         )
+        # Session 7은 다른 mode의 권한 혼합을 read-only로 보정하지 않고 명시적으로 거부한다.
+        with self.assertRaisesRegex(ValueError, "other execution capabilities"):
+            create_application_runtime(
+                **common_arguments, execution_mode="live", allow_testnet_orders=True,
+            )
 
         self.assertFalse(locked_testnet.trading_controller.command_enabled)
         self.assertFalse(locked_live.trading_controller.command_enabled)

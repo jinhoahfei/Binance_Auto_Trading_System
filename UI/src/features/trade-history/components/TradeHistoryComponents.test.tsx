@@ -9,6 +9,12 @@ import {
 import { HistoryFilters, SummaryCards, TradeTable } from './index';
 
 describe('거래 내역 표시 컴포넌트', () => {
+  it('BNB 원 수수료와 USDT 평가 정책을 금액 옆에 표시한다', () => {
+    const feeNote = '원 수수료 0.000001 BNB · BNB는 체결 직전 1초봉 종가로 USDT 평가';
+    render(<TradeTable rows={[{ ...TRADE_HISTORY_ROWS_FIXTURE[0]!, feeNote }]} />);
+    expect(screen.getByText(feeNote)).toBeInTheDocument();
+  });
+
   it('요약 카드와 체결 행을 Figma 열 구조로 표시한다', () => {
     render(
       <>

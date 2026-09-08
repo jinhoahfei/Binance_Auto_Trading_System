@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from binance_auto_trader.adapters.binance.live_endpoints import (
+    LIVE_REST_BASE_URL, _LIVE_ENDPOINT_CAPABILITY,
+)
+
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -598,6 +602,7 @@ class BinanceSpotRESTClient:
         maximum_order_notional: Decimal | None = None,
         allow_order_timestamp_retry: bool = True,
         use_mainnet_market_data: bool = False,
+        _live_endpoint_capability: object | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -612,6 +617,7 @@ class BinanceSpotRESTClient:
             recv_window_milliseconds -> 1~60000ms signed request window
             maximum_order_notional -> STOP cleanup 외 주문에 적용할 선택 Testnet quote 금액 상한
             allow_order_timestamp_retry -> POST /v3/order의 -1021 단일 재전송 허용 여부
+            _live_endpoint_capability -> live 전용 adapter가 전달하는 내부 endpoint 표식
             use_mainnet_market_data -> 공개 Kline만 실제 시장 데이터 전용 host에서 조회할지 여부
         반환값: 없음
         작성 날짜: 2026/08/25
@@ -655,7 +661,17 @@ class BinanceSpotRESTClient:
             secret_key,
             "secret_key",
         ).encode("utf-8")
-        self._base_url = _normalize_base_url(base_url)
+        # Live adapter만 exact 주소를 선택하며 Testnet allowlist와 fallback은 그대로 격리한다.
+        if _live_endpoint_capability is not None:
+            if (
+                _live_endpoint_capability is not _LIVE_ENDPOINT_CAPABILITY
+                or base_url != LIVE_REST_BASE_URL
+                or use_mainnet_market_data
+            ):
+                raise ValueError("invalid live endpoint configuration")
+            self._base_url = LIVE_REST_BASE_URL
+        else:
+            self._base_url = _normalize_base_url(base_url)
         self._transport = selected_transport
         self._clock = clock
         self._result_clock = result_clock
@@ -1888,7 +1904,15 @@ class BinanceSpotRESTClient:
 
         # FULL response fills를 우선 사용하고 query/cancel/list 응답은 myTrades로 보강한다.
         direct_fill_payloads = payload.get("fills")
-        if direct_fill_payloads is not None:
+        # FULL에는 개별 fill 시간이 없으므로 live BNB 체결은 signed myTrades로 확정한다.
+        bnb_resolver = getattr(self, "resolve_bnb_fee", None)
+        has_bnb = isinstance(direct_fill_payloads, list) and any(
+            isinstance(item, Mapping) and item.get("commissionAsset") == "BNB"
+            for item in direct_fill_payloads
+        )
+        if has_bnb and callable(bnb_resolver):
+            fills = self._load_order_fills(symbol=order.symbol, exchange_order_id=order_id, fallback_executed_at=processed_at)
+        elif direct_fill_payloads is not None:
             rules = self._rules_from_order_symbol(order.symbol)
             fills = map_fill_payloads(
                 direct_fill_payloads,
@@ -2009,6 +2033,7 @@ class BinanceSpotRESTClient:
             base_asset=rules.base_asset,
             quote_asset=rules.quote_asset,
             fallback_executed_at=fallback_executed_at,
+            bnb_fee_resolver=getattr(self, "resolve_bnb_fee", None),
         )  # trade ID와 order ID를 domain fill 멱등 key로 유지한다.
 
     def _rules_from_order_symbol(self, symbol: str) -> SymbolTradingRules:

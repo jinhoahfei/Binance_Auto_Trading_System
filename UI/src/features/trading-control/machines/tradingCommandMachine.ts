@@ -41,6 +41,8 @@ export interface TradingCommandContext {
     readonly is_recovery_liquidation: boolean;
     readonly has_open_position: boolean;
     readonly position_average_entry_price: BackendDecimalString | null;
+    readonly residual_quantity?: BackendDecimalString;
+    readonly residual_cost_basis?: BackendDecimalString;
     readonly regime_highlight_requested: boolean;
     readonly notice: 'not_running' | null;
     readonly unavailable_reason: TradingUnavailableReason | null;
@@ -78,6 +80,8 @@ export interface TradingCommandMachineOptions {
     readonly is_trading?: boolean;
     readonly has_open_position?: boolean;
     readonly position_average_entry_price?: BackendDecimalString | null;
+    readonly residual_quantity?: BackendDecimalString;
+    readonly residual_cost_basis?: BackendDecimalString;
 }
 
 export type TradingCommandEvent =
@@ -106,6 +110,8 @@ export type TradingCommandEvent =
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
         readonly position_average_entry_price?: BackendDecimalString | null;
+        readonly residual_quantity?: BackendDecimalString;
+        readonly residual_cost_basis?: BackendDecimalString;
         readonly lifecycle_status: BackendTradingStatus;
     }
     | {
@@ -133,6 +139,8 @@ export type TradingCommandEvent =
         readonly is_trading: boolean;
         readonly has_open_position: boolean;
         readonly position_average_entry_price?: BackendDecimalString | null;
+        readonly residual_quantity?: BackendDecimalString;
+        readonly residual_cost_basis?: BackendDecimalString;
         readonly lifecycle_status: BackendTradingStatus;
     }
     | {
@@ -449,6 +457,8 @@ export function create_trading_command_machine(
                         : context.has_open_position;
                 },
                 // 시작·실시간 갱신·재연결에서 보유 여부와 평단가를 한 snapshot으로 교체한다.
+                residual_quantity: ({ context, event }) => (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED' || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') ? event.residual_quantity ?? '0' : context.residual_quantity,
+                residual_cost_basis: ({ context, event }) => (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED' || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') ? event.residual_cost_basis ?? '0' : context.residual_cost_basis,
                 position_average_entry_price: ({ context, event }) => {
                     if (event.type !== 'TRADING_SNAPSHOT_SYNCHRONIZED'
                         && event.type !== 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') {
@@ -614,6 +624,8 @@ export function create_trading_command_machine(
             is_trading: options.is_trading ?? false,
             is_recovery_liquidation: false,
             has_open_position: options.has_open_position ?? false,
+            residual_quantity: options.residual_quantity ?? '0',
+            residual_cost_basis: options.residual_cost_basis ?? '0',
             position_average_entry_price: options.has_open_position
                 ? options.position_average_entry_price ?? null
                 : null,

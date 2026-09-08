@@ -384,6 +384,28 @@ class Position:
             if self._legacy_base_fee_history_open:
                 raise LegacyFeeAccountingMigrationRequiredError()
 
+    def detach_residual(self, quantity: Decimal, cost_basis: Decimal, step_size: Decimal) -> None:
+        """
+        함수 이름: detach_residual()
+        기능: durable 잔여 장부와 정확히 같은 수량·원가만 전략 Position에서 분리한다.
+        인자: quantity -> 장부의 ETH, cost_basis -> 미실현 원가, step_size -> 공식 주문 단위
+        반환값: 없음
+        작성 날짜: 2026/09/08
+        """
+        for value in (quantity, cost_basis, step_size):
+            _validate_decimal(value, "residual value", allow_zero=False)
+        with self._lock:
+            state = self._state
+            if quantity >= step_size or state.quantity != quantity or state.cost_basis != cost_basis:
+                raise ValueError("residual does not match the entire sub-step Position")
+            self.require_history_accounting_compatibility()
+            # 자산을 매도하거나 손실로 처리하지 않고 외부 잔여 장부에 보존한 전략 상태만 닫는다.
+            self._state = PositionStateSnapshot(
+                symbol=state.symbol, owner=None, quantity=ZERO_DECIMAL,
+                average_entry_price=ZERO_DECIMAL, cost_basis=ZERO_DECIMAL,
+                entered_at=None, status=PositionStatus.CLOSED, exit_reason=state.exit_reason,
+            )
+
     def get_snapshot(self) -> PositionStateSnapshot:
         """
         함수 이름: get_snapshot()
@@ -524,14 +546,14 @@ class Position:
                         if is_legacy_trade
                         else _calculate_net_buy_quantity(
                             trade.executed_quantity,
-                            trade.fee_amount,
-                            trade.fee_asset,
+                            trade.base_fee_amount,
+                            "ETH",
                         )
                     )
                     acquisition_fee = (
                         trade.fee_quote_amount
-                        if is_legacy_trade or trade.fee_asset != "ETH"
-                        else ZERO_DECIMAL
+                        if is_legacy_trade
+                        else trade.non_base_fee_quote_amount
                     )
                     next_quantity = state.quantity + acquired_quantity
                     next_cost_basis = (
@@ -569,8 +591,7 @@ class Position:
             # v2 SELL base fee는 미지원이며 v1은 기존 gross 회계 의미 그대로만 재생한다.
             if (
                 trade.schema_version != LEGACY_TRADE_SCHEMA_VERSION
-                and trade.fee_asset == "ETH"
-                and trade.fee_amount > ZERO_DECIMAL
+                and trade.base_fee_amount > ZERO_DECIMAL
             ):
                 raise ValueError(
                     "historical SELL base fee requires asset-flow reconciliation"
@@ -651,17 +672,15 @@ class Position:
             decimal_context.rounding = ROUND_HALF_EVEN
             acquired_quantity = _calculate_net_buy_quantity(
                 summary.executed_quantity,
-                summary.fee_amount,
-                summary.fee_asset,
+                summary.base_fee_amount,
+                "ETH",
             )
             next_quantity = state.quantity + acquired_quantity
             next_cost_basis = (
                 state.cost_basis
                 + summary.executed_amount
                 + (
-                    ZERO_DECIMAL
-                    if summary.fee_asset == "ETH"
-                    else summary.fee_quote_amount
+                    summary.non_base_fee_quote_amount
                 )
             )
             next_average_entry_price = next_cost_basis / next_quantity
@@ -693,7 +712,7 @@ class Position:
         """
         # OPEN 상태, owner와 보유 수량을 확인한 뒤에만 SELL 원가를 배분한다.
         state = self._state
-        if summary.fee_asset == "ETH" and summary.fee_amount > ZERO_DECIMAL:
+        if summary.base_fee_amount > ZERO_DECIMAL:
             raise ValueError(
                 "SELL base fee requires asset-flow reconciliation"
             )

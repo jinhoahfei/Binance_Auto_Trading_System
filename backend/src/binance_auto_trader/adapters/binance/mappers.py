@@ -1763,6 +1763,7 @@ def map_fill_payloads(
     base_asset: str,
     quote_asset: str,
     fallback_executed_at: datetime,
+    bnb_fee_resolver: object | None = None,
 ) -> tuple[Fill, ...]:
     """
     함수 이름: map_fill_payloads()
@@ -1772,6 +1773,7 @@ def map_fill_payloads(
         exchange_order_id -> fill이 속한 거래소 order ID
         base_asset -> 수수료 직접 환산을 허용할 base asset
         quote_asset -> 수수료 직접 환산을 허용할 quote asset
+        bnb_fee_resolver -> live 전용 BNB 평가 근거 조회 함수 또는 None
         fallback_executed_at -> FULL fill에 time이 없을 때 사용할 처리 시각
     반환값: 거래소 order ID와 trade ID로 중복 제거한 Fill tuple
     작성 날짜: 2026/08/22
@@ -1837,6 +1839,13 @@ def map_fill_payloads(
             if "time" in payload
             else fallback_executed_at.astimezone(timezone.utc)
         )
+        # BNB 체결은 주문 시각을 대용하지 않고 myTrades의 개별 체결 시각을 요구한다.
+        valuation = None
+        if fee_asset == "BNB" and callable(bnb_fee_resolver):
+            if "time" not in payload:
+                raise BinancePayloadError("BNB fills require individual myTrades time")
+            valuation = bnb_fee_resolver(executed_at)
+            fee_quote_amount = valuation.quote_amount(fee_amount, executed_at)
         fill_value = Fill(
             exchange_order_id=exchange_order_id,
             trade_id=trade_id,
@@ -1846,6 +1855,7 @@ def map_fill_payloads(
             fee_asset=fee_asset,
             fee_quote_amount=fee_quote_amount,
             executed_at=executed_at,
+            fee_valuation=valuation,
         )
         existing_fill = fills_by_key.get(fill_value.key)
         if existing_fill is not None and existing_fill != fill_value:

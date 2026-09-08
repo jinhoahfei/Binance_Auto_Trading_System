@@ -654,6 +654,10 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
     assert_unit_interval_ratio(trading.scale_in, 'trading.scale_in');
     assert_unit_interval_ratio(trading.scale_out, 'trading.scale_out');
     assert_boolean(trading.has_open_position, 'trading.has_open_position');
+    // 잔여 자산은 Position 종료와 무관하게 원본 Decimal 문자열로 보존한다.
+    for (const field of ['residual_quantity', 'residual_cost_basis'] as const) {
+        if (trading[field] !== undefined) assert_non_negative_decimal_string(trading[field], `trading.${field}`);
+    }
 
     // 실행 로직은 선택 REGIME와 별개인 선택적 표시 계약이며 제공된 값의 enum과 중복을 검증한다.
     if (trading.active_logic !== undefined && trading.active_logic !== null) {
@@ -1030,6 +1034,9 @@ export function validate_trade_snapshot(value: unknown): BackendTradeSnapshot {
         assert_decimal_string(trade[field_name], `trade.${field_name}`);
     });
     assert_string(trade.fee_asset, 'trade.fee_asset');
+    if (trade.fee_note !== undefined) {
+        assert_string(trade.fee_note, 'trade.fee_note');
+    }
     assert_nullable_decimal_string(trade.allocated_cost_basis, 'trade.allocated_cost_basis');
     assert_nullable_decimal_string(trade.realized_pnl, 'trade.realized_pnl');
     assert_nullable_decimal_string(trade.realized_return_rate, 'trade.realized_return_rate');
@@ -1436,6 +1443,7 @@ export function map_trade_record(trade: BackendTradeSnapshot): TradeRecord {
         quantity: trade.executed_quantity,
         total: trade.executed_amount,
         fee: trade.fee_quote_amount,
+        ...(trade.fee_note === undefined ? {} : { fee_note: trade.fee_note }),
         profit_rate: trade.realized_return_rate,
         realized_pnl: trade.realized_pnl,
         exit_reason: trade.exit_reason,
@@ -1609,6 +1617,8 @@ export function map_backend_snapshot(
         scale_out_percentage: Number(trading.scale_out) * 100,
         is_trading,
         has_open_position: trading.has_open_position,
+        residual_quantity: trading.residual_quantity ?? '0',
+        residual_cost_basis: trading.residual_cost_basis ?? '0',
         position_average_entry_price: trading.position_average_entry_price ?? null,  // 원본 소수 문자열을 보존한다.
         trading_state_label: trading.status,
     };
@@ -1651,6 +1661,8 @@ export function map_backend_snapshot(
             scale_out_percentage: server_snapshot.scale_out_percentage,
             is_trading: server_snapshot.is_trading,
             has_open_position: server_snapshot.has_open_position,
+        residual_quantity: server_snapshot.residual_quantity ?? '0',
+        residual_cost_basis: server_snapshot.residual_cost_basis ?? '0',
             position_average_entry_price: server_snapshot.position_average_entry_price ?? null,
         },
         server_snapshot,
@@ -1804,6 +1816,8 @@ export function map_backend_event_to_intents(
                 scale_in_percentage: Number(trading.scale_in) * 100,
                 scale_out_percentage: Number(trading.scale_out) * 100,
                 has_open_position: trading.has_open_position,
+        residual_quantity: trading.residual_quantity ?? '0',
+        residual_cost_basis: trading.residual_cost_basis ?? '0',
                 position_average_entry_price: trading.position_average_entry_price ?? null,
                 logic_coverage: validate_trading_logic_coverage(trading.logic_coverage),
                 strategy_status: presentation.label,

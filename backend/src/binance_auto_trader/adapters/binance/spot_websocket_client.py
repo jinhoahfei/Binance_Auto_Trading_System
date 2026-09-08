@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from binance_auto_trader.adapters.binance.live_endpoints import (
+    LIVE_MARKET_STREAM_URL, LIVE_WEBSOCKET_API_URL, _LIVE_ENDPOINT_CAPABILITY,
+)
+
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import hashlib
@@ -754,6 +758,7 @@ class BinanceSpotWebSocketClient:
             _DEFAULT_ACCOUNT_EVENT_QUEUE_CAPACITY
         ),
         use_mainnet_market_data: bool = False,
+        _live_endpoint_capability: object | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -766,6 +771,7 @@ class BinanceSpotWebSocketClient:
             recv_window_milliseconds -> SIGNED 요청 허용 시간 창
             startup_timeout_seconds -> open 또는 subscription ACK 최대 대기 시간
             account_event_queue_capacity -> downstream 처리 전 대기할 최대 account event 수
+            _live_endpoint_capability -> live adapter의 내부 endpoint 선택 표식
             use_mainnet_market_data -> 공개 Kline을 실제 시장 stream에서 구독할지 여부
         반환값: 없음
         작성 날짜: 2026/08/22
@@ -810,6 +816,13 @@ class BinanceSpotWebSocketClient:
             if use_mainnet_market_data
             else _TESTNET_COMBINED_STREAM_URL
         )
+        # Live의 public/private URL은 한 표식으로 함께 선택해 혼합 환경을 만들지 않는다.
+        self._account_api_url = _TESTNET_WEBSOCKET_API_URL
+        if _live_endpoint_capability is not None:
+            if _live_endpoint_capability is not _LIVE_ENDPOINT_CAPABILITY or use_mainnet_market_data:
+                raise ValueError("invalid live WebSocket configuration")
+            self._market_stream_url = LIVE_MARKET_STREAM_URL
+            self._account_api_url = LIVE_WEBSOCKET_API_URL
         self._socket_factory = socket_factory or _default_socket_factory
         self._timestamp_provider = (
             timestamp_provider or _utc_timestamp_milliseconds
@@ -1048,7 +1061,7 @@ class BinanceSpotWebSocketClient:
 
         # API key는 공식 JSON params에만 두고 secret과 두 credential 모두 URL에 넣지 않는다.
         socket_application = self._socket_factory(
-            _TESTNET_WEBSOCKET_API_URL,
+            self._account_api_url,
             on_open=handle_open,
             on_message=handle_message,
             on_error=handle_error,
