@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 문서 상태 | 실행 기준 문서 / Phase 9 실제 Testnet 검증 완료, Phase 12 개인용 ad-hoc desktop package·credential·shutdown 검증 완료, Phase 13 부분 구현·live readiness `NO_GO` |
-| 기준일 | 2026-09-07 (Asia/Seoul) |
+| 기준일 | 2026-09-08 (Asia/Seoul) |
 | 기준 커밋 | `d9532077dc2cd9c5b1c25f0718b675e4fcb072bb` (`main`, Phase 10 시작 기준) |
 | 구현 목표 | 한 번에 전체를 구현하지 않고, 검증 가능한 단위별로 실제 거래 가능한 통합 시스템까지 완성한다. |
 | 최우선 설계 기준 | `Design/Architecture/Communication_Diagram_Message_Flow_Specification.md` |
@@ -14,6 +14,7 @@
 | 2026-09-05 Session 4 최신 갱신 | §16.20.7 Session 4를 `c28544e4d22c9c5512c380286d1dfc6dd618e14e == origin/main`과 unchanged lockfile 세 개에서 완료했다. 격리 target에 arm64 app/DMG를 fresh build하고 PyInstaller one-file과 hardened ad-hoc library-validation 불일치를 실제 실행에서 발견해 해당 후보를 기각했다. 최종 채택본은 outer seal을 포함한 non-hardened ad-hoc app과 read-only DMG이며 app tree SHA-256 `7e790832c97447df819d08c65c8a080bfd8f32ffbcab9ee18a5a59cbdb931853`, DMG SHA-256 `2c95e0fa33cca0cbf1fd263814be87f761440722237796b13d91d8b5f6b7df7b`다. Network-deny offline OSV 결과 High/Critical `0`, 최종 secret scan `2` canary/`2781` files PASS다. macOS arm64에서 Keychain read-only `READY`, Dashboard/History/stop, picker selected/cancelled, Command-Q safe shutdown, `RELEASED` owner와 orphan `0`을 확인했고 postflight `5/5`도 open order/list `0`을 유지했다. 실제 신규 주문은 `0`회다. 따라서 Session 5는 `GO`지만 Windows native PASS, Cross-platform package, Private Beta, live와 공개 release track은 완료하지 않았다. 상세 증거와 ad-hoc trust 절차는 §16.20.7에 기록했다. |
 | 2026-09-06 Session 5 최신 갱신 | §16.20.8의 Windows 11 x64 호환 source를 개발 실행 범위로 완료했다. `pnpm desktop:dev`가 Windows debug Tauri/Vite와 source Python venv를 직접 실행하도록 구성했고 Credential Manager, framed stdio, LockFileEx·LocalAppData adapter를 macOS 구현에서 분리했다. Backend `1046` 실행·`10` safe skip, UI `481`, Rust `45`, 도구 `38`, Communication `126/126`이 통과했다. Session 6 native 개발 실행 검증은 `GO`이며 Windows native PASS·설치 package·Private Beta/live 완료를 의미하지 않는다. |
 | 2026-09-07 Session 6 완료 | 사용자 지시에 따라 Windows 10 x64 개발 실행 통과를 완료 조건으로 확정했다. venv·Node/pnpm·Rust/MSVC를 준비하고 Vite EBUSY·main-window Windows capability 누락을 수정했다. Credential Manager와 Mac 이력 복원 후 read-only READY, Dashboard/History, picker, 정상 종료, fresh restart/renderer reload를 통과했다. 최종 RELEASED·잔여 process/port 0·이력 불변이다. Session 6은 완료이며 Windows 11 검증과 설치 배포는 별도 후속 작업이다. 상세 결과와 실패 기록은 §16.20.9 및 `WINDOWS_DEVELOPMENT_VALIDATION.md`에 보존했다. |
+| 2026-09-08 Session 6 재검증 | clean HEAD `e726793`에서 Windows 10 x64 backend 1,046 실행(979 PASS/67 skip), UI 480 PASS/2 skip, Rust 37 PASS, 도구 38 실행(20 PASS/18 skip), Communication 126/126을 재확인했다. 실제 Testnet read-only READY, History 16행, native picker 취소·선택, 정상 종료 취소·확정, fresh restart/renderer reload와 안전 종료를 통과했다. 최종 RELEASED·앱/개발 서버 잔여 0·이력 불변이며 production source와 lockfile 변경은 없다. Session 7 구현 착수는 GO이며, 양 OS package와 별도 승인된 live read-only READY는 Session 7의 남은 완료 조건이다. 상세 증거와 최초 UI timeout은 §16.20.9에 기록했다. |
 
 ---
 
@@ -5675,6 +5676,58 @@ Session 6을 `[x]`로 변경한다. 최초 실패 기록은 보존하며 재검�
 **별도 후속 작업:** Windows 11 x64 재검증, 이 변경 tree의 macOS 회귀 검증,
 PyInstaller sidecar·unsigned NSIS 제작과 설치·재설치 검증. 재설치 시 실행 중 sidecar를 강제 종료하거나
 history/credential을 삭제하지 않고 정상 종료 뒤 진행한다.
+
+**2026-09-08 재실행 완료 증거:**
+
+§1과 `CODING_CONVENTIONS.md`를 다시 적용하고 Communication Case 1 startup `1`~`5`,
+stop `8.1.1`~`8.1.1.3`, ADR-003/005의 mode·Origin·owner·shutdown 책임을 확인했다.
+현재 세션 범위만 재검증했으며 Session 7 기능을 선행 구현하지 않았다. 시작 HEAD는
+`e726793b6ebe5018f1491a36fa081a97ed2c8e4f`이고 working tree는 clean이었다. 이번 작업에서
+commit을 만들지 않았다. Production source·Communication Operation·lockfile 변경과 신규 업무
+클래스는 없다. 임시 UI 검증 helper는 `.dev-tools/windows-session6-revalidation.ts`에 격리하고
+함수 설명·논리 블록·문장 주석을 작성했다. `UI/src/test/desktopSmoke.ts`의 임시 import와 checkout
+줄바꿈은 검증 후 HEAD bytes로 복원했다. 주요 실행 파일은 `scripts/enter_windows_development.ps1`,
+`scripts/configure_testnet_credentials.ps1`, `UI/scripts/desktopLauncher.mjs`,
+`UI/src/test/desktopRecoveryReloadSmoke.ts`이며 상세 보고서는 `WINDOWS_DEVELOPMENT_VALIDATION.md`다.
+
+아래 명령의 Python/Node/Rust는 root에서 `. ./scripts/enter_windows_development.ps1`로 선택했다.
+로그는 ignored `.testnet-artifacts/windows-native-20260908/`에 보관한다.
+
+| 검증 | 실제 명령과 결과 |
+|---|---|
+| Host/toolchain | Windows 10 Enterprise `10.0.19045` x64, Python `3.12.14`, Node `24.19.0`, pnpm `11.16.0`, Rust/Cargo `1.98.1`; 기존 MSVC/WebView2로 native compile/run 성공. |
+| Backend 전체 | `cd backend; python -m unittest discover -s tests -q`, `PYTHONWARNINGS=error`, credential·baseline·cap 환경 제거 — `Ran 1046 tests in 107.694s`, `OK (skipped=67)`; `backend.log`. |
+| Windows/IPC 집중 | `cd backend; python -m unittest tests.unit.platform.test_windows_platform tests.integration.transport.test_framed_sidecar_process -v` — `16` 실행, `15` PASS·POSIX 전용 `1` skip; native lock contention/reacquire, flush 실패 전파, early ACK, parent EOF/malformed control의 ORPHANED와 listener 보존, CLOSED_ACK 뒤 RELEASED; `windows-framing.log`. |
+| UI 전체 | `cd UI; pnpm.cmd test --maxWorkers=1` — `46` files/`480` PASS, `1` file/`2` tests skip, `148.62s`; `ui-serial.log`. 최초 `--maxWorkers=2`와 다른 검사 동시 실행은 `477` PASS·`3` timeout·`2` skip으로 실패했고 `ui.log`에 보존했다. 테스트·5초 timeout은 수정하지 않았다. |
+| UI typecheck/build | `cd UI; pnpm.cmd build` — TypeScript/Vite PASS; `ui-build.log`. |
+| Rust native | `cargo test --locked --offline` — `35` PASS; `cargo test --bin native-picker-current-host-smoke --features native-picker-smoke --locked --offline` — `2` PASS; `cargo clippy --lib --locked --offline -- -D warnings`, `cargo fmt --all --check` PASS; `rust*.log`. |
+| 도구/Communication | `python -m unittest scripts.test_windows_development scripts.test_package_sidecar scripts.test_check_communication_traceability -q` — `38` 실행, `20` PASS·`18` platform skip. `python scripts/check_communication_traceability.py` — `126/126`, gap `0`; `tools.log`, `communication.log`. |
+| Credential | `./scripts/configure_testnet_credentials.ps1 -Action canary`, 이어 `-Action check` PASS. 실제 pair를 덮어쓰지 않았고 별도 canary 삭제를 확인했다. 기존 `CredentialManager.validate_secret`의 empty/1/512/513 bytes·space/newline/NUL/non-ASCII/ASCII 양끝 입력 `9/9` PASS; `credential-*.log`. Native buffer의 `finally` zeroization 경로와 secret-free IPC/log contract도 검토했다. |
+| 실제 개발 앱 | `cd UI; $env:BINANCE_DESKTOP_SMOKE='1'; pnpm.cmd desktop:dev` — read-only READY, 공개 시세 대조, API·market/account stream online, tooltip, History 전체 `16`행, main 창 production picker의 취소 `null`·선택 absolute path, OS close 취소·확정과 process code `0`; `desktop-smoke.log`, `normal-shutdown-postflight.json`. |
+| Fresh restart | 임시 import 복원 후 `$env:BINANCE_DESKTOP_SMOKE='recovery-reload'; pnpm.cmd desktop:dev` — 실제 새 runtime에서 `recovery-retry-passed`, 같은 backend의 `renderer-reload-passed`, `recovery-shutdown-accepted`(HTTP `202`), process code `0`; `desktop-fresh-recovery.log`. |
+| 최종 보존/종료 | `.backend-runtime.lock`은 `RELEASED`, runtime PID `4784` 부재, 앱/개발 서버/검사 process `0`, Vite listener `0`, history/pending SHA-256 불변; `postflight.json`. CWD가 같아서 처음 집계된 Codex CUA helper `2`개는 executable path로 구분했고 최초 집계도 보존했다. |
+
+실제 Testnet 주문·취소·청산과 live signed/order 호출은 **0회**다. Native bootstrap의
+`allow_testnet_orders=false`, `max_notional=None`, exact 개발 Origin을 유지했다. Binance API/endpoint
+동작은 변경하지 않았으며 기존 adapter만 실행했다. Windows fixture의 orphan 검증을 실제 계좌 앱의
+강제 orphan 검증으로 바꾸어 해석하지 않는다. Memory zeroization 전수 관측, 전원 차단 durability,
+픽셀 시각 검사, 장시간 soak, Windows 11·macOS 재실행·설치 배포는 이번 증거에 포함하지 않는다.
+UI timeout 원인은 동시 부하의 영향을 의심하지만 확정하지 않았고, 최초 실패를 성공으로 덮지 않았다.
+Backend가 출력한 기존 supply/soak readiness GAP도 Session 6 성공으로 해제하지 않았다.
+
+**Session 7 진입 판정 — 2026-09-08:** **`GO` — live bootstrap 분리 구현에 착수해도 된다.**
+
+이유는 현재 HEAD에서 Windows native compile과 필수 회귀, credential 전달 경계, 실제 read-only
+startup·History·picker·shutdown·fresh restart를 확인했고, 정상 종료 뒤 owner와 이력 보존까지
+검증해 Session 6의 개발 실행 완료 조건을 충족했기 때문이다. 이번 재검증으로 새 production 변경이
+추가되지 않아 다음 세션 전에 해결해야 할 Session 6 코드 blocker도 없다.
+
+Session 7의 **완료**에는 해당 세션에 적힌 Testnet/live 격리 구현·negative gate test와 양 OS package의
+signed live read-only READY가 모두 필요하다. 현재 남은 Windows package 제작·검증과 이 HEAD의 macOS
+회귀를 관련 후속 작업으로 수행해야 하며, 현재 Windows 개발 앱 PASS를 양 OS package PASS로 재사용할
+수 없다. Live credential read/signed preflight는 Session 7에 명시된 별도 승인 범위에서 수행한다.
+따라서 Cross-platform package master·Private Beta master·Phase 13/live는 계속 `[ ]`이며 실제 live
+주문은 Session 8의 별도 gate에 남긴다.
 
 **세션 요청문:**
 

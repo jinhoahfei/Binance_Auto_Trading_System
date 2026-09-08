@@ -1,4 +1,4 @@
-# Windows 개발 실행 검증 — 2026-09-07
+# Windows 개발 실행 검증 — 2026-09-07 / 2026-09-08
 
 ## 판정과 범위
 
@@ -138,3 +138,97 @@ History/정상 종료를 검사한 임시 TypeScript fixture는 `.dev-tools/wind
   Windows checkout의 CRLF 때문에 과거 macOS 파일의 raw SHA-256과 직접 비교하지 않는다.
 - 이 작업의 변경 tree를 macOS에서 다시 실행하지 않았다. 과거 macOS 결과를 현재 tree의 회귀
   통과 증거로 재사용하지 않는다. Windows 11과 배포 검증은 별도 작업으로 남는다.
+
+## 2026-09-08 현재 HEAD 재검증
+
+위 9월 7일 기록을 보존하고, 사용자 요청에 따라 Session 6을 현재 Windows 10 Enterprise
+`10.0.19045` x64에서 다시 수행했다. 시작 HEAD는
+`e726793b6ebe5018f1491a36fa081a97ed2c8e4f`, 초기 tree는 clean이었다. 새 commit과 production
+수정은 없으며 함수·클래스·업무 책임·lockfile도 변경하지 않았다. §1, 코딩 규칙과 Communication
+startup/stop, ADR-003/005를 다시 확인했다. 로그 위치는
+`.testnet-artifacts/windows-native-20260908/`다.
+
+기존 source venv와 local toolchain을 그대로 사용했다. Python `3.12.14`, Node `24.19.0`,
+pnpm `11.16.0`, Rust/Cargo `1.98.1`이며 MSVC와 WebView2의 실제 compile/run을 통과했다.
+새 설치·NSIS/PyInstaller packaging은 수행하지 않았다.
+
+| 검증 | 결과 | 로그 |
+|---|---|---|
+| Backend 전체 | `python -m unittest discover -s tests -q`, credential/baseline/cap 환경 제거·`PYTHONWARNINGS=error`; 1,046 실행, 979 PASS/67 skip, 107.694초 | `backend.log` |
+| Windows platform/framed child | `python -m unittest tests.unit.platform.test_windows_platform tests.integration.transport.test_framed_sidecar_process -v`; 16 실행, 15 PASS/1 POSIX skip, 9.578초 | `windows-framing.log` |
+| UI 전체 최종 | `pnpm.cmd test --maxWorkers=1`; 46 files/480 PASS, 1 file/2 tests skip, 148.62초 | `ui-serial.log` |
+| UI typecheck/build | `pnpm.cmd build`; TypeScript/Vite PASS | `ui-build.log` |
+| Rust | `cargo test --locked --offline` 35 PASS; picker feature의 binary test 2 PASS; clippy `-D warnings`와 fmt PASS | `rust.log`, `rust-picker.log`, `rust-clippy.log`, `rust-fmt.log` |
+| 도구/Communication | Windows development/package/trace 도구 38 실행, 20 PASS/18 platform skip; Communication 126/126, gap 0 | `tools.log`, `communication.log` |
+| Credential | 기존 PowerShell 도구의 canary set/read/delete와 실제 pair check PASS; `validate_secret`의 공개 입력 경계 9/9 PASS | `credential-canary.log`, `credential-check.log`, `credential-boundaries.log` |
+| 실제 앱 | Testnet read-only READY, 모든 연결 online, 공개 스윙 대조, tooltip, History 16행, picker 취소/선택, 정상 종료 취소/확정, process code 0 | `desktop-smoke.log` |
+| 정상 종료 후 | owner RELEASED, runtime PID 2288 부재, Vite listener 0 | `normal-shutdown-postflight.json` |
+| Fresh restart/renderer 복구 | 연결 재시도, 같은 backend의 renderer reload, 안전 종료 HTTP 202, process code 0 | `desktop-fresh-recovery.log` |
+| 최종 정리 | owner RELEASED, runtime PID 4784 부재, 앱/개발 서버/검사 process 0, Vite listener 0, history/pending 불변 | `postflight.json` |
+
+Rust picker test 명령은 `cargo test --bin native-picker-current-host-smoke --features
+native-picker-smoke --locked --offline`다. Clippy는 `cargo clippy --lib --locked --offline --
+-D warnings`, format은 `cargo fmt --all --check`다. 도구 명령은
+`python -m unittest scripts.test_windows_development scripts.test_package_sidecar
+scripts.test_check_communication_traceability -q`와
+`python scripts/check_communication_traceability.py`다. 줄바꿈한 명령은 한 줄로 이어 실행한다.
+
+### 실제 앱 검증 방법과 보존 경계
+
+Root의 `. ./scripts/enter_windows_development.ps1`로 도구를 선택한 뒤 `UI`에서
+`$env:BINANCE_DESKTOP_SMOKE='1'; pnpm.cmd desktop:dev`를 실행했다. 초기에는 WebView 내부 요소가
+접근성 API에 노출되지 않아 `.dev-tools/windows-session6-revalidation.ts`를 기존 smoke entry에
+일시 import했다. Helper는 실제 DOM으로 History 16행과 Dashboard 복귀를 검사하고, 실제 main 창의
+`choose_csv_export_directory` production command를 호출해 native 반환값을 확인했다. 폴더 대화상자는
+Computer Use 키보드로 취소·선택했다. OS `Alt+F4` 두 번에 대응한 실제 종료 dialog에서 helper가 첫
+요청을 취소하고 두 번째를 확정했다. 원본 HTTP 요청·응답을 변경하지 않았으며 CSV 파일은 생성하지 않았다.
+
+Helper는 업무 코드 밖에 격리하고 함수·블록·문장 설명을 작성했다. 이력 payload, credential,
+descriptor나 token을 보관하지 않고 고정 단계만 기록했다. 검증 후 임시 import를 제거하고 해당
+`UI/src/test/desktopSmoke.ts`를 HEAD의 원래 CRLF bytes로 복원했다. 최종 source diff는 없다.
+첫 정상 종료의 HTTP 202 관찰 marker는 로그에 남지 않았으므로 이를 별도 PASS로 세지 않았다.
+이 실행의 완료 근거는 종료 확정 marker·process code 0·RELEASED·runtime 부재다.
+
+이어 임시 helper가 없는 상태에서 `$env:BINANCE_DESKTOP_SMOKE='recovery-reload'; pnpm.cmd
+desktop:dev`로 새 runtime을 시작했다. 기존 개발 fixture가 descriptor 실패를 주입하고 실제 native
+재연결, 같은 backend의 화면 재로딩, 안전 종료를 검사했다. 이 실행에는 HTTP 202를 뜻하는
+`recovery-shutdown-accepted`와 process code 0이 모두 기록됐다.
+
+두 이력 파일은 시작/종료 후 아래 raw SHA-256을 유지했다. Mac 원본이나 Credential Manager pair를
+수정하지 않았다. 주문 opt-in을 켜지 않았고 native `allow_testnet_orders=false`를 유지해 실제 주문·
+취소·청산·live signed/order 호출은 0회다. 공개 mainnet 시세와 기존 Spot Testnet read-only adapter만
+사용했으며 Binance API 구현 변경은 없다.
+
+| 파일 | Windows raw SHA-256 |
+|---|---|
+| `history.jsonl` | `ed436eecc1e0e44037248d625ee37ce0d9ff857c6ddad524a616e9e887ba16b2` |
+| `history.jsonl.pending-orders.jsonl` | `d46cfc86774143f606e06b4770b27b53c8b4abb395c04c69001870a9afcffed7` |
+
+### 이번 재검증의 실패 기록과 판정
+
+- 첫 UI 전체 검사 `--maxWorkers=2`는 다른 native 검사/빌드와 동시에 실행했고, 477 PASS/3 실패/2
+  skip이었다. `App`, `main` 복구, `realtime-indicator` axe 검사 각각이 기존 5초 timeout을 초과했다.
+  `ui.log`를 보존했다. 다른 검사를 끝내고 worker 1개로 단독 재실행한 전체 suite는 통과했다.
+  코드·test timeout을 바꾸지 않았으며 부하를 원인으로 확정하거나 모든 병렬 실행의 안정성을 주장하지 않는다.
+- Native UI 조작 도구는 cached element 부재, 좌표 geometry 부재, UIA CacheRequest 오류를 반환했다.
+  입력 실패 뒤 창을 재관찰하고 키보드로 실제 반환값을 확인했다. 픽셀 시각 검사는 수행하지 않았다.
+- 첫 전체 process 집계는 CWD가 같은 Codex CUA helper 2개까지 포함해 실패했다. Executable path가
+  Codex의 `runtimes/cua_node/`임을 확인해 앱 process와 분리했다. 최초 결과는
+  `postflight-initial-including-cua.json`, 최종 결과는 `postflight.json`에 남겼다. 앱이나 helper를
+  강제 종료하지 않았다.
+- 처음 sandbox 안의 OS CIM 조회는 access denied였으며, 사전 승인 범위의 native 조회에서 실제
+  OS를 확인했다. Native build의 `linker_messages` warning은 MSVC의 `.lib/.exp` 생성 안내였고
+  clippy `-D warnings`와 compile/run은 성공했다.
+- Credential printable 경계는 공개 입력으로 검증했다. Native `finally`의 buffer 덮어쓰기와
+  secret-free IPC/log 계약은 source·기존 회귀로 확인했으며 process memory 전수 zeroization이나
+  실제 credential bytes에 대한 전체 artifact scan을 수행했다고 주장하지 않는다.
+- Windows fixture의 EOF/orphan·lock/flush 검증과 실제 계좌 앱의 정상 lifecycle을 구분한다.
+  강제 전원 차단 durability, 장시간 soak, Windows 11, 현재 HEAD의 macOS 회귀와 package 배포는
+  미실행이다. Backend의 기존 supply/soak readiness GAP도 그대로 남는다.
+
+**판정:** Session 6 `[x]` 유지, **Session 7 구현 착수 `GO`**다. 현재 HEAD에서 Windows 개발 실행,
+필수 회귀와 read-only lifecycle·종료·재시작·이력 보존을 확인했고 새 production 변경이나 Session 6
+코드 blocker가 없다. Session 7 완료에는 별도 live composition root/capability와 격리 검증,
+Windows package 후속 작업·macOS 회귀 및 양 OS package의 승인된 signed live read-only READY가
+필요하다. Live credential/signed preflight는 Session 7의 별도 승인을 따르고 실제 live 주문은
+Session 8 gate에 둔다. Cross-platform package/Private Beta/Phase 13/live는 미완료를 유지한다.
