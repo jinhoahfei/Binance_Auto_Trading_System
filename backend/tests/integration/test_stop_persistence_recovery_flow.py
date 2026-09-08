@@ -848,7 +848,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
             opened_quantity = position.quantity
             self.assertGreater(opened_quantity, Decimal("0"))
 
-            # Case B SELL을 NEW로 남겨 STOP G-06P가 query → cancel → query를 수행하게 한다.
+            # Case B SELL은 취소하지 않고 첫 NEW query 뒤 다음 same-ID query에서 terminal을 확정한다.
             clock.advance(1)
             sell_event = TradingEvent(
                 TradingEventType.MARKET_DATA_UPDATED,
@@ -879,8 +879,11 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                     command_id="stop-with-pending-partial",
                     expected_version=controller.context.version,
                 )
+                self.assertEqual([], rest_client.canceled_orders)
+                clock.advance(5)
+                controller.trigger_order_reconciliation(occurred_at=clock())
             self.assertIs(
-                stopped.status,
+                controller.status,
                 TradingSessionStatus.RECONCILIATION_REQUIRED,
             )
             self.assertEqual(
@@ -888,7 +891,6 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                     "submit:BUY",
                     "submit:SELL",
                     "query:SELL",
-                    "cancel:SELL",
                     "query:SELL",
                 ],
                 rest_client.operation_trace,

@@ -102,7 +102,8 @@ def handle_case_b_signal_transition(
                     patch(
                         signal_created=True,
                         signal_candle_id=event.candle_id or market.current_30m_candle_id,
-                        signal_time=event.occurred_at,
+                        # Production은 원본 마감 경계를 사용한다. source 없는 수동 fixture만 event 시각을 쓴다.
+                        signal_time=market.confirmed_30m_close_time or event.occurred_at,
                     ),
                     create_queue_event_action(
                         TradingEventType.START_CASE_B_WAIT_PULLBACK_CONDITION_CHECK,

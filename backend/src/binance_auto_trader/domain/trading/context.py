@@ -52,6 +52,7 @@ class MarketEvaluationSnapshot:
     current_30m_high: Decimal = ZERO_DECIMAL
     touch_candle_bbw: Decimal = ZERO_DECIMAL
     confirmed_30m_close: bool = False
+    confirmed_30m_close_time: datetime | None = None
     confirmed_1m_close: bool = False
     ema_slope_30m_close: Decimal = ZERO_DECIMAL
     realtime_ema_slope: Decimal = ZERO_DECIMAL
@@ -79,6 +80,15 @@ class MarketEvaluationSnapshot:
         반환값: 없음
         작성 날짜: 2026/08/14
         """
+        # 원본 봉 마감 경계는 로컬 수신시각과 별도로 전달한다.
+        if self.confirmed_30m_close_time is not None:
+            if (
+                not isinstance(self.confirmed_30m_close_time, datetime)
+                or self.confirmed_30m_close_time.utcoffset() is None
+                or not self.confirmed_30m_close
+            ):
+                raise ValueError("confirmed close time requires a closed candle and aware datetime")
+
         # 가격과 지표 계산에서 float 오차가 섞이지 않도록 Decimal만 허용한다.
         decimal_fields = (
             self.realtime_price,
@@ -957,7 +967,10 @@ class TradingContext:
                 allow_new_case_c_setup=False,
                 case_c_consumed_for_event=False,
                 case_c_recovery_confirmed=False,
-                last_case_c_setup_candle_id=None,
+                last_case_c_setup_candle_id=(
+                    self._runtime.last_case_c_setup_candle_id
+                    if action.preserve_setup_candle else None
+                ),
                 flush_low=None,
                 flush_low_pct_b=None,
                 flush_low_time=None,

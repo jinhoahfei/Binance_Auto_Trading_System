@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from time import monotonic_ns
 
@@ -106,6 +106,47 @@ def _calculate_pct_b(
         )
 
     return (candidate_price - lower_band) / band_width
+
+
+def calculate_execution_pct_b(
+    market_snapshot: MarketSnapshot,
+    executed_at: datetime,
+    execution_price: Decimal,
+) -> Decimal | None:
+    """
+    함수 이름: calculate_execution_pct_b()
+    기능: 실제 체결가와 체결봉 직전 19개 확정봉으로 체결 순간의 후보 BB와 %B를 복원한다.
+    인자: market_snapshot -> authoritative 30분 이력
+        executed_at -> 거래소 실제 체결시각, execution_price -> 해당 fill 가격
+    반환값: 체결 %B 또는 연속 이력을 증명할 수 없을 때 None
+    작성 날짜: 2026/09/09
+    """
+    # 조회 시점의 최신 밴드를 과거 체결에 대입하지 않는다.
+    if not market_snapshot.ready or executed_at.utcoffset() is None:
+        return None
+    execution_time = executed_at.astimezone(timezone.utc)
+    candle_open = execution_time.replace(
+        minute=(execution_time.minute // 30) * 30, second=0, microsecond=0,
+    )
+    previous_candles = tuple(
+        candle for candle in market_snapshot.klines_by_interval[Interval.THIRTY_MINUTES]
+        if candle.closed and candle.open_time < candle_open
+    )[-(BOLLINGER_PERIOD - 1):]
+    if len(previous_candles) != BOLLINGER_PERIOD - 1 or any(
+        candle.open_time != candle_open - timedelta(minutes=30 * (BOLLINGER_PERIOD - 1 - index))
+        for index, candle in enumerate(previous_candles)
+    ):
+        return None  # 누락·보존기간 밖의 이력은 적극 인계를 허용하는 추정값으로 바꾸지 않는다.
+    with localcontext() as decimal_context:
+        decimal_context.prec = DECIMAL_PRECISION
+        decimal_context.rounding = ROUND_HALF_EVEN
+        try:
+            _middle, lower, upper, _width = _calculate_bollinger_bands(
+                (*tuple(candle.close for candle in previous_candles), execution_price)
+            )
+        except MarketEvaluationCalculationError:
+            return None
+        return _calculate_pct_b(execution_price, lower, upper)
 
 
 def _calculate_cci(
@@ -786,6 +827,10 @@ class ThirtyMinuteMarketEvaluationBuilder:
             "current_30m_high": candidate_high,
             "touch_candle_bbw": touch_candle_bbw,
             "confirmed_30m_close": confirmed_30m_close,
+            "confirmed_30m_close_time": (
+                latest_thirty_minute.open_time + timedelta(minutes=30)
+                if confirmed_30m_close else None
+            ),
             "confirmed_1m_close": confirmed_1m_close,
             "ema_slope_30m_close": confirmed_slope,
             "realtime_ema_slope": realtime_slope,
@@ -842,12 +887,8 @@ class ThirtyMinuteMarketEvaluationBuilder:
         if not isinstance(realtime_slope, Decimal):
             raise RuntimeError("realtime_ema_slope must be a Decimal")
 
-        # 새 30분봉은 이전 봉의 유지 시간을 승계하지 않고 각 조건을 현재 tick부터 다시 센다.
-        previous_starts = (
-            self._condition_started_at
-            if candle_id == self._current_candle_id
-            else {}
-        )
+        # 정상 봉 교체는 연속성을 끊지 않는다. 불충족 또는 reset/rebase에서만 초기화한다.
+        previous_starts = self._condition_started_at
         condition_contracts = {
             "pct_b_at_least_060_for_5s": (
                 realtime_pct_b >= Decimal("0.60"),

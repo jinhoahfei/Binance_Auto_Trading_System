@@ -18,7 +18,7 @@ from ..action_requests import (
 from ..conditions import condition_met
 from ..context import TradingContextView
 from ..events import ForceSellOutcomePayload, TradingEvent, TradingEventType
-from ..states import RootState, TradingPhase, TradingStateConfiguration
+from ..states import OrderSide, RootState, TradingPhase, TradingStateConfiguration
 from .base import TransitionOutcome, create_transition_outcome
 from .helpers import (
     create_lower_event_initialization_patch,
@@ -133,7 +133,7 @@ def handle_global_transition(
             actions = [
                 patch(trading_phase=TradingPhase.STOPPING),
             ]
-            if runtime.pending_order_side is not None:
+            if runtime.pending_order_side is OrderSide.BUY:
                 actions.append(
                     CancelPendingOrder(
                         order_id=runtime.pending_order_id,

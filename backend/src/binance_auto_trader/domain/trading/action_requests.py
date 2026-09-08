@@ -146,6 +146,7 @@ class ResetCaseCContext:
     """
 
     preserve_exit_result: bool = False
+    preserve_setup_candle: bool = False
 
 
 @dataclass(frozen=True, slots=True)

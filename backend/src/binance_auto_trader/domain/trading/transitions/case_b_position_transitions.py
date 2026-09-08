@@ -118,7 +118,7 @@ def handle_case_b_position_transition(
                 TradingStateConfiguration.create_trade_management_initial_state(),
                 CloseLowerEvent(reason="CASE_B_STOP_REENTRY"),
                 ResetCaseBContext(),
-                ResetCaseCContext(),
+                ResetCaseCContext(preserve_setup_candle=True),
                 open_action,
                 create_lower_event_initialization_patch(context),
                 patch(position_owner=None),
@@ -172,6 +172,11 @@ def _handle_holding(
     """
     runtime = context.runtime
     event_type = event.event_type
+    return_state = (
+        PositionReturnState.CASE_B_TREND_HOLD
+        if state.case_b_position_state is CaseBPositionState.CASE_B_TREND_HOLD
+        else PositionReturnState.CASE_B_HOLDING
+    )
 
     # 조건 검사 event에서는 우선순위 함수로 정확히 하나의 후속 event만 선택한다.
     if event_type in (
@@ -203,7 +208,7 @@ def _handle_holding(
             actions = create_exit_order_actions(
                 StrategyType.CASE_B,
                 reason,
-                PositionReturnState.CASE_B_HOLDING,
+                return_state,
                 event,
                 context,
                 attempt_kind=OrderAttemptKind.INITIAL,
@@ -233,7 +238,7 @@ def _handle_holding(
         reason = runtime.pending_exit_reason
         if (
             reason in CASE_B_INITIAL_FAILURE_TRANSITION_ID_BY_REASON
-            and runtime.pending_return_state is PositionReturnState.CASE_B_HOLDING
+            and runtime.pending_return_state is return_state
         ):
             attempt_kind = _get_sell_attempt_kind(event, context)
             transition_id = (
@@ -262,13 +267,13 @@ def _handle_holding(
             ExitReason.TIME,
             ExitReason.TAKE_PROFIT,
         )
-        and runtime.pending_return_state is PositionReturnState.CASE_B_HOLDING
+        and runtime.pending_return_state is return_state
         and runtime.pending_order_id is None
     ):
         actions = create_exit_order_actions(
             StrategyType.CASE_B,
             runtime.pending_exit_reason,
-            PositionReturnState.CASE_B_HOLDING,
+            return_state,
             event,
             context,
             attempt_kind=OrderAttemptKind.RETRY,
@@ -295,8 +300,25 @@ def _handle_trend_hold(
     runtime = context.runtime
     event_type = event.event_type
 
-    # 두 약화 조건 중 하나가 5초 지속될 때만 매도 event를 생성한다.
+    # Lower BB 공통 방어는 Trend Hold에서도 유지하고, 같은 청산 의도의 retry까지 연결한다.
+    defensive_events = (
+        TradingEventType.CASE_B_EMERGENCY_STOP,
+        TradingEventType.CASE_B_STOP,
+        TradingEventType.CASE_B_TIME_EXIT,
+    )
+    if event_type in defensive_events or (
+        event_type in (TradingEventType.CASE_B_SELL_FAILED, TradingEventType.CASE_B_SELL_RETRY)
+        and runtime.pending_exit_reason in (ExitReason.EMERGENCY_STOP, ExitReason.STOP, ExitReason.TIME)
+    ):
+        return _handle_holding(state, event, context)
+
+    # 비상손절·확정봉 손절·시간 제한을 먼저 확인한 뒤 5초 약화 조건을 평가한다.
     if event_type is TradingEventType.CASE_B_TREND_HOLD_CONDITION_CHECK:
+        for defensive_event in defensive_events:
+            if _is_holding_exit_guard_satisfied(defensive_event, context):
+                return create_transition_outcome(
+                    "PB-16", state, create_queue_event_action(defensive_event, context),
+                )
         if not _is_trend_hold_exit_guard_satisfied(context):
             return create_transition_outcome(
                 "PB-15",

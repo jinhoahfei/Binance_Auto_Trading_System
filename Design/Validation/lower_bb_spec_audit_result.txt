@@ -1,0 +1,51 @@
+test_continuous_stop_timer_must_cross_thirty_minute_boundary (__main__.LowerBBSpecAudit.test_continuous_stop_timer_must_cross_thirty_minute_boundary) ... FAIL
+test_control_holding_time_exit_is_implemented (__main__.LowerBBSpecAudit.test_control_holding_time_exit_is_implemented) ... ok
+test_lower_touch_close_must_not_hide_confirmed_stop (__main__.LowerBBSpecAudit.test_lower_touch_close_must_not_hide_confirmed_stop) ... FAIL
+test_recovered_case_c_must_rearm_on_next_realtime_lower_touch (__main__.LowerBBSpecAudit.test_recovered_case_c_must_rearm_on_next_realtime_lower_touch) ... FAIL
+test_trend_hold_must_emergency_exit_without_waiting_five_seconds (__main__.LowerBBSpecAudit.test_trend_hold_must_emergency_exit_without_waiting_five_seconds) ... FAIL
+test_trend_hold_must_still_exit_after_six_hours (__main__.LowerBBSpecAudit.test_trend_hold_must_still_exit_after_six_hours) ... FAIL
+
+======================================================================
+FAIL: test_continuous_stop_timer_must_cross_thirty_minute_boundary (__main__.LowerBBSpecAudit.test_continuous_stop_timer_must_cross_thirty_minute_boundary)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 128, in test_continuous_stop_timer_must_cross_thirty_minute_boundary
+    self.assertTrue(getattr(evaluation, flag), "180 seconds continuous, but timer restarted at 120 seconds")
+AssertionError: False is not true : 180 seconds continuous, but timer restarted at 120 seconds
+
+======================================================================
+FAIL: test_lower_touch_close_must_not_hide_confirmed_stop (__main__.LowerBBSpecAudit.test_lower_touch_close_must_not_hide_confirmed_stop)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 101, in test_lower_touch_close_must_not_hide_confirmed_stop
+    self.assertIn(E.CASE_B_STOP, queued(result), f"classified={event_type}, transitions={result.transition_ids}")
+AssertionError: <TradingEventType.CASE_B_STOP: 'CASE_B_STOP'> not found in [] : classified=NEW_30M_LOWER_BAND_TOUCHED, transitions=()
+
+======================================================================
+FAIL: test_recovered_case_c_must_rearm_on_next_realtime_lower_touch (__main__.LowerBBSpecAudit.test_recovered_case_c_must_rearm_on_next_realtime_lower_touch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 147, in test_recovered_case_c_must_rearm_on_next_realtime_lower_touch
+    self.assertIn("G-03", result.transition_ids, f"classified={event_type}")
+AssertionError: 'G-03' not found in () : classified=MARKET_DATA_UPDATED
+
+======================================================================
+FAIL: test_trend_hold_must_emergency_exit_without_waiting_five_seconds (__main__.LowerBBSpecAudit.test_trend_hold_must_emergency_exit_without_waiting_five_seconds)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 87, in test_trend_hold_must_emergency_exit_without_waiting_five_seconds
+    self.assertIn(E.CASE_B_EMERGENCY_STOP, queued(result), str(result.transition_ids))
+AssertionError: <TradingEventType.CASE_B_EMERGENCY_STOP: 'CASE_B_EMERGENCY_STOP'> not found in [] : ('PB-15',)
+
+======================================================================
+FAIL: test_trend_hold_must_still_exit_after_six_hours (__main__.LowerBBSpecAudit.test_trend_hold_must_still_exit_after_six_hours)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 80, in test_trend_hold_must_still_exit_after_six_hours
+    self.assertIn(E.CASE_B_TIME_EXIT, queued(result), str(result.transition_ids))
+AssertionError: <TradingEventType.CASE_B_TIME_EXIT: 'CASE_B_TIME_EXIT'> not found in [] : ('PB-15',)
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.002s
+
+FAILED (failures=5)

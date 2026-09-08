@@ -1,0 +1,77 @@
+test_control_all_109_table_ids_exist (__main__.EventActionAudit.test_control_all_109_table_ids_exist) ... ok
+test_control_g07_pending_precedes_position (__main__.EventActionAudit.test_control_g07_pending_precedes_position) ... ok
+test_control_pb15_matches_table_without_common_exits (__main__.EventActionAudit.test_control_pb15_matches_table_without_common_exits) ... ok
+test_ea01_close_event_must_reach_pb05_stop_check (__main__.EventActionAudit.test_ea01_close_event_must_reach_pb05_stop_check) ... FAIL
+test_ea02_pc06_three_minutes_must_survive_normal_rollover (__main__.EventActionAudit.test_ea02_pc06_three_minutes_must_survive_normal_rollover) ... FAIL
+test_ea03_pc27_must_not_use_request_pct_b_as_fill_pct_b (__main__.EventActionAudit.test_ea03_pc27_must_not_use_request_pct_b_as_fill_pct_b) ... FAIL
+test_ea04_g03_must_receive_live_new_candle_touch (__main__.EventActionAudit.test_ea04_g03_must_receive_live_new_candle_touch) ... FAIL
+test_ea05_g06p_pending_sell_should_be_reconciled_without_cancel (__main__.EventActionAudit.test_ea05_g06p_pending_sell_should_be_reconciled_without_cancel) ... FAIL
+test_ea06_b05_signal_time_should_be_candle_close_not_delivery (__main__.EventActionAudit.test_ea06_b05_signal_time_should_be_candle_close_not_delivery) ... FAIL
+test_ea07_pb23_must_preserve_one_setup_per_candle (__main__.EventActionAudit.test_ea07_pb23_must_preserve_one_setup_per_candle) ... FAIL
+
+======================================================================
+FAIL: test_ea01_close_event_must_reach_pb05_stop_check (__main__.EventActionAudit.test_ea01_close_event_must_reach_pb05_stop_check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/trading_event_action_audit.py", line 49, in test_ea01_close_event_must_reach_pb05_stop_check
+    prior.LowerBBSpecAudit().test_lower_touch_close_must_not_hide_confirmed_stop()
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 101, in test_lower_touch_close_must_not_hide_confirmed_stop
+    self.assertIn(E.CASE_B_STOP, queued(result), f"classified={event_type}, transitions={result.transition_ids}")
+AssertionError: <TradingEventType.CASE_B_STOP: 'CASE_B_STOP'> not found in [] : classified=NEW_30M_LOWER_BAND_TOUCHED, transitions=()
+
+======================================================================
+FAIL: test_ea02_pc06_three_minutes_must_survive_normal_rollover (__main__.EventActionAudit.test_ea02_pc06_three_minutes_must_survive_normal_rollover)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/trading_event_action_audit.py", line 52, in test_ea02_pc06_three_minutes_must_survive_normal_rollover
+    prior.LowerBBSpecAudit().test_continuous_stop_timer_must_cross_thirty_minute_boundary()
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 128, in test_continuous_stop_timer_must_cross_thirty_minute_boundary
+    self.assertTrue(getattr(evaluation, flag), "180 seconds continuous, but timer restarted at 120 seconds")
+AssertionError: False is not true : 180 seconds continuous, but timer restarted at 120 seconds
+
+======================================================================
+FAIL: test_ea03_pc27_must_not_use_request_pct_b_as_fill_pct_b (__main__.EventActionAudit.test_ea03_pc27_must_not_use_request_pct_b_as_fill_pct_b)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/trading_event_action_audit.py", line 98, in test_ea03_pc27_must_not_use_request_pct_b_as_fill_pct_b
+    self.assertNotIn("PC-27", ids,
+AssertionError: 'PC-27' unexpectedly found in ('PC-23F', 'PC-24', 'PC-26', 'PC-27', 'G-04') : request=0.1241749164942945368473985251611841, terminal_market=0.7179449471770336776118490991929821, published=0.1241749164942945368473985251611841
+
+======================================================================
+FAIL: test_ea04_g03_must_receive_live_new_candle_touch (__main__.EventActionAudit.test_ea04_g03_must_receive_live_new_candle_touch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/trading_event_action_audit.py", line 103, in test_ea04_g03_must_receive_live_new_candle_touch
+    prior.LowerBBSpecAudit().test_recovered_case_c_must_rearm_on_next_realtime_lower_touch()
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/lower_bb_spec_audit.py", line 147, in test_recovered_case_c_must_rearm_on_next_realtime_lower_touch
+    self.assertIn("G-03", result.transition_ids, f"classified={event_type}")
+AssertionError: 'G-03' not found in () : classified=MARKET_DATA_UPDATED
+
+======================================================================
+FAIL: test_ea05_g06p_pending_sell_should_be_reconciled_without_cancel (__main__.EventActionAudit.test_ea05_g06p_pending_sell_should_be_reconciled_without_cancel)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/trading_event_action_audit.py", line 113, in test_ea05_g06p_pending_sell_should_be_reconciled_without_cancel
+    self.assertFalse(any(isinstance(a, CancelPendingOrder) for a in result.action_requests))
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_ea06_b05_signal_time_should_be_candle_close_not_delivery (__main__.EventActionAudit.test_ea06_b05_signal_time_should_be_candle_close_not_delivery)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/trading_event_action_audit.py", line 131, in test_ea06_b05_signal_time_should_be_candle_close_not_delivery
+    self.assertEqual(NOW, changes["signal_time"])
+AssertionError: datetime.datetime(2026, 9, 9, 0, 30, tzinfo=datetime.timezone.utc) != datetime.datetime(2026, 9, 9, 0, 30, 2, tzinfo=datetime.timezone.utc)
+
+======================================================================
+FAIL: test_ea07_pb23_must_preserve_one_setup_per_candle (__main__.EventActionAudit.test_ea07_pb23_must_preserve_one_setup_per_candle)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/oscar/Desktop/Binance_Auto/Design/Validation/trading_event_action_audit.py", line 156, in test_ea07_pb23_must_preserve_one_setup_per_candle
+    self.assertNotIn("C-03", activation.transition_ids,
+AssertionError: 'C-03' unexpectedly found in ('C-03', 'B-03') : same-candle previous setup ID became None
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.012s
+
+FAILED (failures=7)

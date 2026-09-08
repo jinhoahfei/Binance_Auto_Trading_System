@@ -70,7 +70,7 @@ _PHASE_CONDITIONS = {
     "B_WAIT_PULLBACK": ("b_pullback", "b_signal_age"),
     "B_POSITION_OPEN_SIGNALLED": ("b_signal_age",),
     "CASE_B_HOLDING": ("b_profit_zone", "b_take_profit_slope", "b_trend_slope", "b_stop", "b_emergency_stop", "b_time_exit"),
-    "CASE_B_TREND_HOLD": ("b_trend_exit_slope", "b_trend_exit_pct_b"),
+    "CASE_B_TREND_HOLD": ("b_trend_exit_slope", "b_trend_exit_pct_b", "b_stop", "b_emergency_stop", "b_time_exit"),
     "C_WAIT_SETUP": ("c_setup_pct_b", "c_setup_cci"),
     "C_SETUP_FLUSH": ("c_flush", "c_recovery"),
     "C_SETUP_RECOVERY": ("c_new_low", "c_rebound", "c_recovery_window", "c_entry_limit", "c_recovery"),

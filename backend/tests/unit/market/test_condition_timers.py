@@ -78,10 +78,11 @@ class MarketConditionTimerTests(unittest.TestCase):
                 self.assertNotEqual(restarted.timer_id, started.timer_id)
                 self.assertEqual(restarted.remaining_seconds, Decimal(duration))
 
-                # 실제 봉 변경과 stream reset도 이전 회차의 초를 승계하면 안 된다.
+                # 정상 봉 교체는 같은 연속 조건을 유지하고 stream reset만 새 회차를 시작한다.
                 _, next_candle = tick((duration + 4) * 1_000_000_000, True, rollover=True)
-                self.assertEqual(next_candle.reset_reason, "candle_changed")
-                self.assertEqual(next_candle.remaining_seconds, Decimal(duration))
+                self.assertEqual(next_candle.reset_reason, restarted.reset_reason)
+                self.assertEqual(next_candle.timer_id, restarted.timer_id)
+                self.assertEqual(next_candle.remaining_seconds, Decimal(duration - 1))
                 builder.reset()
                 builder.rebase(market)
                 _, reconnected = tick((duration + 5) * 1_000_000_000, True, rollover=True)

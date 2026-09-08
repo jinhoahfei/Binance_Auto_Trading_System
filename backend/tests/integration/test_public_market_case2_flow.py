@@ -1174,12 +1174,12 @@ class PublicMarketCase2FlowTests(unittest.TestCase):
                 sell_trace_ids,
             )
 
-    def test_case_c_terminal_sell_keeps_intent_pct_b_for_active_handoff(
+    def test_case_c_terminal_sell_uses_execution_pct_b_for_handoff(
         self,
     ) -> None:
         """
-        함수 이름: test_case_c_terminal_sell_keeps_intent_pct_b_for_active_handoff()
-        기능: Partial SELL 뒤 시장 %B가 바뀌어도 최초 매도 %B와 Case B active 인계를 보존한다.
+        함수 이름: test_case_c_terminal_sell_uses_execution_pct_b_for_handoff()
+        기능: Partial SELL 뒤 실제 체결가가 바뀌면 의도 %B와 분리된 체결 %B로 wait-only를 선택한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/29
@@ -1189,6 +1189,26 @@ class PublicMarketCase2FlowTests(unittest.TestCase):
                 temporary_directory,
                 PublicCase2OrderScenario.SELL_PARTIAL_THEN_FILLED,
             )
+            original_build_fills = fixture.rest_client._build_fills
+
+            def build_observed_fills(order, exchange_order_id):
+                """
+                함수 이름: build_observed_fills()
+                기능: 기존 partial 사실은 보존하고 새 SELL fill을 관측시각과 실제 시장가로 만든다.
+                인자: order -> fake 주문, exchange_order_id -> 주문 식별자
+                반환값: 누적 fill tuple
+                작성 날짜: 2026/09/09
+                """
+                fills = original_build_fills(order, exchange_order_id)
+                if order.side is not OrderSide.SELL:
+                    return fills
+                known = {fill.trade_id: fill for fill in order.fills}
+                return tuple(known.get(fill.trade_id) or replace(
+                    fill, executed_at=fixture.clock(),
+                    price=fixture.trading_controller.context.market.realtime_price,
+                ) for fill in fills)
+
+            fixture.rest_client._build_fills = build_observed_fills
             _trigger_public_case_c_buy(fixture)
 
             # 낮은 %B의 TP trailing에 진입한 뒤 확정 1분 slope 하락으로
@@ -1236,7 +1256,7 @@ class PublicMarketCase2FlowTests(unittest.TestCase):
                 Decimal("0.40"),
             )
 
-            # Same-ID terminal fill은 변경된 시장값이 아닌 최초 intent %B를 게시한다.
+            # Same-ID terminal fill은 실제 새 체결가의 %B를 게시하고 최초 intent는 그대로 보존한다.
             terminal_events = (
                 fixture.trading_controller.trigger_order_reconciliation(
                     occurred_at=fixture.clock.advance(timedelta(seconds=1)),
@@ -1256,13 +1276,11 @@ class PublicMarketCase2FlowTests(unittest.TestCase):
                 for transition_id in result.transition_ids
             )
             exit_context = fixture.trading_controller.context
-            self.assertEqual(
-                original_exit_pct_b,
-                exit_context.runtime.case_c_exit_pct_b,
-            )
-            self.assertIn("PC-27", terminal_transition_ids)
-            self.assertNotIn("PC-28", terminal_transition_ids)
-            self.assertFalse(exit_context.runtime.case_b_entry_paused)
+            self.assertGreaterEqual(exit_context.runtime.case_c_exit_pct_b, Decimal("0.40"))
+            self.assertEqual(original_exit_pct_b, sell_order.exit_pct_b_at_intent)
+            self.assertIn("PC-28", terminal_transition_ids)
+            self.assertNotIn("PC-27", terminal_transition_ids)
+            self.assertTrue(exit_context.runtime.case_b_entry_paused)
             self.assertTrue(
                 exit_context.runtime.case_b_only_until_next_lower_touch
             )

@@ -48,11 +48,11 @@ def create_hold_timer_snapshots(
         duration = Decimal(duration_ns) / Decimal("1000000000")
         started_at = starts[flag_name]
         old_timer = previous_by_id.get(condition_id)
-        reason = "candle_changed" if candle_changed else ("stream_reset" if generation > 0 and not previous else None)
-        timer_id = f"hold:{generation}:{candle_id}:{condition_id}:{started_at}"
+        reason = "stream_reset" if generation > 0 and not previous else None
+        timer_id = f"hold:{generation}:{condition_id}:{started_at}"
         remaining = duration
         if started_at is None:
-            interrupted = not candle_changed and old_timer is not None and old_timer.state != "waiting"
+            interrupted = old_timer is not None and old_timer.state != "waiting"
             state = "stopped" if interrupted else "waiting"
             if interrupted:
                 timer_id = old_timer.timer_id

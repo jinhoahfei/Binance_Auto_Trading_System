@@ -1,0 +1,15 @@
+test_control_all_109_table_ids_exist (__main__.EventActionAudit.test_control_all_109_table_ids_exist) ... ok
+test_control_g07_pending_precedes_position (__main__.EventActionAudit.test_control_g07_pending_precedes_position) ... ok
+test_control_pb15_holds_before_common_exit_deadline (__main__.EventActionAudit.test_control_pb15_holds_before_common_exit_deadline) ... ok
+test_ea01_close_event_must_reach_pb05_stop_check (__main__.EventActionAudit.test_ea01_close_event_must_reach_pb05_stop_check) ... ok
+test_ea02_pc06_three_minutes_must_survive_normal_rollover (__main__.EventActionAudit.test_ea02_pc06_three_minutes_must_survive_normal_rollover) ... ok
+test_ea03_pc27_must_not_use_request_pct_b_as_fill_pct_b (__main__.EventActionAudit.test_ea03_pc27_must_not_use_request_pct_b_as_fill_pct_b) ... ok
+test_ea04_g03_must_receive_live_new_candle_touch (__main__.EventActionAudit.test_ea04_g03_must_receive_live_new_candle_touch) ... ok
+test_ea05_g06p_pending_sell_should_be_reconciled_without_cancel (__main__.EventActionAudit.test_ea05_g06p_pending_sell_should_be_reconciled_without_cancel) ... ok
+test_ea06_b05_signal_time_should_be_candle_close_not_delivery (__main__.EventActionAudit.test_ea06_b05_signal_time_should_be_candle_close_not_delivery) ... ok
+test_ea07_pb23_must_preserve_one_setup_per_candle (__main__.EventActionAudit.test_ea07_pb23_must_preserve_one_setup_per_candle) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.013s
+
+OK

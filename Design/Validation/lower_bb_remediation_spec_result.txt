@@ -1,0 +1,11 @@
+test_continuous_stop_timer_must_cross_thirty_minute_boundary (__main__.LowerBBSpecAudit.test_continuous_stop_timer_must_cross_thirty_minute_boundary) ... ok
+test_control_holding_time_exit_is_implemented (__main__.LowerBBSpecAudit.test_control_holding_time_exit_is_implemented) ... ok
+test_lower_touch_close_must_not_hide_confirmed_stop (__main__.LowerBBSpecAudit.test_lower_touch_close_must_not_hide_confirmed_stop) ... ok
+test_recovered_case_c_must_rearm_on_next_realtime_lower_touch (__main__.LowerBBSpecAudit.test_recovered_case_c_must_rearm_on_next_realtime_lower_touch) ... ok
+test_trend_hold_must_emergency_exit_without_waiting_five_seconds (__main__.LowerBBSpecAudit.test_trend_hold_must_emergency_exit_without_waiting_five_seconds) ... ok
+test_trend_hold_must_still_exit_after_six_hours (__main__.LowerBBSpecAudit.test_trend_hold_must_still_exit_after_six_hours) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.002s
+
+OK

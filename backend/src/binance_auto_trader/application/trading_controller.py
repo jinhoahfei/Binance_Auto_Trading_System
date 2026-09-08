@@ -27,6 +27,7 @@ from binance_auto_trader.application.trade_history_controller import (
 )
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
 from binance_auto_trader.application.trading_indicator_snapshot import TradingIndicatorStore
+from binance_auto_trader.application.market_evaluation_builder import calculate_execution_pct_b
 from binance_auto_trader.application.trading_logic_snapshot import (
     TradingLogicSnapshot,
     create_trading_logic_snapshot,
@@ -1941,8 +1942,9 @@ class TradingController:
                         command_id=f"manual-kill-stop-{command_id}",
                         expected_version=self._context.version,
                     )
-                elif self._status is (
-                    TradingSessionStatus.RECONCILIATION_REQUIRED
+                elif self._status in (
+                    TradingSessionStatus.RECONCILIATION_REQUIRED,
+                    TradingSessionStatus.STOPPING,
                 ):
                     self._resume_manual_kill_order_cleanup_locked(
                         command_id,
@@ -3566,6 +3568,11 @@ class TradingController:
         작성 날짜: 2026/08/29
         """
         if event.market_evaluation is None:
+            # 내부 후속·retry에서도 새 signal/체결/timer 기준의 경과시간을 다시 결합한다.
+            if self._latest_market_evaluation_version > 0:
+                self._context.update_market(self._enrich_market_evaluation_elapsed(
+                    self._context.market, event.occurred_at,
+                ))
             return event  # 사용자·주문·내부 event는 기존 Context와 event identity를 그대로 사용한다.
         if not isinstance(event.market_evaluation, MarketEvaluationSnapshot):
             raise TypeError(
@@ -3711,12 +3718,14 @@ class TradingController:
         if not lower_touched:
             return TradingEventType.MARKET_DATA_UPDATED
 
-        # 아직 scope가 없으면 G-02 최초 접촉, 다른 확정봉이면 G-03 신규 접촉으로 분리한다.
+        # 새 scope를 열 수 있을 때만 G-03으로 분류하고, 보유·잠금 중 확정봉 판단은 계속 전달한다.
         runtime = self._context.runtime
         if runtime.lower_event_id is None:
             return TradingEventType.LOWER_BAND_TOUCHED
         if (
-            market.confirmed_30m_close
+            runtime.position_owner is None
+            and runtime.pending_order_id is None
+            and (not runtime.case_c_consumed_for_event or runtime.case_c_recovery_confirmed)
             and market.current_30m_candle_id is not None
             and market.current_30m_candle_id != runtime.touch_candle_id
         ):
@@ -7274,8 +7283,7 @@ class TradingController:
     ) -> bool:
         """
         함수 이름: _publish_case_c_exit_result()
-        기능: 일반 Case C 전량 SELL 체결 시 종료 사유와
-            최초 SELL 의도 시점 %B를 Context에 고정한다.
+        기능: 일반 Case C 전량 SELL 체결 시 실제 마지막 fill의 %B와 종료 사유를 고정한다.
         인자: state -> 방금 Position에 fill을 반영한 주문 실행 상태
         반환값: 종료 provenance가 일관되게 게시됐거나 대상이 아니면 True,
             불일치면 False
@@ -7300,12 +7308,12 @@ class TradingController:
         # 종료 결과를 확정한다.
         runtime = self._context.runtime
         exit_reason = runtime.pending_exit_reason
-        exit_pct_b = order.exit_pct_b_at_intent
+        intent_pct_b = order.exit_pct_b_at_intent
         if (
             exit_reason is None
             or order.exit_reason is not exit_reason
-            or exit_pct_b is None
-            or runtime.pending_exit_pct_b != exit_pct_b
+            or intent_pct_b is None
+            or runtime.pending_exit_pct_b != intent_pct_b
         ):
             self._enter_order_reconciliation(
                 state,
@@ -7314,12 +7322,8 @@ class TradingController:
             )
             return False
 
-        # Persistence 재시도나 중복 terminal 결과는
-        # 최초 SELL 의도 시점의 %B를 덮어쓰지 않는다.
-        if (
-            runtime.case_c_exit_reason is exit_reason
-            and runtime.case_c_exit_pct_b is not None
-        ):
+        # 계산 불가(None)도 최초 종료 결과다. 재조회·저장 재시도에서 미래 시세로 덮어쓰지 않는다.
+        if runtime.case_c_exit_reason is exit_reason:
             return True
         if (
             runtime.case_c_exit_reason is not None
@@ -7332,8 +7336,16 @@ class TradingController:
             )
             return False
 
-        # Partial·UNKNOWN 뒤의 시장 변경과 무관하게 매도 의도 시점의
-        # immutable %B로 PC-23F provenance를 게시한다.
+        # 실제 마지막 fill의 가격과 그 봉 이전 이력만 사용한다. 근거 부재는 wait-only 인계다.
+        # 같은 밀리초의 Binance fill은 숫자 trade ID로 순서를 정한다.
+        # 비숫자 ID를 쓰는 gateway에서는 누적 fill 수신 순서를 보조 기준으로 사용한다.
+        _last_index, last_fill = max(enumerate(order.fills), key=lambda item: (
+            item[1].executed_at,
+            int(item[1].trade_id) if item[1].trade_id.isdecimal() else item[0],
+        ))
+        exit_pct_b = calculate_execution_pct_b(
+            self._market_snapshot, last_fill.executed_at, last_fill.price,
+        )
         self._context.apply_runtime_patch(
             patch(
                 case_c_exit_reason=exit_reason,
@@ -7988,6 +8000,18 @@ class TradingController:
                 message_id="8",
             )
             return ()
+        # 일반 STOP의 SELL은 조회만 하지만 durable CANCEL_AND_LIQUIDATE는 별도 취소 의무를 갖는다.
+        if (
+            action.stop_after_reconciliation
+            and not state.stop_after_reconciliation
+            and self._requires_manual_kill_cleanup_locked()
+            and not state.order.is_terminal
+        ):
+            outcomes = self._cancel_pending_order_action(CancelPendingOrder(
+                order_id=action.order_id, reason="STOP_CONFIRMED",
+            ))
+            if outcomes:
+                return outcomes
         state.stop_after_reconciliation = action.stop_after_reconciliation
 
         # 앞선 cancel action에서 이미 terminal completion을 만들었으면 중복 force/order event를 만들지 않는다.

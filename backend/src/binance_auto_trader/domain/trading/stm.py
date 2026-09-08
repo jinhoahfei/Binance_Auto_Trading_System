@@ -231,6 +231,10 @@ class TradingSTM:
         if global_outcome is not None:
             return self._commit(event, context, state_before, global_outcome)
 
+        # 새 scope를 열 수 없어도 같은 확정봉의 포지션·signal 판단은 보존한다.
+        if event.event_type is TradingEventType.NEW_30M_LOWER_BAND_TOUCHED:
+            event = replace(event, event_type=TradingEventType.MARKET_DATA_UPDATED)
+
         # 복합 상태 밖에서는 하위 Region 이벤트를 소비하지 않는다.
         if state_before.root_state is not RootState.TRADE_MANAGEMENT:
             return self._no_op(event, context, state_before)
