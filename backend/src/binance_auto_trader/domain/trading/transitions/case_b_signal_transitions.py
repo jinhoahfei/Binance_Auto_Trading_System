@@ -48,15 +48,12 @@ def handle_case_b_signal_transition(
     market = context.market
     event_type = event.event_type
 
-    # B_WAIT_TOUCH에서는 고정된 touch candle의 저가와 BBW로 Case B 활성화를 결정한다.
+    # 공통 하단 접촉은 이미 통과했다. 그 순간의 30분봉 BBW만으로 Case B를 활성화한다.
     if signal_state is CaseBSignalState.B_WAIT_TOUCH:
         if event_type is not TradingEventType.ACTIVATE_TRADE_MANAGEMENT:
             return None
         valid_touch = (
-            runtime.touch_candle_low is not None
-            and runtime.lower_band_at_touch is not None
-            and runtime.touch_candle_bbw is not None
-            and condition_met("b_touch_low", context)
+            runtime.touch_candle_bbw is not None
             and condition_met("b_touch_bbw", context)
         )
         # touch 조건이 맞지 않으면 이 lower event의 Case B Region을 종료한다.

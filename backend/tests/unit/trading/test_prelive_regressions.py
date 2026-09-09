@@ -51,6 +51,48 @@ class PreliveTradingRegressionTests(unittest.TestCase):
     작성 날짜: 2026/09/09
     """
 
+    def test_case_b_activation_uses_only_frozen_touch_bandwidth(self):
+        """
+        함수 이름: test_case_b_activation_uses_only_frozen_touch_bandwidth()
+        기능: 공통 접촉 이후 B 활성화는 저가 없이 저장된 BBW만 읽고 최신 BBW를 재사용하지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        for touch_bbw, latest_bbw, enabled in (("0.019", "0.03", True), ("0.02", "0.01", False)):
+            with self.subTest(touch_bbw=touch_bbw):
+                stm = TradingSTM(RegimeType.TYPE_0)
+                stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+                context = create_test_context(
+                    market=MarketEvaluationSnapshot(touch_candle_bbw=Decimal(latest_bbw)),
+                    runtime=TradingRuntimeSnapshot(touch_candle_bbw=Decimal(touch_bbw)),
+                )
+                result = stm.handle(create_test_event(TradingEventType.ACTIVATE_TRADE_MANAGEMENT), context)
+                self.assertIn("B-03" if enabled else "B-02", result.transition_ids)
+
+    def test_new_candle_touch_uses_current_price_in_classifier_and_guard(self):
+        """
+        함수 이름: test_new_candle_touch_uses_current_price_in_classifier_and_guard()
+        기능: 새 봉에서도 현재가 접촉으로 즉시 재추적하고 과거 저가만으로는 재진입하지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        for price, touched in (("100.01", False), ("100", True), ("99.99", True)):
+            with self.subTest(price=price):
+                runtime = TradingRuntimeSnapshot(lower_event_id="old-event", touch_candle_id="old")
+                market = MarketEvaluationSnapshot(realtime_price=Decimal(price), lower_band=Decimal("100"),
+                    upper_band=Decimal("102"), current_30m_low=Decimal("99"), current_30m_candle_id="new")
+                classifier = SimpleNamespace(_context=SimpleNamespace(runtime=runtime))
+                event_type = TradingController._select_market_event_type(classifier, market)
+                self.assertIs(event_type, TradingEventType.NEW_30M_LOWER_BAND_TOUCHED
+                              if touched else TradingEventType.MARKET_DATA_UPDATED)
+                stm = TradingSTM(RegimeType.TYPE_0)
+                stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+                result = stm.handle(create_test_event(TradingEventType.NEW_30M_LOWER_BAND_TOUCHED),
+                                    create_test_context(market=market, runtime=runtime))
+                self.assertEqual("G-03" in result.transition_ids, touched)
+
     def test_trend_defenses_preserve_reason_and_retry_intent(self):
         """
         함수 이름: test_trend_defenses_preserve_reason_and_retry_intent()

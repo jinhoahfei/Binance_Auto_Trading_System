@@ -292,7 +292,7 @@ def handle_global_transition(
         and runtime.position_owner is None
         and runtime.pending_order_id is None
         and context.market.current_30m_candle_id != runtime.touch_candle_id
-        and condition_met("lower_close", context)
+        and is_lower_touch_condition_met(context)
         and (
             not runtime.case_c_consumed_for_event
             or runtime.case_c_recovery_confirmed

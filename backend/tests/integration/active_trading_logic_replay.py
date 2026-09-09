@@ -159,7 +159,8 @@ def replay_entry_scenario(strategy: str) -> dict[str, object]:
                 ))
             entry_market = replace(
                 market,
-                realtime_price=Decimal("4327"),
+                # B의 %B 0.20 눌림은 하단 위에 있어야 새 하단 터치로 분류되지 않는다.
+                realtime_price=Decimal("4380") if strategy == "CASE_B" else Decimal("4327"),
                 realtime_pct_b=Decimal("0.2") if strategy == "CASE_B" else Decimal("-0.24"),
                 confirmed_30m_close=False,
             )

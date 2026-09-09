@@ -107,7 +107,6 @@ class TradingIndicatorTests(unittest.TestCase):
                 touch_candle_bbw=Decimal("0.01999999"), flush_low=Decimal("89"), entry_pct_b=Decimal("-0.24")),
             position=PositionSnapshot(quantity=Decimal("1"), entry_price=Decimal("100")),
         )
-        self.assertTrue(evaluate_condition("b_touch_low", context).satisfied)
         self.assertTrue(evaluate_condition("b_touch_bbw", context).satisfied)
         self.assertEqual(evaluate_condition("b_emergency_stop", context).threshold, Decimal("99"))
         self.assertEqual(evaluate_condition("c_rebound", context).threshold, Decimal("-0.24"))
@@ -129,7 +128,7 @@ class TradingIndicatorTests(unittest.TestCase):
         initial = TradingStateConfiguration.create_trade_management_initial_state()
         context = create_test_context(runtime=TradingRuntimeSnapshot(case_b_enabled=True, case_c_enabled=True))
         for phase, first_id in (
-            (CaseBSignalState.B_WAIT_TOUCH, "b_touch_low"),
+            (CaseBSignalState.B_WAIT_TOUCH, "b_touch_bbw"),
             (CaseBSignalState.B_WAIT_SIGNAL, "b_signal_slope"),
             (CaseBSignalState.B_WAIT_PULLBACK, "b_pullback"),
             (CaseBSignalState.B_POSITION_OPEN_SIGNALLED, "b_signal_age"),
@@ -260,9 +259,7 @@ class TradingIndicatorTests(unittest.TestCase):
         # 가격과 runtime 기준은 하드코딩된 UI 숫자 대신 실제 평가 입력을 사용해야 한다.
         for condition_id, owner, field, boundary, expected in (
             ("lower_price", "market", "realtime_price", "100", (True, True, False)),
-            ("lower_close", "market", "current_30m_low", "100", (True, True, False)),
             ("upper_safe_exit", "market", "realtime_price", "120", (False, True, True)),
-            ("b_touch_low", "runtime", "touch_candle_low", "90", (True, True, False)),
             ("b_touch_bbw", "runtime", "touch_candle_bbw", "0.02", (True, False, False)),
             ("b_emergency_stop", "market", "realtime_price", "99", (True, True, False)),
             ("b_trend_slope", "market", "realtime_ema_slope", "0.08", (False, False, True)),

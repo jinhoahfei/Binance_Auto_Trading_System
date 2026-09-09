@@ -38,15 +38,12 @@ SIX_HOURS = timedelta(hours=6)
 def is_lower_touch_condition_met(context: TradingContextView) -> bool:
     """
     함수 이름: is_lower_touch_condition_met()
-    기능: 실시간 가격 또는 확정 30분봉 저가의 하단 Bollinger Band 접촉을 판정한다.
+    기능: 현재가가 같은 시점의 실시간 30분봉 하단 Bollinger Band 이하인지 판정한다.
     인자: context -> 동일 평가 시점의 TradingContextView
     반환값: 하단 Band 접촉 여부
     작성 날짜: 2026/08/14
     """
-    market = context.market
-    return condition_met("lower_price", context) or (
-        market.confirmed_30m_close and condition_met("lower_close", context)
-    )
+    return condition_met("lower_price", context)
 
 
 def resolve_lower_event_id(event: TradingEvent, context: TradingContextView) -> str:

@@ -3711,16 +3711,10 @@ class TradingController:
         ):
             return TradingEventType.UPPER_BAND_TOUCHED
 
-        # 하단 접촉은 실시간 가격과 확정 30분봉 저가라는 명세의 두 source를 함께 사용한다.
+        # 봉 확정을 기다리지 않고 현재가와 동일 평가의 실시간 30분봉 하단 Band를 비교한다.
         lower_touched = (
             market.lower_band > Decimal("0")
-            and (
-                market.realtime_price <= market.lower_band
-                or (
-                    market.confirmed_30m_close
-                    and market.current_30m_low <= market.lower_band
-                )
-            )
+            and market.realtime_price <= market.lower_band
         )
         if not lower_touched:
             return TradingEventType.MARKET_DATA_UPDATED

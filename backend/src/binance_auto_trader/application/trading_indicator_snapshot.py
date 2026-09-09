@@ -64,8 +64,8 @@ class TradingIndicatorSnapshot:
 
 # UI용 이름과 색상은 포함하지 않고 단계가 사용하는 조건 ID만 연결한다.
 _PHASE_CONDITIONS = {
-    "LOWER_TOUCH_WATCH": ("lower_price", "lower_close"),
-    "B_WAIT_TOUCH": ("b_touch_low", "b_touch_bbw"),
+    "LOWER_TOUCH_WATCH": ("lower_price",),
+    "B_WAIT_TOUCH": ("b_touch_bbw",),
     "B_WAIT_SIGNAL": ("b_signal_slope", "b_signal_pct_b", "b_signal_low"),
     "B_WAIT_PULLBACK": ("b_pullback", "b_signal_age"),
     "B_POSITION_OPEN_SIGNALLED": ("b_signal_age",),

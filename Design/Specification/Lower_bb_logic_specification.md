@@ -36,6 +36,9 @@
 - 실시간 감시: 현재가 기준 realtime %B
 - Bollinger Band: 30분봉 close 기준 20기간, 표준편차 2
 - `%B = (current_price - lower) / (upper - lower)`
+- 공통 하단 터치: `current_price <= realtime_30m_lower_band`가 되는 즉시 B/C 후보 추적을 시작한다. 30분봉 확정을 기다리거나 과거 봉 저가만으로 터치를 판정하지 않는다.
+- 실시간 30분봉 BB는 직전 확정 종가 19개와 현재가를 임시 종가로 사용한다. 봉 확정 시에는 해당 봉까지의 확정 종가 20개를 사용한다.
+- `touch_candle_bbw`는 하단 터치 순간, 같은 30분봉의 실시간 BB로 계산한 `(upper - lower) / middle`을 저장한 값이다. 이후 가격 변동이나 봉 마감으로 덮어쓰지 않는다.
 - 하단 BB 대응 목적이므로 상단 BB에 닿으면 새 상단 전략을 시작하지 않고
   주문·포지션 상태에 맞는 안전 종료 절차로 전환한다.
 
@@ -70,10 +73,10 @@
 
 ### 3.2 하단 BB 터치 감지
 
-30분봉 기준이다.
+공통 실시간 하단 터치가 발생한 뒤, 그 순간의 30분봉 실시간 BBW만으로 Case B 후보 진입을 결정한다.
 
 ```python
-if 30m_low <= lower_band and bbw < 0.02:
+if touch_candle_bbw < 0.02:
     state = "WAIT_SIGNAL"
 ```
 
@@ -81,6 +84,8 @@ if 30m_low <= lower_band and bbw < 0.02:
 
 - `BBW < 0.02`는 매수봉 기준이 아니다.
 - 반드시 하단 BB를 터치한 30분봉 기준의 BBW다.
+- `touch_candle_bbw`는 공통 터치 순간의 실시간 BBW를 고정한 값이다. 봉 저가 접촉 조건을 다시 요구하지 않으며, 봉 확정까지 기다리지 않는다.
+- 이 조건은 Case B 후보 추적의 시작 조건이며, 실제 매수에는 아래 회복 신호와 눌림 조건이 필요하다.
 
 ### 3.3 신호 확정 조건
 
@@ -698,7 +703,7 @@ Case B POSITION_OPEN
   -> Case C entry OFF
   -> Case C setup 기록은 가능하지만 매수 권한 없음
   -> Case B 비상손절 또는 Case B 30m 손절만 실행
-  -> 손절 매도 후 현재 가격/확정봉이 하단 BB 이벤트 조건이면 새 하단 터치 이벤트로 즉시 재판정
+  -> 손절 매도 후 현재가가 실시간 30분봉 하단 BB 이하이면 새 하단 터치 이벤트로 즉시 재판정
 ```
 
 이유:
@@ -714,7 +719,7 @@ Case B 포지션 중에는 Case C가 개입하지 않는다. 그러나 Case B가
 ```text
 Case B stop/emergency stop sell 완료
   -> owner = None
-  -> if current_price <= lower_band or confirmed_30m_low <= lower_band:
+  -> if current_price <= realtime_30m_lower_band:
        start_new_lower_event()
        if touch_candle_bbw < 0.02:
            Case B monitor ON
@@ -729,8 +734,8 @@ Case B stop/emergency stop sell 완료
 
 세부 기준:
 
-- Case B가 30분봉 `ema_slope < -0.08` 손절로 끝났고 해당 확정봉의 low가 하단 BB를 터치했다면, 그 확정봉을 새 touch candle로 본다.
-- Case B가 실시간 비상손절로 끝났고 매도 직후 현재가가 하단 BB 이하라면, 그 시점을 새 하단 터치 이벤트로 본다.
+- Case B가 30분봉 손절 또는 실시간 비상손절로 끝났고 매도 후 현재가가 실시간 30분봉 하단 BB 이하라면, 그 시점을 새 하단 터치 이벤트로 본다.
+- 해당 확정봉의 과거 low만 하단 BB 이하인 경우에는 새 이벤트를 만들지 않는다.
 - 단, 새 이벤트에서 Case B는 다시 `BBW < 0.02` touch candle 조건부터 판단한다.
 - 새 이벤트에서 Case C도 다시 `%B <= -0.15`, `CCI <= -140` setup 조건부터 판단한다.
 - 같은 포지션에서 손절 전 Case C 조건이 보였다는 이유만으로 즉시 Case C 매수를 실행하지 않는다. 매도 완료 후 새 이벤트에서 다시 조건을 본다.
@@ -1082,8 +1087,7 @@ Case B 보유 중에는 중복 진입 방지를 위해 Case C를 off한다. 그�
 ```text
 Case B STOP 또는 EMERGENCY_STOP 매도 완료
   -> owner = None
-  -> if current_price <= lower_band
-     or confirmed_30m_low <= lower_band:
+  -> if current_price <= realtime_30m_lower_band:
        start_new_lower_event()
        if touch_candle_bbw < 0.02:
            Case B monitor ON

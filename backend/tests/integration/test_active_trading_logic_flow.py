@@ -1,6 +1,7 @@
 """TradingSTM의 실행 전략이 스냅샷과 실시간 event에 동일하게 공개되는지 검증한다."""
 
 import asyncio
+from dataclasses import replace
 from decimal import Decimal
 import unittest
 
@@ -11,10 +12,12 @@ from binance_auto_trader.domain.trading.context import (
     PositionSnapshot,
 )
 from binance_auto_trader.domain.trading.states import (
+    CaseBSignalState,
     OrderAttemptKind,
     OrderSide,
     StrategyType,
 )
+from binance_auto_trader.domain.trading.action_requests import SubmitOrder
 from binance_auto_trader.transport import (
     BackendEventStream,
     create_trading_session_update_observer,
@@ -29,6 +32,64 @@ class ActiveTradingLogicFlowTests(unittest.TestCase):
     기능: 외부 주문 없이 실제 session·시장 전이·주문 및 포지션 snapshot의 전략 표시를 검증한다.
     작성 날짜: 2026/09/05
     """
+
+    def test_realtime_touch_starts_tracking_and_freezes_touch_bandwidth(self) -> None:
+        """
+        함수 이름: test_realtime_touch_starts_tracking_and_freezes_touch_bandwidth()
+        기능: 봉 저가만의 접촉은 무시하고 실시간 접촉 즉시 추적하며 터치 순간 BBW를 고정한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        for bandwidth, enables_b in (("0.01999999", True), ("0.02", False), ("0.02000001", False)):
+            for touch_price in ("100", "99.99"):
+                with self.subTest(bandwidth=bandwidth, touch_price=touch_price):
+                    controller, regime_controller, _ = _create_ready_controller()
+                    self.addCleanup(controller.close_session_resources)
+                    selection = regime_controller.set_regime_type(
+                        RegimeType.TYPE_0, command_id="select-touch", expected_version=0,
+                    )
+                    controller.start_trading(command_id="start-touch", expected_version=selection.version)
+                    market = MarketEvaluationSnapshot(
+                        realtime_price=Decimal("101"), lower_band=Decimal("100"),
+                        upper_band=Decimal("102"), current_30m_low=Decimal("99"),
+                        current_30m_candle_id="closed", confirmed_30m_close=True,
+                        touch_candle_bbw=Decimal(bandwidth),
+                    )
+                    inputs = (
+                        market,
+                        replace(market, realtime_price=Decimal("100.5")),
+                        replace(market, realtime_price=Decimal(touch_price), confirmed_30m_close=False,
+                                current_30m_candle_id="touch"),
+                        replace(market, realtime_price=Decimal("101"), confirmed_30m_close=False,
+                                current_30m_candle_id="touch",
+                                touch_candle_bbw=Decimal("0.03") if enables_b else Decimal("0.01")),
+                    )
+                    for index, candidate in enumerate(inputs):
+                        controller._market_snapshot.update(controller._market_snapshot.klines_by_interval)
+                        controller.observe_market_evaluation(
+                            candidate, source_event_id=f"touch-{index}",
+                            market_version=controller._market_snapshot.version,
+                        )
+                        results = asyncio.run(controller.drain_events())
+                        self.assertFalse(any(isinstance(action, SubmitOrder)
+                                             for result in results for action in result.action_requests))
+                        logic = map_trading_snapshot(controller, "fake")["active_logic"]
+                        if index < 2:
+                            self.assertEqual(logic["root_state"], "LOWER_TOUCH_WATCH")
+                            rows = logic["indicators"]["conditions"]
+                            self.assertEqual([row["condition_id"] for row in rows], ["lower_price"])
+                            self.assertEqual(Decimal(rows[0]["value"]), candidate.realtime_price)
+                            self.assertFalse(rows[0]["satisfied"])
+                        else:
+                            self.assertEqual(logic["root_state"], "TRADE_MANAGEMENT")
+                            self.assertEqual(logic["active_strategies"],
+                                             ["CASE_B", "CASE_C"] if enables_b else ["CASE_C"])
+                            self.assertEqual(controller.context.runtime.touch_candle_bbw, Decimal(bandwidth))
+                            self.assertEqual(controller.context.runtime.touch_candle_id, "touch")
+                            if enables_b:
+                                self.assertIs(controller._active_stm.current_state.case_b_signal_state,
+                                              CaseBSignalState.B_WAIT_SIGNAL)
 
     def test_actual_recovery_timer_transitions_and_publications(self) -> None:
         """
@@ -109,7 +170,7 @@ class ActiveTradingLogicFlowTests(unittest.TestCase):
                 })
                 self.assertEqual(
                     [row["condition_id"] for row in waiting_logic["indicators"]["conditions"]],
-                    ["lower_price", "lower_close"],
+                    ["lower_price"],
                 )  # 시작 직후에는 이전 전략의 지표를 재사용하지 않는다.
                 self.assertTrue(all(row["satisfied"] is None for row in waiting_logic["indicators"]["conditions"]))
 

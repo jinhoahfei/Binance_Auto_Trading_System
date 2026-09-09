@@ -29,9 +29,7 @@ class TradingCondition:
 # 유지시간은 시장 평가기가 계산한 연속 유지 결과를 그대로 사용한다.
 _DEFINITIONS = {
     "lower_price": ("market.realtime_price", "<=", "market.lower_band", "realtime", None, None),
-    "lower_close": ("market.current_30m_low", "<=", "market.lower_band", "close_30m", None, None),
     "upper_safe_exit": ("market.realtime_price", ">=", "market.upper_band", "realtime", None, None),
-    "b_touch_low": ("runtime.touch_candle_low", "<=", "runtime.lower_band_at_touch", "touch", None, None),
     "b_touch_bbw": ("runtime.touch_candle_bbw", "<", "0.02", "touch", None, None),
     "b_signal_slope": ("market.ema_slope_30m_close", ">", "-0.03", "close_30m", None, None),
     "b_signal_pct_b": ("market.pct_b_close", ">", "0.25", "close_30m", None, None),
