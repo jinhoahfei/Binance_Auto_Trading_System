@@ -206,8 +206,19 @@ def run_preflight(configuration: LiveConfiguration) -> dict[str, object]:
         try:
             rest.resolve_bnb_fee(datetime.now(timezone.utc))
             checks["bnb_fee_valuation"] = True
-        except (ValueError, RuntimeError, TypeError):
+        except (ValueError, RuntimeError, TypeError) as error:
             checks["bnb_fee_valuation"] = False
+            # 알려진 고정 진단만 공개하고 transport 예외 원문·서명 URL은 절대 보고하지 않는다.
+            safe_reasons = {
+                "BNB valuation candle unavailable": "CANDLE_UNAVAILABLE",
+                "BNB valuation requires actual market trades": "NO_TRADES_AFTER_BOUNDED_READS",
+                "BNB valuation window mismatch": "WINDOW_MISMATCH",
+                "invalid BNB valuation kline": "INVALID_KLINE",
+                "invalid BNB valuation trade count": "INVALID_TRADE_COUNT",
+                "BNB rate must be a decimal string": "INVALID_RATE",
+                "valuation requires a positive finite Decimal rate": "INVALID_RATE",
+            }
+            result["bnb_fee_valuation_failure"] = safe_reasons.get(str(error), "UNCLASSIFIED_REDACTED")
     checks["base_fee_residual_policy"] = True  # Live root는 승인된 durable 잔여 회계를 조립한다.
     rest.fetch_reference_price(symbol="ETHUSDT")
     checks["reference_price"] = True

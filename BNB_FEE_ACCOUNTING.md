@@ -52,6 +52,20 @@ CSV v2의 첫 21개 열 순서는 유지하고 마지막 두 열을 추가한다
 
 ## 검증
 
+### 2026-09-09 Session 8 동일 구간 읽기 지연 처리
+
+실제 사전검사에서 직전 1초봉의 체결 수가 처음에는 0, 이후 동일 구간 조회에서는 6으로
+반환됐다. 기존 V1 평가 시각·원가 정책은 유지하며 adapter에서 **동일 UTC 구간**의 정상 빈 응답과
+체결 수 0인 응답만 최대 4회 GET으로 확인한다. 재조회 대기는 정수 `1, 1, 2`초(합계 4초)다.
+이 합계는 의도적인 대기 시간이며 전체 네트워크 시간의 상한은 아니다. 각 GET은 기존 transport
+timeout을 사용한다. Timeout·HTTP 오류·malformed 가격/타입·다른 구간은 재조회하지 않는다.
+끝까지 빈/무체결이면 기존 차단을 유지하며 현재 ticker나 다른 과거 봉으로 대체하지 않는다.
+
+`scripts/run_live_read_only_from_keychain.py`는 알려진 BNB 오류만 고정 reason code로 보고한다.
+알 수 없는 예외는 `UNCLASSIFIED_REDACTED`이며 원 예외·서명 URL을 출력하지 않는다.
+새 테스트는 지연 회복, 동일 구간 유지, 지속 실패의 횟수 상한, 즉시 성공, malformed/네트워크
+실패의 즉시 전파와 secret canary 비노출을 검증한다. 실제 주문은 실행하지 않았다.
+
 - Backend 전체 1,074 실행, 1,064 PASS / 외부 safe skip 10, 38.278s.
 - UI 전체 488 PASS / 48 files, 7.66s. TypeScript typecheck PASS.
 - 도구 읽기/runtime 회귀 9 PASS.

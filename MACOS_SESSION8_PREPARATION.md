@@ -1,5 +1,28 @@
 # macOS Session 8 준비 상태
 
+> **2026-09-09 22:27 KST 최신 상태:** 사용자가 다른 봇·수동 거래 배제와 출금 권한 비활성
+> 유지를 확인했다. 해당 운영 확인은 완료다. 최신 signed 사전검사도 BNB/USDT 포함 12/12 PASS,
+> blockers=[], 주문 0이다. 아래 이전 NO_GO/사용자 확인 대기보다 이번 기록을 우선 적용한다.
+> 다음은 사용자 직접 실제 실행과 사후 회계·재시작 검증이며 actual pilot은 아직 미완료다.
+
+> **2026-09-09 22:24 KST 기술 작업 마감:** BNB 동일 구간 최대 4회 읽기와 실패 사유를 보완하고
+> Backend/UI/Rust/도구·새 package·native 읽기 재시작을 검증했다. 최신 package는
+> `UI/apps/desktop/src-tauri/target/session8-1e7df5f/release/bundle/`다. 이전 Session 7 package 대신
+> 이 수정본을 사용한다. 최종 signed 검사는 USDT PASS, BNB `NO_TRADES_AFTER_BOUNDED_READS`로
+> NO_GO다. 사용자 계좌 운영 확인은 진행할 수 있지만 실제 시작 전에는 최신 PASS가 필요하다.
+> 자세한 증거와 남은 조건은 `MACOS_SESSION8_VALIDATION.md`의 22:24 기록을 따른다.
+
+> **2026-09-09 22:13 KST 재확인:** Spot USDT free `40.45627619`, locked `0`.
+> Signed 사전검사 12개 모두 PASS, `blockers=[]`, 주문 0이다. 아래 22:01 NO_GO는 과거
+> 관측이다. BNB 평가도 이번에는 PASS지만 지연/무체결 처리 코드 수정은 아직 수행하지 않았다.
+> 실제 pilot 완료를 의미하지 않는다. 최신 상세는 `MACOS_SESSION8_VALIDATION.md`를 따른다.
+
+> **최신 관측 우선 — 2026-09-09 22:01 KST:** signed 읽기는 성공했으나 MARKET 잔액·BNB
+> 평가 검사가 실패해 현재 pilot 사전조건은 NO_GO다. 주문 비활성 runtime은 독립 2회
+> 13/13 PASS. 아래 이전 PASS는 과거 관측이며 actual pilot은 미실행이다. 사용자 사전 승인은
+> 확인했으며 추가 승인 대기는 아니다. 최신 결과와 Windows 진입 보류 근거는
+> [MACOS_SESSION8_VALIDATION.md](MACOS_SESSION8_VALIDATION.md)를 따른다.
+
 기준일: 2026-09-09. 시작 기준 HEAD는 `baeabcd031c69b6e8448946c2d7511f0baf5cfab`이며,
 현재 Session 7·잔여 정책 구현은 아직 commit하지 않은 작업 트리다. 실제 주문 실행 기록은 아니다.
 

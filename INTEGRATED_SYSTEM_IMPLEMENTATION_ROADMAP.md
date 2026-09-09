@@ -5765,6 +5765,11 @@ Windows 11과 설치 패키지는 별도 후속 작업이다. Testnet 주문과 
 
 #### 16.20.10 Session 7 — live bootstrap과 양 OS live-readiness
 
+**2026-09-09 22:01 KST 최신 재판정:** 아래 00:41 기술적 GO 이후 실제 signed 검사에서
+MARKET 잔액·BNB 평가 두 항목이 실패해 현재 Session 8 사전조건은 **NO_GO**다.
+읽기 runtime은 독립 2회 READY/CLOSED PASS. 최신 증거와 Windows 진입 보류 근거는
+§16.20.11 및 [MACOS_SESSION8_VALIDATION.md](MACOS_SESSION8_VALIDATION.md)를 우선 적용한다.
+
 **최신 macOS Session 8 진입 재판정 (2026-09-09T00:41:50+09:00): 기술적 GO.**
 실제 signed preflight `blockers=[]`, BNB 평가·잔액 PASS, 실제 runtime READY/CLOSED 13 checks PASS,
 Position/잔여/pending/unknown/history/open order/list 0, reconciliation clear다. 패키지 manifest의
@@ -5915,6 +5920,81 @@ REALIZED_ONLY, CANCEL_AND_LIQUIDATE를 사용하라. 어떤 live credential read
 ```
 
 #### 16.20.11 Session 8 — macOS 후 Windows 순차 저액 live pilot
+
+**2026-09-09 22:27 KST 운영 조건 확인 및 최신 사전검사:** `[x]` 사용자가 macOS pilot 동안
+해당 계좌의 다른 봇·수동 거래 중지와 API 출금 권한 비활성 유지를 확인했다고 명시했다.
+이 항목은 사용자 확인 완료이며 API로 출금 권한을 검증했다는 뜻은 아니다. 재확인을 요청하지 않는다.
+기존 읽기 전용 preflight를 다시 실행해 BNB·USDT 포함 **12/12 PASS, blockers=[]**를 확인했다.
+이는 아래 22:24 NO_GO 이후 최신 관측이다. 주문 mutation 0, profile 변경 없음.
+기술 검증과 macOS 운영 확인은 완료했고 다음은 사용자 직접 실제 실행 및 그 결과의 회계/restart
+검증이다. Session 8 actual 완료와 Windows Session 7 순차 진입은 아직 미완료로 유지한다.
+
+**2026-09-09 22:24 KST 계좌 운영 확인 전 기술 작업 마감:** `[x]` BNB 동일 구간 제한 GET
+재조회·고정 실패 사유 보고·회귀·새 macOS package·native 읽기 재시작 검증 완료.
+`[ ]` actual pilot·체결 후 회계/restart 미완료. **최종 signed 사전조건은 BNB
+`NO_TRADES_AFTER_BOUNDED_READS` 한 항목으로 NO_GO**이며 아래 22:13 PASS보다 이 관측을 우선한다.
+USDT 잔액 조건은 PASS다. 작업 중 signed 12/12 PASS도 관측했지만 무체결 V1 정책의 항시
+PASS를 보장하지 않는다. 다른 시점 가격으로 정책을 완화하지 않았다.
+
+§1·coding convention·기존 Communication Operation에 따라 adapter/검증 도구에만 책임을
+추가했고 업무 클래스·order/position 10 USDT·daily loss None·profile을 유지했다.
+Backend 1,089 실행(1,079 PASS/10 skip), UI 488, Rust 47, 도구 48, Communication 126/126 PASS.
+최종 package target은 `session8-1e7df5f`, app tree SHA-256
+`b1cb06f518bb23dc1476637c6e7f04c56d00d1c9e40148a4dfb58a26f762eafc`, DMG SHA-256
+`eadee96991444673c515692846c16444910304152c949a46f7660411349ddff4`다. Ad-hoc strict signature,
+DMG checksum·read-only mount parity, secret scan 2 canary/1,149 files PASS.
+새 native 앱 실계좌·주문 비활성·40.46 USDT·LIVE·History 0·종료·fresh restart·종료 취소/확정,
+독립 runtime 2회 13/13 PASS와 최종 RELEASED/process 0을 확인했다. 실제 주문 mutation 0.
+시작 HEAD `1e7df5fd0e76c015cb2f9921289885567a39c819` 위 작업 트리이며 별도 commit은 없다.
+실행 명령·주요 파일·최초 실패 및 최종 검증은
+[MACOS_SESSION8_VALIDATION.md](MACOS_SESSION8_VALIDATION.md)의 22:24 기록을 따른다.
+
+사용자 계좌 운영 상태 확인 단계로는 넘어갈 수 있다. 실제 주문 시작은 최신 사전조건 PASS와
+운영 확인 후 사용자 직접 실행 단계다. **Windows Session 7 진입은 계속 보류**한다.
+macOS actual terminal lifecycle·수수료/잔여 회계·fresh restart 계좌 대조가 아직 없기 때문이다.
+
+**2026-09-09 22:13 KST 최신 signed 사전조건 PASS:** 사용자 재확인 요청 후 Spot USDT free
+`40.45627619`, locked `0`을 조회했다. 기존 사전검사 12개 모두 true, `blockers=[]`,
+BNB 평가·MARKET 잔액 포함 PASS, 주문 mutation 0이다. 아래 이전 잔액 부족은 현재 blocker가
+아니다. BNB 조회 지연/무체결 처리 코드를 수정한 것은 아니므로 이번 PASS를 구조적 해결로
+확대하지 않는다. actual lifecycle·회계/restart와 Windows 순차 진입 보류는 유지한다.
+상세는 [MACOS_SESSION8_VALIDATION.md](MACOS_SESSION8_VALIDATION.md)의 22:13 기록을 따른다.
+
+**2026-09-09 22:07 KST 원인 진단 후속:** signed 실측 Spot USDT free/locked 각각 0,
+MARKET 적용 최소 notional 5 USDT로 잔액 사전조건 미충족을 확인했다. BNB는 직전 1초봉의
+체결 수 검증에서 실패했고, 동일 실패 구간을 나중에 조회하자 체결 6건을 반환했다.
+즉시 한 번 조회하는 현재 방식은 응답 반영 지연 가능성과 지속적인 무체결을 구분하지 못한다.
+최근 60초 표본의 7개 봉은 조회 당시 체결 수 0이었다. 로컬/거래소 시각 차이는 -39ms였고
+두 기준에서 같은 실패 구간을 선택했다. 후속 preflight는 두 blocker가 유지돼 NO_GO,
+BNB/STOP/읽기 회귀 19/19 PASS, 주문 mutation 0이다. 진단만 수행했으며 production 정책이나
+profile은 변경하지 않았다. 동일 구간 제한 재조회와 실패 사유 구분은 후속 코드 보완 항목이며,
+영구 무체결 가격을 허용하는 평가 정책 변경과 구분한다. 상세 실측·명령·공식 근거는
+[MACOS_SESSION8_VALIDATION.md](MACOS_SESSION8_VALIDATION.md)의 22:07 기록을 따른다.
+
+**2026-09-09 22:01 KST macOS 실행 결과: `[ ] 부분 완료` — 읽기 재검증만 완료, actual pilot 미실행.**
+최신 signed 사전조건은 MARKET 잔액·BNB 평가 실패로 NO_GO다. 독립 읽기 runtime 2회
+13/13 PASS와 주문 mutation 0을 확인했다. 실제 lifecycle·체결 후 회계/restart는 미검증이다.
+상세 검증 결과와 Windows Session 7 진입 판정은 아래에 기록한다.
+
+**2026-09-09 22:01 KST Session 8 macOS 검증 상세:**
+시작 clean HEAD `1e7df5fd0e76c015cb2f9921289885567a39c819`에서 §1과 coding convention,
+Communication Case 1 startup/start/stop 및 Case 2 결과 반영 Operation을 확인했다.
+macOS signed 읽기는 PASS이나 `quote_balance_meets_market_minimum=false`,
+`bnb_fee_valuation=false`로 **최신 pilot 사전조건은 NO_GO**다. 이전 00:41 기술적 GO보다
+이번 관측을 우선한다. 주문 비활성 독립 runtime 2회는 각각 13/13 READY/CLOSED 검사를 통과했다.
+Position/잔여/pending/unknown/history/open order/list 0, reconciliation clear이며,
+도구 9/9·live 집중 12/12·Communication 126/126 PASS다. 실제 주문 mutation 0.
+사용자 사전 승인은 확인했으나 에이전트는 실제 자금 암호화폐 주문 제출·자동매매 활성화를
+수행할 수 없어 actual pilot은 사용자 직접 실행으로 남긴다. 추가 승인 대기로 표현하지 않는다.
+계좌 전용 운영 여부는 미확인이다. Production source·profile·lockfile은 변경하지 않았고
+새 package/UI 검증이나 별도 commit은 없다. 명령·실패·증거 범위는
+[MACOS_SESSION8_VALIDATION.md](MACOS_SESSION8_VALIDATION.md)에 기록했다.
+
+**Windows Session 7로 진행해도 되는가: 현재 순서에서 NO_GO(보류).** macOS actual terminal
+lifecycle과 체결 후 수수료·잔여 장부·fresh restart 계좌 대조가 아직 없고 최신 사전조건도
+실패했다. 주문 전 읽기 재시작 PASS는 이를 대체하지 않는다. 이 조건을 충족한 뒤 Windows의
+별도 계좌/live-readiness를 수행한다. 기존 Session 5 source 완료는 유지하며 Session 8·양 OS
+master·Windows live 완료로 확대하지 않는다.
 
 이 세션은 코드 구현 완료가 아니라 실제 운영 시작이며 Private Beta master와 분리한다.
 2026-09-09 사용자 지시에 따라 macOS에 필요한 Session 1~7 검증을 마친 뒤 macOS pilot을 먼저

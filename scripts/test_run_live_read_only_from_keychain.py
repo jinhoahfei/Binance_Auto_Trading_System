@@ -138,3 +138,30 @@ class LiveKeychainRunnerTests(unittest.TestCase):
             self.assertEqual(runner.main(), 1)
         self.assertNotIn("live-secret-canary", output.getvalue())
         self.assertEqual(json.loads(output.getvalue())["order_mutations"], 0)
+
+    def test_bnb_failure_reports_only_allowlisted_reason(self) -> None:
+        """
+        함수 이름: test_bnb_failure_reports_only_allowlisted_reason()
+        기능: BNB 실패 이유를 구분하되 credential이 포함된 미지의 예외는 고정 값으로 숨긴다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/09
+        """
+        gateway = Mock()
+        gateway.fetch_account_snapshot.return_value.balances = ()
+        gateway.fetch_symbol_trading_rules.return_value.symbol = "ETHUSDT"
+        gateway.fetch_symbol_trading_rules.return_value.notional_filters = ()
+        gateway.fetch_commission_discount_policy.return_value.can_charge_discount_asset = True
+        gateway.fetch_commission_discount_policy.return_value.discount_asset = "BNB"
+        configuration = LiveConfiguration("key", "secret", enabled=True, confirmation="LIVE")
+
+        # 알려진 무체결과 외부 예외를 각각 검사하고 둘 다 pilot을 차단하는지 확인한다.
+        for reason, expected in (("BNB valuation requires actual market trades", "NO_TRADES_AFTER_BOUNDED_READS"), ("secret-canary signed URL", "UNCLASSIFIED_REDACTED")):
+            rest = Mock()
+            rest.resolve_bnb_fee.side_effect = ValueError(reason)
+            with patch.object(runner, "BinanceLiveRESTClient", return_value=rest), patch.object(runner, "APIGateway", return_value=gateway):
+                report = runner.run_preflight(configuration)
+            self.assertEqual(report["bnb_fee_valuation_failure"], expected)
+            self.assertIn("bnb_fee_valuation", report["blockers"])
+            self.assertEqual(report["pilot_prerequisites"], "NO_GO")
+            self.assertNotIn("secret-canary", json.dumps(report))  # 원 예외는 JSON에 반영하지 않는다.

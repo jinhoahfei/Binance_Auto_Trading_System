@@ -144,7 +144,7 @@ class BnbFeeAccountingTests(unittest.TestCase):
         for payload in ([], [row, row], [row[:8] + [0] + row[9:]], [row[:4] + ["NaN"] + row[5:]], [[True] + row[1:]]):
             request.return_value = SimpleNamespace(payload=payload)
             with self.assertRaises((ValueError, TypeError)):
-                BnbFeeValuator(request).resolve(TEST_TIME)
+                BnbFeeValuator(request, wait=Mock()).resolve(TEST_TIME)
 
     def test_rest_mytrades_individual_time_and_dedup(self):
         """

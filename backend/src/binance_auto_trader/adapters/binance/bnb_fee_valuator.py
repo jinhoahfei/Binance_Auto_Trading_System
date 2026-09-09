@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal
+from time import sleep
 from binance_auto_trader.domain.trading.fee_valuation import BnbFeeValuation
 
 
@@ -13,17 +14,20 @@ class BnbFeeValuator:
     작성 날짜: 2026/09/09
     """
 
-    def __init__(self, request_json: Callable[..., object]) -> None:
+    def __init__(self, request_json: Callable[..., object], *, wait: Callable[[int], None] = sleep) -> None:
         """
         함수 이름: __init__()
         기능: fixed live REST의 GET 요청 함수를 결속한다.
-        인자: request_json -> 기존 bounded REST 요청 함수
+        인자: request_json -> 기존 bounded REST 요청 함수, wait -> 제한된 재조회 대기 함수
         반환값: 없음
         작성 날짜: 2026/09/09
         """
         if not callable(request_json):
             raise TypeError("request_json must be callable")
+        if not callable(wait):
+            raise TypeError("wait must be callable")
         self._request_json = request_json  # Credential·endpoint·retry 정책은 기존 adapter가 소유한다.
+        self._wait = wait  # Test는 실제 대기 없이 동일 재조회 계약을 검증한다.
 
     def resolve(self, executed_at: datetime) -> BnbFeeValuation:
         """
@@ -38,21 +42,40 @@ class BnbFeeValuator:
         elapsed = executed_at.astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
         open_time = (elapsed.days * 86400 + elapsed.seconds) * 1000 - 1000
 
-        # 현재 ticker나 미래 가격으로 fallback하지 않고 완료된 구간 하나만 조회한다.
-        response = self._request_json(method="GET", endpoint="/v3/klines", parameters={
+        # 재조회에서도 원 체결의 직전 구간을 고정해 미래 가격이나 다른 봉을 사용하지 않는다.
+        parameters = {
             "symbol": "BNBUSDT", "interval": "1s", "startTime": open_time,
             "endTime": open_time + 999, "limit": 1,
-        }, signed=False)
-        rows = response.payload
-        if not isinstance(rows, list) or len(rows) != 1:
-            raise ValueError("BNB valuation candle unavailable")
-        row = rows[0]
-        if not isinstance(row, list) or len(row) != 12:
-            raise ValueError("invalid BNB valuation kline")
-        if type(row[0]) is not int or type(row[6]) is not int or row[0] != open_time or row[6] != open_time + 999:
-            raise ValueError("BNB valuation window mismatch")
-        if type(row[8]) is not int or row[8] <= 0:
-            raise ValueError("BNB valuation requires actual market trades")
-        if not isinstance(row[4], str):
-            raise TypeError("BNB rate must be a decimal string")
-        return BnbFeeValuation(row[0], row[6], Decimal(row[4]))  # Domain도 환율과 시간 불변식을 검증한다.
+        }
+        retry_delays = (1, 1, 2)
+        for attempt in range(len(retry_delays) + 1):
+            # HTTP 오류·timeout은 전파한다. 정상 응답의 빈/무체결 구간만 최대 4회 GET으로 재확인한다.
+            response = self._request_json(
+                method="GET", endpoint="/v3/klines", parameters=dict(parameters), signed=False,
+            )
+            rows = response.payload
+            if not isinstance(rows, list) or len(rows) > 1:
+                raise ValueError("invalid BNB valuation kline")
+            if not rows:
+                failure_reason = "BNB valuation candle unavailable"
+            else:
+                row = rows[0]
+                if not isinstance(row, list) or len(row) != 12:
+                    raise ValueError("invalid BNB valuation kline")
+                if type(row[0]) is not int or type(row[6]) is not int or row[0] != open_time or row[6] != open_time + 999:
+                    raise ValueError("BNB valuation window mismatch")
+                if type(row[8]) is not int or row[8] < 0:
+                    raise ValueError("invalid BNB valuation trade count")
+                if not isinstance(row[4], str):
+                    raise TypeError("BNB rate must be a decimal string")
+
+                # 무체결이어도 malformed 가격을 대기로 숨기지 않고 domain 검증을 먼저 적용한다.
+                valuation = BnbFeeValuation(row[0], row[6], Decimal(row[4]))
+                if row[8] > 0:
+                    return valuation  # 원 구간의 체결 있는 양수 종가만 회계에 전달한다.
+                failure_reason = "BNB valuation requires actual market trades"
+
+            # 마지막 시도는 더 기다리지 않고 실패를 보존한다. 영구 무체결의 가격 fallback은 없다.
+            if attempt == len(retry_delays):
+                raise ValueError(failure_reason)
+            self._wait(retry_delays[attempt])
