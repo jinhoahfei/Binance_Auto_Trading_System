@@ -15,6 +15,7 @@ from binance_auto_trader.domain.market import Kline, MarketSnapshot
 from binance_auto_trader.domain.regime import RegimeEvaluationTrigger
 
 from .regime_controller import RegimeController
+from .runtime_diagnostics import RuntimeDiagnostics
 
 
 MARKET_INTERVALS = SUPPORTED_INTERVALS
@@ -159,6 +160,7 @@ class MarketDataController:
         trading_market_observer: TradingMarketObserver | None = None,
         market_stream_state_observer: MarketStreamStateObserver | None = None,
         market_stream_recovery_requester: Callable[[], object] | None = None,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -172,6 +174,7 @@ class MarketDataController:
             trading_market_observer -> 공개 시장 평가를 받을 TradingController 호환 객체
             market_stream_state_observer -> 장애와 복구 version을 받을 거래 gate observer
             market_stream_recovery_requester -> non-blocking full-resync 요청 callback
+            diagnostics -> 시장 입력·지표 계산 진단 경계 또는 None
         반환값: 없음
         작성 날짜: 2026/08/20
         """
@@ -253,6 +256,7 @@ class MarketDataController:
         self._initial_buffer: list[Kline] = []
         self._initialized = False
         self._market_available = False
+        self._diagnostics = diagnostics or RuntimeDiagnostics()  # 수치 계산·파일 기록의 책임은 서로 분리한다.
         self._live_subscription: Subscription | None = None
         self._stream_cursor_by_interval: dict[Interval, Kline] = {}
         self._pending_boundary_one_minute_close: Kline | None = None
@@ -570,9 +574,11 @@ class MarketDataController:
         if kline.symbol != self._market_snapshot.symbol:
             raise ValueError("Kline symbol must match the MarketSnapshot")
 
-        self._observe_validated_kline(
-            kline
-        )  # Production Gateway가 callback 오류를 같은 generation disconnect·full-resync로 승격한다.
+        try:
+            self._observe_validated_kline(kline)
+        except Exception as error:
+            self._diagnostics.record_exception("market_kline_processing", error, kline=kline, market_version=self._market_snapshot.version)
+            raise  # Production Gateway의 동일 generation disconnect·full-resync 계약은 유지한다.
 
     def _observe_validated_kline(self, kline: Kline) -> None:
         """
@@ -1445,6 +1451,10 @@ class MarketDataController:
         source_event_id = self._create_source_event_id(
             observed_kline if source_klines is None else source_klines
         )
+        self._diagnostics.record(
+            "market_input_observed", source_event_id=source_event_id, market_version=self._market_snapshot.version,
+            klines=(observed_kline,) if source_klines is None else source_klines,
+        )  # 입력 봉과 계산 시점을 연결해 지표 계산 전에 멈춘 경우도 원본을 확인한다.
         boundary_observer = getattr(
             market_observer,
             "observe_public_market_boundary",
@@ -1464,6 +1474,7 @@ class MarketDataController:
             observed_kline,
         )
         if market_evaluation is None:
+            self._diagnostics.record("market_evaluation_deferred", source_event_id=source_event_id, reason="BUILDER_RETURNED_NO_EVALUATION")
             return  # 30분 close 뒤 다음 OPEN을 기다리는 정상 cross-interval event는 게시하지 않는다.
 
         # 계산 완료 사실은 TradingController enqueue 전에 기록해 실제 Kline→평가 순서를 immutable하게 보존한다.

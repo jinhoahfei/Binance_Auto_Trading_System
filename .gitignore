@@ -23,6 +23,8 @@ env/
 
 # Logs
 *.log
+Log_History/*
+!Log_History/README.md
 
 # Database or local data
 *.db

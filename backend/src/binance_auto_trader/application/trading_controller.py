@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 import hashlib
+import sys
 from threading import RLock
 from time import sleep
 from uuid import uuid4
@@ -26,6 +27,8 @@ from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
+from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
+from binance_auto_trader.application.trading_diagnostics import describe_trading_evaluation, normalize_order_failure, normalize_stream_reason
 from binance_auto_trader.application.trading_indicator_snapshot import TradingIndicatorStore
 from binance_auto_trader.application.market_evaluation_builder import calculate_execution_pct_b
 from binance_auto_trader.application.trading_logic_snapshot import (
@@ -1022,6 +1025,7 @@ class TradingController:
         event_runtime_notifier: Callable[[], object] | None = None,
         clock: Callable[[], datetime] | None = None,
         application_lock: RLock | None = None,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -1046,6 +1050,7 @@ class TradingController:
             event_runtime_notifier -> queue 또는 due 작업이 생겼음을 알릴 non-blocking callback
             clock -> event와 scheduler가 공유할 UTC clock 또는 None
             application_lock -> transport publication과 공유할 application RLock 또는 None
+            diagnostics -> bootstrap이 연결한 진단 출력 경계 또는 기록 비활성의 None
         반환값: 없음
         작성 날짜: 2026/08/21
         """
@@ -1296,6 +1301,7 @@ class TradingController:
         self._startup_reconciliation_complete = False
         self._startup_reconciliation_blocked = False
         self._recovered_position_liquidation_session = False  # 일반 stop과 복구 청산의 멱등 namespace를 구분한다.
+        self._diagnostics = diagnostics or RuntimeDiagnostics()  # 파일 책임은 주입된 sink에만 둔다.
 
     @property
     def account(self) -> Account:
@@ -3382,6 +3388,7 @@ class TradingController:
                 ),
             )
             self._public_market_boundary_trace.append(candidate)
+            self._record_diagnostic("market_boundary", trace=candidate)  # Kline 수신·지표 계산·queue 처리 사이의 누락 위치를 구분한다.
 
             return candidate
 
@@ -3756,7 +3763,11 @@ class TradingController:
                 raise RuntimeError("running session requires an event processor")
 
             # direct stop과 event microstep이 같은 STM·Context를 동시에 commit하지 못하게 한다.
-            result = await processor.process_next()
+            try:
+                result = await processor.process_next()
+            except Exception as error:
+                self._diagnostics.record_exception("process_next_event", error, session_id=self._session_id)
+                raise  # 진단을 추가해도 원래 예외와 fail-close 경로는 그대로 유지한다.
             if result is not None:
                 active_stm = self._active_stm
                 if active_stm is not None:
@@ -3800,7 +3811,11 @@ class TradingController:
                 raise RuntimeError("running session requires an event processor")
 
             # drain 전체도 stop command와 하나의 serialized session operation으로 취급한다.
-            results = await processor.drain(max_microsteps=max_microsteps)
+            try:
+                results = await processor.drain(max_microsteps=max_microsteps)
+            except Exception as error:
+                self._diagnostics.record_exception("drain_events", error, session_id=self._session_id)
+                raise  # 실패한 입력은 앞선 evaluation_started와 action_requested로 추적한다.
             active_stm = self._active_stm
             if active_stm is not None:
                 self._synchronize_status_from_context(active_stm)
@@ -4115,6 +4130,9 @@ class TradingController:
         with self._session_lock:
             self._stream_reconciliation_required = True
             self._account_subscription = None
+            self._record_diagnostic("stream_unavailable", level="WARNING", stream="account", reason=normalize_stream_reason(reason))
+            if sys.exception() is not None:
+                self._diagnostics.record_exception("account_stream", sys.exception(), session_id=self._session_id)
             if self._is_active_locked():
                 self._enter_order_reconciliation(
                     None,
@@ -4150,6 +4168,9 @@ class TradingController:
             if self._status is TradingSessionStatus.RUNNING:
                 self._market_stream_interrupted_running_session = True
             self._market_stream_reconciliation_required = True
+            self._record_diagnostic("stream_unavailable", level="WARNING", stream="market", reason=normalize_stream_reason(reason))
+            if sys.exception() is not None:
+                self._diagnostics.record_exception("market_stream", sys.exception(), session_id=self._session_id)
 
             # 정상 startup의 initializing gate는 주문을 잠그지만 실패 origin이 아니므로 cause를 만들지 않는다.
             is_pre_session_initialization = (
@@ -4206,6 +4227,7 @@ class TradingController:
 
             # Market source 복구 사실만 기록하고 active session의 status·phase 중단 provenance는 보존한다.
             self._market_stream_reconciliation_required = False
+            self._record_diagnostic("stream_reconciled", stream="market", restored_market_version=market_version)
 
     def reconcile_startup_state(self) -> None:
         """
@@ -5868,6 +5890,12 @@ class TradingController:
             )
 
         evaluation_context = self._context.snapshot()  # action 이전의 비교 기준을 보존한다.
+        if self._diagnostics.enabled:
+            self._record_diagnostic(
+                "decision_started", decision_id=result.decision_id,
+                transition_ids=result.transition_ids,
+                evaluation=describe_trading_evaluation(result.state_before, evaluation_context),
+            )  # 직접 start/stop 처리도 첫 effect 이전의 원본 입력을 남긴다.
 
         # patch도 원래 위치에서 적용해 Context mutation과 외부 요청의 순서를 보존한다.
         returned_events: list[TradingEvent] = []
@@ -5909,6 +5937,17 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/09/05
         """
+        # 종료 cleanup 이후에도 입력·전이·최종 runtime을 남겨 마지막 청산까지 복원할 수 있게 한다.
+        if self._diagnostics.enabled:
+            self._record_diagnostic(
+                "strategy_evaluated", decision_id=result.decision_id,
+                consumed=result.consumed, transition_ids=result.transition_ids,
+                state_before=result.state_before, state_after=result.state_after,
+                evaluation=describe_trading_evaluation(result.state_before, context),
+                action_requests=result.action_requests,
+                runtime_after=self._context.runtime, position_after=self._context.snapshot().position,
+            )
+
         # 시작·종료 직접 호출과 queue 처리 모두 같은 저장 경계를 사용한다.
         if self._active_stm is not None:
             self._indicator_store.observe(
@@ -5929,6 +5968,7 @@ class TradingController:
         작성 날짜: 2026/08/21
         """
         self._action_trace.append(action)  # 부수 효과 전에 요청 순서를 먼저 고정한다.
+        self._record_diagnostic("action_requested", action_type=type(action).__name__, action=action)
         if isinstance(action, SubmitOrder):
             self._append_public_market_action_boundary(
                 action
@@ -5973,8 +6013,10 @@ class TradingController:
             self._market_stream_interrupted_running_session
             and isinstance(action, (SubmitOrder, ForceSellAll))
         ):
+            self._record_diagnostic("action_blocked", level="WARNING", reason="MARKET_STREAM_INTERRUPTED", action_type=type(action).__name__)
             return ()  # Operator/session 재조정 전에는 신규 제출만 막고 same-order 취소·조회는 허용한다.
         if not self._order_pipeline_enabled:
+            self._record_diagnostic("action_blocked", level="WARNING", reason="ORDER_PIPELINE_DISABLED", action_type=type(action).__name__)
             if (
                 self._recovered_position_liquidation_session
                 and isinstance(action, ForceSellAll)
@@ -6533,6 +6575,7 @@ class TradingController:
 
         # 메시지 6/6.1은 실제 Gateway 결과를 관찰한 뒤 성공·실패를 같은 식별자로 기록한다.
         gateway_version = self._context.version
+        self._record_diagnostic("order_submit_started", order=order, force_sell=force_sell)
         try:
             if force_sell:
                 result = self._api_gateway.sell_all_position(order)
@@ -6671,6 +6714,7 @@ class TradingController:
         )
         decision = evaluate_buy_risk(policy_state, budget)
         self._last_risk_decision = decision
+        self._record_diagnostic("risk_evaluated", order=order, decision=decision)
         return decision  # frozen decision은 UI publication과 fault trace가 같은 budget을 재사용한다.
 
     def _calculate_order_quantity(
@@ -6887,6 +6931,13 @@ class TradingController:
             raise TypeError("result must be an OrderResult")
         if type(initial) is not bool:
             raise TypeError("initial must be a bool")
+
+        # Raw 응답 대신 정규화된 체결·수수료와 허용된 API 실패 코드만 기록한다.
+        self._record_diagnostic(
+            "order_result_received", level="WARNING" if result.failure_reason else "INFO",
+            initial=initial, order=state.order, result=result,
+            failure=normalize_order_failure(result.failure_reason),
+        )
 
         # apply/reapply 전체를 예외 경계로 묶어 충돌 시 거래소 사실을 임의 보정하지 않는다.
         order = state.order
@@ -7236,6 +7287,8 @@ class TradingController:
                         state.allocated_cost_basis + allocated_cost_basis
                     )  # partial별 사전 원가 합도 ADR-004 Decimal128 정밀도를 유지한다.
             self._publish_position_to_context(position)
+            if not self._publish_case_b_exit_result(state):
+                return False  # 청산 의도가 일치해야 Case B의 완료 feedback을 발행한다.
             if not self._publish_case_c_exit_result(state):
                 # 종료 provenance 불일치에서는
                 # terminal STM feedback을 발행하지 않는다.
@@ -7276,6 +7329,48 @@ class TradingController:
             context_snapshot,
             position_owner=position_state.owner,
         )  # buy fill 전에는 호출되지 않으므로 owner도 실제 fill 이후에만 설정된다.
+
+    def _publish_case_b_exit_result(
+        self,
+        state: _OrderExecutionState,
+    ) -> bool:
+        """
+        함수 이름: _publish_case_b_exit_result()
+        기능: Case B 전량 매도의 실제 종료 사유를 게시해 청산 완료 상태 전이를 연결한다.
+        인자: state -> 방금 Position에 fill을 반영한 주문 실행 상태
+        반환값: 종료 사유를 게시했거나 대상이 아니면 True, 의도가 불일치하면 False
+        작성 날짜: 2026/09/09
+        """
+        # 전역 중지와 부분 청산은 각각 기존 중지 흐름과 잔여 포지션 관리를 계속한다.
+        order = state.order
+        if (
+            state.force_sell
+            or state.stop_after_reconciliation
+            or order.side is not OrderSide.SELL
+            or order.strategy is not StrategyType.CASE_B
+            or self._require_position().quantity > Decimal("0")
+        ):
+            return True
+
+        # 최초 청산 의도와 실제 체결 주문이 일치할 때만 PB-23F에서 사용할 결과를 고정한다.
+        runtime = self._context.runtime
+        exit_reason = runtime.pending_exit_reason
+        if (
+            exit_reason is None
+            or order.exit_reason is not exit_reason
+            or runtime.case_b_exit_reason not in (None, exit_reason)
+        ):
+            self._enter_order_reconciliation(
+                state,
+                OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                message_id="12",
+            )
+            return False
+
+        # 같은 체결의 재조회나 저장 재시도는 이미 확정한 종료 사유를 변경하지 않는다.
+        if runtime.case_b_exit_reason is None:
+            self._context.apply_runtime_patch(patch(case_b_exit_reason=exit_reason))
+        return True  # 내역 저장 후 발생하는 CASE_B_SELL_FILLED가 이 결과를 소비한다.
 
     def _publish_case_c_exit_result(
         self,
@@ -7430,6 +7525,11 @@ class TradingController:
                 due_at=due_at,
             )
         )  # 같은 client ID schedule은 최신 시간 제약 하나로 대체한다.
+        self._record_diagnostic(
+            "order_query_scheduled", client_order_id=state.order.client_order_id,
+            order_id=state.order.exchange_order_id, due_at=due_at,
+            delay_seconds=selected_delay, reconciliation_attempts=state.reconciliation_attempts,
+        )
         self._request_event_runtime_processing()  # 단일 worker가 due polling을 즉시 시작하게 한다.
 
     def _finalize_terminal_execution(
@@ -7468,7 +7568,7 @@ class TradingController:
             else None
         )
         try:
-            history_controller.record_order_execution(
+            committed_trade = history_controller.record_order_execution(
                 order,
                 summary,
                 allocated_cost_basis,
@@ -7519,6 +7619,9 @@ class TradingController:
                 message_id=None,
             )
             return ()
+
+        # 실제 durable Trade와 수수료 반영 성과를 남겨 하루 손익도 로그만으로 복원하게 한다.
+        self._record_diagnostic("trade_committed", trade=committed_trade, performance=history_controller.performance)
 
         # Trade JSONL fsync 후 sidecar에 HISTORY_COMMITTED를 남겨 crash-before-REMOVE를 명시적으로 식별한다.
         if not self._transition_pending_order_recovery(
@@ -7870,6 +7973,7 @@ class TradingController:
         order = state.order
         state.reconciliation_attempts += 1  # Retry-After가 있어도 실제 query 한 번은 예산을 소비한다.
         gateway_version = self._context.version
+        self._record_diagnostic("order_query_started", order=order, reconciliation_attempts=state.reconciliation_attempts)
         # transport 예외는 체결 0으로 간주하지 않고 UNKNOWN으로 정규화해 same-order 조회를 계속한다.
         try:
             result = self._api_gateway.query_order_result(order)
@@ -7970,13 +8074,18 @@ class TradingController:
         ):
             return ()  # UNKNOWN/cancel timeout 중에는 force-sell을 동시에 만들지 않는다.
 
+        self._record_diagnostic("order_cancel_started", order=state.order, reason=action.reason)
         try:
             cancel_result = self._api_gateway.cancel_order(state.order)
-        except Exception:
+        except Exception as error:
+            self._diagnostics.record_exception(
+                "order_cancel", error, session_id=self._session_id, client_order_id=state.order.client_order_id,
+            )  # 취소 결과 불명도 같은 ID를 후속 조회하는 기존 계약을 보존한다.
             self._schedule_order_query(state, None)
             return ()
 
         # cancel 응답의 상태·fill은 provisional로 두고 반드시 후속 same-order query로 확정한다.
+        self._record_diagnostic("order_cancel_received", result=cancel_result, failure=normalize_order_failure(cancel_result.failure_reason))
         self._schedule_order_query(state, cancel_result.retry_after)
         return ()
 
@@ -8181,7 +8290,7 @@ class TradingController:
 
             # Controller는 Gateway를 호출하지 않고 TradeHistoryController의 same-order save만 호출한다.
             try:
-                history_controller.retry_pending_persistence(order_id)
+                committed_trade = history_controller.retry_pending_persistence(order_id)
             except Exception:
                 for message_id in ("13.5", "13.5.1"):
                     self._append_order_trace(
@@ -8193,6 +8302,7 @@ class TradingController:
                         ),
                     )
                 raise
+            self._record_diagnostic("trade_committed", trade=committed_trade, performance=history_controller.performance, persistence_retry=True)
             if not self._transition_pending_order_recovery(
                 state,
                 PendingOrderRecoveryLifecycle.HISTORY_COMMITTED,
@@ -8374,6 +8484,11 @@ class TradingController:
                     )
             self._record_reconciliation_cause_locked(selected_cause_category)
             self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+            self._record_diagnostic(
+                "reconciliation_required", level="ERROR", failure_code=failure_code,
+                cause_category=selected_cause_category, message_id=message_id,
+                order=None if state is None else state.order,
+            )  # message ID가 없는 policy·budget 실패도 파일에는 원인을 남긴다.
 
             # 공개 status를 먼저 잠가 Context patch 실패도 신규 effect 허용 상태로 완화하지 않는다.
             version_before = self._context.version
@@ -8494,6 +8609,12 @@ class TradingController:
         self._active_trace_event_id = (
             None if event is None else event.event_id
         )  # event processor의 finally callback이 다음 microstep 전에 반드시 비운다.
+        if event is not None and self._diagnostics.enabled and self._active_stm is not None:
+            self._record_diagnostic(
+                "evaluation_started", event_type=event.event_type, occurred_at=event.occurred_at,
+                event_lower_event_id=event.lower_event_id, candle_id=event.candle_id, order_id=event.order_id,
+                evaluation=describe_trading_evaluation(self._active_stm.current_state, self._context.snapshot()),
+            )  # action 실행 전에 입력을 확정해 중도 예외에도 판단 지표가 남는다.
 
     def _append_order_trace(
         self,
@@ -8525,6 +8646,7 @@ class TradingController:
             context_version_before,
             failure_code=failure_code,
             command_event_id=command_event_id,
+            order_snapshot=order,
         )
 
     def _append_order_trace_values(
@@ -8537,6 +8659,7 @@ class TradingController:
         *,
         failure_code: OrderExecutionFailureCode | None = None,
         command_event_id: str | None = None,
+        order_snapshot: Order | None = None,
     ) -> None:
         """
         함수 이름: _append_order_trace_values()
@@ -8548,6 +8671,7 @@ class TradingController:
             context_version_before -> operation 직전 Context version
             failure_code -> 실패 trace typed code 또는 None
             command_event_id -> 직접 주어진 원 event ID 또는 None
+            order_snapshot -> 처리 직후 주문·체결 수치 또는 Order 생성 전의 None
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -8579,6 +8703,32 @@ class TradingController:
                 failure_code=failure_code,
             )
         )  # credential와 raw payload는 trace schema에 필드 자체가 없다.
+        self._record_diagnostic("order_step", level="ERROR" if failure_code else "INFO", trace=self._order_trace[-1], order=order_snapshot)
+        if failure_code is not None and sys.exception() is not None:
+            self._diagnostics.record_exception(
+                f"order_step:{message_id}", sys.exception(), session_id=self._session_id,
+                event_id=command_event_id or self._active_trace_event_id,
+                intent_id=intent_id, client_order_id=client_order_id, order_id=order_id,
+            )  # 포착된 원인은 타입·내부 위치만 보존하고 예외 메시지는 출력하지 않는다.
+
+    def _record_diagnostic(self, event: str, *, level: str = "INFO", **details: object) -> None:
+        """
+        함수 이름: _record_diagnostic()
+        기능: 세션·하단 터치·시장 version을 모든 거래 진단 사건에 연결한다.
+        인자: event -> 사건 이름, level -> 심각도, details -> 명시적으로 선택한 진단 값
+        반환값: 없음
+        작성 날짜: 2026/09/09
+        """
+        if not self._diagnostics.enabled:
+            return
+
+        # 호출자는 Controller lock 아래에서 입력·effect를 관찰하므로 같은 시점 식별자를 공유한다.
+        self._diagnostics.record(
+            event, level=level, session_id=self._session_id,
+            event_id=self._active_trace_event_id, lower_event_id=self._context.runtime.lower_event_id,
+            market_version=self._latest_market_evaluation_version, context_version=self._context.version,
+            session_status=self._status, selected_regime=self._selected_regime, **details,
+        )
 
     def _require_position(self) -> Position:
         """
@@ -8688,6 +8838,7 @@ class TradingController:
                 self._cleanup_failures.append(
                     error
                 )  # 실패를 숨기지 않되 이미 commit된 STM 종료는 반쪽 상태로 되돌리지 않는다.
+                self._diagnostics.record_exception("session_subscription_cleanup", error, session_id=self._session_id)
 
     def _synchronize_status_from_context(self, stm: TradingSTM) -> None:
         """
@@ -8699,6 +8850,7 @@ class TradingController:
         """
         root_state = stm.current_state.root_state
         runtime = self._context.runtime
+        status_before = self._status  # STM 전이와 공개 세션 상태 동기화의 시점을 구분해 기록한다.
 
         # 시장 중단 provenance를 포함한 어떤 blocker도 STM 문맥 변경만으로 RUNNING을 다시 열 수 없다.
         reconciliation_blocked = (
@@ -8729,6 +8881,10 @@ class TradingController:
                 self._status = TradingSessionStatus.STOPPING
         else:
             self._status = TradingSessionStatus.RUNNING
+
+        # 같은 상태의 반복 동기화는 줄이고 실제 공개 상태 변경은 완료 시점에 기록한다.
+        if self._status is not status_before:
+            self._record_diagnostic("session_state_changed", status_before=status_before, status_after=self._status, state=stm.current_state)
 
     def _create_session_result(
         self,
@@ -8856,6 +9012,7 @@ class TradingController:
             result,
         )  # operation별 namespace로 start와 stop ID를 분리한다.
         self._command_order.append(command_key)
+        self._record_diagnostic("session_command_completed", operation=operation, command_id=normalized_command_id, result=result)
 
         # adversarial unique command가 process lifetime memory를 무제한 늘리지 못하게 한다.
         while len(self._command_order) > _MAX_COMMAND_RECORDS:

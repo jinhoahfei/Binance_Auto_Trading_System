@@ -9,6 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 import os
+from pathlib import Path
 from threading import Event, Lock, RLock, Thread, current_thread
 from uuid import uuid4
 
@@ -37,6 +38,8 @@ from binance_auto_trader.application.market_evaluation_builder import (
 from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryRepositoryPort,
 )
+from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
+from binance_auto_trader.bootstrap.diagnostics import create_runtime_diagnostics
 from binance_auto_trader.domain.history import Performance, Trade, TradeHistory
 from binance_auto_trader.domain.market import MarketSnapshot
 from binance_auto_trader.domain.regime import RegimeSTM
@@ -409,6 +412,7 @@ class _AccountStreamRecoveryWorker:
         *,
         retry_waiter: Callable[[float], bool] | None = None,
         worker_name: str = "binance-account-stream-recovery",
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -417,6 +421,7 @@ class _AccountStreamRecoveryWorker:
             recovery_allowed -> READY와 startup reconciliation 완료 여부를 반환할 Guard
             retry_waiter -> 지연을 기다리고 종료 요청 여부를 반환할 optional 대기 함수
             worker_name -> account와 market 복구 owner를 구분할 thread 이름
+            diagnostics -> 실행별 복구 진단 경계 또는 None
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -445,6 +450,7 @@ class _AccountStreamRecoveryWorker:
             else retry_waiter
         )
         self._worker_name = worker_name
+        self._diagnostics = diagnostics or RuntimeDiagnostics()  # 복구 thread도 동일 실행 파일에 기록한다.
         self._active_thread: Thread | None = None
         self._rerun_requested = False
         self._deterministic_recovery_blocked = False
@@ -520,23 +526,27 @@ class _AccountStreamRecoveryWorker:
                 # READY와 startup reconciliation을 잃은 runtime에서는 외부 복구를 시작하지 않는다.
                 try:
                     recovery_allowed = self._recovery_allowed()
-                except Exception:
+                except Exception as error:
+                    self._diagnostics.record_exception("recovery_guard", error, worker=self._worker_name)
                     return  # Readiness Guard 자체 실패도 외부 I/O 허용으로 fallback하지 않는다.
                 if recovery_allowed is not True:
                     return
 
                 # 실제 Controller Operation은 worker/application lock을 보유하지 않은 채 호출한다.
+                self._diagnostics.record("stream_recovery_started", worker=self._worker_name, retry_index=retry_index)
                 try:
                     self._recovery_operation()
-                except AccountStreamRecoveryBlockedError:
+                except AccountStreamRecoveryBlockedError as error:
+                    self._diagnostics.record_exception("stream_recovery_blocked", error, worker=self._worker_name)
                     # 동일 runtime에서 개선될 수 없는 blocker는 latch와 후속 자동 시도를 영구 차단한다.
                     with self._state_lock:
                         self._deterministic_recovery_blocked = True
                         self._rerun_requested = False
                         self._active_thread = None
                     return
-                except Exception:
+                except Exception as error:
                     retry_delay = self._BACKOFF_SECONDS[retry_index]
+                    self._diagnostics.record_exception("stream_recovery_retry", error, worker=self._worker_name, retry_delay_seconds=str(retry_delay))
                     retry_index = min(
                         retry_index + 1,
                         len(self._BACKOFF_SECONDS) - 1,
@@ -544,6 +554,8 @@ class _AccountStreamRecoveryWorker:
                     if self._retry_waiter(retry_delay):
                         return  # Runtime close가 backoff를 즉시 깨우면 추가 요청을 보내지 않는다.
                     continue
+
+                self._diagnostics.record("stream_recovery_completed", worker=self._worker_name)
 
                 # 성공과 pending rerun 소비를 원자화해 완료 직전 disconnect를 유실하지 않는다.
                 with self._state_lock:
@@ -722,6 +734,7 @@ class _TradingEventRuntimeWorker:
         *,
         state_update_observer: Callable[[], object] | None = None,
         poll_interval_seconds: float = _POLL_INTERVAL_SECONDS,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -733,6 +746,7 @@ class _TradingEventRuntimeWorker:
             application_lock -> lifecycle, Controller와 publication이 공유하는 RLock
             state_update_observer -> 상태 변경을 transport에 게시할 optional observer
             poll_interval_seconds -> due 작업을 확인하는 양수 interruptible cadence
+            diagnostics -> 실행별 worker 진단 경계 또는 None
         반환값: 없음
         작성 날짜: 2026/08/24
         """
@@ -765,6 +779,7 @@ class _TradingEventRuntimeWorker:
         self._state_snapshot = state_snapshot
         self._application_lock = application_lock
         self._state_update_observer = state_update_observer
+        self._diagnostics = diagnostics or RuntimeDiagnostics()  # 상태 게시 실패도 거래 평가 파일에서 찾는다.
         self._poll_interval_seconds = float(poll_interval_seconds)
         self._state_lock = Lock()
         self._wake_event = Event()
@@ -902,6 +917,8 @@ class _TradingEventRuntimeWorker:
                             _TradingEventRuntimeFailureStage.STATE_SNAPSHOT_AFTER
                         )
                         state_after = self._state_snapshot()
+                        if self._diagnostics.heartbeat_due():
+                            self._diagnostics.record("runtime_heartbeat", session=state_after)
                         failure_stage = (
                             _TradingEventRuntimeFailureStage.STATE_COMPARISON
                         )
@@ -917,6 +934,7 @@ class _TradingEventRuntimeWorker:
                             )
                             self._state_update_observer()
                 except BaseException as error:
+                    self._diagnostics.record_exception("event_runtime_worker", error, failure_stage=failure_stage)
                     # Fail-close publication 전에 최초 stage와 정규화된 타입·내부 위치만 원자 봉인한다.
                     failure_snapshot = _TradingEventRuntimeFailureSnapshot(
                         stage=failure_stage,
@@ -996,6 +1014,7 @@ class ApplicationRuntime:
     )
     market_data_environment: str = "unavailable"
     order_execution_enabled: bool = False
+    diagnostics: RuntimeDiagnostics = field(default_factory=RuntimeDiagnostics, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """
@@ -1158,6 +1177,12 @@ class ApplicationRuntime:
             startup_trace=startup_trace,
         )
         self._state_store.state = next_state  # RLock 아래에서 identity를 교체한다.
+        self.diagnostics.record(
+            "application_state_changed", level="ERROR" if failure else "INFO",
+            startup_command_id=self.startup_command_id,
+            state_before=current_state.status, state_after=next_state.status,
+            application_version=next_state.version, failure=failure,
+        )
 
         return next_state
 
@@ -1177,6 +1202,9 @@ class ApplicationRuntime:
             raise TypeError("trace_entry must be a StartupTraceEntry")
 
         current_state = self._state_store.state
+        self.diagnostics.record(
+            "startup_step", level="ERROR" if trace_entry.failure_code else "INFO", trace=trace_entry,
+        )  # 메모리 trace와 동일한 단계·version·원인 코드를 영구 진단 파일로 보낸다.
         return self._publish_state(
             status=current_state.status,
             failure=current_state.failure,
@@ -1233,6 +1261,7 @@ def create_application_runtime(
     monotonic_clock: Callable[[], int] | None = None,
     kline_limit: int = DEFAULT_KLINE_LIMIT,
     market_data_environment: str | None = None,
+    log_directory: Path | None = None,
 ) -> ApplicationRuntime:
     """
     함수 이름: create_application_runtime()
@@ -1259,6 +1288,7 @@ def create_application_runtime(
         monotonic_clock -> 5초·3분 연속 시장 조건이 공유할 optional nanosecond monotonic clock
         kline_limit -> 각 market interval에서 조회할 Kline 개수
         market_data_environment -> UI에 공개할 시세 환경 또는 실행 mode에서 유도할 None
+        log_directory -> 진단 파일 디렉터리 또는 LIVE·Testnet 기본 Log_History
     반환값: 동일 객체 identity와 단일 RLock을 보존하는 ApplicationRuntime
     작성 날짜: 2026/08/21
     """
@@ -1412,6 +1442,16 @@ def create_application_runtime(
         allow_testnet_orders or _testnet_order_capability is not None or _fake_order_capability is not None
     ):
         raise ValueError("other execution capabilities cannot authorize live")
+
+    # 거래 객체와 복구 journal을 만들기 전에 운영 파일을 열어 기록 경로를 검증한다.
+    diagnostics = create_runtime_diagnostics(selected_execution_mode.value, log_directory)
+    diagnostics.record(
+        "runtime_configured", order_execution_enabled=testnet_order_gate or fake_order_gate or live_order_gate,
+        market_data_environment=selected_market_environment,
+        maximum_order_notional=live_maximum_order_notional if live_order_gate else testnet_maximum_order_notional,
+        maximum_order_submissions_per_intent=maximum_order_submissions_per_intent,
+        risk_policy=risk_policy_state,
+    )
     market_snapshot = MarketSnapshot(clock=clock)
     account = Account()
     regime_stm = RegimeSTM()
@@ -1618,6 +1658,7 @@ def create_application_runtime(
         ),
         risk_policy_state=risk_policy_state,
         event_runtime_notifier=request_trading_event_processing,
+        diagnostics=diagnostics,
     )
 
     async def run_trading_event_runtime_cycle() -> object:
@@ -1669,6 +1710,7 @@ def create_application_runtime(
             trading_controller.snapshot_session,
             application_lock,
             state_update_observer=publish_trading_session_update,
+            diagnostics=diagnostics,
         )
 
     def account_stream_recovery_allowed() -> bool:
@@ -1829,6 +1871,7 @@ def create_application_runtime(
         account_stream_recovery_worker = _AccountStreamRecoveryWorker(
             recover_account_stream,
             account_stream_recovery_allowed,
+            diagnostics=diagnostics,
         )
     regime_controller = RegimeController(
         regime_stm,
@@ -1850,6 +1893,7 @@ def create_application_runtime(
         trading_market_observer=trading_controller,
         market_stream_state_observer=trading_controller,
         market_stream_recovery_requester=request_market_stream_recovery,
+        diagnostics=diagnostics,
     )
     if selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE):
         # 실제 주문 effect가 가능한 Testnet에만 public market 자동 복구 owner를 추가한다.
@@ -1857,6 +1901,7 @@ def create_application_runtime(
             recover_market_stream,
             market_stream_recovery_allowed,
             worker_name="binance-market-stream-recovery",
+            diagnostics=diagnostics,
         )
 
     # Startup command와 runtime은 앞서 만든 not-ready state store identity를 공유한다.
@@ -1883,4 +1928,5 @@ def create_application_runtime(
         _market_stream_recovery_worker=market_stream_recovery_worker,
         _state_store=application_state_store,
         _shutdown_store=_ApplicationShutdownStore(),
+        diagnostics=diagnostics,
     )

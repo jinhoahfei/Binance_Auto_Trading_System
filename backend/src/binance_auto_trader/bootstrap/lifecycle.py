@@ -593,6 +593,9 @@ def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
             _start_account(runtime)
             _start_history_and_performance(runtime)
         except ApplicationStartupError as startup_error:
+            runtime.diagnostics.record_exception(
+                "application_startup", startup_error, startup_command_id=runtime.startup_command_id,
+            )  # typed startup code와 원인 chain의 내부 발생 위치를 함께 보존한다.
             cleanup_error = _close_account_subscription_safely(runtime)
             if cleanup_error is not None:
                 startup_error.add_note(
@@ -701,6 +704,8 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
 
     if cleanup_failures:
         # 기존 단일 예외 계약을 유지하고 후속 오류는 credential 없는 note로 집계한다.
+        for resource_name, cleanup_error in cleanup_failures:
+            runtime.diagnostics.record_exception("application_cleanup", cleanup_error, resource=resource_name)
         _, first_error = cleanup_failures[0]
         for resource_name, later_error in cleanup_failures[1:]:
             first_error.add_note(
