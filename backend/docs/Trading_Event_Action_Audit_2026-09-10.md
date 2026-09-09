@@ -1,5 +1,7 @@
 # Event–Action Table 구현 검증 — 2026-09-10
 
+이 문서는 수정 전 감사 결과를 보존한다. 이후 수정·재검증·설치 결과는 [불일치 수정 및 검증 결과](/Users/oscar/Desktop/Binance_Auto/Design/Validation/Trading_Logic_Event_Action_Fix_2026-09-10.md)를 참고한다.
+
 현재 상태를 **문서대로 정상 동작한다고 판정할 수 없다.** 실행 앱과 최신 소스의 차이, 내부 평가 중단을 숨기는 화면 표시, Trend Hold 청산 조건의 문서 불일치를 확인했다. 아래 결과는 발견한 문제를 구분한 것이며, 모든 거래 로직이 잘못됐다는 의미는 아니다.
 
 ## 검증 기준과 범위

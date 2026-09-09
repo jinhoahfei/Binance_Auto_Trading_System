@@ -152,6 +152,10 @@ class TradingIndicatorTests(unittest.TestCase):
                 owned = replace(context, runtime=replace(context.runtime, position_owner=strategy))
                 slots, _, _ = select_indicator_slots(state, owned)
                 self.assertEqual(slots[0].condition_id, first_id)
+                if phase is CaseBPositionState.CASE_B_TREND_HOLD:
+                    self.assertEqual([slot.condition_id for slot in slots if slot.strategy is strategy],
+                                     ["b_trend_exit_slope", "b_trend_exit_pct_b"])
+
                 self.assertTrue(all(slot.strategy in (strategy, None) for slot in slots))
         setup = replace(initial, case_c_signal_state=CaseCSignalState.C_SETUP)
         slots, _, _ = select_indicator_slots(setup, context)

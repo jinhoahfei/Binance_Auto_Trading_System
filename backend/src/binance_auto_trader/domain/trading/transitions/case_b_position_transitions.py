@@ -300,25 +300,8 @@ def _handle_trend_hold(
     runtime = context.runtime
     event_type = event.event_type
 
-    # Lower BB 공통 방어는 Trend Hold에서도 유지하고, 같은 청산 의도의 retry까지 연결한다.
-    defensive_events = (
-        TradingEventType.CASE_B_EMERGENCY_STOP,
-        TradingEventType.CASE_B_STOP,
-        TradingEventType.CASE_B_TIME_EXIT,
-    )
-    if event_type in defensive_events or (
-        event_type in (TradingEventType.CASE_B_SELL_FAILED, TradingEventType.CASE_B_SELL_RETRY)
-        and runtime.pending_exit_reason in (ExitReason.EMERGENCY_STOP, ExitReason.STOP, ExitReason.TIME)
-    ):
-        return _handle_holding(state, event, context)
-
-    # 비상손절·확정봉 손절·시간 제한을 먼저 확인한 뒤 5초 약화 조건을 평가한다.
+    # PB-15/16은 Trend Hold의 두 가지 5초 약화 조건만 평가한다.
     if event_type is TradingEventType.CASE_B_TREND_HOLD_CONDITION_CHECK:
-        for defensive_event in defensive_events:
-            if _is_holding_exit_guard_satisfied(defensive_event, context):
-                return create_transition_outcome(
-                    "PB-16", state, create_queue_event_action(defensive_event, context),
-                )
         if not _is_trend_hold_exit_guard_satisfied(context):
             return create_transition_outcome(
                 "PB-15",

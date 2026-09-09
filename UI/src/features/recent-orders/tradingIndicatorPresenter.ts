@@ -1,4 +1,4 @@
-import type { BackendTradingCondition, BackendTradingIndicatorSnapshot } from '../../shared/contracts';
+import type { BackendTradingCondition, BackendTradingIndicatorSnapshot, BackendTradingStatus } from '../../shared/contracts';
 import type { RealtimeIndicatorGroupViewModel } from './types';
 
 // 표시 문구만 UI가 소유하며 임계값과 조건 판정은 backend 결과를 그대로 사용한다.
@@ -61,6 +61,7 @@ function present_condition_criterion(row: BackendTradingCondition): string {
  * 인자: snapshot -> 현재 단계 지표, active_state -> ACTIVE STATE 문구
  *      is_online -> 최신 서버 연결 여부, is_trading -> 실행 중 여부
  *      received_at -> 마지막 지표를 최초 수신한 UI monotonic 시각
+ *      lifecycle_status -> backend 세션의 실제 평가 실행 상태
  * 반환값: 한 개의 전략 지표 그룹
  * 작성 날짜: 2026/09/05
  */
@@ -70,12 +71,17 @@ export function present_trading_indicators(
     is_online: boolean,
     is_trading: boolean,
     received_at: number | null = null,
+    lifecycle_status: BackendTradingStatus = is_trading ? 'running' : 'not_started',
 ): ReadonlyArray<RealtimeIndicatorGroupViewModel> {
     const rows = snapshot?.conditions ?? [];  // 재연결 알림의 로컬 상태보다 authoritative 지표 수명을 따른다.
     const strategies = new Set(rows.map((row) => row.strategy).filter((strategy) => strategy !== null));
     const prefix_cases = strategies.size > 1 || active_state.includes(' / ')
         || rows.some((row) => row.strategy !== null && active_state !== (row.strategy === 'CASE_B' ? 'Case_B' : 'Case_C'));
-    const notice = !is_trading && snapshot === null ? '실행 중인 전략이 없습니다.'
+    const evaluation_running = is_trading && lifecycle_status === 'running';
+    const notice = lifecycle_status === 'reconciliation_required'
+        ? '전략 평가가 중단되었습니다. 주문 상태 확인이 필요합니다.'
+        : lifecycle_status === 'stopping' ? '자동매매 종료를 처리하고 있습니다. 전략 지표 평가가 중단되었습니다.'
+        : !is_trading && snapshot === null ? '실행 중인 전략이 없습니다.'
         : !is_online ? '연결이 끊겨 최신 지표 확인을 기다리고 있습니다.'
             : snapshot === null ? '현재 전략의 지표 수신을 기다리고 있습니다.'
                 : snapshot.notice === null ? undefined : NOTICES[snapshot.notice];
@@ -86,7 +92,7 @@ export function present_trading_indicators(
         title: `${active_state} 실시간 지표`,
         notice,
         indicators: rows.map((row) => {
-            const available = is_online && row.satisfied !== null;
+            const available = is_online && evaluation_running && row.satisfied !== null;
             // 아직 시작하지 않은 회복 타이머와 구버전의 시간 정보 누락도 명시적으로 표시한다.
             const has_timer = row.timer != null || row.hold_seconds !== null || row.source === 'elapsed' || row.condition_id === 'c_flush';
             const prefix = prefix_cases && row.strategy !== null ? `${row.strategy === 'CASE_B' ? 'B' : 'C'} · ` : '';
@@ -97,7 +103,7 @@ export function present_trading_indicators(
                 tone: !available ? 'neutral' : row.satisfied ? 'positive' : 'negative',
                 value: available ? format_indicator_value(row.value, row.source) : '—',
                 ...(has_timer ? { timer: {
-                    snapshot: is_online ? row.timer ?? null : null,
+                    snapshot: is_online && evaluation_running ? row.timer ?? null : null,
                     server_time: snapshot?.server_time ?? null,
                     received_at,
                 } } : {}),

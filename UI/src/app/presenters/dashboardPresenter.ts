@@ -226,12 +226,13 @@ export function present_dashboard_props(
 ): DashboardPageProps {
     // 두 Boundary는 계좌 전략 snapshot의 같은 문구를 읽어 REGIME 선택과 실행 Case를 혼동하지 않는다.
     const active_strategy_state = view_model.account_summary.strategy.appliedState;
-    const strategy_status = view_model.connection.is_online
-        ? view_model.trading.is_trading
-            ? '정상 작동'
-            : '매매 중지'
-        : 'API 연결 대기';
-    const strategy_status_tone = view_model.connection.is_online && view_model.trading.is_trading
+    const lifecycle_status = view_model.trading.lifecycle_status;
+    const evaluation_running = view_model.trading.is_trading && lifecycle_status === 'running';
+    const strategy_status = !view_model.connection.is_online ? 'API 연결 대기'
+        : lifecycle_status === 'reconciliation_required' ? '주문 상태 확인 필요'
+            : lifecycle_status === 'stopping' ? '중지 처리 중'
+                : evaluation_running ? '정상 작동' : '매매 중지';
+    const strategy_status_tone = view_model.connection.is_online && evaluation_running
         ? 'positive' as const
         : 'negative' as const;
     const dynamic_indicator_groups = present_trading_indicators(
@@ -240,6 +241,7 @@ export function present_dashboard_props(
         view_model.connection.is_online,
         view_model.trading.is_trading,
         view_model.trader_panel.strategy_indicators_received_at,
+        lifecycle_status,
     );  // REGIME의 4시간봉 지표와 현재 전략 조건은 독립된 데이터 흐름을 사용한다.
     const realtime_chart_view_model = market_snapshot === undefined
         || market_snapshot.data_status === 'idle'

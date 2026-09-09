@@ -1659,6 +1659,7 @@ export function map_backend_snapshot(
             trade_history_summary: server_snapshot.trade_history_summary,
             scale_in_percentage: server_snapshot.scale_in_percentage,
             scale_out_percentage: server_snapshot.scale_out_percentage,
+            lifecycle_status: trading.status,
             is_trading: server_snapshot.is_trading,
             has_open_position: server_snapshot.has_open_position,
         residual_quantity: server_snapshot.residual_quantity ?? '0',

@@ -37,6 +37,7 @@ export interface TradingCommandContext {
     readonly last_risk_budget: BackendRiskBudgetSnapshot | null | undefined;
     readonly risk_block_reason: BackendRiskBlockReason | null | undefined;
     readonly process_ownership_ambiguous: boolean | undefined;
+    readonly lifecycle_status: BackendTradingStatus;
     readonly is_trading: boolean;
     readonly is_recovery_liquidation: boolean;
     readonly has_open_position: boolean;
@@ -77,6 +78,7 @@ export interface TradingCommandMachineOptions {
     readonly last_risk_budget?: BackendRiskBudgetSnapshot | null;
     readonly risk_block_reason?: BackendRiskBlockReason | null;
     readonly process_ownership_ambiguous?: boolean;
+    readonly lifecycle_status?: BackendTradingStatus;
     readonly is_trading?: boolean;
     readonly has_open_position?: boolean;
     readonly position_average_entry_price?: BackendDecimalString | null;
@@ -441,6 +443,11 @@ export function create_trading_command_machine(
                         ? event.process_ownership_ambiguous
                         : context.process_ownership_ambiguous;
                 },
+                lifecycle_status: ({ context, event }) => {
+                    return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                        || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED'
+                        ? event.lifecycle_status : context.lifecycle_status;
+                },
                 is_trading: ({ context, event }) => {
                     if (event.type !== 'TRADING_SNAPSHOT_SYNCHRONIZED'
                         && event.type !== 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') {
@@ -563,22 +570,27 @@ export function create_trading_command_machine(
                 notice: 'not_running',
             }),
             mark_trading_started: assign({
+                lifecycle_status: ({ context }) => context.lifecycle_status === 'reconciliation_required'
+                    || context.lifecycle_status === 'stopping' ? context.lifecycle_status : 'running',
                 is_trading: true,
                 is_recovery_liquidation: false,
                 error: null,
             }),
             mark_trading_stopped: assign({
+                lifecycle_status: ({ context }) => context.lifecycle_status === 'not_started' ? 'not_started' : 'terminated',
                 is_trading: false,
                 is_recovery_liquidation: false,
                 error: null,
             }),
             mark_stop_accepted: assign({
+                lifecycle_status: ({ context }) => context.lifecycle_status === 'reconciliation_required' ? 'reconciliation_required' : 'stopping',
                 is_trading: true,
                 is_recovery_liquidation: false,
                 notice: null,
                 error: null,
             }),
             mark_recovery_liquidation_pending: assign({
+                lifecycle_status: ({ context }) => context.lifecycle_status === 'reconciliation_required' ? 'reconciliation_required' : 'stopping',
                 is_trading: false,
                 is_recovery_liquidation: true,
                 notice: null,
@@ -621,6 +633,7 @@ export function create_trading_command_machine(
             last_risk_budget: options.last_risk_budget,
             risk_block_reason: options.risk_block_reason,
             process_ownership_ambiguous: options.process_ownership_ambiguous,
+            lifecycle_status: options.lifecycle_status ?? (options.is_trading ? 'running' : 'not_started'),
             is_trading: options.is_trading ?? false,
             is_recovery_liquidation: false,
             has_open_position: options.has_open_position ?? false,
@@ -734,9 +747,12 @@ export function create_trading_command_machine(
                     spec_ids: ['U3-04', 'U3-06', 'U3-09', 'U3-12'],
                 },
                 on: {
-                    API_CONNECTION_NOTICE_CONFIRMED: {
-                        target: 'stopped',
-                    },
+                    API_CONNECTION_NOTICE_CONFIRMED: [
+                        { guard: ({ context }) => context.lifecycle_status === 'running', target: 'running' },
+                        { guard: ({ context }) => context.lifecycle_status === 'reconciliation_required'
+                            || context.lifecycle_status === 'stopping', target: 'awaiting_stop_completion' },
+                        { target: 'stopped' },
+                    ],
                 },
             },
             trading_unavailable_notice: {
@@ -969,6 +985,8 @@ export function create_trading_command_machine(
                 },
             },
             disconnect_stopping: {
+                // 재연결 snapshot이 도착하기 전에는 알림을 닫아도 이전 RUNNING을 복원하지 않는다.
+                entry: 'mark_stop_accepted',
                 meta: {
                     spec_ids: ['U3-12'],
                     pending: true,

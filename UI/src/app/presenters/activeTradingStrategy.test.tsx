@@ -192,16 +192,62 @@ describe('현재 실행 TradingSTM 전략 표시', () => {
     it.each([
         ['running', 'TRADE_MANAGEMENT', [], '신호 대기'],
         ['stopping', 'STOPPING', [], '중지 처리 중'],
-        ['stopping', 'STOPPING', ['CASE_B'], 'Case_B'],
-        ['reconciliation_required', 'TRADE_MANAGEMENT', ['CASE_C'], 'Case_C'],
-    ] as const)('활성 로직이 있는 %s 상태는 현재 Case를 우선 표시한다', (status, root_state, active_strategies, label) => {
-        // 중지·주문 확인 중에도 실제 소유 Case가 있으면 해당 전략을 계속 표시해야 한다.
+        ['stopping', 'STOPPING', ['CASE_B'], '중지 처리 중'],
+        ['reconciliation_required', 'TRADE_MANAGEMENT', ['CASE_C'], '주문 상태 확인 필요'],
+    ] as const)('활성 로직이 남아 있어도 %s lifecycle을 정확하게 표시한다', (status, root_state, active_strategies, label) => {
+        // 중지·주문 확인 상태를 기존 Case 이름이 가리지 않아야 한다.
         const snapshot = validate_backend_snapshot(create_strategy_snapshot({
             regime_type: 'type0', root_state, active_strategies,
         }, status));
         expect(map_backend_snapshot(snapshot, '2026-09-05').server_snapshot.account_strategy.appliedState)
             .toBe(label);
     });
+
+    it.each(['reconciliation_required', 'stopping'] as const)(
+        '%s에서는 이전 지표를 숨기고 전체 재동기화와 이벤트 수신 후에도 정상 작동으로 표시하지 않는다',
+        (status) => {
+            const logic: NonNullable<BackendTradingSnapshot['active_logic']> = {
+                regime_type: 'type0', root_state: 'LOWER_TOUCH_WATCH', active_strategies: [],
+                indicators: { phase_key: 'LOWER_TOUCH_WATCH', notice: null, conditions: [{
+                    condition_id: 'lower_price', strategy: null, phase: 'LOWER_TOUCH_WATCH',
+                    value: '101', threshold: '100', comparison: '<=', satisfied: false,
+                    source: 'realtime', hold_seconds: null, evaluated_at: '2026-09-10T00:00:00Z',
+                    market_version: 1, context_version: 1,
+                }] },
+            };
+            const cold_mapping = map_backend_snapshot(validate_backend_snapshot(create_strategy_snapshot(logic, status)), '2026-09-10');
+            const cold = new UiApplicationFacade(new FakeUiCommandAdapter(), cold_mapping.facade_options);
+            cold.start();
+            try { expect(cold.get_view_model().trading.lifecycle_status).toBe(status); }
+            finally { cold.stop(); }
+            const initial = map_backend_snapshot(validate_backend_snapshot(create_strategy_snapshot(logic)), '2026-09-10');
+            const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), initial.facade_options);
+            facade.start();
+            try {
+                facade.dispatch({ type: 'BACKEND_SNAPSHOT_SYNCHRONIZED', snapshot: initial.server_snapshot });
+                expect(present_dashboard_props(facade.get_view_model(), facade).account.strategy.status).toBe('정상 작동');
+                const stopped = validate_backend_snapshot(create_strategy_snapshot(logic, status, 2));
+                const intents = map_backend_event_to_intents({
+                    ...create_backend_event_fixture(11, 'TRADING_SESSION_UPDATED', { trading: stopped.trading }),
+                    aggregate_version: 2,
+                });
+                for (const intent of intents) facade.dispatch(intent);
+                for (const resync of [false, true]) {
+                    if (resync) facade.dispatch({ type: 'BACKEND_SNAPSHOT_SYNCHRONIZED', snapshot: map_backend_snapshot(stopped, '2026-09-10').server_snapshot });
+                    const props = present_dashboard_props(facade.get_view_model(), facade);
+                    expect(props.account.strategy.status).toBe(status === 'stopping' ? '중지 처리 중' : '주문 상태 확인 필요');
+                    expect(props.chart.activeState).toBe(props.account.strategy.status);
+                    const group = props.trader.indicatorGroups![0]!;
+                    expect(group.notice).toContain('중단');
+                    expect(group.indicators[0]).toMatchObject({ value: '—', tone: 'neutral' });
+                }
+                // 복구 후 RUNNING snapshot을 받으면 현재 판정을 다시 표시한다.
+                facade.dispatch({ type: 'BACKEND_SNAPSHOT_SYNCHRONIZED', snapshot: initial.server_snapshot });
+                expect(present_dashboard_props(facade.get_view_model(), facade).trader.indicatorGroups![0]!.indicators[0])
+                    .toMatchObject({ value: '101', tone: 'negative' });
+            } finally { facade.stop(); }
+        },
+    );
 
     it.each([
         { regime_type: 'type5', root_state: 'TRADE_MANAGEMENT', active_strategies: ['CASE_B'] },

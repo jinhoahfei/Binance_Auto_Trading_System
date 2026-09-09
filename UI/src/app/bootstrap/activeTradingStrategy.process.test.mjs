@@ -177,7 +177,7 @@ async function expect_shared_strategy(application, step) {
         const chart_state = screen.getByLabelText('현재 실행 전략');
         const account_state = screen.getByRole('article', { name: '전략 상태' });
         expect(within(chart_state).getByText(step.expected_label), step.stage).toBeInTheDocument();
-        expect(within(account_state).getByText(step.expected_label), step.stage).toBeInTheDocument();
+        expect(within(account_state).getAllByText(step.expected_label).length, step.stage).toBeGreaterThan(0);
         expect(chart_state).toHaveAttribute('title', step.expected_label);
         expect(application.facade.get_view_model().chart.active_trading_logic_state).toBe(step.expected_label);
         // 실제 DTO의 각 행이 하나의 제목 아래에서 이전 단계 행 없이 표시되는지 확인한다.

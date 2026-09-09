@@ -151,6 +151,7 @@ export interface UiApplicationFacadeOptions {
     readonly account_strategy?: StrategySummaryViewModel;
     readonly account_asset?: AssetSummaryViewModel;
     readonly trade_history_summary?: TradeHistorySummaryViewModel;
+    readonly lifecycle_status?: BackendTradingStatus;
     readonly is_trading?: boolean;
     readonly has_open_position?: boolean;
     readonly position_average_entry_price?: BackendDecimalString | null;
@@ -410,6 +411,7 @@ export interface AppViewModel {
         readonly last_risk_budget: BackendRiskBudgetSnapshot | null | undefined;
         readonly risk_block_reason: BackendRiskBlockReason | null | undefined;
         readonly process_ownership_ambiguous: boolean | undefined;
+        readonly lifecycle_status: BackendTradingStatus;
         readonly is_trading: boolean;
         readonly is_pending: boolean;
         readonly is_recovery_liquidation: boolean;
@@ -553,6 +555,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
             risk_block_reason: snapshot.trading.context.risk_block_reason,
             process_ownership_ambiguous:
                 snapshot.trading.context.process_ownership_ambiguous,
+            lifecycle_status: snapshot.trading.context.lifecycle_status,
             is_trading: snapshot.trading.context.is_trading,
             is_pending: snapshot.trading.matches('starting')
                 || snapshot.trading.matches('stopping')
@@ -832,6 +835,7 @@ export class UiApplicationFacade {
                 ...(options.process_ownership_ambiguous === undefined
                     ? {}
                     : { process_ownership_ambiguous: options.process_ownership_ambiguous }),
+                ...(options.lifecycle_status === undefined ? {} : { lifecycle_status: options.lifecycle_status }),
                 ...(options.is_trading === undefined
                     ? {}
                     : { is_trading: options.is_trading }),

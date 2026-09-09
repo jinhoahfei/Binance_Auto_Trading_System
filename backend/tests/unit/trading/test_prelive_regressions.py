@@ -93,48 +93,43 @@ class PreliveTradingRegressionTests(unittest.TestCase):
                                     create_test_context(market=market, runtime=runtime))
                 self.assertEqual("G-03" in result.transition_ids, touched)
 
-    def test_trend_defenses_preserve_reason_and_retry_intent(self):
+    def test_trend_hold_uses_only_table_weakening_conditions(self):
         """
-        함수 이름: test_trend_defenses_preserve_reason_and_retry_intent()
-        기능: 세 공통 방어가 Trend Hold에서 주문·실패·동일 의도 재시도까지 연결되는지 검증한다.
+        함수 이름: test_trend_hold_uses_only_table_weakening_conditions()
+        기능: PB-15/16은 보유 상태 손절·시간 조건과 무관하게 두 약화 조건으로만 분기한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/09/09
+        작성 날짜: 2026/09/10
         """
-        cases = (
-            (TradingEventType.CASE_B_EMERGENCY_STOP, ExitReason.EMERGENCY_STOP,
-             dict(realtime_price=Decimal("98.9"))),
-            (TradingEventType.CASE_B_STOP, ExitReason.STOP,
-             dict(confirmed_30m_close=True, ema_slope_30m_close=Decimal("-0.09"))),
-            (TradingEventType.CASE_B_TIME_EXIT, ExitReason.TIME,
-             dict(holding_elapsed=timedelta(hours=6))),
-        )
-        for event_type, reason, changes in cases:
-            with self.subTest(reason=reason):
-                stm = create_holding_stm(CaseBPositionState.CASE_B_TREND_HOLD)
-                market = replace(MarketEvaluationSnapshot(
-                    realtime_price=Decimal("100"), realtime_pct_b=Decimal("0.7"),
-                    realtime_ema_slope=Decimal("0.09")), **changes)
-                context = create_test_context(market=market,
-                    position=PositionSnapshot(quantity=Decimal("1"), entry_price=Decimal("100")),
-                    runtime=TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B))
-                selected = stm.handle(create_test_event(TradingEventType.MARKET_DATA_UPDATED), context)
-                self.assertEqual([event_type], [a.event_type for a in selected.action_requests if isinstance(a, QueueEvent)])
-                ordered = stm.handle(create_test_event(event_type), context)
-                order = next(a for a in ordered.action_requests if isinstance(a, SubmitOrder))
-                mutations = {change.field.value: change.value for a in ordered.action_requests
-                             if isinstance(a, PatchRuntimeContext) for change in a.changes}
-                pending = replace(context, runtime=replace(context.runtime, **mutations))
-                self.assertIs(pending.runtime.pending_return_state, PositionReturnState.CASE_B_TREND_HOLD)
-                self.assertIs(order.exit_reason, reason)
-                self.assertFalse(stm.handle(create_test_event(TradingEventType.MARKET_DATA_UPDATED), pending).consumed)
-                failed = replace(create_test_event(TradingEventType.CASE_B_SELL_FAILED),
-                                 payload=SellAttemptPayload(OrderAttemptKind.INITIAL))
-                self.assertTrue(stm.handle(failed, pending).consumed)
-                retried = stm.handle(create_test_event(TradingEventType.CASE_B_SELL_RETRY), pending)
-                retry_order = next(a for a in retried.action_requests if isinstance(a, SubmitOrder))
-                self.assertEqual(order.idempotency_key, retry_order.idempotency_key)
-                self.assertIs(retry_order.exit_reason, reason)
+        for slope_held, pct_held in ((False, False), (True, False), (False, True), (True, True)):
+            for changes in (
+                dict(realtime_price=Decimal("99")),
+                dict(confirmed_30m_close=True, ema_slope_30m_close=Decimal("-0.09")),
+                dict(holding_elapsed=timedelta(hours=6)),
+            ):
+                with self.subTest(slope=slope_held, pct=pct_held, changes=changes):
+                    stm = create_holding_stm(CaseBPositionState.CASE_B_TREND_HOLD)
+                    market = replace(MarketEvaluationSnapshot(
+                        realtime_price=Decimal("100"),
+                        realtime_slope_at_most_004_for_5s=slope_held,
+                        pct_b_below_060_for_5s=pct_held,
+                    ), **changes)
+                    context = create_test_context(market=market,
+                        position=PositionSnapshot(quantity=Decimal("1"), entry_price=Decimal("100")),
+                        runtime=TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B))
+                    result = stm.handle(create_test_event(TradingEventType.MARKET_DATA_UPDATED), context)
+                    weak = slope_held or pct_held
+                    self.assertIn("PB-16" if weak else "PB-15", result.transition_ids)
+                    self.assertEqual(
+                        [TradingEventType.CASE_B_TREND_HOLD_SELL] if weak else [],
+                        [action.event_type for action in result.action_requests if isinstance(action, QueueEvent)],
+                    )
+                    # 이전 보유 상태에서 지연 도착한 청산 이벤트도 Trend Hold에서는 주문을 만들지 않는다.
+                    for event_type in (TradingEventType.CASE_B_EMERGENCY_STOP,
+                                       TradingEventType.CASE_B_STOP, TradingEventType.CASE_B_TIME_EXIT):
+                        stale = stm.handle(create_test_event(event_type), context)
+                        self.assertFalse(stale.consumed)
+                        self.assertFalse(any(isinstance(action, SubmitOrder) for action in stale.action_requests))
 
     def test_new_lower_close_is_evaluated_during_owner_or_recovery_lock(self):
         """

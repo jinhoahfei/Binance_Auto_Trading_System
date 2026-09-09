@@ -16,6 +16,13 @@ export function format_trading_logic_state(trading: BackendTradingSnapshot): str
         return '자동매매 종료';
     }
 
+    if (trading.status === 'reconciliation_required') {
+        return '주문 상태 확인 필요';
+    }
+    if (trading.status === 'stopping') {
+        return '중지 처리 중';
+    }
+
     // 서버가 실행 전략을 제공한 경우에만 Case 이름을 표시하고 병렬 신호 감시는 함께 표시한다.
     const active_logic = trading.active_logic;
     if (active_logic !== undefined && active_logic !== null) {
@@ -33,8 +40,5 @@ export function format_trading_logic_state(trading: BackendTradingSnapshot): str
     }
 
     // 구버전 서버의 누락된 전략을 REGIME이나 마지막 체결 전략으로 대체하지 않는다.
-    if (trading.status === 'reconciliation_required') {
-        return '주문 상태 확인 필요';
-    }
-    return trading.status === 'stopping' ? '중지 처리 중' : '전략 확인 대기';
+    return '전략 확인 대기';
 }
