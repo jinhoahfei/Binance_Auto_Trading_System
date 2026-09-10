@@ -1300,6 +1300,7 @@ def map_trading_snapshot(
             "mode": mode_text,
             "status": status_text,
             "active_logic": active_logic_payload,
+            "recovery": getattr(session_snapshot, "recovery", None),
             "version": getattr(session_snapshot, "version"),
             "command_enabled": getattr(session_snapshot, "command_enabled"),
             "scale_in": getattr(session_snapshot, "scale_in"),
@@ -1622,11 +1623,22 @@ export interface BackendTradingLogicSnapshot {{
     readonly indicators?: BackendTradingIndicatorSnapshot | null;
 }}
 
+export interface BackendRecoverySnapshot {{
+    readonly phase: 'idle' | 'market' | 'account_orders' | 'blocked' | 'resumed';
+    readonly started_at: string | null;
+    readonly attempts: number;
+    readonly block_reason: string | null;
+    readonly last_market_input_at: string | null;
+    readonly last_strategy_evaluation_at: string | null;
+    readonly prolonged: boolean;
+}}
+
 export interface BackendTradingSnapshot {{
     readonly mode: BackendExecutionMode;
     readonly status: BackendTradingStatus;
     /** 구버전 schema v3에서 생략될 수 있는 실제 실행 STM의 전략 상태다. */
     readonly active_logic?: BackendTradingLogicSnapshot | null;
+    readonly recovery?: BackendRecoverySnapshot | null;
     readonly version: number;
     readonly command_enabled: boolean;
     readonly scale_in: BackendDecimalString;

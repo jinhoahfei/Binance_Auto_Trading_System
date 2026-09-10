@@ -27,7 +27,7 @@ from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
-from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
+from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics, describe_exception
 from binance_auto_trader.application.trading_diagnostics import describe_trading_evaluation, normalize_order_failure, normalize_stream_reason
 from binance_auto_trader.application.trading_indicator_snapshot import TradingIndicatorStore
 from binance_auto_trader.application.market_evaluation_builder import calculate_execution_pct_b
@@ -774,6 +774,7 @@ class TradingSessionSnapshot:
     residual_quantity: Decimal = Decimal("0")
     residual_cost_basis: Decimal = Decimal("0")
     position_average_entry_price: Decimal | None = None  # 열린 Position의 표시용 평단가다.
+    recovery: dict[str, object] | None = None
     active_logic: TradingLogicSnapshot | None = None  # 실제 실행 STM의 전략만 공개한다.
 
 
@@ -1289,6 +1290,16 @@ class TradingController:
         self._market_stream_reconciliation_required = False
         self._market_stream_interrupted_running_session = False
         self._market_stop_requested: str | None = None
+        self._interrupted_trading_phase: TradingPhase | None = None
+        self._recovery_started_at: datetime | None = None
+        self._recovery_attempts = 0
+        self._recovery_phase = "idle"
+        self._recovery_block_reason: str | None = None
+        self._last_market_input_at: datetime | None = None
+        self._last_strategy_evaluation_at: datetime | None = None
+        self._liveness_started_at: datetime | None = None
+        self._reset_recovery_timers_on_next_market = False
+        self._market_resume_suppressed = False
         self._indicator_store = TradingIndicatorStore()  # 지표는 세션 처리 lock 아래에서만 변경한다.
         self._latest_market_evaluation_version = 0
         self._event_runtime_failed = False  # 이 process에서는 worker failure 뒤 command gate를 다시 열지 않는다.
@@ -2487,6 +2498,7 @@ class TradingController:
                 residual_cost_basis=self.residual_totals[1],
                 position_average_entry_price=position_average_entry_price,
                 active_logic=active_logic,
+                recovery=self.market_recovery_snapshot(),
                 command_enabled=self.command_enabled,
                 selected=self._selected_regime,
                 support_status=(
@@ -2859,6 +2871,11 @@ class TradingController:
                 self._status = previous_status
                 raise
 
+            self._market_resume_suppressed = False
+            self._liveness_started_at = None
+            self._recovery_phase = "idle"
+            self._recovery_started_at = None
+            self._recovery_block_reason = None
             # G-01 Action 반영이 끝난 뒤에만 RUNNING 결과와 멱등 receipt를 publish한다.
             self._status = TradingSessionStatus.RUNNING
             result = self._create_session_result(start_result)
@@ -3639,6 +3656,14 @@ class TradingController:
                 "market event versions must be processed in strictly increasing order"
             )
 
+        if self._reset_recovery_timers_on_next_market:
+            if self._context.runtime.timer_base_time is not None:
+                self._context.apply_runtime_patch(patch(
+                    timer_base_time=event.occurred_at,
+                    timer_base_pct_b=event.market_evaluation.realtime_pct_b,
+                ))
+            self._reset_recovery_timers_on_next_market = False
+
         # 앞선 microstep이 만든 signal·Position 시각을 반영한 뒤 이 event의 발생 시각까지 경과를 계산한다.
         enriched_market = self._enrich_market_evaluation_elapsed(
             event.market_evaluation,
@@ -3655,6 +3680,7 @@ class TradingController:
 
         # 모든 검증과 immutable event 생성이 끝난 뒤에만 Context와 processed version을 commit한다.
         self._context.update_market(enriched_market)
+        self._last_strategy_evaluation_at = self._clock()
         self._latest_market_evaluation_version = event.market_version
         return prepared_event
 
@@ -4200,8 +4226,18 @@ class TradingController:
         with self._session_lock:
             # 최초 RUNNING 중단만 기억해 STOPPING 또는 다른 reconciliation을 자동 재개하지 않는다.
             self._market_stream_monitoring_started = True
-            if self._status is TradingSessionStatus.RUNNING:
+            if (self._status is TradingSessionStatus.RUNNING
+                    and not self._market_stream_interrupted_running_session):
                 self._market_stream_interrupted_running_session = True
+                self._interrupted_trading_phase = self._context.runtime.trading_phase
+                self._recovery_started_at = self._clock()
+                self._recovery_attempts = 0
+            self._recovery_phase = "market"
+            self._recovery_block_reason = None
+            if reason == "market_stream_initializing":
+                self._recovery_attempts += 1
+            if self._event_queue is not None:
+                self._event_queue.discard_market_work()
             self._market_stream_reconciliation_required = True
             self._record_diagnostic("stream_unavailable", level="WARNING", stream="market", reason=normalize_stream_reason(reason))
             if sys.exception() is not None:
@@ -4269,6 +4305,178 @@ class TradingController:
                     expected_version=self._context.version,
                 )  # 사용자가 요청한 STOP만 재개하며 매매를 자동 재시작하지 않는다.
 
+
+    def note_market_input(self) -> None:
+        """
+        함수 이름: note_market_input()
+        기능: 전략 실행 여부와 별개로 마지막 시장 입력 시각을 기록한다.
+        인자: 없음
+        반환값: 처리 결과 또는 없음
+        작성 날짜: 2026/09/10
+        """
+        with self._session_lock:
+            self._last_market_input_at = self._clock()
+
+    def market_recovery_snapshot(self) -> dict[str, object]:
+        """
+        함수 이름: market_recovery_snapshot()
+        기능: 복구 상태를 일관된 공개 값으로 조회한다.
+        인자: 없음
+        반환값: 처리 결과 또는 없음
+        작성 날짜: 2026/09/10
+        """
+        with self._session_lock:
+            return {
+                "phase": self._recovery_phase,
+                "started_at": self._recovery_started_at,
+                "attempts": self._recovery_attempts,
+                "block_reason": self._recovery_block_reason,
+                "last_market_input_at": self._last_market_input_at,
+                "last_strategy_evaluation_at": self._last_strategy_evaluation_at,
+                "prolonged": self._recovery_started_at is not None
+                    and self._recovery_phase not in ("idle", "resumed")
+                    and (self._clock() - self._recovery_started_at).total_seconds() >= 60,
+            }
+
+    @property
+    def market_session_recovery_pending(self) -> bool:
+        """
+        함수 이름: market_session_recovery_pending()
+        기능: 복구 상태를 일관된 공개 값으로 조회한다.
+        인자: 없음
+        반환값: 처리 결과 또는 없음
+        작성 날짜: 2026/09/10
+        """
+        with self._session_lock:
+            return (self._market_stream_interrupted_running_session
+                    and self._recovery_phase != "blocked")
+
+    def check_market_liveness(self) -> bool:
+        """
+        함수 이름: check_market_liveness()
+        기능: 실행 중인 전략 평가가 60초 멈추면 한 번의 재동기화를 요청한다.
+        인자: 없음
+        반환값: 처리 결과 또는 없음
+        작성 날짜: 2026/09/10
+        """
+        with self._session_lock:
+            if not self._market_stream_recovery_enabled or self._status is not TradingSessionStatus.RUNNING:
+                self._liveness_started_at = None
+                return False
+            now = self._clock()
+            if self._liveness_started_at is None:
+                self._liveness_started_at = now
+            last = max(self._liveness_started_at, self._last_strategy_evaluation_at or self._liveness_started_at)
+            if (now - last).total_seconds() < 60:
+                return False
+            self._record_diagnostic("strategy_evaluation_stalled", level="WARNING", last_evaluated_at=last)
+            self.mark_market_stream_reconciliation_required("market_evaluation_stalled")
+            return True
+
+    def _block_market_auto_resume(self, reason: str, *, error: BaseException | None = None) -> None:
+        """
+        함수 이름: _block_market_auto_resume()
+        기능: 자동 재개 차단 상태와 당시의 독립 차단 요인을 즉시 기록한다.
+        인자: reason -> 재개를 차단한 안정적인 사유 코드, error -> 원인 위치를 기록할 예외
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        previous_phase = self._recovery_phase
+        self._recovery_phase = "blocked"
+        self._recovery_block_reason = reason
+        self._record_diagnostic(
+            "trading_session_resume_blocked", level="WARNING", reason=reason,
+            previous_recovery_phase=previous_phase, recovery_phase=self._recovery_phase,
+            recovery_started_at=self._recovery_started_at, recovery_attempts=self._recovery_attempts,
+            shutdown_requested=self._market_resume_suppressed,
+            stop_requested=self._market_stop_requested is not None,
+            manual_kill_required=self._requires_manual_kill_cleanup_locked(),
+            cleanup_in_progress=self._cleanup_in_progress,
+            process_lifetime_blocked=self._process_lifetime_reconciliation_required_locked(),
+            startup_blocked=self._startup_reconciliation_blocked,
+            reconciliation_cause_status=self._reconciliation_cause_status,
+            reconciliation_cause_category=self._reconciliation_cause_category,
+            unresolved_orders=self._stream_reconciliation_required,
+            interrupted_trading_phase=self._interrupted_trading_phase,
+            causes=describe_exception(error) if error is not None else (),
+        )
+
+    def suppress_market_auto_resume(self) -> None:
+        """
+        함수 이름: suppress_market_auto_resume()
+        기능: 유효한 종료 요청 뒤 해당 세션의 자동 거래 재개를 금지한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        with self._session_lock:
+            self._market_resume_suppressed = True
+            if self._market_stream_interrupted_running_session:
+                self._block_market_auto_resume("SHUTDOWN_REQUESTED")
+
+    def recover_interrupted_market_session(self) -> None:
+        """
+        함수 이름: recover_interrupted_market_session()
+        기능: 동일 주문 조회와 계좌·포지션 대조를 통과한 시장 중단 세션만 재개한다.
+        인자: 없음
+        반환값: 처리 결과 또는 없음
+        작성 날짜: 2026/09/10
+        """
+        with self._session_lock:
+            if not self._market_stream_interrupted_running_session:
+                return
+            if self._market_stream_reconciliation_required:
+                return
+            if (self._market_resume_suppressed or self._market_stop_requested is not None or self._requires_manual_kill_cleanup_locked()
+                    or self._cleanup_in_progress or self._process_lifetime_reconciliation_required_locked()
+                    or self._startup_reconciliation_blocked
+                    or self._reconciliation_cause_status is not ReconciliationCauseStatus.EXACT
+                    or self._reconciliation_cause_category is not ReconciliationCauseCategory.MARKET_STREAM_FAILED):
+                self._block_market_auto_resume("OTHER_BLOCKER_OR_STOP")
+                return
+            self._recovery_phase = "account_orders"
+            try:
+                self.reconnect_account_stream_after_reconciliation()
+            except AccountStreamRecoveryBlockedError as error:
+                self._block_market_auto_resume("ACCOUNT_ORDER_INVARIANT", error=error)
+                raise
+            if self._stream_reconciliation_required:
+                self._block_market_auto_resume("UNRESOLVED_ORDER")
+                return
+            position = self._require_position()
+            if position.quantity > Decimal("0"):
+                try:
+                    regime, owner = self._resolve_recovered_position_provenance(
+                        self._require_trade_history_controller().trade_history.trades,
+                        position.get_snapshot(),
+                    )
+                    if (self._active_stm is None or regime is not self._active_stm.regime_type
+                            or owner not in (self._context.runtime.position_owner,
+                                             self._context.runtime.pending_strategy)):
+                        raise ValueError("recovery position owner conflicts with strategy")
+                except Exception as error:
+                    self._block_market_auto_resume("POSITION_HISTORY_MISMATCH", error=error)
+                    raise AccountStreamRecoveryBlockedError("position history verification failed") from error
+            if self._market_stream_reconciliation_required or not self._market_stream_ready:
+                return
+            if (self._process_lifetime_reconciliation_required_locked()
+                    or self._requires_manual_kill_cleanup_locked() or self._market_stop_requested is not None):
+                self._block_market_auto_resume("OTHER_BLOCKER_OR_STOP")
+                return
+            if self._event_queue is not None:
+                self._event_queue.discard_market_work()
+            self._context.apply_runtime_patch(patch(trading_phase=self._interrupted_trading_phase or TradingPhase.IDLE))
+            self._market_stream_interrupted_running_session = False
+            self._interrupted_trading_phase = None
+            self._reconciliation_cause_status = ReconciliationCauseStatus.MISSING
+            self._reconciliation_cause_category = None
+            self._status = TradingSessionStatus.RUNNING
+            self._reset_recovery_timers_on_next_market = True
+            self._recovery_phase = "resumed"
+            self._recovery_block_reason = None
+            self._liveness_started_at = self._clock()
+            self._record_diagnostic("trading_session_resumed", restored_market_version=self._market_snapshot.version)
+            self._request_event_runtime_processing()
 
     def reconcile_startup_state(self) -> None:
         """
@@ -5478,6 +5686,7 @@ class TradingController:
                     self._status is TradingSessionStatus.RECONCILIATION_REQUIRED
                     and not unresolved_state_remains
                     and not self._market_stream_reconciliation_required
+                    and not self._market_stream_interrupted_running_session
                     and self._context.initialized
                 ):
                     try:

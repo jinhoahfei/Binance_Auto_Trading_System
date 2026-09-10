@@ -1,5 +1,7 @@
 """시장 snapshot 초기화와 동일 구독의 연속 Kline 반영을 조정한다."""
 
+from binance_auto_trader.domain.market.stream_ordering import classify_kline
+
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from threading import RLock
@@ -134,6 +136,16 @@ class MarketStreamStateObserver(Protocol):
         ...
 
 
+class _PendingCandleBoundary(Exception):
+    """
+    클래스 이름: _PendingCandleBoundary
+    기능: A bounded partial update is waiting for its matching close/open source.
+    인자: 선언된 입력으로 현재 처리 상태를 확인한다.
+    반환값: 처리 결과 또는 없음
+    작성 날짜: 2026/09/10
+    """
+
+
 class MarketDataStreamStateError(RuntimeError):
     """
     클래스 이름: MarketDataStreamStateError
@@ -245,6 +257,7 @@ class MarketDataController:
         self._regime_controller = regime_controller
         self._kline_limit = kline_limit
         self._market_evaluation_builder = market_evaluation_builder
+        self._deferred_live_klines: dict[tuple[Interval, datetime], Kline] = {}
         self._trading_market_observer = trading_market_observer
         self._market_stream_state_observer = market_stream_state_observer
         self._market_stream_recovery_requester = (
@@ -314,6 +327,7 @@ class MarketDataController:
             self._initialized = False
             self._market_available = False
             self._live_subscription = None
+            self._deferred_live_klines.clear()
             self._stream_cursor_by_interval = {}
             self._pending_boundary_one_minute_close = None
             self._pending_boundary_one_minute_open = None
@@ -358,13 +372,16 @@ class MarketDataController:
                     )
                     for interval in MARKET_INTERVALS
                 }
-                merged_klines = {
-                    interval: (
-                        *rest_klines[interval],
-                        *buffered_klines[interval],
-                    )
-                    for interval in MARKET_INTERVALS
-                }
+                merged_klines = {}
+                for interval in MARKET_INTERVALS:
+                    candidates = {item.open_time: item for item in rest_klines[interval]}
+                    for item in buffered_klines[interval]:
+                        previous = candidates.get(item.open_time)
+                        if previous is not None and previous.closed:
+                            continue
+                        candidates[item.open_time] = item
+                    merged_klines[interval] = tuple(sorted(candidates.values(), key=lambda item: item.open_time))[-self._kline_limit:]
+
 
                 # WebSocket 봉을 REST 봉 뒤에 배치해 같은 key에서 실시간 값을 우선한다.
                 self._market_snapshot.update(merged_klines)
@@ -574,8 +591,13 @@ class MarketDataController:
         if kline.symbol != self._market_snapshot.symbol:
             raise ValueError("Kline symbol must match the MarketSnapshot")
 
+        observer = getattr(self._trading_market_observer, "note_market_input", None)
+        if callable(observer):
+            observer()
         try:
             self._observe_validated_kline(kline)
+        except _PendingCandleBoundary:
+            return
         except Exception as error:
             self._diagnostics.record_exception("market_kline_processing", error, kline=kline, market_version=self._market_snapshot.version)
             raise  # Production Gateway의 동일 generation disconnect·full-resync 계약은 유지한다.
@@ -598,6 +620,12 @@ class MarketDataController:
                     "market data must be initialized before live observation"
                 )
 
+            latest_committed = self._market_snapshot.klines_by_interval[kline.interval][-1]
+            if kline.open_time < latest_committed.open_time:
+                return
+            if (kline.open_time == latest_committed.open_time and latest_committed.closed
+                    and not kline.closed):
+                return
             # interval별 wire cursor가 있으면 exact duplicate를 버리고 역행은 즉시 차단한다.
             previous_cursor = self._stream_cursor_by_interval.get(
                 kline.interval
@@ -615,7 +643,8 @@ class MarketDataController:
 
             # 동시에 닫히는 interval은 stale-open 중간 snapshot 없이 bounded canonical batch로 조정한다.
             if self._coordinate_atomic_boundary(kline):
-                self._stream_cursor_by_interval[kline.interval] = kline
+                if previous_cursor is None or kline.open_time >= previous_cursor.open_time:
+                    self._stream_cursor_by_interval[kline.interval] = kline
                 return
 
             # snapshot 기준 gap 검증을 통과한 event만 한 version update에 반영한다.
@@ -699,6 +728,10 @@ class MarketDataController:
                     "upper boundary exceeded its bounded next-open slot"
                 )
             return expected_open_time
+
+        latest = self._market_snapshot.klines_by_interval[kline.interval][-1]
+        if kline.open_time == latest.open_time + interval_duration:
+            return kline.open_time
 
         # 활성 경계가 이 upper interval을 요구하면 close보다 먼저 온 OPEN을 추측하지 않는다.
         pending_boundary_time = self._pending_boundary_time
@@ -798,9 +831,14 @@ class MarketDataController:
                 self._pending_boundary_one_day_close = kline
             return
         if pending_close is None:
-            raise MarketDataStreamStateError(
-                "upper boundary next-open requires its closed Kline first"
-            )
+            latest = self._market_snapshot.klines_by_interval[interval][-1]
+            if kline.open_time != latest.open_time + _INTERVAL_DURATION_BY_INTERVAL[interval]:
+                raise MarketDataStreamStateError("upper boundary requires the exact next open Kline")
+            if interval is Interval.FOUR_HOURS:
+                self._pending_boundary_four_hour_open = kline
+            else:
+                self._pending_boundary_one_day_open = kline
+            return
 
         # Upper OPEN은 close 직후 정확한 한 봉만 허용하며 여러 tick은 최신 값으로 교체한다.
         expected_open_time = (
@@ -828,6 +866,30 @@ class MarketDataController:
         작성 날짜: 2026/08/29
         """
         boundary_time = self._pending_boundary_time
+        if boundary_time is not None:
+            required_sources = {
+                "1m_close": self._pending_boundary_one_minute_close,
+                "30m_close": self._pending_boundary_thirty_minute_close,
+            }
+            if self._is_four_hour_boundary(boundary_time):
+                required_sources.update({
+                    "4h_close": self._pending_boundary_four_hour_close,
+                    "4h_open": self._pending_boundary_four_hour_open,
+                })
+            if self._is_one_day_boundary(boundary_time):
+                required_sources.update({
+                    "1d_close": self._pending_boundary_one_day_close,
+                    "1d_open": self._pending_boundary_one_day_open,
+                })
+            missing_sources = tuple(name for name, source in required_sources.items() if source is None)
+            if missing_sources:
+                self._diagnostics.record(
+                    "market_boundary_waiting", reason="MISSING_BOUNDARY_SOURCES",
+                    boundary_time=boundary_time, market_version=self._market_snapshot.version,
+                    missing_sources=missing_sources,
+                    received_sources={name: source for name, source in required_sources.items() if source is not None},
+                    pending_count=len(required_sources) - len(missing_sources),
+                )
         one_minute_close = self._pending_boundary_one_minute_close
         thirty_minute_close = self._pending_boundary_thirty_minute_close
         if (
@@ -971,6 +1033,15 @@ class MarketDataController:
         else:
             return False
         if pending_close is None:
+            latest = self._market_snapshot.klines_by_interval[kline.interval][-1]
+            boundary = latest.open_time + interval_duration
+            if (not kline.closed and not latest.closed and kline.open_time == boundary
+                    and boundary.minute in (0, 30)):
+                if kline.interval is Interval.ONE_MINUTE:
+                    self._pending_boundary_one_minute_open = kline
+                else:
+                    self._pending_boundary_thirty_minute_open = kline
+                return True
             return False
 
         # 더 늦은 E를 가진 동일 close는 final payload를 교체하되 open으로 되돌아가지는 못한다.
@@ -1298,25 +1369,10 @@ class MarketDataController:
                 "stream cursors require WebSocket event times"
             )
 
-        # 같은 E는 내용까지 같을 때만 멱등 duplicate이고 다른 payload면 source 충돌이다.
-        if current.event_time == previous.event_time:
-            if current == previous:
-                return True
-            raise MarketDataStreamStateError(
-                "duplicate Kline event key changed payload"
-            )
-
-        # event time과 open time 중 어느 하나라도 뒤로 가면 최신 snapshot을 보존한다.
-        if current.event_time < previous.event_time:
-            raise MarketDataStreamStateError(
-                "Kline event time moved backwards"
-            )
-        if current.open_time < previous.open_time:
-            raise MarketDataStreamStateError(
-                "Kline open time moved backwards"
-            )
-
-        return False
+        disposition = classify_kline(previous, current)
+        if disposition == "conflict":
+            raise MarketDataStreamStateError("conflicting Kline update requires resync")
+        return disposition in ("duplicate", "stale")
 
     def _validate_snapshot_sequence(self, kline: Kline) -> None:
         """
@@ -1396,6 +1452,16 @@ class MarketDataController:
         반환값: 없음
         작성 날짜: 2026/08/25
         """
+        for incoming in observed_klines:
+            key = (incoming.interval, incoming.open_time)
+            previous = self._deferred_live_klines.get(key)
+            if previous is not None and previous.closed and not incoming.closed:
+                continue
+            self._deferred_live_klines[key] = incoming
+        for interval in MARKET_INTERVALS:
+            if sum(key[0] is interval for key in self._deferred_live_klines) > 2:
+                raise MarketDataStreamStateError("pending boundary exceeded two candles per interval")
+        observed_klines = tuple(self._deferred_live_klines.values())
         # 기존 history를 복사한 뒤 같은 open time의 새 사실만 candidate mapping에서 교체한다.
         next_klines_by_interval = {
             interval: {
@@ -1423,10 +1489,33 @@ class MarketDataController:
                 next_klines_by_interval.items()
             )
         }
-        self._market_snapshot.update(
-            bounded_klines_by_interval,
-            source_klines=observed_klines,
-        )  # Version 원인 Kline을 snapshot에 결합해 stale callback의 재사용을 차단한다.
+        try:
+            self._market_snapshot.update(
+                bounded_klines_by_interval,
+                source_klines=observed_klines,
+            )
+        except ValueError as error:
+            if str(error) in {
+                "open Kline must contain the snapshot time",
+                "closed Kline must end by the snapshot time",
+                "Kline open time must not be in the future",
+                "the open four-hour Kline must contain the snapshot time",
+                "the latest four-hour Kline must be open",
+                "only the latest four-hour Kline may be open",
+            }:
+                self._diagnostics.record(
+                    "market_boundary_waiting", reason="SNAPSHOT_TIME_VALIDATION",
+                    # 위 여섯 고정 검증 문구만 허용하며 임의 예외 원문은 기록하지 않는다.
+                    validation_rule=str(error), pending_count=len(observed_klines),
+                    boundary_time=self._pending_boundary_time,
+                    market_version=self._market_snapshot.version,
+                    last_snapshot_at=self._market_snapshot.updated_at,
+                    pending_klines=observed_klines,
+                    candidate_latest_klines={interval.value: klines[-1] for interval, klines in bounded_klines_by_interval.items()},
+                )
+                raise _PendingCandleBoundary() from error
+            raise
+        self._deferred_live_klines.clear()
 
     def _publish_market_evaluation(
         self,

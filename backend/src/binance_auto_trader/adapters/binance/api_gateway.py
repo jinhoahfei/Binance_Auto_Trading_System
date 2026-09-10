@@ -1047,26 +1047,34 @@ class APIGateway:
         if not MINIMUM_KLINE_LIMIT <= limit <= MAXIMUM_KLINE_LIMIT:
             raise ValueError("limit must be between 1 and 1000")
 
-        _normalize_utc_datetime(self._clock(), "clock result")
+        sweep_started = _utc_to_milliseconds(_normalize_utc_datetime(self._clock(), "clock result"))
         raw_payloads: dict[
             Interval,
             list[object] | tuple[object, ...],
         ] = {}
 
-        for interval in SUPPORTED_INTERVALS:
-            payload = get_klines(
-                symbol=normalized_symbol,
-                interval=interval.value,
-                limit=limit,
-            )
-            if not isinstance(payload, (list, tuple)):
-                raise TypeError(
-                    f"Binance {interval.value} kline payload must be an array"
+        for attempt in range(3):
+            if attempt:
+                sweep_started = _utc_to_milliseconds(self._clock())
+            for interval in SUPPORTED_INTERVALS:
+                payload = get_klines(
+                    symbol=normalized_symbol, interval=interval.value, limit=limit,
                 )
+                if not isinstance(payload, (list, tuple)):
+                    raise TypeError(f"Binance {interval.value} kline payload must be an array")
+                raw_payloads[interval] = payload
+            current_time_milliseconds = _utc_to_milliseconds(self._clock())
+            # 경계를 가로지른 REST 조회는 서로 다른 기준 시각을 섞지 않고 다시 읽는다.
+            stale_intervals = [
+                interval for interval in SUPPORTED_INTERVALS
+                if sweep_started // _INTERVAL_MILLISECONDS_BY_INTERVAL[interval]
+                != current_time_milliseconds // _INTERVAL_MILLISECONDS_BY_INTERVAL[interval]
+            ]
+            if not stale_intervals:
+                break
+            if attempt == 2:
+                raise ValueError("REST candle sweep remained stale across a boundary")
 
-            raw_payloads[interval] = payload
-
-        current_time_milliseconds = _utc_to_milliseconds(self._clock())
         normalized_klines: dict[Interval, tuple[Kline, ...]] = {}
         for interval in SUPPORTED_INTERVALS:
             normalized_klines[interval] = tuple(

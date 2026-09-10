@@ -238,7 +238,7 @@ def _create_valid_arrival_orders(
 ) -> tuple[tuple[str, ...], ...]:
     """
     함수 이름: _create_valid_arrival_orders()
-    기능: interval 내부 close→open 순서를 지키는 모든 cross-stream source permutation을 만든다.
+    기능: close/open의 도착 순서가 바뀌는 모든 cross-stream source permutation을 만든다.
     인자: include_one_day -> 1D close/open role까지 순열에 포함할지 여부
     반환값: 가능한 모든 role arrival-order tuple
     작성 날짜: 2026/08/29
@@ -252,19 +252,11 @@ def _create_valid_arrival_orders(
     if include_one_day:
         roles = (*roles, "one_day_close", "one_day_open")
 
-    # 같은 WebSocket interval의 close가 next-open보다 먼저라는 유일한 partial order만 적용한다.
+    # 같은 interval에서 OPEN이 CLOSE보다 먼저 도착하는 경우까지 포함한다.
     valid_orders = []
     for arrival_order in permutations(roles):
-        if arrival_order.index("four_hour_close") > arrival_order.index(
-            "four_hour_open"
-        ):
-            continue
-        if include_one_day and arrival_order.index(
-            "one_day_close"
-        ) > arrival_order.index("one_day_open"):
-            continue
         valid_orders.append(arrival_order)
-    return tuple(valid_orders)  # 4H 12개, UTC 자정 180개 순열을 재현 가능하게 고정한다.
+    return tuple(valid_orders)  # 4H 24개, UTC 자정 720개 순열을 재현 가능하게 고정한다.
 
 
 def _emit_boundary_source(
@@ -309,7 +301,7 @@ class MarketAllIntervalBoundaryFlowTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_all_valid_arrival_permutations_commit_one_atomic_version()
-        기능: 4H 12개와 UTC 자정 180개 유효 arrival permutation이 같은 canonical 결과인지 검증한다.
+        기능: 4H 24개와 UTC 자정 720개 유효 arrival permutation이 같은 canonical 결과인지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/29
@@ -323,7 +315,7 @@ class MarketAllIntervalBoundaryFlowTests(unittest.TestCase):
             arrival_orders = _create_valid_arrival_orders(
                 include_one_day=include_one_day
             )
-            expected_order_count = 180 if include_one_day else 12
+            expected_order_count = 720 if include_one_day else 24
             self.assertEqual(len(arrival_orders), expected_order_count)
 
             # 모든 cross-stream 순열은 source tuple과 publication version을 동일하게 만든다.
@@ -551,8 +543,6 @@ class MarketAllIntervalBoundaryFlowTests(unittest.TestCase):
         """
         error_cases = (
             "mismatched_boundary",
-            "four_hour_open_before_close",
-            "one_day_open_before_close",
         )
         for error_case in error_cases:
             with self.subTest(error_case=error_case):

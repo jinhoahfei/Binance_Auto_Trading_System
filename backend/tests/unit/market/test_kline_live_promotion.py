@@ -333,11 +333,11 @@ class KlineLivePromotionTests(unittest.TestCase):
                 first_subscription,
             )
 
-    def test_fingerprint_history_is_bounded_and_evicted_stale_event_fails_closed(
+    def test_fingerprint_history_is_bounded_and_evicted_stale_event_is_ignored(
         self,
     ) -> None:
         """
-        함수 이름: test_fingerprint_history_is_bounded_and_evicted_stale_event_fails_closed()
+        함수 이름: test_fingerprint_history_is_bounded_and_evicted_stale_event_is_ignored()
         기능: 장시간 stream의 duplicate 기록 상한과 상한 밖 역행 event 차단을 검증한다.
         인자: 없음
         반환값: 없음
@@ -371,8 +371,8 @@ class KlineLivePromotionTests(unittest.TestCase):
                 client.emit(0, event)
 
             self.assertEqual(gateway.kline_replay_buffer_size, 2)
-            with self.assertRaisesRegex(ValueError, "moved backwards"):
-                client.emit(0, events[0])
+            client.emit(0, events[0])
+            self.assertTrue(gateway.kline_live_ready)
 
         # Eviction 후 오래된 duplicate는 재전달되지 않고 현재 generation을 fail closed한다.
         self.assertEqual(len(observed), 3)

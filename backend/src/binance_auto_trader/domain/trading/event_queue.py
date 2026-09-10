@@ -105,6 +105,8 @@ class SerialEventQueue:
         self._event_heap: list[_QueueEntry] = []
         self._next_sequence = 1
         self._seen_event_ids: set[str] = set()
+        self._highest_market_version = 0
+        self._last_claimed_market_event: TradingEvent | None = None
         self._max_pending_events = max_pending_events
         self._max_seen_event_ids = max_seen_event_ids
         self._lock = Lock()
@@ -128,6 +130,9 @@ class SerialEventQueue:
             sequence_number = self._next_sequence
             queued_event = event.with_queue_identity(sequence_number)
 
+            is_market = queued_event.market_evaluation is not None and queued_event.market_version is not None
+            if is_market and queued_event.market_version <= self._highest_market_version:
+                return None
             # 같은 event ID를 이미 한 번 수락했다면 재수신한 입력을 버린다.
             if queued_event.event_id in self._seen_event_ids:
                 return None
@@ -135,11 +140,14 @@ class SerialEventQueue:
             # 메모리를 늘리는 새 identity는 pending·session dedup 상한에서 fail closed한다.
             if len(self._event_heap) >= self._max_pending_events:
                 raise EventQueueCapacityError("Pending event capacity was reached")
-            if len(self._seen_event_ids) >= self._max_seen_event_ids:
+            if not is_market and len(self._seen_event_ids) >= self._max_seen_event_ids:
                 raise EventQueueCapacityError("Event identity capacity was reached")
 
             self._next_sequence += 1
-            self._seen_event_ids.add(queued_event.event_id)
+            if is_market:
+                self._highest_market_version = queued_event.market_version
+            else:
+                self._seen_event_ids.add(queued_event.event_id)
 
             # 내부 후속 event는 아직 대기 중인 모든 외부 event보다 먼저 처리한다.
             if internal:
@@ -167,7 +175,9 @@ class SerialEventQueue:
             if not self._event_heap:
                 return None
 
-            return heapq.heappop(self._event_heap).event
+            event = heapq.heappop(self._event_heap).event
+            self._last_claimed_market_event = event if event.market_evaluation is not None else None
+            return event
 
     def restore_claimed(self, event: TradingEvent) -> None:
         """
@@ -183,7 +193,8 @@ class SerialEventQueue:
 
         # dedup set은 유지하면서 원래 우선순위와 FIFO sequence를 heap에 되돌린다.
         with self._lock:
-            if event.event_id is None or event.event_id not in self._seen_event_ids:
+            if (event != self._last_claimed_market_event
+                    and (event.event_id is None or event.event_id not in self._seen_event_ids)):
                 raise ValueError("Only a previously accepted event can be restored")
             if any(
                 entry.event.event_id == event.event_id
@@ -198,6 +209,23 @@ class SerialEventQueue:
                     event=event,
                 ),
             )
+
+    def discard_market_work(self) -> int:
+        """
+        함수 이름: discard_market_work()
+        기능: Discard stale decisions/timers while retaining confirmed order outcomes and STOP.
+        인자: 선언된 입력으로 현재 처리 상태를 확인한다.
+        반환값: 처리 결과 또는 없음
+        작성 날짜: 2026/09/10
+        """
+        with self._lock:
+            kept = [entry for entry in self._event_heap
+                    if entry.event.event_type in _ORDER_FINISHED_EVENT_TYPES
+                    or entry.event.priority == EventPriority.USER_COMMAND]
+            removed = len(self._event_heap) - len(kept)
+            self._event_heap = kept
+            heapq.heapify(self._event_heap)
+            return removed
 
     def clear(self) -> int:
         """

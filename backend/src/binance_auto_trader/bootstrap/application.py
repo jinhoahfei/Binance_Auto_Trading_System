@@ -403,7 +403,7 @@ class _AccountStreamRecoveryWorker:
     작성 날짜: 2026/08/22
     """
 
-    _BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
+    _BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 
     def __init__(
         self,
@@ -514,7 +514,7 @@ class _AccountStreamRecoveryWorker:
     def _run(self) -> None:
         """
         함수 이름: _run()
-        기능: full reconciliation을 실행해 transient 실패만 최대 8초 간격으로 재시도한다.
+        기능: full reconciliation을 실행해 transient 실패만 최대 30초 간격으로 재시도한다.
         인자: 없음
         반환값: 성공, readiness 상실 또는 종료 요청 시 없음
         작성 날짜: 2026/08/22
@@ -917,13 +917,14 @@ class _TradingEventRuntimeWorker:
                             _TradingEventRuntimeFailureStage.STATE_SNAPSHOT_AFTER
                         )
                         state_after = self._state_snapshot()
-                        if self._diagnostics.heartbeat_due():
+                        heartbeat_due = self._diagnostics.heartbeat_due()
+                        if heartbeat_due:
                             self._diagnostics.record("runtime_heartbeat", session=state_after)
                         failure_stage = (
                             _TradingEventRuntimeFailureStage.STATE_COMPARISON
                         )
                         should_publish = (
-                            bool(cycle_results) or state_after != state_before
+                            heartbeat_due or bool(cycle_results) or state_after != state_before
                         )
                         if (
                             should_publish
@@ -1611,6 +1612,7 @@ def create_application_runtime(
         order_result_callback=apply_order_stream_result,
         reconciliation_required_callback=require_stream_reconciliation,
         bnb_fee_resolver=bnb_fee_resolver,
+        market_diagnostic_callback=diagnostics.record,
     )
 
     # Persistence 구현 또는 주입 port를 먼저 조립해 order outcome 전에 durable owner를 준비한다.
@@ -1669,6 +1671,8 @@ def create_application_runtime(
         반환값: 이번 cycle에서 처리한 STM result tuple
         작성 날짜: 2026/08/24
         """
+        if trading_controller.check_market_liveness():
+            request_market_stream_recovery()
         return await trading_controller.run_event_runtime_cycle()
 
     def trading_event_processing_allowed() -> bool:
@@ -1836,7 +1840,8 @@ def create_application_runtime(
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
-                and trading_controller.market_stream_reconciliation_required
+                and (trading_controller.market_stream_reconciliation_required
+                     or trading_controller.market_session_recovery_pending)
                 and not trading_controller.process_ownership_ambiguous
             )
 
@@ -1849,7 +1854,11 @@ def create_application_runtime(
         작성 날짜: 2026/08/25
         """
         # MarketDataController가 gate 재개까지 원자 검증하고 bootstrap은 성공 publication만 덧붙인다.
-        market_result = market_data_controller.reconcile_market_stream()
+        market_result = (market_data_controller.reconcile_market_stream()
+                         if trading_controller.market_stream_reconciliation_required
+                         else market_snapshot)
+        if application_state_store.state.status is ApplicationStatus.READY:
+            trading_controller.recover_interrupted_market_session()
         with application_lock:
             if (
                 application_state_store.state.status

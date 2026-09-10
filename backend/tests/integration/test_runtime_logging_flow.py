@@ -68,6 +68,143 @@ class RuntimeLoggingFlowTests(unittest.TestCase):
         self.assertTrue(all(record["dropped_records_before"] == 0 for record in records))
         return records
 
+    def test_conflicting_kline_logs_both_ohlcv_without_raw_payload(self) -> None:
+        """
+        함수 이름: test_conflicting_kline_logs_both_ohlcv_without_raw_payload()
+        기능: 합성 동일 시각 충돌의 실제 값과 시각을 파일에서 복원한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        from binance_auto_trader.adapters.binance import WebSocketGateway
+        from binance_auto_trader.domain.market import Interval
+        from tests.unit.market.test_kline_live_promotion import FakeWebSocketClient, _create_kline_event
+        with TemporaryDirectory() as directory:
+            writer, diagnostics = self._create_diagnostics(directory)
+            client = FakeWebSocketClient()
+            gateway = WebSocketGateway(client, market_diagnostic_callback=diagnostics.record)
+            subscription = gateway.start_all_kline_buffering("ETHUSDT", (Interval.ONE_MINUTE,))
+            try:
+                client.emit(0, _create_kline_event(close="100", event_offset_milliseconds=1000))
+                incoming = _create_kline_event(close="101", event_offset_milliseconds=1000)
+                incoming["api_key"] = "DO_NOT_LOG_RAW_CANARY"
+                with self.assertRaisesRegex(ValueError, "conflicting Kline"):
+                    client.emit(0, incoming)
+                records = self._read_records(writer, diagnostics)
+                event = next(record["details"] for record in records if record["event"] == "market_input_disposition")
+                self.assertEqual(event["reason"], "conflict")
+                self.assertEqual(event["previous_event_time"], event["received_event_time"])
+                for name, values in (("previous_kline", ("100", "101", "99", "100", "5")),
+                                     ("received_kline", ("101", "102", "100", "101", "5"))):
+                    self.assertEqual(tuple(event[name][field] for field in ("open", "high", "low", "close", "volume")), values)
+                self.assertNotIn("DO_NOT_LOG_RAW_CANARY", writer.path.read_text())
+            finally:
+                subscription.close()
+
+    def test_atomic_boundary_logs_exact_missing_sources(self) -> None:
+        """
+        함수 이름: test_atomic_boundary_logs_exact_missing_sources()
+        기능: 자정 경계의 대기 목록이 실제 수신 순서대로 줄어드는지 파일에서 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        from tests.integration.test_market_all_interval_boundary_flow import (
+            ONE_DAY_BOUNDARY, _create_all_interval_boundary_flow, _create_boundary_source_specs, _emit_boundary_source,
+        )
+        with TemporaryDirectory() as directory:
+            writer, diagnostics = self._create_diagnostics(directory)
+            controller, snapshot, _, _, client, _, _, _ = _create_all_interval_boundary_flow(ONE_DAY_BOUNDARY)
+            controller._diagnostics = diagnostics
+            specs = _create_boundary_source_specs(ONE_DAY_BOUNDARY, include_one_day=True)
+            version = snapshot.version
+            _emit_boundary_source(client, specs["one_minute_close"])
+            _emit_boundary_source(client, specs["thirty_minute_close"])
+            events = [record["details"] for record in self._read_records(writer, diagnostics)
+                      if record["event"] == "market_boundary_waiting"]
+            self.assertEqual(set(events[0]["missing_sources"]), {"30m_close", "4h_close", "4h_open", "1d_close", "1d_open"})
+            self.assertEqual(set(events[-1]["missing_sources"]), {"4h_close", "4h_open", "1d_close", "1d_open"})
+            self.assertEqual(events[-1]["boundary_time"], ONE_DAY_BOUNDARY.isoformat(timespec="microseconds"))
+            self.assertEqual(events[-1]["received_sources"]["1m_close"]["close"], "121")
+            self.assertEqual(snapshot.version, version)
+
+    def test_snapshot_boundary_wait_logs_validation_and_pending_candles(self) -> None:
+        """
+        함수 이름: test_snapshot_boundary_wait_logs_validation_and_pending_candles()
+        기능: 경계 시각 불일치의 검증 규칙과 게시 전 후보 봉을 파일에 보존한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        from binance_auto_trader.domain.market import Interval
+        from binance_auto_trader.application.market_data_controller import _PendingCandleBoundary
+        from tests.integration.test_market_all_interval_boundary_flow import FOUR_HOUR_BOUNDARY, _create_all_interval_boundary_flow
+        with TemporaryDirectory() as directory:
+            writer, diagnostics = self._create_diagnostics(directory)
+            controller, snapshot, _, _, _, _, _, _ = _create_all_interval_boundary_flow(FOUR_HOUR_BOUNDARY)
+            controller._diagnostics = diagnostics
+            incoming = replace(snapshot.klines_by_interval[Interval.ONE_DAY][-1], event_time=FOUR_HOUR_BOUNDARY + timedelta(seconds=1))
+            with self.assertRaises(_PendingCandleBoundary):
+                controller._merge_klines_into_snapshot((incoming,))
+            event = next(record["details"] for record in self._read_records(writer, diagnostics) if record["event"] == "market_boundary_waiting")
+            self.assertEqual(event["reason"], "SNAPSHOT_TIME_VALIDATION")
+            self.assertIn("snapshot time", event["validation_rule"])
+            self.assertEqual(event["pending_klines"][0]["event_time"], incoming.event_time.isoformat(timespec="microseconds"))
+            self.assertEqual(set(event["candidate_latest_klines"]), {"1m", "30m", "4h", "1d"})
+            self.assertEqual(event["market_version"], snapshot.version)
+
+    def test_resume_block_is_written_immediately_without_heartbeat(self) -> None:
+        """
+        함수 이름: test_resume_block_is_written_immediately_without_heartbeat()
+        기능: 종료·독립 차단·미확인 주문에 대한 재개 금지 순간을 파일에서 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        from unittest.mock import PropertyMock
+        from binance_auto_trader.adapters.binance import WebSocketGateway
+        from tests.integration.test_testnet_restart_reconciliation_flow import _create_recovery_controller, _FilledSubmissionTestnetRESTClient
+        from binance_auto_trader.application.trading_controller import AccountStreamRecoveryBlockedError
+        for reason in ("SHUTDOWN_REQUESTED", "OTHER_BLOCKER_OR_STOP", "UNRESOLVED_ORDER", "ACCOUNT_ORDER_INVARIANT"):
+            with self.subTest(reason=reason), TemporaryDirectory() as directory:
+                writer, diagnostics = self._create_diagnostics(directory)
+                client = _FilledSubmissionTestnetRESTClient()
+                controller, _, _ = _create_recovery_controller(Path(directory) / "history.jsonl", client, command_gate=True)
+                controller._diagnostics = diagnostics
+                try:
+                    controller.reconcile_startup_state()
+                    selected = controller.commit_regime_selection(RegimeType.TYPE_0, controller.fetch_selected_trading_logic(RegimeType.TYPE_0), command_id="select", expected_version=0)
+                    controller.start_trading(command_id="start", expected_version=selected.version)
+                    controller.mark_market_stream_reconciliation_required("kline_stream_invalid")
+                    with patch.object(WebSocketGateway, "kline_live_ready", new_callable=PropertyMock, return_value=True):
+                        controller.complete_market_stream_reconciliation(controller._market_snapshot.version)
+                        if reason == "SHUTDOWN_REQUESTED":
+                            controller.suppress_market_auto_resume()
+                        elif reason == "OTHER_BLOCKER_OR_STOP":
+                            controller.mark_event_runtime_failed()
+                            controller.recover_interrupted_market_session()
+                        elif reason == "ACCOUNT_ORDER_INVARIANT":
+                            with patch.object(controller, "reconnect_account_stream_after_reconciliation", side_effect=AccountStreamRecoveryBlockedError("DO_NOT_LOG_EXCEPTION_CANARY")):
+                                with self.assertRaises(AccountStreamRecoveryBlockedError):
+                                    controller.recover_interrupted_market_session()
+                        else:
+                            controller._stream_reconciliation_required = True
+                            with patch.object(controller, "reconnect_account_stream_after_reconciliation"):
+                                controller.recover_interrupted_market_session()
+                    events = [record["details"] for record in self._read_records(writer, diagnostics)
+                              if record["event"] == "trading_session_resume_blocked"]
+                    self.assertEqual(events[-1]["reason"], reason)
+                    self.assertEqual(events[-1]["recovery_phase"], "blocked")
+                    if reason == "ACCOUNT_ORDER_INVARIANT":
+                        self.assertEqual(events[-1]["causes"][0]["exception_type"], "AccountStreamRecoveryBlockedError")
+                        self.assertTrue(events[-1]["causes"][0]["frames"])
+                        self.assertNotIn("DO_NOT_LOG_EXCEPTION_CANARY", writer.path.read_text())
+                    else:
+                        self.assertTrue(events[-1][{"SHUTDOWN_REQUESTED": "shutdown_requested", "OTHER_BLOCKER_OR_STOP": "process_lifetime_blocked", "UNRESOLVED_ORDER": "unresolved_orders"}[reason]])
+                    self.assertEqual(client.submit_count, 0)
+                finally:
+                    controller.close_session_resources()
+
     def test_case_b_and_c_entry_trailing_exit_are_reconstructable(self) -> None:
         """
         함수 이름: test_case_b_and_c_entry_trailing_exit_are_reconstructable()

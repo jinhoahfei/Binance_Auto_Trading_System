@@ -660,6 +660,23 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
     }
 
     // 실행 로직은 선택 REGIME와 별개인 선택적 표시 계약이며 제공된 값의 enum과 중복을 검증한다.
+    if (trading.recovery !== undefined && trading.recovery !== null) {
+        const recovery = assert_record(trading.recovery, 'trading.recovery');
+        if (!['idle', 'market', 'account_orders', 'blocked', 'resumed'].includes(String(recovery.phase))
+            || !Number.isSafeInteger(recovery.attempts) || Number(recovery.attempts) < 0
+            || typeof recovery.prolonged !== 'boolean') {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'trading.recovery is invalid');
+        }
+        for (const field of ['started_at', 'last_market_input_at', 'last_strategy_evaluation_at']) {
+            const timestamp = recovery[field];
+            if (timestamp !== null && (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp)))) {
+                throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', `recovery.${field} is invalid`);
+            }
+        }
+        if (recovery.block_reason !== null && typeof recovery.block_reason !== 'string') {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'recovery.block_reason is invalid');
+        }
+    }
     if (trading.active_logic !== undefined && trading.active_logic !== null) {
         const active_logic = assert_record(trading.active_logic, 'trading.active_logic');
         const regime_type = assert_string(active_logic.regime_type, 'active_logic.regime_type');

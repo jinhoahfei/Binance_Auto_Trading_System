@@ -900,6 +900,7 @@ def request_application_shutdown(
             ):
                 raise RuntimeError("application is not ready for safe shutdown")
 
+            runtime.trading_controller.suppress_market_auto_resume()
             safety_receipt = _read_shutdown_safety_receipt(runtime)
             if not safety_receipt.accepted:
                 raise ShutdownBlockedError(safety_receipt)

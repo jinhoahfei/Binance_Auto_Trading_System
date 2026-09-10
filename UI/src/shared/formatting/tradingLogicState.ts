@@ -17,6 +17,13 @@ export function format_trading_logic_state(trading: BackendTradingSnapshot): str
     }
 
     if (trading.status === 'reconciliation_required') {
+        const recovery = trading.recovery;
+        if (recovery?.phase === 'blocked') {
+            return '사용자 조치 필요';
+        }
+        if (recovery?.phase === 'market' || recovery?.phase === 'account_orders') {
+            return recovery.prolonged ? '자동 복구 지연 · 60초 이상' : '자동 복구 중';
+        }
         return '주문 상태 확인 필요';
     }
     if (trading.status === 'stopping') {

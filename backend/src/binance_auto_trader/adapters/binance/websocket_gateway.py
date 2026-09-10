@@ -1,5 +1,7 @@
 """공식 Binance Spot Kline과 account WebSocket stream을 정규화한다."""
 
+from binance_auto_trader.domain.market.stream_ordering import classify_kline
+
 from collections import OrderedDict
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
@@ -875,6 +877,7 @@ class WebSocketGateway:
         reconciliation_required_callback: Callable[[str], object]
         | None = None,
         bnb_fee_resolver: object | None = None,
+        market_diagnostic_callback: Callable[..., object] | None = None,
     ) -> None:
         """
         함수 이름: __init__()
@@ -887,6 +890,7 @@ class WebSocketGateway:
         반환값: 없음
         작성 날짜: 2026/08/20
         """
+        self._market_diagnostic_callback = market_diagnostic_callback
         self._bnb_fee_resolver = bnb_fee_resolver  # Live root만 공식 평가 함수를 주입한다.
         provides_kline_operation = callable(
             getattr(
@@ -1597,6 +1601,27 @@ class WebSocketGateway:
             kline.interval.value,
         )  # 동일 E에서도 open time과 interval로 결정적 순서를 완성한다.
 
+    def _record_kline_disposition(self, reason: str, previous: Kline, received: Kline) -> None:
+        """
+        함수 이름: _record_kline_disposition()
+        기능: 폐기 시각과 충돌한 정규화 시세를 기록해 원본 입력 차이를 보존한다.
+        인자: reason -> 분류, previous -> 반영된 봉, received -> 수신 봉
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        if self._market_diagnostic_callback is None:
+            return
+        details: dict[str, object] = {}
+        if reason == "conflict":
+            # 정규화된 공개 시세만 기록하며 raw payload는 진단 경계로 전달하지 않는다.
+            details = {"previous_kline": previous, "received_kline": received}
+        self._market_diagnostic_callback(
+            "market_input_disposition", reason=reason, interval=received.interval.value,
+            previous_event_time=previous.event_time, received_event_time=received.event_time,
+            previous_open_time=previous.open_time, received_open_time=received.open_time,
+            previous_closed=previous.closed, received_closed=received.closed, **details,
+        )
+
     def _buffer_kline_message(
         self,
         payload: object,
@@ -1646,34 +1671,21 @@ class WebSocketGateway:
                             kline.open_time,
                             kline.event_time,
                         )
-                        existing_kline = self._kline_event_fingerprints.get(
-                            event_key
-                        )
-                        if existing_kline is not None:
-                            if existing_kline != kline:
-                                raise ValueError(
-                                    "duplicate Kline event key changed payload"
-                                )
-                            return  # 완전히 같은 wire event 재전달은 observer와 snapshot에 다시 반영하지 않는다.
-
-                        # Bounded fingerprint에서 제거된 오래된 event도 interval cursor 뒤로 역행하지 못한다.
-                        previous_kline = self._kline_cursor_by_interval.get(
-                            kline.interval
-                        )
+                        previous_kline = self._kline_cursor_by_interval.get(kline.interval)
                         if previous_kline is not None:
-                            if previous_kline.event_time is None:
-                                raise RuntimeError(
-                                    "Kline stream cursor lost its event time"
-                                )
-                            if kline == previous_kline:
-                                return  # 다른 interval traffic으로 fingerprint가 제거된 최신 duplicate도 멱등이다.
-                            if (
-                                kline.event_time <= previous_kline.event_time
-                                or kline.open_time < previous_kline.open_time
-                            ):
-                                raise ValueError(
-                                    "Kline stream event moved backwards"
-                                )
+                            disposition = classify_kline(previous_kline, kline)
+                            if disposition == "late_close":
+                                prior = self._kline_event_fingerprints.get(event_key)
+                                if prior == kline:
+                                    return
+                                if prior is not None and prior.closed:
+                                    self._record_kline_disposition("conflict", prior, kline)
+                                    raise ValueError("conflicting closed Kline requires resync")
+                            if disposition not in ("accept", "late_close"):
+                                self._record_kline_disposition(disposition, previous_kline, kline)
+                                if disposition == "conflict":
+                                    raise ValueError("conflicting Kline update requires resync")
+                                return
 
                         # 정상 stream에서는 fingerprint 수를 고정해 24시간 이상 연결의 메모리가 단조 증가하지 않게 한다.
                         self._kline_event_fingerprints[event_key] = kline
@@ -1683,7 +1695,8 @@ class WebSocketGateway:
                             > _MAXIMUM_KLINE_EVENT_FINGERPRINTS
                         ):
                             self._kline_event_fingerprints.popitem(last=False)
-                        self._kline_cursor_by_interval[kline.interval] = kline
+                        if previous_kline is None or disposition != "late_close":
+                            self._kline_cursor_by_interval[kline.interval] = kline
                         live_observer = self._kline_live_observer
                         if live_observer is None:
                             self._kline_buffer[kline.interval][
