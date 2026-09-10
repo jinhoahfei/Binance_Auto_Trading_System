@@ -100,11 +100,14 @@ def record_replay_step(
     }
 
 
-def replay_entry_scenario(strategy: str) -> dict[str, object]:
+def replay_entry_scenario(
+    strategy: str, *, exchange_clock_offset: timedelta | None = None,
+) -> dict[str, object]:
     """
     함수 이름: replay_entry_scenario()
     기능: Case별 시장 조건으로 실제 매수 전이·NEW·FILLED·중지·종료를 재현한다.
     인자: strategy -> 검증할 CASE_B 또는 CASE_C
+        exchange_clock_offset -> 체결·응답에 재현할 거래소 시계 오차 또는 기존 fixture 시각
     반환값: 실제 제출 횟수와 순서대로 기록한 UI 재생 단계
     작성 날짜: 2026/09/05
     """
@@ -176,10 +179,19 @@ def replay_entry_scenario(strategy: str) -> dict[str, object]:
             ))
 
             # 동일 가짜 주문의 조회 결과를 FILLED로 진행해 production Position owner 전이까지 처리한다.
-            controller.trigger_order_reconciliation(occurred_at=fixture.clock.advance(timedelta(seconds=1)))
+            fixture.clock.advance(timedelta(seconds=1))
+            if exchange_clock_offset is not None:
+                fixture.rest_client.fill_time_origin = fixture.clock() + exchange_clock_offset
+                fixture.rest_client.clock = lambda: fixture.clock() + exchange_clock_offset
+            controller.trigger_order_reconciliation(occurred_at=fixture.clock())
             fill_results = asyncio.run(controller.drain_events(max_microsteps=100))
             if fixture.position.owner is None or fixture.position.owner.value != strategy:
                 raise AssertionError("The filled Position must belong to the requested Case")
+            if exchange_clock_offset is not None:
+                if fixture.position.entered_at != fixture.clock() + exchange_clock_offset:
+                    raise AssertionError("Exchange fill time must remain unchanged")
+                if controller.context.market.holding_elapsed != timedelta(0):
+                    raise AssertionError("Holding age before the exchange fill timestamp must be zero")
             steps.append(record_replay_step(
                 fixture, event_stream,
                 stage=f"{strategy} 체결·포지션 관리", expected_label=expected_label,
@@ -201,6 +213,18 @@ def replay_entry_scenario(strategy: str) -> dict[str, object]:
                 if next(row for row in rows if row["condition_id"] == checked_id)["satisfied"] is not held:
                     raise AssertionError("Displayed duration must equal the strategy builder result")
                 steps.append(step)
+
+            if exchange_clock_offset is not None:
+                # 동일 보유 단계의 연속 event가 새로고침 없이 수치와 남은 시간을 바꾸는지 UI에서 검사한다.
+                changed_market = replace(
+                    holding_market, realtime_pct_b=Decimal("0.62") if strategy == "CASE_B" else Decimal("0.07"),
+                    realtime_ema_slope=Decimal("0.095") if strategy == "CASE_B" else Decimal("-0.40"),
+                )
+                results = replay_market_evaluation(fixture, changed_market, "holding-after-clock-skew")
+                steps.append(record_replay_step(
+                    fixture, event_stream, stage=f"{strategy} 시각 오차 후 보유 지표 갱신",
+                    expected_label=expected_label, expected_strategies=(strategy,), results=results,
+                ))
 
             # 같은 Case 안의 추세 유지·익절 trailing 전이도 실제 event queue로 처리한다.
             trend_market = replace(holding_market, realtime_slope_above_008_for_5s=True,
@@ -353,6 +377,10 @@ def main() -> None:
             report = {
                 "network_connections_allowed": False,
                 "scenarios": [replay_entry_scenario(strategy) for strategy in ("CASE_B", "CASE_C")],
+                "clock_skew_scenarios": [
+                    replay_entry_scenario(strategy, exchange_clock_offset=timedelta(milliseconds=29))
+                    for strategy in ("CASE_B", "CASE_C")
+                ],
                 "timer_scenario": replay_recovery_timer_scenario(),
             }
     print(json.dumps(report, ensure_ascii=False))  # UI test가 실제 wire DTO를 동일한 bytes로 재사용한다.

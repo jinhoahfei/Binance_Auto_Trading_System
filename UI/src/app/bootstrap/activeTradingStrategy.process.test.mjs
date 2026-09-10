@@ -261,6 +261,45 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
         }
     });
 
+    it.each(replay_report.clock_skew_scenarios)('$strategy 체결 시각이 앞서도 보유 단계의 지표와 타이머가 계속 갱신된다', async (scenario) => {
+        const { application, rendered, transport } = await mount_replay_application(scenario.steps[0].event);
+        const prefix = scenario.strategy === 'CASE_B' ? 'b' : 'c';
+        let first_timer_text;
+        let observed_holding = false;
+        let observed_update = false;
+        try {
+            for (const step of scenario.steps.slice(1)) {
+                await act(async () => transport.sockets[0].receive(step.event));
+                await expect_shared_strategy(application, step);
+                const panel = screen.getByRole('tabpanel', { name: '실시간 지표' });
+                if (step.stage.includes('체결·포지션 관리')) {
+                    const group = within(panel).getByRole('region', { name: `${prefix === 'b' ? 'Case_B' : 'Case_C'} 실시간 지표` });
+                    expect(group).toHaveTextContent('보유');
+                    first_timer_text = within(panel.querySelector(`[data-condition-id$=":${prefix}_time_exit"]`)).getByRole('timer').textContent;
+                }
+                if (step.stage.includes('같은 보유 단계 지표 갱신')) {
+                    const row = panel.querySelector(`[data-condition-id$=":${prefix}_profit_zone"]`);
+                    expect(row.querySelector('strong')).toHaveTextContent(prefix === 'b' ? '0.61' : '0.09');
+                    observed_holding = true;
+                }
+                if (step.stage.includes('시각 오차 후 보유 지표 갱신')) {
+                    const row = panel.querySelector(`[data-condition-id$=":${prefix}_profit_zone"]`);
+                    expect(row.querySelector('strong')).toHaveTextContent(prefix === 'b' ? '0.62' : '0.07');
+                    const timer = within(panel.querySelector(`[data-condition-id$=":${prefix}_time_exit"]`)).getByRole('timer');
+                    expect(timer.textContent).not.toBe(first_timer_text);
+                    observed_update = true;
+                }
+            }
+            expect(observed_holding).toBe(true);
+            expect(observed_update).toBe(true);
+            expect(transport.snapshot_request_count).toBe(1);
+            expect(transport.sockets).toHaveLength(1);
+        } finally {
+            rendered.unmount();
+            application.deactivate();
+        }
+    });
+
     it('실제 C 회복 타이머가 시작 대기·180초 경계·시간 초과·저점 갱신을 표시한다', async () => {
         const steps = replay_report.timer_scenario.steps;
         const { application, rendered, transport } = await mount_replay_application(steps[0].event);

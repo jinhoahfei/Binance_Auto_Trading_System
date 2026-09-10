@@ -3703,10 +3703,12 @@ class TradingController:
             if self._position is not None
             else None
         )
-        holding_elapsed = self._calculate_non_negative_elapsed(
-            evaluation_time,
-            entered_at,
-            "Position entered_at",
+        # 거래소 체결 시각은 로컬 clock보다 앞설 수 있고, queue에는 체결 전 관측도 남을 수 있다.
+        # 그 평가 시점의 보유시간은 0이다. 원 체결 시각과 market 발생 시각은 변경하지 않는다.
+        holding_elapsed = (
+            max(timedelta(0), evaluation_time - entered_at)
+            if entered_at is not None
+            else timedelta(0)
         )
         signal_elapsed = self._calculate_non_negative_elapsed(
             evaluation_time,
