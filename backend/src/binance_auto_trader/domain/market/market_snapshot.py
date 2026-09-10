@@ -23,6 +23,7 @@ _INTERVAL_DURATION_BY_INTERVAL: Mapping[Interval, timedelta] = MappingProxyType(
     }
 )
 _SUPPORTED_MARKET_SYMBOL = "ETHUSDT"
+_MAX_LIVE_CLOCK_SKEW = timedelta(seconds=5)
 
 
 def _utc_now() -> datetime:
@@ -345,21 +346,6 @@ class MarketSnapshot:
             _validate_continuity(interval, sorted_klines)
             next_klines_by_interval[interval] = sorted_klines
 
-        next_updated_at = _normalize_utc_datetime(
-            self._clock(),
-            "updated_at",
-        )
-        for interval in SUPPORTED_INTERVALS:
-            _validate_klines_at_snapshot_time(
-                interval,
-                next_klines_by_interval[interval],
-                next_updated_at,
-            )
-        _validate_four_hour_current_candle(
-            next_klines_by_interval[Interval.FOUR_HOURS],
-            next_updated_at,
-        )
-
         # Live provenance는 최종 candidate history에 exact value로 남은 typed Kline만 허용한다.
         if source_klines is None:
             normalized_source_klines: tuple[Kline, ...] = ()
@@ -379,6 +365,37 @@ class MarketSnapshot:
                     raise ValueError(
                         "every source Kline must be present in the next snapshot"
                     )
+
+        next_updated_at = _normalize_utc_datetime(
+            self._clock(),
+            "updated_at",
+        )
+        # 실제 WS event와 PC 사이에 관측된 약 2초 오차를 포함해 최대 5초만 보정한다.
+        # source가 candidate에 포함됨을 검증한 뒤에만 시각을 사용한다.
+        latest_allowed_time = next_updated_at + _MAX_LIVE_CLOCK_SKEW
+        source_times = [
+            source.event_time
+            for source in normalized_source_klines
+            if source.event_time is not None
+            and next_updated_at < source.event_time <= latest_allowed_time
+        ]
+        if self._state.updated_at is not None and (
+            next_updated_at < self._state.updated_at <= latest_allowed_time
+        ):
+            # 다른 interval의 늦은 tick으로 직전 경계 시각을 되돌리지 않는다.
+            source_times.append(self._state.updated_at)
+        if source_times:
+            next_updated_at = max(source_times)
+        for interval in SUPPORTED_INTERVALS:
+            _validate_klines_at_snapshot_time(
+                interval,
+                next_klines_by_interval[interval],
+                next_updated_at,
+            )
+        _validate_four_hour_current_candle(
+            next_klines_by_interval[Interval.FOUR_HOURS],
+            next_updated_at,
+        )
 
         next_current_eth_price = next_klines_by_interval[
             Interval.FOUR_HOURS

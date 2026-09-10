@@ -1,4 +1,5 @@
 import type { BackendTradingCondition, BackendTradingIndicatorSnapshot, BackendTradingStatus } from '../../shared/contracts';
+import { format_decimal_text } from '../../shared/formatting';
 import type { RealtimeIndicatorGroupViewModel } from './types';
 
 // 표시 문구만 UI가 소유하며 임계값과 조건 판정은 backend 결과를 그대로 사용한다.
@@ -25,15 +26,15 @@ const NOTICES: Readonly<Record<string, string>> = {
 
 /**
  * 함수 이름: format_indicator_value()
- * 기능: 비교 경계의 정밀도를 유지하고 시간 값에만 초 단위를 붙인다.
+ * 기능: 지표와 기준값을 소수점 둘째 자리로 표시하고 시간 값에 초 단위를 붙인다.
  * 인자: value -> backend Decimal 문자열, source -> 값의 출처
- * 반환값: 반올림하지 않은 표시 문자열
+ * 반환값: 두 자리로 반올림한 표시 문자열
  * 작성 날짜: 2026/09/05
  */
 function format_indicator_value(value: string | null, source: string): string {
     if (value === null) return '—';
-    // 소수 끝 영점만 제거하며 임계값에 가까운 수치를 반올림하지 않는다.
-    const display = value.includes('.') ? value.replace(/\.?0+$/u, '') : value;
+    // 화면만 반올림하며 조건 충족 여부는 원본 정밀도로 평가한 backend 결과를 사용한다.
+    const display = format_decimal_text(value);
     return source === 'elapsed' ? `${display}초` : display;
 }
 

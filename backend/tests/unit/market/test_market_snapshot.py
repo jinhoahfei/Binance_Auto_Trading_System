@@ -1,5 +1,6 @@
 """MarketSnapshot의 전체 갱신, dedup, 연속성과 원자성을 검증한다."""
 
+from dataclasses import replace
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -134,6 +135,45 @@ class MarketSnapshotTests(unittest.TestCase):
     기능: MarketSnapshot의 초기 상태와 원자적인 전체 갱신 계약을 테스트한다.
     작성 날짜: 2026/08/20
     """
+
+    def test_exchange_close_accepts_small_clock_skew_and_keeps_updating(self) -> None:
+        """
+        함수 이름: test_exchange_close_accepts_small_clock_skew_and_keeps_updating()
+        기능: 실제 로그의 20ms·2.045초 및 허용 한계 5초 오차에서 연속 갱신을 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        for skew_ms in (20, 2045, 5000):
+            with self.subTest(skew_ms=skew_ms):
+                boundary = TEST_UPDATED_AT + timedelta(minutes=1)
+                now = [boundary + timedelta(milliseconds=15 - skew_ms)]
+                snapshot = MarketSnapshot(clock=lambda: now[0])
+                data = make_full_klines()
+                snapshot.update(data)
+                close = replace(data[Interval.ONE_MINUTE][-1], closed=True,
+                                event_time=boundary + timedelta(milliseconds=15))
+                data[Interval.ONE_MINUTE][-1] = close
+                snapshot.update(data, source_klines=(close,))
+                self.assertEqual(snapshot.updated_at, close.event_time)
+                late_tick = replace(data[Interval.FOUR_HOURS][-1], event_time=boundary - timedelta(milliseconds=1))
+                data[Interval.FOUR_HOURS][-1] = late_tick
+                snapshot.update(data, source_klines=(late_tick,))
+                self.assertEqual(snapshot.updated_at, close.event_time)
+                for offset in (30, 200):
+                    now[0] = boundary + timedelta(milliseconds=offset - skew_ms)
+                    tick = replace(close, open_time=boundary, closed=False,
+                                   event_time=boundary + timedelta(milliseconds=offset))
+                    data[Interval.ONE_MINUTE] = [close, tick]
+                    snapshot.update(data, source_klines=(tick,))
+                self.assertEqual(snapshot.version, 5)
+                # 큰 미래 봉이나 source가 없는 미래 마감은 기존처럼 원자적으로 거부한다.
+                future = replace(tick, open_time=boundary + timedelta(minutes=1),
+                                 event_time=boundary + timedelta(minutes=1))
+                data[Interval.ONE_MINUTE] = [tick, future]
+                with self.assertRaises(ValueError):
+                    snapshot.update(data, source_klines=(future,))
+                self.assertEqual(snapshot.version, 5)
 
     def test_starts_not_ready_at_version_zero(self) -> None:
         """

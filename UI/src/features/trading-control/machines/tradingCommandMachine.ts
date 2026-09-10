@@ -245,6 +245,10 @@ export function create_trading_command_machine(
             }),
         },
         guards: {
+            snapshot_preserves_local_command: ({ context, event }) => {
+                return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
+                    && event.lifecycle_status === context.lifecycle_status;
+            },
             snapshot_is_running: ({ event }) => {
                 return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
                     && event.lifecycle_status === 'running';
@@ -771,6 +775,11 @@ export function create_trading_command_machine(
                     spec_ids: ['U3-02', 'U3-05', 'U3-06', 'U3-07', 'VR-02', 'ER-05'],
                 },
                 on: {
+                    TRADING_SNAPSHOT_SYNCHRONIZED: {
+                        guard: 'snapshot_preserves_local_command',
+                        actions: 'synchronize_trading_snapshot',
+                    },
+
                     START_CONFIRMED: [
                         {
                             guard: 'is_regime_missing_at_confirmation',
@@ -816,6 +825,12 @@ export function create_trading_command_machine(
                         actions: 'remember_failure',
                     },
                 },
+                on: {
+                    TRADING_SNAPSHOT_SYNCHRONIZED: {
+                        guard: 'snapshot_preserves_local_command',
+                        actions: 'synchronize_trading_snapshot',
+                    },
+                },
             },
             running: {
                 meta: {
@@ -845,6 +860,11 @@ export function create_trading_command_machine(
                     spec_ids: ['U2-02', 'U2-05', 'U2-06', 'VR-03', 'ER-07', 'ER-08'],
                 },
                 on: {
+                    TRADING_SNAPSHOT_SYNCHRONIZED: {
+                        guard: 'snapshot_preserves_local_command',
+                        actions: 'synchronize_trading_snapshot',
+                    },
+
                     STOP_CONFIRMED: {
                         target: 'stopping',
                     },
@@ -880,12 +900,23 @@ export function create_trading_command_machine(
                         actions: 'remember_failure',
                     },
                 },
+                on: {
+                    TRADING_SNAPSHOT_SYNCHRONIZED: {
+                        guard: 'snapshot_preserves_local_command',
+                        actions: 'synchronize_trading_snapshot',
+                    },
+                },
             },
             force_sell_confirmation: {
                 meta: {
                     spec_ids: ['U2-03', 'U2-07', 'U2-09', 'U2-10', 'VR-03', 'ER-09', 'ER-10'],
                 },
                 on: {
+                    TRADING_SNAPSHOT_SYNCHRONIZED: {
+                        guard: 'snapshot_preserves_local_command',
+                        actions: 'synchronize_trading_snapshot',
+                    },
+
                     FORCE_SELL_AND_STOP_CONFIRMED: {
                         target: 'force_selling',
                     },
@@ -919,6 +950,12 @@ export function create_trading_command_machine(
                     onError: {
                         target: 'force_sell_confirmation',
                         actions: 'remember_failure',
+                    },
+                },
+                on: {
+                    TRADING_SNAPSHOT_SYNCHRONIZED: {
+                        guard: 'snapshot_preserves_local_command',
+                        actions: 'synchronize_trading_snapshot',
                     },
                 },
             },
@@ -1012,7 +1049,12 @@ export function create_trading_command_machine(
                 entry: 'mark_stop_accepted',
                 on: {
                     START_BUTTON_CLICKED: {},
-                    STOP_BUTTON_CLICKED: {},
+                    STOP_BUTTON_CLICKED: [
+                        { guard: ({ context, event }) => context.lifecycle_status === 'reconciliation_required' && event.has_open_position,
+                            target: 'force_sell_confirmation', actions: 'remember_position' },
+                        { guard: ({ context }) => context.lifecycle_status === 'reconciliation_required',
+                            target: 'stop_confirmation', actions: 'remember_position' },
+                    ],
                 },
             },
         },

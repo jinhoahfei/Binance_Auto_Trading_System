@@ -1219,55 +1219,68 @@ class TradingSessionStopTests(unittest.TestCase):
         self.assertTrue(session_subscription.closed)
         self.assertEqual(0, controller.pending_schedule_count)
 
-    def test_terminated_session_requires_regime_reselection_before_restart(
-        self,
-    ) -> None:
+    def test_terminated_session_restarts_with_retained_regime_and_fresh_stm(self) -> None:
         """
-        함수 이름: test_terminated_session_requires_regime_reselection_before_restart()
-        기능: 정상 종료 뒤 같은 REGIME도 다시 선택해야 새 session을 시작하는지 검증한다.
+        함수 이름: test_terminated_session_restarts_with_retained_regime_and_fresh_stm()
+        기능: REGIME 한 번 선택 후 반복 시작·중지가 새 세션으로 실행되고 중복 START는 재실행되지 않음을 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/21
+        작성 날짜: 2026/09/10
         """
-        # TYPE_0 session을 시작하고 zero-position G-05로 완전히 종료한다.
         controller, regime_controller, _ = _create_ready_controller()
-        initial_selection = regime_controller.set_regime_type(
+        regime_controller.set_regime_type(
             RegimeType.TYPE_0,
-            command_id="select-before-termination",
+            command_id="select-once",
             expected_version=0,
         )
-        first_session = controller.start_trading(
-            command_id="start-before-termination",
-            expected_version=initial_selection.version,
-        )
-        stopped = controller.stop_trading(
-            command_id="stop-before-reselection",
-            expected_version=controller.context.version,
-        )
+        previous_sessions = set()
+        previous_stms = []
+        for cycle in range(3):
+            with self.subTest(cycle=cycle):
+                version = controller.context.version
+                started = controller.start_trading(
+                    command_id=f"start-cycle-{cycle}", expected_version=version,
+                )
+                self.assertIs(started.status, TradingSessionStatus.RUNNING)
+                self.assertIs(controller.selected_regime, RegimeType.TYPE_0)
+                self.assertNotIn(started.session_id, previous_sessions)
+                self.assertTrue(all(controller._active_stm is not stm for stm in previous_stms))
+                previous_sessions.add(started.session_id)
+                previous_stms.append(controller._active_stm)
+                replay = controller.start_trading(
+                    command_id=f"start-cycle-{cycle}", expected_version=version,
+                )
+                self.assertEqual(replay, started)
+                self.assertIs(controller._active_stm, previous_stms[-1])
+                stopped = controller.stop_trading(
+                    command_id=f"stop-cycle-{cycle}", expected_version=controller.context.version,
+                )
+                self.assertIs(stopped.status, TradingSessionStatus.TERMINATED)
+                self.assertIs(controller.selected_regime, RegimeType.TYPE_0)
+                self.assertEqual(controller.pending_schedule_count, 0)
+                self.assertFalse(controller.external_action_requests)
 
-        # 새 selection command 없이 직접 재시작하면 consumed selection Guard로 거부한다.
-        with self.assertRaises(TradingSessionError) as missing_reselection:
-            controller.start_trading(
-                command_id="restart-without-reselection",
-                expected_version=stopped.version,
-            )
-        self.assertIs(
-            missing_reselection.exception.code,
-            TradingSessionFailureCode.NO_SELECTED_REGIME,
+    def test_retained_regime_restart_still_requires_ready_market(self) -> None:
+        """
+        함수 이름: test_retained_regime_restart_still_requires_ready_market()
+        기능: 중지 후 선택값이 남아도 시세 미준비 상태에서는 새 STM 실행 없이 시작을 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        controller, regime_controller, _ = _create_ready_controller(market_stream_recovery_enabled=True)
+        selected = regime_controller.set_regime_type(
+            RegimeType.TYPE_0, command_id="select", expected_version=0,
         )
-
-        # 같은 TYPE_0도 명시적으로 다시 선택하면 새 STM과 session ID로 시작한다.
-        repeated_selection = regime_controller.set_regime_type(
-            RegimeType.TYPE_0,
-            command_id="select-after-termination",
-            expected_version=stopped.version,
-        )
-        restarted = controller.start_trading(
-            command_id="start-after-reselection",
-            expected_version=repeated_selection.version,
-        )
-        self.assertIs(restarted.status, TradingSessionStatus.RUNNING)
-        self.assertNotEqual(first_session.session_id, restarted.session_id)
+        controller.start_trading(command_id="start", expected_version=selected.version)
+        stopped = controller.stop_trading(command_id="stop", expected_version=controller.context.version)
+        previous_stm = controller._active_stm
+        controller.mark_market_stream_reconciliation_required("restart-test")
+        with self.assertRaises(TradingSessionError) as raised:
+            controller.start_trading(command_id="restart", expected_version=stopped.version)
+        self.assertIs(raised.exception.code, TradingSessionFailureCode.CONNECTION_NOT_READY)
+        self.assertIs(controller._active_stm, previous_stm)
+        self.assertEqual(controller.session_id, stopped.session_id)
 
     def test_zero_position_stop_preserves_context_action_order(self) -> None:
         """

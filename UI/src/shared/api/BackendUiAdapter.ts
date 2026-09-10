@@ -1521,7 +1521,8 @@ export class BackendUiAdapter implements UiCommandPort {
                 true,
             );
         }
-        if (this.#trading_status === 'running') {
+        if (this.#trading_status === 'running' || this.#trading_status === 'reconciliation_required') {
+            // 재조정 상태도 명시적 종료 의도를 전달해야 복구 뒤 STOP 전이를 진행할 수 있다.
             await this.stop_trading();
         }
         if (this.#trading_status === 'not_started'

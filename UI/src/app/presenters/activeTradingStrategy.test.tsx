@@ -244,7 +244,7 @@ describe('현재 실행 TradingSTM 전략 표시', () => {
                 // 복구 후 RUNNING snapshot을 받으면 현재 판정을 다시 표시한다.
                 facade.dispatch({ type: 'BACKEND_SNAPSHOT_SYNCHRONIZED', snapshot: initial.server_snapshot });
                 expect(present_dashboard_props(facade.get_view_model(), facade).trader.indicatorGroups![0]!.indicators[0])
-                    .toMatchObject({ value: '101', tone: 'negative' });
+                    .toMatchObject({ value: '101.00', tone: 'negative' });
             } finally { facade.stop(); }
         },
     );

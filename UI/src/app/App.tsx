@@ -74,7 +74,7 @@ export function App({ applicationFactory }: AppProps) {
                 connectionDetails={connection_details.connection_details}
                 connectionDetailsError={connection_details.has_error}
                 hasOpenPosition={view_model.trading.has_open_position}
-                isCommandPending={view_model.trading.is_pending}
+                isCommandPending={view_model.trading.is_pending && view_model.trading.lifecycle_status !== 'reconciliation_required'}
                 isConnected={view_model.connection.is_online}
                 isTrading={view_model.trading.is_trading}
                 onConnectionDetailsOpenChange={connection_details.set_is_open}

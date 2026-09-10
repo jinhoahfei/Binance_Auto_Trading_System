@@ -17,11 +17,11 @@ function create_condition(changes: Partial<BackendTradingCondition> = {}): Backe
         value: '-0.08000001', threshold: '-0.08', comparison: '<', satisfied: true,
         source: 'close_30m', hold_seconds: null, evaluated_at: '2026-09-05T01:00:00Z',
         market_version: 1, context_version: 1, ...changes,
-    };  // 임계값 아래의 마지막 소수 자릿수도 화면에 보존한다.
+    };  // 원본 정밀도의 backend 판정을 제공한다.
 }
 
 describe('현재 단계 실시간 지표 표시', () => {
-    it('손절 충족은 초록이고 미충족·미수신은 빨강·회색이며 기준과 원본 정밀도를 표시한다', () => {
+    it('손절 충족은 초록이고 미충족·미수신은 빨강·회색이며 기준을 두 자리로 표시하면서 원본 판정을 유지한다', () => {
         // 같은 수치라도 backend 유지시간 판정이 false이면 UI는 녹색으로 바꾸지 않는다.
         const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'B_HOLDING', notice: null, conditions: [
             create_condition(),
@@ -33,11 +33,29 @@ describe('현재 단계 실시간 지표 표시', () => {
         const rows = screen.getAllByRole('listitem');
         expect(rows[0]).toHaveAttribute('data-tone', 'positive');
         expect(rows[0]).toHaveTextContent('손절');
-        expect(rows[0]).toHaveTextContent('-0.08000001');
+        expect(within(rows[0]!).getByLabelText('-0.08 · 충족')).toBeInTheDocument();
+        expect(rows[0]).toHaveTextContent('< -0.08');
+        expect(rows[0]).not.toHaveTextContent('-0.08000001');
         expect(rows[1]).toHaveAttribute('data-tone', 'negative');
         expect(rows[1]).toHaveTextContent('5초 연속 유지');
         expect(rows[2]).toHaveAttribute('data-tone', 'neutral');
         expect(within(rows[2]!).getByLabelText('— · 확인 대기')).toBeInTheDocument();
+    });
+
+    it.each([
+        ['2509.99', '2485.043400943892438313960509311914', '2,509.99', '2,485.04'],
+        ['0.019999999999999999', '0.02', '0.02', '0.02'],
+        ['-0.005', '0', '-0.01', '0.00'],
+        ['99.999', '100', '100.00', '100.00'],
+    ])('지표 %s와 기준 %s를 두 자리로 표시한다', (value, threshold, displayed, limit) => {
+        const row = create_condition({ value, threshold });
+        const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'B', notice: null, conditions: [row] };
+        const indicator = present_trading_indicators(snapshot, 'Case_B', true, true)[0]!.indicators[0]!;
+        expect(indicator.value).toBe(displayed);
+        expect(indicator.criterion).toBe(`< ${limit}`);
+        expect(indicator.tone).toBe('positive');
+        expect(row.value).toBe(value);
+        expect(row.threshold).toBe(threshold);
     });
 
     it('병렬 감시에는 제목 하나와 B·C 구분을 사용하고 연결이 끊기면 색상 판정을 지운다', () => {

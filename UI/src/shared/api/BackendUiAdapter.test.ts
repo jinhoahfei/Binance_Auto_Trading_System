@@ -1376,6 +1376,35 @@ describe('BackendUiAdapter HTTP contract', () => {
         ]);
     });
 
+    it('시세 조정 상태의 종료는 STOP을 전달하고 terminal 확인 뒤에만 native 종료한다', async () => {
+        const base = create_backend_snapshot_fixture();
+        const blocked = { ...base, trading: { ...base.trading, status: 'reconciliation_required' as const,
+            version: 4, command_enabled: false, has_open_position: false,
+            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa' } };
+        let stopped = false;
+        const paths: string[] = [];
+        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const path = new URL(input.toString()).pathname;
+            paths.push(path);
+            const request_id = request_headers(init)['X-Request-Id']!;
+            if (path === '/v1/trading/stop') {
+                stopped = true;
+                return create_success_response(request_id, {status: 'reconciliation_required', version: 4, session_id: blocked.trading.session_id});
+            }
+            if (path === '/v1/snapshot') return create_success_response(request_id,
+                stopped ? { ...blocked, trading: { ...blocked.trading, status: 'terminated', version: 5 } } : blocked);
+            expect(stopped).toBe(true);
+            return create_success_response(request_id, {accepted: true, status: 'accepted', version: 5}, 202);
+        });
+        const wait_for_sidecar_exit = vi.fn(async () => ({exited: true, code: 0}));
+        const adapter = new BackendUiAdapter(create_descriptor(), {fetch: fetch_mock as typeof fetch,
+            create_uuid: create_uuid_factory(), shutdown_poll_interval_ms: 1, wait_for_sidecar_exit});
+        await adapter.load_snapshot();
+        await adapter.shutdown_application();
+        expect(paths).toEqual(['/v1/snapshot', '/v1/trading/stop', '/v1/snapshot', '/v1/shutdown']);
+        expect(wait_for_sidecar_exit).toHaveBeenCalledOnce();
+    });
+
     it('Phase 12: reconciliation timeout은 exposure를 표시하고 shutdown/kill로 진행하지 않는다', async () => {
         const base_snapshot = create_backend_snapshot_fixture();
         const reconciliation_snapshot = {
@@ -1394,7 +1423,9 @@ describe('BackendUiAdapter HTTP contract', () => {
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(
                 request_headers(init)['X-Request-Id']!,
-                reconciliation_snapshot,
+                new URL(_input.toString()).pathname === '/v1/trading/stop'
+                    ? { status: 'reconciliation_required', session_id: reconciliation_snapshot.trading.session_id, version: 4 }
+                    : reconciliation_snapshot,
             );
         });
         const adapter = new BackendUiAdapter(create_descriptor(), {
@@ -1411,7 +1442,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             message: expect.stringContaining('열린 포지션: 있음'),
         });
         expect(fetch_mock.mock.calls.every((call) => {
-            return new URL(call[0].toString()).pathname === '/v1/snapshot';
+            return ['/v1/snapshot', '/v1/trading/stop'].includes(new URL(call[0].toString()).pathname);
         })).toBe(true);
         expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
     });

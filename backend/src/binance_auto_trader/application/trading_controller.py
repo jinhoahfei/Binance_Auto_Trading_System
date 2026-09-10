@@ -1288,6 +1288,7 @@ class TradingController:
         self._market_stream_monitoring_started = False
         self._market_stream_reconciliation_required = False
         self._market_stream_interrupted_running_session = False
+        self._market_stop_requested: str | None = None
         self._indicator_store = TradingIndicatorStore()  # 지표는 세션 처리 lock 아래에서만 변경한다.
         self._latest_market_evaluation_version = 0
         self._event_runtime_failed = False  # 이 process에서는 worker failure 뒤 command gate를 다시 열지 않는다.
@@ -1535,7 +1536,7 @@ class TradingController:
     ) -> None:
         """
         함수 이름: _record_reconciliation_cause_locked()
-        기능: session lock 아래 최초 원인만 EXACT로 기록하고 후속 기록을 영구 모호성으로 잠근다.
+        기능: 반복 시세 장애는 같은 원인으로 유지하고 주문·계좌 등의 중복·충돌은 모호성으로 잠근다.
         인자: category -> secret 없는 안정적 재조정 원인 범주
         반환값: 없음
         작성 날짜: 2026/08/31
@@ -1554,7 +1555,15 @@ class TradingController:
             self._reconciliation_cause_category = category
             return
 
-        # 두 번째 기록은 같은 범주도 단일 원인 증거가 아니므로 category를 즉시 폐기한다.
+        # 시세 장애→초기화→재연결 재시도는 주문 조정 원인이 추가된 것이 아니다.
+        # market-only 사실이 유지될 때만 반복을 멱등 처리해 복구 뒤 명시적 STOP을 허용한다.
+        if (
+            self._reconciliation_cause_category is category
+            and category is ReconciliationCauseCategory.MARKET_STREAM_FAILED
+        ):
+            return
+
+        # 주문·계좌 등의 두 번째 기록은 여전히 단일 원인 증거가 아니므로 범주를 폐기한다.
         self._reconciliation_cause_status = (
             ReconciliationCauseStatus.DUPLICATE
             if self._reconciliation_cause_category is category
@@ -2704,9 +2713,13 @@ class TradingController:
             self._validate_start_prerequisites()
 
             selected_regime = self._selected_regime
+            if selected_regime is None:
+                raise RuntimeError("validated selection must provide a REGIME")
+            # REGIME 선택은 중지 후에도 유지하고, 이미 사용한 STM 대신 새 세션 객체를 만든다.
+            # 모든 시작 Guard를 통과한 명시적 START에서만 생성하므로 자동 재개는 하지 않는다.
             selected_stm = self._selected_stm
-            if selected_regime is None or selected_stm is None:
-                raise RuntimeError("supported selection must provide a TradingSTM")
+            if selected_stm is None:
+                selected_stm = self.fetch_selected_trading_logic(selected_regime)
 
             # start publication 전 예외가 Context와 이전 lifecycle을 반쪽 상태로 남기지 않게 보존한다.
             context_checkpoint = self._context._create_checkpoint()
@@ -3180,6 +3193,34 @@ class TradingController:
                     result,
                 )
                 return result
+
+            # 시세만 끊긴 세션의 명시적 STOP은 복구 후에도 버리지 않는다.
+            # 주문/계좌/worker 원인이 섞인 상태는 기존 조정 절차를 우회하지 않는다.
+            if (
+                self._status is TradingSessionStatus.RECONCILIATION_REQUIRED
+                and self._market_stream_interrupted_running_session
+                and self._reconciliation_cause_status is ReconciliationCauseStatus.EXACT
+                and self._reconciliation_cause_category is ReconciliationCauseCategory.MARKET_STREAM_FAILED
+            ):
+                if self._market_stop_requested is None:
+                    self._market_stop_requested = command_id
+                if (
+                    not self._market_stream_reconciliation_required
+                    and self._market_stream_ready
+                    and not self._stream_reconciliation_required
+                    and not self._process_lifetime_reconciliation_required_locked()
+                    and not self._startup_reconciliation_blocked
+                    and self._startup_reconciliation_complete
+                    and self.pending_order_query_count == 0
+                    and self._context.runtime.pending_order_id is None
+                    and self._context.runtime.pending_intent_id is None
+                    and self._context.runtime.pending_exit_reason is None
+                    and active_stm.current_state.root_state is not RootState.STOPPING
+                ):
+                    self._market_stream_interrupted_running_session = False
+                    self._market_stop_requested = None
+                    # 같은 lock 안에서 곧바로 canonical STOP을 적용하므로 시장 평가를 재개하지 않는다.
+                    self._status = TradingSessionStatus.RUNNING
 
             # 이미 중지 중이면 terminal outcome queue를 건드리지 않고 현재 진행만 반환한다.
             if self._status in (
@@ -4222,6 +4263,12 @@ class TradingController:
             # Market source 복구 사실만 기록하고 active session의 status·phase 중단 provenance는 보존한다.
             self._market_stream_reconciliation_required = False
             self._record_diagnostic("stream_reconciled", stream="market", restored_market_version=market_version)
+            if self._market_stop_requested is not None:
+                self.stop_trading(
+                    command_id=f"market-recovered-stop-{self._market_stop_requested}",
+                    expected_version=self._context.version,
+                )  # 사용자가 요청한 STOP만 재개하며 매매를 자동 재시작하지 않는다.
+
 
     def reconcile_startup_state(self) -> None:
         """
@@ -5799,7 +5846,7 @@ class TradingController:
                 current_version=self._context.version,
             )
 
-        # 미지원 선택과 이전 session에서 이미 소비한 지원 선택을 서로 다른 Guard로 구분한다.
+        # 지원 여부는 지속되는 REGIME 선택으로 판단하며 세션 STM은 START에서 준비한다.
         selected_configuration = get_trading_logic_configuration(
             self._selected_regime
         )
@@ -5812,13 +5859,6 @@ class TradingController:
                 "The selected REGIME does not provide a trading logic",
                 current_version=self._context.version,
             )
-        if self._selected_stm is None:
-            raise TradingSessionError(
-                TradingSessionFailureCode.NO_SELECTED_REGIME,
-                "A REGIME must be selected again before a new session starts",
-                current_version=self._context.version,
-            )
-
         # 시장·계좌·실제 account subscription이 모두 같은 startup 세대로 준비돼야 한다.
         if not self._market_snapshot.ready:
             raise TradingSessionError(

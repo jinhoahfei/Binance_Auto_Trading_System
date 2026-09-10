@@ -18,6 +18,31 @@ async function wait_for_actor_settlement(): Promise<void> {
 }
 
 describe('tradingCommandMachine', () => {
+    it.each(['running', 'reconciliation_required'] as const)('반복 %s snapshot이 중지 확인과 요청을 취소하지 않는다', async (lifecycle_status) => {
+        const port = new FakeUiCommandAdapter();
+        let complete!: () => void;
+        const completion = new Promise<void>((resolve) => { complete = resolve; });
+        const stop = port.stop_trading.bind(port);
+        port.stop_trading = async () => { await completion; return stop(); };
+        const actor = createActor(create_trading_command_machine(port, { is_trading: true, lifecycle_status }));
+        actor.start();
+        const snapshot = { type: 'TRADING_SNAPSHOT_SYNCHRONIZED' as const, lifecycle_status,
+            is_trading: true, has_open_position: false, selected_regime: 'type0' as const,
+            logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE, command_enabled: lifecycle_status === 'running' };
+        actor.send(snapshot);
+        actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: false });
+        actor.send(snapshot);
+        expect(actor.getSnapshot().matches('stop_confirmation')).toBe(true);
+        actor.send({ type: 'STOP_CONFIRMED' });
+        actor.send(snapshot);
+        expect(actor.getSnapshot().matches('stopping')).toBe(true);
+        complete();
+        await wait_for_actor_settlement();
+        expect(actor.getSnapshot().matches('stopped')).toBe(true);
+        expect(port.command_records.filter((record) => record.name === 'stop_trading')).toHaveLength(1);
+        actor.stop();
+    });
+
     it('종료·재연결 snapshot에도 잔여 자산과 미실현 원가를 보존한다', () => {
         const actor = createActor(create_trading_command_machine(new FakeUiCommandAdapter()));
         actor.start();

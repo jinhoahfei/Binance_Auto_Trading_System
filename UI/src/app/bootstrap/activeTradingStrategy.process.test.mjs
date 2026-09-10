@@ -277,7 +277,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
                     expect(row).toHaveAttribute('data-tone', 'neutral');
                     if (index === 5) {
                         const rebound = document.querySelector('[data-condition-id$=":c_rebound"]');
-                        expect(rebound).toHaveTextContent('≥ -0.273');
+                        expect(rebound).toHaveTextContent('≥ -0.27');
                         expect(rebound).toHaveAttribute('data-tone', 'neutral');
                     }
                 }
