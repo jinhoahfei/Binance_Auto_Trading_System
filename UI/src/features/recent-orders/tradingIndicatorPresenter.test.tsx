@@ -58,15 +58,57 @@ describe('현재 단계 실시간 지표 표시', () => {
         expect(row.threshold).toBe(threshold);
     });
 
-    it('병렬 감시에는 제목 하나와 B·C 구분을 사용하고 연결이 끊기면 색상 판정을 지운다', () => {
+    it('병렬 감시는 Case별 제목과 현재 단계를 표시하고 연결이 끊기면 판정을 지운다', () => {
         const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'PARALLEL', notice: null, conditions: [
             create_condition(), create_condition({ condition_id: 'c_stop', strategy: 'CASE_C', phase: 'CASE_C_HOLDING' }),
         ] };
         const groups = present_trading_indicators(snapshot, 'Case_B / Case_C', false, true);
-        expect(groups).toHaveLength(1);
-        expect(groups[0]?.title).toBe('Case_B / Case_C 실시간 지표');
-        expect(groups[0]?.indicators.map((row) => row.label.slice(0, 3))).toEqual(['B ·', 'C ·']);
-        expect(groups[0]?.indicators.every((row) => row.tone === 'neutral' && row.value === '—')).toBe(true);
+        expect(groups.map((group) => group.title)).toEqual(['Case_B 실시간 지표', 'Case_C 실시간 지표']);
+        expect(groups.every((group) => group.phase === 'POSITION_OPEN · 포지션 보유')).toBe(true);
+        expect(groups.flatMap((group) => group.indicators).every((row) => row.tone === 'neutral' && row.value === '—')).toBe(true);
+    });
+
+    it('WAIT_SIGNAL·Case C 회복 단계를 분리하고 이전 BBW 행을 제거하며 공통 조건은 한 번 표시한다', () => {
+        const snapshot: BackendTradingIndicatorSnapshot = {
+            phase_key: 'parallel-recovery', notice: null,
+            phases: [
+                { strategy: 'CASE_B', phase: 'B_WAIT_SIGNAL', notice: 'entry_paused' },
+                { strategy: 'CASE_C', phase: 'C_SETUP_RECOVERY', notice: null },
+            ],
+            conditions: [
+                create_condition({ condition_id: 'b_signal_slope', phase: 'B_WAIT_SIGNAL' }),
+                create_condition({ condition_id: 'b_touch_bbw', phase: 'B_WAIT_TOUCH' }),
+                create_condition({ condition_id: 'c_rebound', strategy: 'CASE_C', phase: 'C_SETUP_RECOVERY' }),
+                create_condition({ condition_id: 'upper_safe_exit', strategy: null, phase: 'UPPER_SAFE_EXIT' }),
+            ],
+        };
+        render(<RealtimeIndicators groups={present_trading_indicators(snapshot, 'Case_B / Case_C', true, true)} />);
+        const case_b = screen.getByRole('region', { name: 'Case_B 실시간 지표' });
+        const case_c = screen.getByRole('region', { name: 'Case_C 실시간 지표' });
+        expect(case_b).toHaveTextContent('WAIT_SIGNAL');
+        expect(case_b).toHaveTextContent('일시정지');
+        expect(case_b).not.toHaveTextContent('터치 순간 30분봉 BBW');
+        expect(case_c).toHaveTextContent('SETUP · 반등 회복 대기');
+        expect(case_c).not.toHaveTextContent('일시정지');
+        expect(screen.getAllByText('상단 밴드 안전 종료')).toHaveLength(1);
+    });
+
+    it('지표가 없는 주문·종료 단계도 backend 상태 그대로 표시한다', () => {
+        const snapshot: BackendTradingIndicatorSnapshot = {
+            phase_key: 'pending', notice: 'order_pending', conditions: [],
+            phases: [
+                { strategy: 'CASE_B', phase: 'CASE_B_FINAL_STATE', notice: 'bbw_rejected' },
+                { strategy: 'CASE_C', phase: 'C_POSITION_OPEN_SIGNALLED', notice: 'order_pending' },
+            ],
+        };
+        const groups = present_trading_indicators(snapshot, 'Case_C', true, true);
+        expect(groups).toHaveLength(2);
+        expect(groups[0]?.notice).toContain('터치 순간 BBW');
+        expect(groups[1]?.phase).toBe('매수 주문 · 체결 대기');
+        expect(groups.every((group) => group.indicators.length === 0)).toBe(true);
+        expect(is_trading_indicator_snapshot(snapshot)).toBe(true);
+        expect(is_trading_indicator_snapshot({ ...snapshot, phases: [snapshot.phases![0], snapshot.phases![0]] })).toBe(false);
+        expect(is_trading_indicator_snapshot({ ...snapshot, phases: [{ strategy: 'CASE_A', phase: 'SETUP', notice: null }] })).toBe(false);
     });
 
     it('구버전과 종료 후에는 예시값을 만들지 않고 대기·빈 상태 안내를 표시한다', () => {

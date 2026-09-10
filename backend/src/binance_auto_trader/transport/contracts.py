@@ -1196,6 +1196,10 @@ def _map_trading_indicators(snapshot: object | None) -> dict[str, object] | None
     return {
         "phase_key": snapshot.phase_key, "notice": snapshot.notice, "conditions": conditions,
         "server_time": datetime_to_wire(captured_at) if captured_at is not None else None,
+        "phases": [
+            {"strategy": phase.strategy, "phase": phase.phase, "notice": phase.notice}
+            for phase in getattr(snapshot, "phases", ())
+        ],
     }  # 전송 기준 시각은 Guard의 평가 시각을 덮어쓰지 않는다.
 
 
@@ -1614,6 +1618,11 @@ export interface BackendTradingIndicatorSnapshot {{
     readonly notice: 'order_pending' | 'entry_paused' | 'stopping' | 'inactive' | null;
     readonly conditions: ReadonlyArray<BackendTradingCondition>;
     readonly server_time?: string | null;
+    readonly phases?: ReadonlyArray<{{
+        readonly strategy: BackendStrategyType;
+        readonly phase: string;
+        readonly notice: 'order_pending' | 'other_order_pending' | 'entry_paused' | 'bbw_rejected' | 'case_finished' | null;
+    }}>;
 }}
 
 export interface BackendTradingLogicSnapshot {{

@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
-from ..domain.trading.conditions import TradingCondition, evaluate_condition, unevaluated_condition
+from ..domain.trading.conditions import TradingCondition, condition_unmet, evaluate_condition, unevaluated_condition
 from ..domain.trading.context import TradingContextView
 from ..domain.trading.results import TradingSTMResult
 from ..domain.trading.states import (
@@ -49,10 +49,23 @@ class TradingIndicatorEvaluation:
 
 
 @dataclass(frozen=True, slots=True)
+class TradingIndicatorPhase:
+    """
+    클래스 이름: TradingIndicatorPhase
+    기능: 지표가 없는 주문·종료 단계도 Case별 현재 상태와 진입 제한을 보존한다.
+    작성 날짜: 2026/09/10
+    """
+
+    strategy: StrategyType
+    phase: str
+    notice: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TradingIndicatorSnapshot:
     """
     클래스 이름: TradingIndicatorSnapshot
-    기능: 단계 전환 식별자와 하나의 현재 지표 목록을 원자적으로 전달한다.
+    기능: Case별 현재 단계와 해당 단계의 지표 평가를 원자적으로 전달한다.
     작성 날짜: 2026/09/05
     """
 
@@ -60,6 +73,7 @@ class TradingIndicatorSnapshot:
     notice: str | None
     conditions: tuple[TradingIndicatorEvaluation, ...]
     captured_at: datetime | None = field(default=None, compare=False)  # 조회 시각만으로 background publication을 반복하지 않는다.
+    phases: tuple[TradingIndicatorPhase, ...] = ()
 
 
 # UI용 이름과 색상은 포함하지 않고 단계가 사용하는 조건 ID만 연결한다.
@@ -125,6 +139,11 @@ def select_indicator_slots(
             phases.append((StrategyType.CASE_B, state.case_b_position_state.value))
         elif runtime.position_owner is StrategyType.CASE_C and state.case_c_position_state is not None:
             phases.append((StrategyType.CASE_C, state.case_c_position_state.value))
+            # B-12/B-13은 매수만 중지한다. C 보유 중에도 B의 확정봉과 신호 유효시간을 보존한다.
+            if runtime.case_b_enabled and state.case_b_signal_state in (
+                CaseBSignalState.B_WAIT_SIGNAL, CaseBSignalState.B_WAIT_PULLBACK,
+            ):
+                phases.append((StrategyType.CASE_B, state.case_b_signal_state.value))
         else:
             if runtime.case_b_enabled and state.case_b_signal_state not in (None, CaseBSignalState.CASE_B_FINAL_STATE):
                 phases.append((StrategyType.CASE_B, state.case_b_signal_state.value))
@@ -151,6 +170,51 @@ def select_indicator_slots(
     )
     phase_key = ":".join((state.root_state.value, *(phase for _, phase in phases), notice or ""))
     return slots, phase_key, notice
+
+
+def select_indicator_phases(
+    state: TradingStateConfiguration,
+    context: TradingContextView,
+) -> tuple[TradingIndicatorPhase, ...]:
+    """
+    함수 이름: select_indicator_phases()
+    기능: 같은 STM snapshot에서 두 Case의 단계와 각 Case에만 적용되는 제한을 읽는다.
+    인자: state -> 현재 병렬 Region 상태
+        context -> 해당 상태의 불변 Context
+    반환값: B·C 순서의 단계 목록 또는 하단 이벤트 밖의 빈 tuple
+    작성 날짜: 2026/09/10
+    """
+    if state.root_state is not RootState.TRADE_MANAGEMENT:
+        return ()
+    runtime = context.runtime
+    phases = []
+    for strategy, position_state, signal_state in (
+        (StrategyType.CASE_B, state.case_b_position_state, state.case_b_signal_state),
+        (StrategyType.CASE_C, state.case_c_position_state, state.case_c_signal_state),
+    ):
+        current_state = position_state or signal_state
+        if current_state is None:
+            continue
+        phase = current_state.value
+        notice = None
+        if strategy is StrategyType.CASE_C and signal_state is CaseCSignalState.C_SETUP and position_state is None:
+            phase = "C_SETUP_FLUSH" if runtime.flush_low is None else "C_SETUP_RECOVERY"
+        if runtime.pending_strategy is strategy and (
+            runtime.pending_order_id or runtime.pending_intent_id or runtime.pending_exit_reason
+        ):
+            notice = "order_pending"
+        elif phase in ("B_POSITION_OPEN_SIGNALLED", "C_POSITION_OPEN_SIGNALLED"):
+            notice = "order_pending"
+        elif strategy is StrategyType.CASE_B and phase == "CASE_B_FINAL_STATE" and not runtime.case_b_enabled:
+            notice = "bbw_rejected" if condition_unmet("b_touch_bbw", context) else "case_finished"
+        elif phase in ("CASE_B_FINAL_STATE", "CASE_C_FINAL_STATE"):
+            notice = "case_finished"
+        elif runtime.pending_order_id or runtime.pending_intent_id or runtime.pending_exit_reason:
+            notice = "other_order_pending"
+        elif strategy is StrategyType.CASE_B and runtime.case_b_entry_paused:
+            notice = "entry_paused"
+        phases.append(TradingIndicatorPhase(strategy, phase, notice))
+    return tuple(phases)
 
 
 class TradingIndicatorStore:
@@ -288,4 +352,7 @@ class TradingIndicatorStore:
                 condition = unevaluated_condition(slot.condition_id)
                 evaluation = TradingIndicatorEvaluation(slot, condition)
             evaluations.append(replace(evaluation, timer=self._timers.get(slot.condition_id)))
-        return TradingIndicatorSnapshot(phase_key, notice, tuple(evaluations), context.evaluated_at)
+        return TradingIndicatorSnapshot(
+            phase_key, notice, tuple(evaluations), context.evaluated_at,
+            select_indicator_phases(stm.current_state, context),
+        )

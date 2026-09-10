@@ -29,6 +29,21 @@ export function is_trading_indicator_snapshot(value: unknown): value is BackendT
         || (snapshot.notice !== null && !['order_pending', 'entry_paused', 'stopping', 'inactive'].includes(String(snapshot.notice)))
         || !Array.isArray(snapshot.conditions)) return false;
 
+    // 단계는 지표 행이 없는 주문·종료 상태도 전달하며 각 Case를 한 번만 허용한다.
+    if (snapshot.phases !== undefined) {
+        if (!Array.isArray(snapshot.phases)) return false;
+        const strategies = new Set<string>();
+        for (const candidate of snapshot.phases) {
+            if (candidate === null || typeof candidate !== 'object') return false;
+            const phase = candidate as Record<string, unknown>;
+            if ((phase.strategy !== 'CASE_B' && phase.strategy !== 'CASE_C')
+                || typeof phase.phase !== 'string' || !phase.phase
+                || (phase.notice !== null && !['order_pending', 'other_order_pending', 'entry_paused', 'bbw_rejected', 'case_finished'].includes(String(phase.notice)))
+                || strategies.has(phase.strategy)) return false;
+            strategies.add(phase.strategy);
+        }
+    }
+
     // 중복 행과 불완전한 참·거짓 판정은 정상 전략 수치로 표시하지 않는다.
     const identities = new Set<string>();
     return snapshot.conditions.every((candidate: unknown) => {

@@ -137,6 +137,11 @@ export interface BackendTradingIndicatorSnapshot {
     readonly notice: 'order_pending' | 'entry_paused' | 'stopping' | 'inactive' | null;
     readonly conditions: ReadonlyArray<BackendTradingCondition>;
     readonly server_time?: string | null;
+    readonly phases?: ReadonlyArray<{
+        readonly strategy: BackendStrategyType;
+        readonly phase: string;
+        readonly notice: 'order_pending' | 'other_order_pending' | 'entry_paused' | 'bbw_rejected' | 'case_finished' | null;
+    }>;
 }
 
 export interface BackendTradingLogicSnapshot {

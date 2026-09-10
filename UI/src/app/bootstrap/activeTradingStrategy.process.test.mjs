@@ -180,11 +180,19 @@ async function expect_shared_strategy(application, step) {
         expect(within(account_state).getAllByText(step.expected_label).length, step.stage).toBeGreaterThan(0);
         expect(chart_state).toHaveAttribute('title', step.expected_label);
         expect(application.facade.get_view_model().chart.active_trading_logic_state).toBe(step.expected_label);
-        // 실제 DTO의 각 행이 하나의 제목 아래에서 이전 단계 행 없이 표시되는지 확인한다.
+        // 실제 DTO의 단계와 각 행이 Case별 그룹에서 이전 단계 행 없이 표시되는지 확인한다.
         const panel = screen.getByRole('tabpanel', { name: '실시간 지표' });
         const rows = step.event.payload.trading.active_logic?.indicators?.conditions ?? [];
-        expect(within(panel).getAllByRole('heading')).toHaveLength(1);
-        expect(within(panel).getByRole('heading')).toHaveTextContent(`${step.expected_label} 실시간 지표`);
+        const phases = step.event.payload.trading.active_logic?.indicators?.phases ?? [];
+        const expected_titles = phases.map((phase) => `${phase.strategy === 'CASE_B' ? 'Case_B' : 'Case_C'} 실시간 지표`);
+        if (rows.some((row) => row.strategy === null) || !expected_titles.length) {
+            expected_titles.push(phases.length ? '공통 실시간 지표' : `${step.expected_label} 실시간 지표`);
+        }
+        expect(within(panel).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(expected_titles);
+        for (const phase of phases) {
+            const group = within(panel).getByRole('region', { name: `${phase.strategy === 'CASE_B' ? 'Case_B' : 'Case_C'} 실시간 지표` });
+            expect(group).toHaveTextContent('현재 단계');
+        }
         expect(panel.querySelectorAll('[data-condition-id]')).toHaveLength(rows.length);
         for (const row of rows) {
             const identity = `${row.strategy ?? 'common'}:${row.phase}:${row.condition_id}`;

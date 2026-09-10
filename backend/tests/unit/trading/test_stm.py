@@ -835,6 +835,37 @@ class PriorityAndBoundaryTests(unittest.TestCase):
     작성 날짜: 2026/08/14
     """
 
+    def test_case_c_unavailable_values_do_not_confirm_recovery_or_trailing_exit(self) -> None:
+        """
+        함수 이름: test_case_c_unavailable_values_do_not_confirm_recovery_or_trailing_exit()
+        기능: 판정 불가 값을 회복 성공이나 EMA 비증가로 간주하지 않는지 확인한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        from binance_auto_trader.domain.trading.transitions.case_c_position_transitions import _select_trailing_event
+
+        stm = TradingSTM(RegimeType.TYPE_0)
+        stm._state = replace(
+            TradingStateConfiguration.create_trade_management_initial_state(),
+            ownership_state=OwnershipState.CASE_C_POSITION_MANAGEMENT,
+            case_c_position_state=CaseCPositionState.CASE_C_CLOSED,
+        )
+        context = create_test_context(
+            market=MarketEvaluationSnapshot(realtime_pct_b=Decimal("NaN")),
+            runtime=TradingRuntimeSnapshot(case_c_consumed_for_event=True, case_b_entry_paused=True),
+        )
+        result = stm.handle(create_test_event(TradingEventType.CHECK_CASE_C_RECOVERY), context)
+        self.assertNotIn("PC-26", result.transition_ids)
+        self.assertIs(result.state_after.case_c_position_state, CaseCPositionState.CASE_C_CLOSED)
+        trailing = replace(context, market=MarketEvaluationSnapshot(
+            realtime_pct_b=Decimal("0.2"), confirmed_1m_close=True,
+            current_close_ema_slope=Decimal("NaN"),
+        ), runtime=replace(context.runtime, previous_trail_ema_slope=Decimal("0.1")))
+        self.assertIsNone(_select_trailing_event(trailing))
+        expired = replace(trailing, market=replace(trailing.market, holding_elapsed=timedelta(hours=1)))
+        self.assertIs(_select_trailing_event(expired), TradingEventType.CASE_C_TIME_EXIT)
+
     def test_pb_03_emergency_stop_has_priority_over_all_other_exits(self) -> None:
         """
         함수 이름: test_pb_03_emergency_stop_has_priority_over_all_other_exits()

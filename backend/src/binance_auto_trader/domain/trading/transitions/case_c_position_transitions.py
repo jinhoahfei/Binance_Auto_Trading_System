@@ -93,6 +93,8 @@ def handle_case_c_position_transition(
                         "Wait for Case C post-exit %B recovery",
                     ),
                 )
+            if not condition_met("c_recovery", context):
+                return None  # PC-26은 유효한 %B >= 0.25 판정이 있어야만 회복을 확정한다.
             return create_transition_outcome(
                 "PC-26",
                 replace(
@@ -492,7 +494,9 @@ def _select_trailing_event(context: TradingContextView) -> TradingEventType | No
     if market.confirmed_1m_close and previous_slope is not None:
         if condition_met("c_trail_increase", context):
             return TradingEventType.CASE_C_EMA_INCREASEMENT
-        return TradingEventType.CASE_C_EMA_DECREASEMENT
+        if condition_unmet("c_trail_increase", context):
+            return TradingEventType.CASE_C_EMA_DECREASEMENT
+        # 판정 불가는 EMA 비증가가 아니다. 유효한 시간청산 조건은 계속 확인한다.
     if condition_met("c_time_exit", context):
         return TradingEventType.CASE_C_TIME_EXIT
     return None

@@ -47,6 +47,8 @@ export interface RealtimeIndicatorGroupViewModel {
     readonly id: string;
     readonly indicators: ReadonlyArray<RealtimeIndicatorViewModel>;
     readonly title: string;
+    readonly phase?: string;
+    readonly phase_description?: string;
     readonly notice?: string | undefined;
 }
 

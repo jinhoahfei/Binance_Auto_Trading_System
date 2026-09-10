@@ -90,6 +90,61 @@ class ActiveTradingLogicFlowTests(unittest.TestCase):
                             if enables_b:
                                 self.assertIs(controller._active_stm.current_state.case_b_signal_state,
                                               CaseBSignalState.B_WAIT_SIGNAL)
+                            indicators = logic["indicators"]
+                            phases = {phase["strategy"]: phase for phase in indicators["phases"]}
+                            self.assertEqual(phases["CASE_B"]["phase"], "B_WAIT_SIGNAL" if enables_b else "CASE_B_FINAL_STATE")
+                            self.assertEqual(phases["CASE_C"]["phase"], "C_WAIT_SETUP")
+                            case_b_rows = [row["condition_id"] for row in indicators["conditions"] if row["strategy"] == "CASE_B"]
+                            self.assertEqual(case_b_rows, ["b_signal_slope", "b_signal_pct_b", "b_signal_low"] if enables_b else [])
+                            self.assertNotIn("b_touch_bbw", case_b_rows)
+
+    def test_case_b_signal_observation_continues_during_case_c_position(self) -> None:
+        """
+        함수 이름: test_case_b_signal_observation_continues_during_case_c_position()
+        기능: C 체결 뒤 B의 확정봉 평가·단계 표시는 유지하되 추가 매수는 차단한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        from tempfile import TemporaryDirectory
+        from tests.integration.test_buy_sell_flow import _create_buy_flow_fixture, FakeOrderScenario
+        from tests.integration.active_trading_logic_replay import replay_market_evaluation
+
+        with TemporaryDirectory() as directory:
+            fixture = _create_buy_flow_fixture(directory, FakeOrderScenario.IMMEDIATE_FILLED)
+            controller = fixture.controller
+            self.addCleanup(controller.close_session_resources)
+            market = MarketEvaluationSnapshot(
+                realtime_price=Decimal("4320"), lower_band=Decimal("4350"), upper_band=Decimal("4500"),
+                realtime_pct_b=Decimal("-0.30"), current_30m_candle_id="parallel-touch",
+                touch_candle_bbw=Decimal("0.01"), cci_30m_realtime=Decimal("-150"),
+            )
+            replay_market_evaluation(fixture, market, "parallel-touch")
+            entry = replay_market_evaluation(fixture, replace(market,
+                realtime_price=Decimal("4327"), realtime_pct_b=Decimal("-0.24")), "c-entry")
+            self.assertTrue(any("C-12" in result.transition_ids for result in entry))
+            self.assertIs(fixture.position.owner, StrategyType.CASE_C)
+            failed_signal = replace(market, realtime_price=Decimal("4400"), realtime_pct_b=Decimal("0.09"),
+                confirmed_30m_close=True, pct_b_close=Decimal("0.5"), ema_slope_30m_close=Decimal("-0.04"),
+                current_closed_candle_low=Decimal("4360"),
+                previous_3_closed_candle_lows=(Decimal("4310"), Decimal("4320"), Decimal("4330")))
+            replay_market_evaluation(fixture, failed_signal, "b-close-during-c")
+            snapshot = map_trading_snapshot(controller, "fake")["active_logic"]["indicators"]
+            case_b = next(phase for phase in snapshot["phases"] if phase["strategy"] == "CASE_B")
+            self.assertEqual(case_b, {"strategy": "CASE_B", "phase": "B_WAIT_SIGNAL", "notice": "entry_paused"})
+            slope = next(row for row in snapshot["conditions"] if row["condition_id"] == "b_signal_slope")
+            self.assertEqual(slope["value"], "-0.04")
+            self.assertFalse(slope["satisfied"])
+            replay_market_evaluation(fixture, replace(failed_signal, confirmed_30m_close=False), "b-intrabar-during-c")
+            rows = map_trading_snapshot(controller, "fake")["active_logic"]["indicators"]["conditions"]
+            self.assertEqual(slope, next(row for row in rows if row["condition_id"] == "b_signal_slope"))
+            results = replay_market_evaluation(fixture, replace(failed_signal, ema_slope_30m_close=Decimal("0")), "b-signal-during-c")
+            self.assertTrue(any("B-05" in result.transition_ids for result in results))
+            self.assertFalse(any(isinstance(action, SubmitOrder) for result in results for action in result.action_requests))
+            snapshot = map_trading_snapshot(controller, "fake")["active_logic"]["indicators"]
+            self.assertEqual([row["condition_id"] for row in snapshot["conditions"] if row["strategy"] == "CASE_B"],
+                             ["b_pullback", "b_signal_age"])
+            self.assertEqual(next(phase for phase in snapshot["phases"] if phase["strategy"] == "CASE_B")["phase"], "B_WAIT_PULLBACK")
 
     def test_actual_recovery_timer_transitions_and_publications(self) -> None:
         """

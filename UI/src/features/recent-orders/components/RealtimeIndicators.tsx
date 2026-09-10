@@ -15,12 +15,14 @@ export interface RealtimeIndicatorsProps {
  * 작성 날짜: 2026/08/12
  */
 export function RealtimeIndicators({ groups, visible = true }: RealtimeIndicatorsProps) {
-    // 단계별 단일 목록과 안내를 표시하며 고정 체류시간이나 예시 지표는 만들지 않는다.
+    // 각 Case의 현재 단계를 지표 위에 표시하고 공통 조건은 별도 그룹에서 한 번만 보여준다.
     return (
         <div className={styles.groups}>
             {groups.map((group) => (
-                <section className={styles.group} key={group.id}>
+                <section className={styles.group} key={group.id} aria-label={group.title}>
                     <h3>{group.title}</h3>
+                    {group.phase === undefined ? null : <p className={styles.phase}><span>현재 단계</span>{group.phase}</p>}
+                    {group.phase_description === undefined ? null : <p className={styles.description}>{group.phase_description}</p>}
                     {group.notice === undefined ? null : <p className={styles.notice}>{group.notice}</p>}
                     <ul>
                         {group.indicators.map((indicator) => (

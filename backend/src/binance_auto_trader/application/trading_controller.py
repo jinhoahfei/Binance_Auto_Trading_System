@@ -1298,7 +1298,6 @@ class TradingController:
         self._last_market_input_at: datetime | None = None
         self._last_strategy_evaluation_at: datetime | None = None
         self._liveness_started_at: datetime | None = None
-        self._reset_recovery_timers_on_next_market = False
         self._market_resume_suppressed = False
         self._indicator_store = TradingIndicatorStore()  # 지표는 세션 처리 lock 아래에서만 변경한다.
         self._latest_market_evaluation_version = 0
@@ -3656,14 +3655,6 @@ class TradingController:
                 "market event versions must be processed in strictly increasing order"
             )
 
-        if self._reset_recovery_timers_on_next_market:
-            if self._context.runtime.timer_base_time is not None:
-                self._context.apply_runtime_patch(patch(
-                    timer_base_time=event.occurred_at,
-                    timer_base_pct_b=event.market_evaluation.realtime_pct_b,
-                ))
-            self._reset_recovery_timers_on_next_market = False
-
         # 앞선 microstep이 만든 signal·Position 시각을 반영한 뒤 이 event의 발생 시각까지 경과를 계산한다.
         enriched_market = self._enrich_market_evaluation_elapsed(
             event.market_evaluation,
@@ -4471,7 +4462,8 @@ class TradingController:
             self._reconciliation_cause_status = ReconciliationCauseStatus.MISSING
             self._reconciliation_cause_category = None
             self._status = TradingSessionStatus.RUNNING
-            self._reset_recovery_timers_on_next_market = True
+            # Case C 회복 구간은 장애 시간도 포함한 경과시간이므로 기준 시각·%B·매수선을 보존한다.
+            # 복구 첫 시장 평가도 C-08 종료와 C-09~11 기준 갱신의 기존 판정 우선순위를 따른다.
             self._recovery_phase = "resumed"
             self._recovery_block_reason = None
             self._liveness_started_at = self._clock()

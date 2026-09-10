@@ -94,7 +94,9 @@ pnpm build
 pnpm storybook
 ```
 
-`pnpm test:active-strategy`는 개발 서버와 Binance 연결 없이 ACTIVE STATE 및 거래 / 계좌 → 전략 상태 → 현재 상태의 일치를 검증합니다. 기존 backend 테스트 환경(`backend/.venv/bin/python`, 없으면 `python3`)에서 실제 TradingSTM에 Case B·C의 시장 조건과 가짜 주문·체결 응답을 입력한 뒤, 발행된 JSON event를 실제 UI adapter와 App에 전달합니다. 두 표시 영역과 단계별 단일 지표 목록의 자동 갱신, 5초 유지 판정의 색상 변화, C 트레일링의 이전 EMA 기준 보존, 청산 후 회복·B 인계, 중지·종료, 연결 단절 시 회색 표시와 event 유실 후 전체 snapshot 복원을 검사합니다. 지표 수치 비교는 backend의 순수 조건 평가를 전략 전이와 공유하고, UI는 true/false/null 판정만 초록/빨강/회색으로 표시합니다. Python 외부 socket 연결은 차단하고 UI HTTP·WebSocket은 메모리 대역을 사용하므로 5173 포트를 점유하지 않습니다.
+`pnpm test:active-strategy`는 개발 서버와 Binance 연결 없이 ACTIVE STATE 및 거래 / 계좌 → 전략 상태 → 현재 상태의 일치를 검증합니다. 기존 backend 테스트 환경(`backend/.venv/bin/python`, 없으면 `python3`)에서 실제 TradingSTM에 Case B·C의 시장 조건과 가짜 주문·체결 응답을 입력한 뒤, 발행된 JSON event를 실제 UI adapter와 App에 전달합니다. 두 표시 영역과 Case별 현재 단계·지표 그룹의 자동 갱신, 5초 유지 판정의 색상 변화, C 트레일링의 이전 EMA 기준 보존, 청산 후 회복·B 인계, 중지·종료, 연결 단절 시 회색 표시와 event 유실 후 전체 snapshot 복원을 검사합니다. 지표 수치 비교는 backend의 순수 조건 평가를 전략 전이와 공유하고, UI는 true/false/null 판정만 초록/빨강/회색으로 표시합니다. Python 외부 socket 연결은 차단하고 UI HTTP·WebSocket은 메모리 대역을 사용하므로 5173 포트를 점유하지 않습니다.
+
+`Case_B 실시간 지표`와 `Case_C 실시간 지표`를 별도 그룹으로 표시하며, 각 제목 아래에 backend가 전달한 현재 단계와 그 단계의 다음 전환 설명을 표시합니다. WAIT_SIGNAL에는 확정 30분봉 EMA 기울기·종가 %B·직전 3봉 저점 비교만 표시하고, 터치 BBW를 계속 감시하지 않습니다. Case C는 SETUP 안에서도 저점 확인 대기와 반등 회복 대기를 구분합니다. 주문·종료 상태처럼 지표가 없는 단계도 `indicators.phases`로 전달하며, Case C 보유 중 Case B의 신호 감시와 매수 일시정지를 구분합니다. 공통 상단 안전 종료 조건은 별도 그룹에서 한 번만 표시합니다.
 
 실시간 지표의 구현 경계는 `backend/src/binance_auto_trader/domain/trading/conditions.py`의 순수 평가, `backend/src/binance_auto_trader/application/trading_indicator_snapshot.py`의 단계·평가 보존, 기존 transport 계약, `features/recent-orders/tradingIndicatorPresenter.ts`의 문구·색상 투영으로 분리되어 있습니다. 시작 전·종료 후와 구버전 payload에서는 예시 지표를 표시하지 않습니다. 트레이딩 패널은 기존 순서를 유지하는 세로 스크롤 영역이며 단일 열에서는 높이 640px를 사용합니다.
 
