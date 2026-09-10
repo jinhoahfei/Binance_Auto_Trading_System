@@ -148,6 +148,7 @@ class ExitReason(str, Enum):
     TREND_HOLD = "TREND_HOLD"
     TP_TRAIL = "TP_TRAIL"
     TP_FALLBACK = "TP_FALLBACK"
+    EXTERNAL_MANUAL = "EXTERNAL_MANUAL"  # 거래소 사실으로 복구한 외부 수동 매도 전용이다.
 
 
 class PositionReturnState(str, Enum):

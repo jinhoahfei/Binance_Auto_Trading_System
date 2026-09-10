@@ -1,5 +1,6 @@
 .panel {
     position: relative;
+    flex-shrink: 0;
     min-width: 0;
     height: 116px;
     padding: 15px 20px 15px 24px;
@@ -21,7 +22,8 @@
 
 .content {
     display: grid;
-    grid-template-columns: minmax(170px, 206px) 1px minmax(340px, 376px) 1px minmax(250px, 272px);
+    /* 68px 타입 버튼 5개와 7px 간격 4개가 축소 없이 들어갈 너비를 보장한다. */
+    grid-template-columns: minmax(170px, 206px) 1px minmax(368px, 376px) 1px minmax(250px, 272px);
     gap: 12px;
     align-items: center;
     width: 100%;
@@ -135,12 +137,14 @@
 
 .options {
     display: flex;
+    flex-shrink: 0;
     gap: 7px;
     align-items: center;
     justify-content: center;
     min-width: 0;
     height: 52px;
-    overflow-x: auto;
+    /* WebKit에서 가로 스크롤 막대가 버튼 높이를 줄여 세로 스크롤까지 만드는 것을 방지한다. */
+    overflow: visible;
 }
 
 .indicators {
@@ -180,7 +184,8 @@
 
 @media (max-width: 1320px) {
     .content {
-        grid-template-columns: minmax(170px, 0.8fr) 1px minmax(340px, 1.5fr) 1px minmax(240px, 1fr);
+        grid-template-columns: minmax(170px, 0.8fr) 1px minmax(368px, 1.5fr) 1px minmax(220px, 1fr);
+        gap: 8px;
     }
 }
 

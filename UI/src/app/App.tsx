@@ -1,7 +1,6 @@
 import { lazy, Suspense } from 'react';
 
 import { AppHeader } from '../features/trading-control';
-import { ResidualNotice } from '../features/trading-control/components/ResidualNotice';
 import { use_realtime_chart_data } from '../features/price-chart';
 import { AppModalHost } from './components';
 import {
@@ -83,13 +82,6 @@ export function App({ applicationFactory }: AppProps) {
                     type: 'STOP_TRADING_CLICKED',
                     has_open_position: view_model.trading.has_open_position,
                 })}
-            />
-
-            <ResidualNotice
-                quantity={view_model.trading.residual_quantity ?? '0'}
-                costBasis={view_model.trading.residual_cost_basis ?? '0'}
-                hasOpenPosition={view_model.trading.has_open_position}
-                isTrading={view_model.trading.is_trading}
             />
 
             <Suspense

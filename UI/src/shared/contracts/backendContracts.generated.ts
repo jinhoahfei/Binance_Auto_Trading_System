@@ -227,7 +227,8 @@ export interface BackendTradeSnapshot {
     readonly executed_quantity: BackendDecimalString;
     readonly executed_amount: BackendDecimalString;
     readonly average_fill_price: BackendDecimalString;
-    readonly market_price_at_decision: BackendDecimalString;
+    readonly entry_price?: BackendDecimalString | null;
+    readonly market_price_at_decision: BackendDecimalString | null;
     readonly fee_amount: BackendDecimalString;
     readonly fee_asset: string;
     readonly fee_note?: string;

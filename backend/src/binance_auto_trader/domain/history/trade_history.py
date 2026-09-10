@@ -1,6 +1,7 @@
 """order ID idempotency와 KST 조회를 소유하는 TradeHistory를 정의한다."""
 
 from collections.abc import Iterable
+from decimal import Decimal
 from threading import RLock
 from zoneinfo import ZoneInfo
 
@@ -103,6 +104,31 @@ class TradeHistory:
             matching_trades.append(trade)
 
         return tuple(matching_trades)
+
+    def get_entry_prices(self) -> dict[str, Decimal | None]:
+        """
+        함수 이름: get_entry_prices()
+        기능: 필터 전 전체 이력에서 각 매수와 그 뒤 매도의 직전 매수 평균 체결가를 연결한다.
+        인자: 없음
+        반환값: order ID별 수수료를 포함하지 않은 매수 평균 체결가 또는 근거 없음의 None
+        작성 날짜: 2026/09/10
+        """
+        entry_prices = {}
+        latest_buy = None
+        for trade in self.trades:
+            if trade.side is OrderSide.BUY:
+                latest_buy = trade
+                entry_prices[trade.order_id] = trade.average_fill_price
+            else:
+                entry_prices[trade.order_id] = (
+                    latest_buy.average_fill_price
+                    if latest_buy is not None
+                    and latest_buy.executed_at <= trade.executed_at
+                    and (latest_buy.symbol, latest_buy.strategy, latest_buy.regime_type)
+                    == (trade.symbol, trade.strategy, trade.regime_type)
+                    else None
+                )
+        return entry_prices
 
     def _add_trade_without_lock(self, trade: Trade) -> None:
         """

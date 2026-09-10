@@ -22,6 +22,7 @@ from binance_auto_trader.domain.trading.account import (
     SUPPORTED_VALUATION_ASSET,
 )
 from binance_auto_trader.domain.trading.order import Order, OrderResult
+from binance_auto_trader.domain.trading.account_execution import AccountExecution
 from binance_auto_trader.domain.trading.states import OrderSide
 from binance_auto_trader.domain.market import (
     Interval,
@@ -1653,6 +1654,27 @@ class APIGateway:
             results,
             "recent order",
         )
+
+    def list_account_executions_since(self, symbol: str, order_id: str) -> tuple[AccountExecution, ...] | None:
+        """
+        함수 이름: list_account_executions_since()
+        기능: 완전한 외부 체결 조회 port만 호출하고 미지원과 빈 결과를 구분한다.
+        인자: symbol -> 상품, order_id -> 마지막 durable 주문 ID
+        반환값: 검증된 AccountExecution tuple 또는 미지원 None
+        작성 날짜: 2026/09/10
+        """
+        normalized_symbol = _normalize_symbol(symbol)
+        reader = getattr(self._rest_client, "list_account_executions_since", None)
+        if not callable(reader):
+            return None
+        results = reader(symbol=normalized_symbol, order_id=order_id)
+        if results is None:
+            return None
+        if not isinstance(results, tuple) or any(not isinstance(item, AccountExecution) or item.result.symbol != normalized_symbol for item in results):
+            raise ValueError("invalid account execution collection")
+        if len({item.result.exchange_order_id for item in results}) != len(results) or len({item.result.client_order_id for item in results}) != len(results):
+            raise ValueError("duplicate account execution identity")
+        return results
 
     def list_all_recent_order_results(
         self,

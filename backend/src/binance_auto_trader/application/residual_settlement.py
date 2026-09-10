@@ -6,7 +6,7 @@ from typing import Protocol
 from binance_auto_trader.domain.history.trade import Trade
 from binance_auto_trader.domain.trading.position import Position
 from binance_auto_trader.domain.trading.residual import ResidualTransfer, history_digest
-from binance_auto_trader.domain.trading.states import OrderSide
+from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 
 class ResidualStorage(Protocol):
@@ -94,9 +94,18 @@ class ResidualSettlement:
                 fee_seen = False
             if trade.side is OrderSide.BUY and trade.base_fee_amount > 0:
                 fee_seen = True
-            eligible = trade.side is OrderSide.SELL and trade.requested_quantity == previous_quantity and fee_seen
-            position.apply_historical_trade(trade)
             entry = entries.get(count)
+            effective_step = entry.step_size if entry is not None else current_step_size
+            with localcontext() as context:
+                context.prec = 34
+                external_full_step = (
+                    trade.exit_reason is ExitReason.EXTERNAL_MANUAL
+                    and effective_step is not None and effective_step > 0
+                    and trade.requested_quantity == trade.executed_quantity
+                    and trade.executed_quantity == (previous_quantity // effective_step) * effective_step
+                )  # 외부 주문의 실제 origQty를 보존하며 매도 가능한 전량이 체결됐는지 확인한다.
+            eligible = trade.side is OrderSide.SELL and fee_seen and (trade.requested_quantity == previous_quantity or external_full_step)
+            position.apply_historical_trade(trade)
             if entry is not None:
                 # 이력 내용·전량 매도 의도·원가를 모두 재검증해 장부만 바꿔 Position을 숨기지 못한다.
                 if not eligible or entry.history_sha256 != history_digest(trades[:count]):

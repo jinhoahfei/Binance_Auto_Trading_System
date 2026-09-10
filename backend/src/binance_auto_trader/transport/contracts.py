@@ -900,12 +900,12 @@ def map_account_snapshot(account: object) -> JsonObject:
     )
 
 
-def map_trade(trade: object) -> JsonObject:
+def map_trade(trade: object, *, entry_price: Decimal | None = None) -> JsonObject:
     """
     함수 이름: map_trade()
     기능: durable Trade의 실제 체결 필드만 recent trade DTO로 변환한다.
-    인자: trade -> persistence에서 복원한 canonical Trade
-    반환값: entry price나 slippage를 추측하지 않은 trade DTO
+    인자: trade -> persistence에서 복원한 canonical Trade, entry_price -> 전체 이력에서 연결한 매수 체결가
+    반환값: 실제 체결과 검증된 매수 진입 가격을 보존한 trade DTO
     작성 날짜: 2026/08/21
     """
     exit_reason = getattr(trade, "exit_reason")
@@ -920,7 +920,9 @@ def map_trade(trade: object) -> JsonObject:
             for fill in fee_fills:
                 amounts[fill.fee_asset] = amounts.get(fill.fee_asset, Decimal("0")) + fill.fee_amount
         original_fees = " + ".join(f"{format(amount, 'f')} {asset}" for asset, amount in sorted(amounts.items()))
-        fee_note = f"원 수수료 {original_fees} · BNB는 체결 직전 1초봉 종가로 USDT 평가"
+        fee_note = f"원 수수료 {original_fees}"
+        if any(fill.fee_asset == "BNB" for fill in fee_fills):
+            fee_note += " · BNB는 체결 직전 1초봉 종가로 USDT 평가"
 
     return normalize_json_object(
         {
@@ -937,6 +939,9 @@ def map_trade(trade: object) -> JsonObject:
             "executed_quantity": getattr(trade, "executed_quantity"),
             "executed_amount": getattr(trade, "executed_amount"),
             "average_fill_price": getattr(trade, "average_fill_price"),
+            "entry_price": entry_price if entry_price is not None else (
+                getattr(trade, "average_fill_price") if getattr(trade, "side").value == "BUY" else None
+            ),
             "market_price_at_decision": getattr(
                 trade,
                 "market_price_at_decision",
@@ -1018,7 +1023,11 @@ def map_trade_details(
         )
 
     # D-12에 따라 row filter 결과와 Account·Performance 전체 summary 범위를 분리한다.
-    row_dtos = [map_trade(row) for row in rows]  # 검증된 상한 안의 행만 일괄 mapping한다.
+    entry_prices = getattr(trade_details, "entry_prices", ())
+    row_dtos = [
+        map_trade(row, entry_price=entry_prices[index] if entry_prices else None)
+        for index, row in enumerate(rows)
+    ]  # 기간·side 필터 밖의 매수도 Controller가 연결한 가격으로 표시한다.
     performance_dto = map_performance(
         getattr(trade_details, "performance")
     )  # Controller가 계산한 aggregate를 transport에서 다시 계산하지 않는다.
@@ -1708,7 +1717,8 @@ export interface BackendTradeSnapshot {{
     readonly executed_quantity: BackendDecimalString;
     readonly executed_amount: BackendDecimalString;
     readonly average_fill_price: BackendDecimalString;
-    readonly market_price_at_decision: BackendDecimalString;
+    readonly entry_price?: BackendDecimalString | null;
+    readonly market_price_at_decision: BackendDecimalString | null;
     readonly fee_amount: BackendDecimalString;
     readonly fee_asset: string;
     readonly fee_note?: string;

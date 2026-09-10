@@ -4,6 +4,7 @@ from binance_auto_trader.adapters.binance.mappers import (
     OrderPreparationFilterEvidence, OrderSubmissionAttemptEvidence, ReferencePrice, SymbolTradingRules,
 )
 from binance_auto_trader.domain.trading.order import Order, OrderResult
+from binance_auto_trader.domain.trading.account_execution import AccountExecution
 
 
 class BinanceReadOnlyRESTFacade:
@@ -346,6 +347,17 @@ class BinanceReadOnlyRESTFacade:
             limit=limit,
         )
 
+    def list_account_executions_since(self, *, symbol: str, order_id: str) -> tuple[AccountExecution, ...] | None:
+        """
+        함수 이름: list_account_executions_since()
+        기능: 주문 권한 없이 동일 delegate의 외부 체결 복구 조회를 전달한다.
+        인자: symbol -> 상품, order_id -> durable 주문 ID
+        반환값: 완전한 체결 tuple 또는 미지원 None
+        작성 날짜: 2026/09/10
+        """
+        reader = getattr(self._delegate, "list_account_executions_since", None)
+        return reader(symbol=symbol, order_id=order_id) if callable(reader) else None
+
     def list_all_recent_order_results(
         self,
         *,
@@ -373,4 +385,3 @@ class BinanceReadOnlyRESTFacade:
             symbol=symbol,
             limit=limit,
         )  # Exact symbol·limit의 read-only 결과만 호출자에게 전달한다.
-

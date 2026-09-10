@@ -4754,6 +4754,7 @@ class TradingController:
                     "startup order stream rebase failed"
                 ) from error
 
+            self._reconcile_external_exits_during_startup()
             position = self._require_position()
             self._settle_residual_position()
             self._validate_residual_balance()
@@ -5019,6 +5020,69 @@ class TradingController:
         history = self._require_trade_history_controller().trade_history.trades
         if self._residual_settlement.settle(self._require_position(), history, rules.lot_size.step_size):
             self._publish_restored_position_snapshot(self._require_position())
+
+    def _reconcile_external_exits_during_startup(self) -> None:
+        """
+        함수 이름: _reconcile_external_exits_during_startup()
+        기능: fresh startup에서 완전히 설명되는 외부 매도만 내구 이력과 Position에 반영한다.
+        인자: 없음
+        반환값: 없음; 불확실한 계좌·체결·저장은 startup reconciliation 실패
+        작성 날짜: 2026/09/10
+        """
+        from binance_auto_trader.application.external_exit_recovery import build_external_exit_trades
+
+        position = self._require_position()
+        history_controller = self._require_trade_history_controller()
+        history = history_controller.trade_history.trades
+        if position.quantity <= 0 or not history:
+            return
+        anchor = history[-1].order_id
+        executions = self._api_gateway.list_account_executions_since(_TRADING_SYMBOL, anchor)
+        if executions is None:
+            return  # 미지원 port는 기존 잔고 불일치 차단을 그대로 거친다.
+        known = {trade.order_id: trade for trade in history}
+        new_executions = []
+        for execution in executions:
+            result = execution.result
+            durable = known.get(result.exchange_order_id)
+            if durable is not None:
+                if not _order_result_exactly_confirms_trade(result, durable) or execution.side is not durable.side:
+                    raise StartupOrderReconciliationError("account execution conflicts with durable history")
+                if durable.schema_version == 4 and execution.requested_quantity != durable.requested_quantity:
+                    raise StartupOrderReconciliationError("external execution original quantity conflicts with durable history")
+                continue
+            if result.client_order_id.startswith(APP_CLIENT_ORDER_ID_PREFIX):
+                raise StartupOrderReconciliationError("unexplained app execution during external recovery")
+            new_executions.append(execution)
+        if not new_executions:
+            return
+        if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
+            raise StartupOrderReconciliationError("external recovery requires no account-wide open orders")
+        first_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
+        # 별도의 두 조회에서 동일 주문·fill과 잔고를 확인한 뒤에만 첫 durable write를 허용한다.
+        repeated = self._api_gateway.list_account_executions_since(_TRADING_SYMBOL, anchor)
+        confirmed_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
+        first_eth = tuple(balance for balance in first_account.balances if balance.asset == _BASE_ASSET)
+        confirmed_eth = tuple(balance for balance in confirmed_account.balances if balance.asset == _BASE_ASSET)
+        if repeated != executions or first_eth != confirmed_eth or len(confirmed_eth) != 1:
+            raise StartupOrderReconciliationError("external recovery evidence changed during verification")
+        if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
+            raise StartupOrderReconciliationError("open orders appeared during external recovery")
+        if not self._web_socket_gateway.account_ready or self._process_lifetime_reconciliation_required_locked():
+            raise StartupOrderReconciliationError("external recovery account stream is not stable")
+        balance = confirmed_eth[0]
+        residual_quantity = self._residual_settlement.totals[0] if self._residual_settlement is not None else Decimal("0")
+        try:
+            trades = build_external_exit_trades(history, position, tuple(new_executions), eth_balance=balance.free + balance.locked, residual_quantity=residual_quantity)
+        except (ValueError, TypeError) as error:
+            raise StartupOrderReconciliationError("external SELL cannot be attributed to the app position") from error
+        self._account.apply_startup_reconciliation_snapshot(confirmed_account, self._market_snapshot.get_current_eth_price())
+        self._account_free_overlays.clear()
+        for trade in trades:
+            # 전체 후보는 이미 검증했다. 저장 중 중단돼도 다음 실행이 원래 order ID로 멱등 복원한다.
+            history_controller.record_reconciled_external_trade(trade)
+            position.apply_historical_trade(trade)
+        self._web_socket_gateway.rebase_order_results(tuple(execution.result for execution in executions))
 
     def _restore_position_from_history(
         self,

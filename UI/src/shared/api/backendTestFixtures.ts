@@ -154,6 +154,7 @@ export function create_backend_snapshot_fixture(): BackendSnapshot {
             executed_quantity: '0.10',
             executed_amount: '432.150',
             average_fill_price: '4321.50',
+            entry_price: '4321.50',
             market_price_at_decision: '4320.00',
             fee_amount: '0.0001',
             fee_asset: 'ETH',

@@ -26,7 +26,7 @@ from binance_auto_trader.domain.trading.order import (
     PendingOrderRecoveryRecord,
 )
 from binance_auto_trader.domain.trading.risk import ManualKillControlState
-from binance_auto_trader.domain.trading.states import OrderSide
+from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 
 _HOLDINGS_ASSET = "ETH"
@@ -144,7 +144,7 @@ class CSVExportWriterPort(Protocol):
 class TradeDetailsResult:
     """
     클래스 이름: TradeDetailsResult
-    기능: 적용 query, 필터 행, ETH 보유량 provenance와 전체 Performance를 불변으로 묶는다.
+    기능: 적용 query, 필터 행과 매수 체결가, ETH 보유량 provenance 및 전체 Performance를 불변으로 묶는다.
     작성 날짜: 2026/08/23
     """
 
@@ -154,6 +154,7 @@ class TradeDetailsResult:
     holdings: Decimal
     account_version: int
     performance: Performance
+    entry_prices: tuple[Decimal | None, ...] = ()
 
     def __post_init__(self) -> None:
         """
@@ -172,6 +173,10 @@ class TradeDetailsResult:
             raise TypeError("rows must contain only Trade values")
         if not isinstance(self.performance, Performance):
             raise TypeError("performance must be a Performance")
+        if not isinstance(self.entry_prices, tuple) or (self.entry_prices and len(self.entry_prices) != len(self.rows)):
+            raise ValueError("entry prices must align with detail rows")
+        if any(price is not None and (not isinstance(price, Decimal) or not price.is_finite() or price <= 0) for price in self.entry_prices):
+            raise ValueError("entry price must be positive finite Decimal or None")
 
         # Account에서 읽은 ETH 보유량과 이를 식별할 단조 version의 값 범위를 검증한다.
         if self.holdings_asset != _HOLDINGS_ASSET:
@@ -424,6 +429,7 @@ class TradeHistoryController:
                         "clock crossed the KST date boundary repeatedly"
                     )
 
+                entry_prices = current_state.trade_history.get_entry_prices()
                 return TradeDetailsResult(
                     query=query,
                     rows=rows,
@@ -431,6 +437,7 @@ class TradeHistoryController:
                     holdings=summary_state.holdings,
                     account_version=summary_state.account_version,
                     performance=summary_state.performance,
+                    entry_prices=tuple(entry_prices[row.order_id] for row in rows),
                 )  # 필터 행과 기존 D-12 summary snapshot의 범위를 섞지 않는다.
 
         raise RuntimeError("trade details summary could not be stabilized")
@@ -1049,64 +1056,91 @@ class TradeHistoryController:
                 summary,
                 realized_result,
             )
-            published_trades = current_state.trade_history.trades
-            next_trade_history = TradeHistory(published_trades)
-            next_trade_history.add_trade(trade)
+            return self._publish_completed_trade(trade)
 
-            # 같은 order·같은 Trade의 멱등 재처리는 durable state와 live event를 다시 만들지 않는다.
-            if len(next_trade_history.trades) == len(published_trades):
-                return next(
-                    published_trade
-                    for published_trade in published_trades
-                    if published_trade.order_id == trade.order_id
-                )  # caller에도 이미 durable publication된 canonical Trade를 반환한다.
+    def record_reconciled_external_trade(self, trade: Trade) -> Trade:
+        """
+        함수 이름: record_reconciled_external_trade()
+        기능: startup이 검증한 외부 매도를 기존 내구 저장·성과 publication 경계로 기록한다.
+        인자: trade -> 원 체결 증거를 가진 v4 외부 매도
+        반환값: 저장 완료한 Trade
+        작성 날짜: 2026/09/10
+        """
+        if not isinstance(trade, Trade) or trade.schema_version != 4 or trade.exit_reason is not ExitReason.EXTERNAL_MANUAL:
+            raise ValueError("external reconciliation requires v4 SELL")
+        with self._operation_lock:
+            return self._publish_completed_trade(trade)
 
-            next_performance = Performance(
-                published_trades,
-                clock=self._clock,
+    def _publish_completed_trade(self, trade: Trade) -> Trade:
+        """
+        함수 이름: _publish_completed_trade()
+        기능: operation lock 아래 완료 Trade의 저장과 성과·이력 게시를 원자적으로 조정한다.
+        인자: trade -> 저장할 canonical Trade
+        반환값: 저장과 publication을 완료한 Trade
+        작성 날짜: 2026/09/10
+        """
+        if self._pending_publications:
+            raise TradeHistoryPersistencePendingError("pending trade persistence blocks publication")
+        with self._state_lock:
+            current_state = self._state
+        published_trades = current_state.trade_history.trades
+        next_trade_history = TradeHistory(published_trades)
+        next_trade_history.add_trade(trade)
+
+        # 같은 order·같은 Trade의 멱등 재처리는 durable state와 live event를 다시 만들지 않는다.
+        if len(next_trade_history.trades) == len(published_trades):
+            return next(
+                published_trade
+                for published_trade in published_trades
+                if published_trade.order_id == trade.order_id
+            )  # caller에도 이미 durable publication된 canonical Trade를 반환한다.
+
+        next_performance = Performance(
+            published_trades,
+            clock=self._clock,
+        )
+        next_performance.apply_new_trade(trade)
+        next_state = _TradeHistoryLoadState(
+            trade_history=next_trade_history,
+            performance=next_performance,
+        )
+        pending_publication = _PendingPublication(
+            trade=trade,
+            state=next_state,
+        )
+
+        # 메시지 13.5와 account-day 안정화가 성공하기 전에는 두 candidate를 publish하지 않는다.
+        save_trade = getattr(
+            self._repository,
+            "save_this_trade_by_order_id",
+            None,
+        )
+        if not callable(save_trade):
+            raise TypeError(
+                "repository must provide save_this_trade_by_order_id"
             )
-            next_performance.apply_new_trade(trade)
-            next_state = _TradeHistoryLoadState(
-                trade_history=next_trade_history,
-                performance=next_performance,
+        try:
+            save_trade(trade.order_id, trade)
+            published_performance = self._stabilize_performance_account_day(
+                next_performance
             )
-            pending_publication = _PendingPublication(
-                trade=trade,
-                state=next_state,
-            )
+        except Exception:
+            self._pending_publications[trade.order_id] = pending_publication
+            raise  # 공개 state는 유지하고 동일 Trade의 save-only retry 근거만 보존한다.
 
-            # 메시지 13.5와 account-day 안정화가 성공하기 전에는 두 candidate를 publish하지 않는다.
-            save_trade = getattr(
-                self._repository,
-                "save_this_trade_by_order_id",
-                None,
-            )
-            if not callable(save_trade):
-                raise TypeError(
-                    "repository must provide save_this_trade_by_order_id"
-                )
-            try:
-                save_trade(trade.order_id, trade)
-                published_performance = self._stabilize_performance_account_day(
-                    next_performance
-                )
-            except Exception:
-                self._pending_publications[trade.order_id] = pending_publication
-                raise  # 공개 state는 유지하고 동일 Trade의 save-only retry 근거만 보존한다.
+        published_state = _TradeHistoryLoadState(
+            trade_history=next_trade_history,
+            performance=published_performance,
+        )  # Durable write 중 자정이 지나도 새 account day candidate만 공개한다.
 
-            published_state = _TradeHistoryLoadState(
-                trade_history=next_trade_history,
-                performance=published_performance,
-            )  # Durable write 중 자정이 지나도 새 account day candidate만 공개한다.
+        with self._state_lock:
+            self._state = published_state  # 두 공개 snapshot을 같은 state 교체로 게시한다.
+        self._details_summary_state = None  # 새 Trade 또는 KST rollover 성과는 다음 조회에서 원자 재결합한다.
 
-            with self._state_lock:
-                self._state = published_state  # 두 공개 snapshot을 같은 state 교체로 게시한다.
-            self._details_summary_state = None  # 새 Trade 또는 KST rollover 성과는 다음 조회에서 원자 재결합한다.
+        # durable state publication 경계가 끝난 뒤 같은 candidate를 event observer에 전달한다.
+        self._notify_trade_update(trade, published_performance)
 
-            # durable state publication 경계가 끝난 뒤 같은 candidate를 event observer에 전달한다.
-            self._notify_trade_update(trade, published_performance)
-
-            return trade  # durable save와 두 domain publication이 모두 완료된 Trade다.
+        return trade  # durable save와 두 domain publication이 모두 완료된 Trade다.
 
     def retry_pending_persistence(self, order_id: str) -> Trade:
         """

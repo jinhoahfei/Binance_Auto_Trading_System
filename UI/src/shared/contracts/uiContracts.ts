@@ -117,10 +117,12 @@ export interface TradeRecord {
     readonly strategy: string;
     readonly price: DecimalString;
     readonly entry_price: DecimalString | null;
-    readonly market_price_at_decision: DecimalString;
+    readonly market_price_at_decision: DecimalString | null;
     readonly quantity: DecimalString;
     readonly total: DecimalString;
     readonly fee: DecimalString;
+    readonly fee_amount?: DecimalString;
+    readonly fee_asset?: string;
     readonly fee_note?: string;
     readonly profit_rate: DecimalString | null;
     readonly realized_pnl: DecimalString | null;

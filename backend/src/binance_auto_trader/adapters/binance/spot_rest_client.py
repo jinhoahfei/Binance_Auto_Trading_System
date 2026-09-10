@@ -21,6 +21,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from binance_auto_trader.domain.trading.account_execution import AccountExecution
 from binance_auto_trader.domain.trading.order import (
     FeeAssetReconciliationRequiredError,
     Fill,
@@ -1424,6 +1425,48 @@ class BinanceSpotRESTClient:
             client_order_id_prefix=normalized_prefix,
         )  # client prefix filtering은 allOrders가 지원하지 않아 로컬에서 수행한다.
 
+    def list_account_executions_since(self, *, symbol: str, order_id: str) -> tuple[AccountExecution, ...]:
+        """
+        함수 이름: list_account_executions_since()
+        기능: 마지막 durable 주문부터 전체 client 주문을 페이지 조회해 외부 체결 복구 근거를 만든다.
+        인자: symbol -> ETHUSDT, order_id -> 마지막 durable 거래소 주문 ID
+        반환값: 누락·중복 없는 주문 방향과 누적 체결 tuple
+        작성 날짜: 2026/09/10
+        """
+        symbol = self._normalize_symbol(symbol)
+        if not isinstance(order_id, str) or re.fullmatch(r"[1-9][0-9]*", order_id) is None:
+            raise ValueError("recovery requires a canonical order ID")
+        cursor = int(order_id)
+        executions = []
+        # 오래된 매수도 날짜를 자르지 않고 orderId cursor로 조회한다. 불완전한 상한 결과는 사용하지 않는다.
+        for page_index in range(10):
+            payload = self._request_json(method="GET", endpoint="/v3/allOrders", parameters={"symbol": symbol, "orderId": cursor, "limit": 1000}, signed=True).payload
+            if not isinstance(payload, list) or len(payload) > 1000:
+                raise BinancePayloadError("invalid account execution page")
+            for row in payload:
+                if not isinstance(row, Mapping) or row.get("symbol") != symbol:
+                    raise BinancePayloadError("invalid account execution row")
+                identifier = row.get("orderId")
+                if type(identifier) is not int or identifier < cursor:
+                    raise BinancePayloadError("account execution cursor regressed")
+                cursor = identifier + 1
+                if not self._payload_has_executions(row):
+                    continue
+                side = OrderSide(row.get("side"))
+                created = row.get("time")
+                if type(created) is not int or created <= 0:
+                    raise BinancePayloadError("account execution creation time missing")
+                quantity = row.get("origQty")
+                if not isinstance(quantity, str):
+                    raise BinancePayloadError("account execution original quantity missing")
+                processed = self._payload_processed_time(row)
+                fills = self._load_order_fills(symbol=symbol, exchange_order_id=identifier, fallback_executed_at=processed, expected_side=side)
+                result = map_order_result(row, expected_symbol=symbol, expected_client_order_id=row.get("clientOrderId"), fills=fills)
+                executions.append(AccountExecution(side, Decimal(quantity), _UNIX_EPOCH + timedelta(milliseconds=created), result))
+            if len(payload) < 1000:
+                return tuple(executions)
+        raise BinancePayloadError("account execution history exceeds recovery bound")
+
     def list_all_recent_order_results(
         self,
         *,
@@ -2004,6 +2047,7 @@ class BinanceSpotRESTClient:
         symbol: str,
         exchange_order_id: int,
         fallback_executed_at: datetime,
+        expected_side: OrderSide | None = None,
     ) -> tuple[Fill, ...]:
         """
         함수 이름: _load_order_fills()
@@ -2011,6 +2055,7 @@ class BinanceSpotRESTClient:
         인자: symbol -> 주문 symbol
             exchange_order_id -> Binance orderId
             fallback_executed_at -> trade time 누락 시 사용할 UTC 시각
+            expected_side -> 외부 복구 시 fill 방향·출처·조회 완전성을 엄격하게 검증할 방향
         반환값: 중복 제거한 Fill tuple
         작성 날짜: 2026/08/22
         """
@@ -2021,9 +2066,22 @@ class BinanceSpotRESTClient:
             parameters={
                 "symbol": symbol,
                 "orderId": exchange_order_id,
+                **({"limit": 1000} if expected_side is not None else {}),
             },
             signed=True,
         )
+        if expected_side is not None:
+            rows = response.payload
+            if not isinstance(rows, list) or len(rows) >= 1000 or any(
+                not isinstance(row, Mapping) or row.get("symbol") != symbol
+                or row.get("orderId") != exchange_order_id
+                or row.get("isBuyer") is not (expected_side is OrderSide.BUY)
+                or type(row.get("time")) is not int or row["time"] <= 0
+                for row in rows
+            ):
+                raise BinancePayloadError("external execution fill provenance is incomplete")
+            if any(type(row.get("id")) is not int or row["id"] <= 0 for row in rows) or len({row["id"] for row in rows}) != len(rows):
+                raise BinancePayloadError("external execution fill IDs are invalid or duplicated")
         rules = self._rules_from_order_symbol(symbol)
 
         return map_fill_payloads(

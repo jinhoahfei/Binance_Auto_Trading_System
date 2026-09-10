@@ -1043,7 +1043,6 @@ export function validate_trade_snapshot(value: unknown): BackendTradeSnapshot {
         'executed_quantity',
         'executed_amount',
         'average_fill_price',
-        'market_price_at_decision',
         'fee_amount',
         'fee_quote_amount',
     ] as const;
@@ -1058,6 +1057,18 @@ export function validate_trade_snapshot(value: unknown): BackendTradeSnapshot {
     assert_nullable_decimal_string(trade.realized_pnl, 'trade.realized_pnl');
     assert_nullable_decimal_string(trade.realized_return_rate, 'trade.realized_return_rate');
     assert_nullable_string(trade.exit_reason, 'trade.exit_reason');
+    if (trade.entry_price !== undefined) {
+        assert_nullable_positive_decimal_string(trade.entry_price, 'trade.entry_price');
+    }
+
+    // 외부 매도는 실제 결정 시세를 알 수 없어 null이며 자동매매 체결의 필수값 계약은 유지한다.
+    if (trade.exit_reason === 'EXTERNAL_MANUAL') {
+        if (trade.side !== 'SELL' || trade.market_price_at_decision !== null || (trade.client_order_id as string).startsWith('bat-')) {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'external SELL provenance is invalid');
+        }
+    } else {
+        assert_decimal_string(trade.market_price_at_decision, 'trade.market_price_at_decision');
+    }
 
     return value as BackendTradeSnapshot;
 }
@@ -1442,7 +1453,7 @@ function map_indicator_metrics(
  * 함수 이름: map_trade_record()
  * 기능: durable backend Trade를 계산 없이 기존 UI 체결 record로 변환한다.
  * 인자: trade -> validated backend Trade
- * 반환값: nullable unavailable entry price와 USDT 단위를 보존한 UI record
+ * 반환값: 실제 매수 체결가와 원 수수료 자산·금액을 보존한 UI record
  * 작성 날짜: 2026/08/21
  */
 export function map_trade_record(trade: BackendTradeSnapshot): TradeRecord {
@@ -1455,11 +1466,13 @@ export function map_trade_record(trade: BackendTradeSnapshot): TradeRecord {
         regime: trade.regime_type,
         strategy: trade.strategy,
         price: trade.average_fill_price,
-        entry_price: null,
+        entry_price: trade.entry_price ?? (trade.side === 'BUY' ? trade.average_fill_price : null),
         market_price_at_decision: trade.market_price_at_decision,
         quantity: trade.executed_quantity,
         total: trade.executed_amount,
         fee: trade.fee_quote_amount,
+        fee_amount: trade.fee_amount,
+        fee_asset: trade.fee_asset,
         ...(trade.fee_note === undefined ? {} : { fee_note: trade.fee_note }),
         profit_rate: trade.realized_return_rate,
         realized_pnl: trade.realized_pnl,

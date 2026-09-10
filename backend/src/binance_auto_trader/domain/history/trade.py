@@ -20,6 +20,7 @@ SUPPORTED_TRADE_SCHEMA_VERSIONS = frozenset(
         LEGACY_TRADE_SCHEMA_VERSION,
         TRADE_SCHEMA_VERSION,
         3,
+        4,
     }
 )
 TRADE_RECORD_TYPE = "trade"
@@ -297,7 +298,7 @@ class Trade:
     executed_quantity: Decimal
     executed_amount: Decimal
     average_fill_price: Decimal
-    market_price_at_decision: Decimal
+    market_price_at_decision: Decimal | None
     fee_amount: Decimal
     fee_asset: str
     fee_quote_amount: Decimal
@@ -444,7 +445,7 @@ class Trade:
             type(self.schema_version) is not int
             or self.schema_version not in SUPPORTED_TRADE_SCHEMA_VERSIONS
         ):
-            raise ValueError("schema_version must be supported integer 1 or 2")
+            raise ValueError("schema_version must be supported integer 1, 2, 3 or 4")
 
         # durable identity 세 필드와 exchange order의 양의 정수 wire 형식을 먼저 검증한다.
         _validate_non_empty_text(self.trade_id, "trade_id")
@@ -481,12 +482,24 @@ class Trade:
             ("executed_quantity", self.executed_quantity),
             ("executed_amount", self.executed_amount),
             ("average_fill_price", self.average_fill_price),
-            ("market_price_at_decision", self.market_price_at_decision),
         )
         for field_name, field_value in positive_fields:
             _validate_finite_decimal(field_value, field_name)
             if field_value <= Decimal("0"):
                 raise ValueError(f"{field_name} must be greater than zero")
+
+        # 외부 매도의 판단 시세를 체결가로 만들어 넣지 않고 v4에서만 null로 보존한다.
+        if self.schema_version == 4:
+            if self.side is not OrderSide.SELL or self.exit_reason is not ExitReason.EXTERNAL_MANUAL:
+                raise ValueError("v4 is reserved for reconciled external SELL")
+            if self.market_price_at_decision is not None or self.client_order_id.startswith("bat-"):
+                raise ValueError("external SELL cannot claim app decision provenance")
+        else:
+            if self.exit_reason is ExitReason.EXTERNAL_MANUAL:
+                raise ValueError("external SELL requires v4 evidence")
+            _validate_finite_decimal(self.market_price_at_decision, "market_price_at_decision")
+            if self.market_price_at_decision <= 0:
+                raise ValueError("market_price_at_decision must be greater than zero")
 
         # 원자산과 quote 환산 수수료는 0을 허용하되 음수는 거부한다.
         fee_fields = (
@@ -503,17 +516,17 @@ class Trade:
         if _SYMBOL_PATTERN.fullmatch(self.fee_asset) is None:
             raise ValueError("fee_asset must contain only uppercase ASCII letters and digits")
 
-        # v3는 원 fill과 평가 근거를 함께 저장하고 aggregate를 재계산해 변조를 거부한다.
+        # v3/v4는 원 fill과 평가 근거를 함께 저장하고 aggregate를 재계산해 변조를 거부한다.
         if not isinstance(self.fee_fills, tuple):
             raise TypeError("fee_fills must be a tuple")
-        if self.schema_version == 3:
+        if self.schema_version in (3, 4):
             if not self.fee_fills or any(not isinstance(fill, Fill) or fill.exchange_order_id != self.order_id for fill in self.fee_fills):
-                raise ValueError("v3 requires order-bound fee fills")
+                raise ValueError("v3/v4 requires order-bound fee fills")
             if len({fill.key for fill in self.fee_fills}) != len(self.fee_fills):
                 raise ValueError("duplicate fee fill evidence")
             aggregate = _aggregate_fills(self.fee_fills)
             if aggregate != (self.executed_quantity, self.executed_amount, self.average_fill_price, self.fee_amount, self.fee_asset, self.fee_quote_amount, self.executed_at):
-                raise ValueError("v3 aggregate does not match fee evidence")
+                raise ValueError("v3/v4 aggregate does not match fee evidence")
         elif self.fee_fills:
             raise ValueError("legacy schema cannot contain fee evidence")
         self._validate_fee_conversion()
@@ -528,7 +541,7 @@ class Trade:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
-        if self.schema_version == 3:
+        if self.schema_version in (3, 4):
             return  # 개별 Fill과 aggregate의 정확한 일치를 위에서 검증했다.
         # USDT fee는 별도 환율 없이 원 수수료와 quote 수수료가 정확히 같아야 한다.
         if self.fee_asset == _QUOTE_ASSET:
@@ -624,7 +637,7 @@ def trade_from_json_object(record: object) -> Trade:
     # domain 생성 전에 object shape와 허용 key 집합을 exact match로 고정한다.
     if not isinstance(record, Mapping):
         raise TypeError("trade record must be a JSON object")
-    expected_fields = _TRADE_RECORD_FIELDS | {"fee_fills"} if record.get("schema_version") == 3 else _TRADE_RECORD_FIELDS
+    expected_fields = _TRADE_RECORD_FIELDS | {"fee_fills"} if record.get("schema_version") in (3, 4) else _TRADE_RECORD_FIELDS
     if set(record.keys()) != expected_fields:
         raise ValueError("trade record must contain exactly the JSONL fields")
 
@@ -634,7 +647,7 @@ def trade_from_json_object(record: object) -> Trade:
         type(schema_version) is not int
         or schema_version not in SUPPORTED_TRADE_SCHEMA_VERSIONS
     ):
-        raise ValueError("schema_version must be supported integer 1 or 2")
+        raise ValueError("schema_version must be supported integer 1, 2, 3 or 4")
     if record["record_type"] != TRADE_RECORD_TYPE:
         raise ValueError("record_type must be trade")
 
@@ -676,7 +689,7 @@ def trade_from_json_object(record: object) -> Trade:
             record["average_fill_price"],
             "average_fill_price",
         ),
-        market_price_at_decision=_parse_plain_decimal(
+        market_price_at_decision=_parse_optional_plain_decimal(
             record["market_price_at_decision"],
             "market_price_at_decision",
         ),
@@ -700,7 +713,7 @@ def trade_from_json_object(record: object) -> Trade:
         ),
         exit_reason=_parse_optional_exit_reason(record["exit_reason"]),
         schema_version=schema_version,
-        fee_fills=tuple(fill_from_record(fill) for fill in _read_fee_fills(record)) if schema_version == 3 else (),
+        fee_fills=tuple(fill_from_record(fill) for fill in _read_fee_fills(record)) if schema_version in (3, 4) else (),
     )
 
 
@@ -731,7 +744,7 @@ def trade_to_json_object(trade: Trade) -> dict[str, object]:
     # UTC timestamp와 enum을 wire 값으로 바꾸고 schema의 canonical key 순서를 유지한다.
     executed_at_text = trade.executed_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return {
-        **({"fee_fills": [fill_to_record(fill) for fill in trade.fee_fills]} if trade.schema_version == 3 else {}),
+        **({"fee_fills": [fill_to_record(fill) for fill in trade.fee_fills]} if trade.schema_version in (3, 4) else {}),
         "schema_version": trade.schema_version,
         "record_type": TRADE_RECORD_TYPE,
         "trade_id": trade.trade_id,

@@ -732,7 +732,7 @@ describe('backend snapshot and event mapping', () => {
         });
         expect(mapped.server_snapshot.recent_trades[0]).toMatchObject({
             quote_asset: 'USDT',
-            entry_price: null,
+            entry_price: '4321.50',
             total: '432.150',
         });
         // EMA9의 수치·단위와 스윙의 확정 구조 판정이 같은 snapshot에서 표시되는지 확인한다.

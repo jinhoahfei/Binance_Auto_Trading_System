@@ -65,6 +65,15 @@ Context와 STM 상태가 잠시 어긋나는 것을 막기 위해 `CASE_*_POSITI
 
 
 
+### 0.4 외부 수동 매도와 새 실행 복구
+
+앱 밖에서 발생한 매도는 아래 전략 Guard의 성공이나 `CASE_*_SELL_FILLED`로 추정하지 않는다.
+실행 중에는 기존 외부 체결 reconciliation 차단을 유지한다. 새 process의 startup에서
+`TradingController`가 실제 주문·fill·잔고를 반복 검증해 `EXTERNAL_MANUAL` 이력과 Position을
+조정한다. 전량·부분 매도 및 수수료 잔량의 처리는
+[ADR-007](../../Architecture/Decisions/ADR-007-external-manual-sell-recovery.md)을 따른다.
+완료 후 상태는 `NOT_STARTED`이며, 매수 단계 진입이나 자동매매 시작 EVENT를 생성하지 않는다.
+
 ## 1. 상태 구성
 
 ### 1.1 최상위 상태

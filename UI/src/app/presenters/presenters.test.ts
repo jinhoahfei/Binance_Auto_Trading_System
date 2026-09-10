@@ -1,3 +1,5 @@
+import { map_trade_record, validate_trade_snapshot } from '../../shared/api/backendEventMapper';
+import { create_backend_snapshot_fixture } from '../../shared/api/backendTestFixtures';
 import type {
     RealtimeChartDataRuntime,
     RealtimeChartDataSnapshot,
@@ -81,6 +83,79 @@ function create_market_kline(
 }
 
 describe('application presenters', () => {
+    it('실제 매수 평균 체결가와 ETH·USDT 원 수수료를 반올림 없이 표시한다', () => {
+        const source = create_backend_snapshot_fixture().recent_trades[0]!;
+        const buy_source = {
+            ...source, average_fill_price: '2444.04000000', entry_price: '2444.04000000',
+            market_price_at_decision: '2444.98000000', fee_amount: '0.00000400', fee_asset: 'ETH',
+            fee_quote_amount: '0.0097761600000000',
+        };
+        const sell_source = {
+            ...buy_source, trade_id: 'external-sell', side: 'SELL', client_order_id: 'web-manual-sell',
+            average_fill_price: '2421.86000000', market_price_at_decision: null, exit_reason: 'EXTERNAL_MANUAL',
+            fee_amount: '0.00944525', fee_asset: 'USDT', fee_quote_amount: '0.00944525',
+            fee_note: '원 수수료 0.00944525 USDT',
+        };
+        const buy = map_trade_record(validate_trade_snapshot(buy_source));
+        const sell = map_trade_record(validate_trade_snapshot(sell_source));
+        const view_model = create_demo_view_model();
+        const { controller } = create_recording_controller(view_model);
+        const rows = present_trade_history_props({ ...view_model, trade_history: { ...view_model.trade_history, records: [buy, sell] } }, controller).rows;
+        expect(rows).toMatchObject([
+            { entryPrice: '2,444.04 USDT', executionPrice: '2,444.04 USDT', fee: '0.000004 ETH', feeNote: '≈ 0.00977616 USDT' },
+            { entryPrice: '2,444.04 USDT', executionPrice: '2,421.86 USDT', fee: '0.00944525 USDT' },
+        ]);
+        expect(rows[1]?.feeNote).toBeUndefined();
+        expect(buy.market_price_at_decision).toBe('2444.98000000');
+        expect(buy.fee_amount).toBe('0.00000400');
+        expect(sell.market_price_at_decision).toBeNull();
+        const filtered = present_trade_history_props({ ...view_model, trade_history: { ...view_model.trade_history, side: 'sell', records: [sell] } }, controller);
+        expect(filtered.rows[0]?.entryPrice).toBe('2,444.04 USDT');
+        for (const entry_price of ['0', '-1', 'NaN', 2444.04]) {
+            expect(() => validate_trade_snapshot({ ...buy_source, entry_price })).toThrow();
+        }
+    });
+
+    it('아주 작은 BNB·혼합 수수료·실제 0 수수료의 단위를 보존한다', () => {
+        const view_model = create_demo_view_model();
+        const { controller } = create_recording_controller(view_model);
+        const source = create_backend_snapshot_fixture().recent_trades[0]!;
+        const cases = [
+            { fee_asset: 'BNB', fee_amount: '0.0000000009', fee_quote_amount: '0.0000005400', expected: '0.0000000009 BNB', note: '≈ 0.00000054 USDT' },
+            { fee_asset: 'MIXED', fee_amount: '0.01000054', fee_quote_amount: '0.01000054', fee_note: '원 수수료 0.0000000009 BNB + 0.01 USDT', expected: '0.01000054 USDT 환산', note: '원 수수료 0.0000000009 BNB + 0.01 USDT' },
+            { fee_asset: 'USDT', fee_amount: '0.00000000', fee_quote_amount: '0.00000000', expected: '0 USDT', note: undefined },
+        ];
+        for (const example of cases) {
+            const record = map_trade_record(validate_trade_snapshot({ ...source, ...example }));
+            const rows = present_trade_history_props({ ...view_model, trade_history: { ...view_model.trade_history, records: [record] } }, controller).rows;
+            expect(rows[0]?.fee).toBe(example.expected);
+            expect(rows[0]?.feeNote).toBe(example.note);
+        }
+    });
+
+    it('외부 수동 매도는 두 거래 화면에서 구분하고 모르는 판단 시세는 null로 유지한다', () => {
+        const source = {
+            ...create_backend_snapshot_fixture().recent_trades[0]!,
+            side: 'SELL', client_order_id: 'web-manual-sell', exit_reason: 'EXTERNAL_MANUAL',
+            market_price_at_decision: null, realized_pnl: '-0.10', realized_return_rate: '-1.10', allocated_cost_basis: '9.54',
+        };
+        const record = map_trade_record(validate_trade_snapshot(source));
+        const view_model = create_demo_view_model();
+        const updated: AppViewModel = {
+            ...view_model,
+            trader_panel: { ...view_model.trader_panel, trades: [record] },
+            trade_history: { ...view_model.trade_history, records: [record] },
+        };
+        const { controller } = create_recording_controller(updated);
+        expect(present_dashboard_props(updated, controller).trader.orders[0]?.strategy).toBe('외부 수동 매도');
+        expect(present_trade_history_props(updated, controller).rows[0]?.strategy).toBe('외부 수동 매도');
+        expect(record.market_price_at_decision).toBeNull();
+        expect(record.strategy).toBe(source.strategy);
+        expect(() => validate_trade_snapshot({ ...source, exit_reason: 'STOP' })).toThrow();
+        expect(() => validate_trade_snapshot({ ...source, side: 'BUY' })).toThrow();
+        expect(() => validate_trade_snapshot({ ...source, client_order_id: 'bat-app-order' })).toThrow();
+    });
+
     it('최근 체결과 상세 거래의 ETH 수량은 4자리, 금액과 수익률은 2자리로 표시한다', () => {
         const view_model = create_demo_view_model();
         const buy_trade: TradeRecord = Object.freeze({

@@ -33,6 +33,7 @@ from binance_auto_trader.domain.trading.account import (
     AssetBalance,
 )
 from binance_auto_trader.domain.trading.states import OrderSide
+from binance_auto_trader.transport.contracts import map_trade_details
 
 from tests.unit.history.factories import make_order_execution, make_trade
 
@@ -451,6 +452,31 @@ class TradeHistoryControllerPhase8Tests(unittest.TestCase):
         self.assertEqual(controller.trade_history.trades, (retried_trade,))
         self.assertEqual(controller.performance.total_fee, Decimal("0.10"))
         self.assertEqual(controller.dirty_order_ids, frozenset())
+
+    def test_entry_prices_survive_sell_only_and_date_filters(self) -> None:
+        """
+        함수 이름: test_entry_prices_survive_sell_only_and_date_filters()
+        기능: 기간 밖 매수의 평균 체결가를 매도에 연결하고 이후 새 매수의 가격과 섞지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/10
+        """
+        buy = make_trade(order_id="901", executed_at=CURRENT_TIME - timedelta(days=40))
+        sell = make_trade(order_id="902", side=OrderSide.SELL, executed_at=CURRENT_TIME - timedelta(minutes=2))
+        next_buy = make_trade(order_id="903", executed_at=CURRENT_TIME, average_fill_price=Decimal("120"), executed_amount=Decimal("240"), fee_quote_amount=Decimal("0.24"))
+        repository = RecordingRepository()
+        repository.trades_by_order_id.update({trade.order_id: trade for trade in (buy, sell, next_buy)})
+        controller = TradeHistoryController(repository, clock=fixed_clock, account=make_ready_account())
+        controller.load_trade_history()
+
+        only_sell = map_trade_details(controller.get_trade_details(HistoryPeriod.TODAY, TradeSide.SELL), HistoryPeriod.TODAY)
+        self.assertEqual(len(only_sell["rows"]), 1)
+        self.assertEqual(only_sell["rows"][0]["entry_price"], "100")
+        self.assertEqual(only_sell["rows"][0]["average_fill_price"], "110")
+        today = map_trade_details(controller.get_trade_details(HistoryPeriod.TODAY, TradeSide.ALL), HistoryPeriod.TODAY)
+        self.assertEqual([row["entry_price"] for row in today["rows"]], ["100", "120"])
+        self.assertEqual(controller.trade_history.trades, (buy, sell, next_buy))
+        self.assertEqual(repository.save_call_count, 0)
 
     def test_buy_rejects_allocated_cost_and_skips_realized_fields(self) -> None:
         """

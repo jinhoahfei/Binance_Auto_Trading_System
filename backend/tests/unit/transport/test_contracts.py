@@ -399,7 +399,7 @@ class TransportContractTests(unittest.TestCase):
 
         trade_row = snapshot["recent_trades"][0]
         self.assertEqual(trade_row["average_fill_price"], "4321.50")
-        self.assertNotIn("entry_price", trade_row)
+        self.assertEqual(trade_row["entry_price"], "4321.50")
         self.assertNotIn("slippage", trade_row)
         self.assertNotIn("krw", json_text := str(snapshot).lower())
         self.assertNotIn("nan", json_text)

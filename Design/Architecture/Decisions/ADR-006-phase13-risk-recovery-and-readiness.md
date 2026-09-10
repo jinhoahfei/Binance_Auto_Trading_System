@@ -300,6 +300,10 @@ external execution은 app-owned recovery로 귀속할 수 없어 worker wake와 
 process-ownership만 process-lifetime blocker이므로 concrete `false`와 결합하지 않는다. 결합
 category 자체는 일반 disconnect와 app-prefix unknown도 포함하므로 영구 blocker로 해석하지 않는다.
 
+2026-09-10 보완: 새 process는 [ADR-007](ADR-007-external-manual-sell-recovery.md)에 따라
+열린 앱 Position 이후의 외부 SELL을 전체 체결·반복 잔고 조회로 검증하고 내구 이력에 복구한다.
+실행 중 prefixless-external flag를 해제하거나 자동매매를 재개하지 않는다.
+
 Actual 실행 중 예외가 durable BUY 뒤 발생하면 failure finalizer는 제출을 닫기 전에 단 한 번만
 recovery 가능성을 판정한다. 이번 run의 durable Trade가 정확히 BUY 한 건이고, guard가 BUY permit
 한 건만 소비했으며, pending/UNKNOWN·reconciliation이 없고, authoritative Position이 BUY 체결량과

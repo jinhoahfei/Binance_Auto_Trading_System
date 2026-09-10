@@ -60,7 +60,7 @@ function create_recent_order_view_model(trade_record: TradeRecord): RecentOrderV
     return {
         id: trade_record.id,
         side: trade_record.side,
-        strategy: trade_record.strategy,
+        strategy: trade_record.exit_reason === 'EXTERNAL_MANUAL' ? '외부 수동 매도' : trade_record.strategy,
         time: format_recent_trade_time(trade_record.occurred_at),
         price: trade_record.quote_asset === undefined
             ? `₩ ${format_decimal_text(trade_record.price)}`

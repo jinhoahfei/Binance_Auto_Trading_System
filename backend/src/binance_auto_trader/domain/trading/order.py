@@ -799,6 +799,8 @@ class Order:
             raise TypeError("regime_type must be a RegimeType")
         if self.exit_reason is not None and not isinstance(self.exit_reason, ExitReason):
             raise TypeError("exit_reason must be an ExitReason or None")
+        if self.exit_reason is ExitReason.EXTERNAL_MANUAL:
+            raise ValueError("external execution cannot create an app order intent")
         if self.side is OrderSide.BUY and self.exit_reason is not None:
             raise ValueError("BUY order must not have exit_reason")
 

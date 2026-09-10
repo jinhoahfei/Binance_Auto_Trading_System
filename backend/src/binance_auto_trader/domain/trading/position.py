@@ -506,6 +506,20 @@ class Position:
 
             self._state = next_state  # 유효한 전체 snapshot 하나만 authoritative state로 발행한다.
 
+    def clone(self) -> "Position":
+        """
+        함수 이름: clone()
+        기능: 공개 상태를 바꾸지 않고 복구 후보를 재생할 독립 Position을 만든다.
+        인자: 없음
+        반환값: 불변 snapshot과 legacy 회계 표식을 복사한 Position
+        작성 날짜: 2026/09/10
+        """
+        with self._lock:
+            candidate = Position(self.symbol)
+            candidate._state = self._state
+            candidate._legacy_base_fee_history_open = self._legacy_base_fee_history_open
+            return candidate
+
     def apply_historical_trade(self, trade: object) -> None:
         """
         함수 이름: apply_historical_trade()

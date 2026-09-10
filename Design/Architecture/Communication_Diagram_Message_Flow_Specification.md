@@ -1435,6 +1435,13 @@ barrier를 다시 수행한다. 반면 app prefix가 없는 수동·외부 실�
 수 없으므로 process-lifetime blocker로 고정한다. 이 branch는 worker를 깨우지 않고 direct reconnect도
 거부하며, fresh process의 account-wide 검증 전까지 command를 다시 열 수 없다.
 
+Fresh process는 [ADR-007](Decisions/ADR-007-external-manual-sell-recovery.md)에 따라 열린 앱
+Position 이후의 외부 SELL만 복구한다. `listAccountExecutionsSince(symbol, orderId)`로 전체
+client 주문·fill을 두 번 대조하고, 두 Account의 ETH free/locked와 전체 open order 부재를
+확인한 뒤 `recordReconciledExternalTrade(trade)`의 기존 저장·성과·게시 경로에 반영한다.
+Python operation은 각각 `list_account_executions_since`, `record_reconciled_external_trade`다.
+실행 중 재연결이나 전략 주문 Action으로 이 경로를 호출하지 않고, 완료 후 `NOT_STARTED`를 유지한다.
+
 `ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION` category 자체는 일반 account disconnect와
 app-prefix unknown도 함께 표현하므로 언제나 process-lifetime blocker인 것은 아니다. 별도의 prefixless
 external execution flag가 선 경우에만 이 category를 fresh-process 전용 blocker로 해석한다. Event

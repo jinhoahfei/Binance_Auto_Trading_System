@@ -128,7 +128,7 @@ export function TradeTable({
                     <td className={`${styles.numeric} ${styles.emphasized}`}>{row.executionPrice}</td>
                     <td className={styles.numeric}>{row.quantity}</td>
                     <td className={styles.numeric}>{row.orderAmount}</td>
-                    <td className={`${styles.numeric} ${styles.secondary}`}>{row.fee}{row.feeNote ? <small style={{ display: 'block', whiteSpace: 'normal' }}>{row.feeNote}</small> : null}</td>
+                    <td className={`${styles.numeric} ${styles.secondary} ${styles.fee}`}>{row.fee}{row.feeNote ? <small style={{ display: 'block', whiteSpace: 'normal' }}>{row.feeNote}</small> : null}</td>
                     <td className={`${styles.numeric} ${get_result_tone_class(row.previousBuyReturn)}`}>
                       {row.previousBuyReturn}
                     </td>

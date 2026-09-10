@@ -42,6 +42,37 @@ const HISTORY_SIDE_LABELS: Readonly<Record<AppViewModel['trade_history']['side']
 };
 
 /**
+ * 함수 이름: create_fee_display()
+ * 기능: 실제 수수료 자산·금액을 반올림 없이 표시하고 quote 환산값을 구분한다.
+ * 인자: trade_record -> 원 수수료와 quote 환산액을 가진 거래 record
+ * 반환값: 수수료 셀의 원 금액과 선택적 환산 안내
+ * 작성 날짜: 2026/09/10
+ */
+function create_fee_display(trade_record: TradeRecord): Pick<TradeRowViewModel, 'fee' | 'feeNote'> {
+    const exact_amount = (value: string) => value.includes('.')
+        ? value.replace(/0+$/u, '').replace(/\.$/u, '')
+        : value;
+    if (trade_record.fee_amount !== undefined && trade_record.fee_asset !== undefined) {
+        if (trade_record.fee_asset !== 'MIXED') {
+            return {
+                fee: `${exact_amount(trade_record.fee_amount)} ${trade_record.fee_asset}`,
+                ...(trade_record.fee_asset === trade_record.quote_asset
+                    ? {}
+                    : { feeNote: `≈ ${exact_amount(trade_record.fee)} ${trade_record.quote_asset ?? 'USDT'}` }),
+            };
+        }
+        return {
+            fee: `${exact_amount(trade_record.fee)} ${trade_record.quote_asset ?? 'USDT'} 환산`,
+            ...(trade_record.fee_note === undefined ? {} : { feeNote: trade_record.fee_note }),
+        };
+    }
+    return {
+        fee: format_quote_amount(trade_record.fee, trade_record.quote_asset),
+        ...(trade_record.fee_note === undefined ? {} : { feeNote: trade_record.fee_note }),
+    };
+}
+
+/**
  * 함수 이름: map_history_period_to_view()
  * 기능: actor의 기간 계약을 거래 내역 Boundary가 사용하는 표시 enum으로 변환한다.
  * 인자: period -> actor 기간 값
@@ -165,15 +196,14 @@ function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewMod
         time: format_history_time(trade_record.occurred_at),
         side: trade_record.side.toUpperCase() as TradeRowViewModel['side'],
         regime: trade_record.regime,
-        strategy: trade_record.strategy,
+        strategy: trade_record.exit_reason === 'EXTERNAL_MANUAL' ? '외부 수동 매도' : trade_record.strategy,
         entryPrice: trade_record.entry_price === null
             ? '-'
             : format_quote_amount(trade_record.entry_price, trade_record.quote_asset),
         executionPrice: format_quote_amount(trade_record.price, trade_record.quote_asset),
         quantity: format_eth_quantity(trade_record.quantity),
         orderAmount: format_quote_amount(trade_record.total, trade_record.quote_asset),
-        fee: format_quote_amount(trade_record.fee, trade_record.quote_asset),
-        ...(trade_record.fee_note === undefined ? {} : { feeNote: trade_record.fee_note }),
+        ...create_fee_display(trade_record),
         previousBuyReturn: trade_record.profit_rate === null
             ? '-'
             : `${format_decimal_text(trade_record.profit_rate)}%`,

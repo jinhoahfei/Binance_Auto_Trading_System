@@ -119,8 +119,9 @@ current_price = 110
 
 - encoding은 UTF-8, BOM 없음, 줄바꿈은 LF다.
 - 한 줄은 하나의 완결된 JSON object이며 `record_type="trade"`다.
-- 기존 record는 `schema_version=1`, Phase 9 이후 신규 record는 `schema_version=2`를
-  가진다. reader는 두 version을 함께 읽고 writer는 새 execution을 v2로만 기록한다.
+- 기존 record는 `schema_version=1`, Phase 9 이후 일반 앱 execution은 `schema_version=2`를
+  가진다. BNB fee 근거가 있는 앱 execution은 v3, 검증된 외부 수동 매도는 v4다.
+  reader는 네 version을 함께 읽고 기존 row의 version과 의미를 보존한다.
 - 가격·수량·금액·수익률은 exponent 없는 JSON string이다. JSON number로 금융 수치를
   저장하지 않는다.
 - timestamp는 UTC RFC 3339 형식이며 `Z`를 사용한다.
@@ -176,7 +177,7 @@ v1은 Phase 8에서 확정한 기존 의미를 보존한다. BUY는 fee asset과
 
 v2는 아래 3.1의 실제 자산 흐름 공식을 사용한다. USDT-fee row는 v1과 v2의 결과가 같고,
 ETH-fee BUY만 net 수량과 실제 quote debit 기준으로 달라진다. `Trade.from_order_execution`
-및 JSONL writer의 신규 record는 v2이며, reader와 Repository는 v1/v2 혼합 파일의 원래
+및 JSONL writer의 일반 신규 record는 v2이며, reader와 Repository는 혼합 파일의 원래
 version을 그대로 보존한다. 동일 order ID의 row가 version만 다르더라도 서로 다른
 canonical 내용이므로 `ORDER_HISTORY_CONFLICT`로 거부한다.
 
@@ -214,6 +215,17 @@ SELL 수량이 크거나 SELL base fee가 있으면 자동 변환하지 않고 �
 - Phase 4 startup load/recovery 동안에는 bootstrap process 하나가 history 경로를
   독점하며 다른 Repository instance/process가 append하지 않는다. Phase 8 writer는
   같은 소유권을 유지하거나 concurrent writer를 허용하기 전에 OS file lock을 추가한다.
+
+### 2.4 Fee 증거와 외부 매도 확장
+
+v3는 기존 필드에 `fee_fills`를 추가해 BNB의 체결 시점 평가 근거를 보존한다. 각 fill과
+aggregate의 주문 ID·수량·금액·수수료·체결 시각이 일치해야 한다. BNB 이외의 지원하지 않는
+제3 수수료 asset은 기존 reconciliation 정책을 유지한다.
+
+v4는 같은 fill 근거를 가진 외부 SELL 전용 record다. `exit_reason=EXTERNAL_MANUAL`,
+`market_price_at_decision=null`이며, 실제 거래소 원 요청량을 기록한다. 앱 주문에는 이 이유와
+null 판단 시세를 허용하지 않는다. 기존 row를 덮어쓰지 않고 주문 ID 기준으로 한 번만 append한다.
+상세 검증과 잔여 회계는 [ADR-007](ADR-007-external-manual-sell-recovery.md)을 따른다.
 
 ## 3. Position cost basis와 Performance 공식
 
@@ -321,6 +333,19 @@ Trade History 화면의 table row만 period/side filter를 적용한다. 상단 
 UI label은 각각 `오늘 계좌 성과`, `전체 매도 성과`, `현재 ETH 보유량`처럼 범위를
 명시해야 한다. 매수/매도 filter 변경으로 summary를 재계산하거나 filtered row 결과로
 Account/Performance를 덮어쓰지 않는다.
+
+### 4.1 거래 표의 진입 가격과 수수료 표시
+
+`진입당시 ETH가격`은 사용자가 선택한 매수 주문의 `average_fill_price`다. BUY 행은 해당
+매수의 실제 평균 체결가를, SELL 행은 동일 상품·REGIME·전략의 직전 BUY 평균 체결가를 표시한다.
+Controller는 필터 전 전체 이력에서 대응 가격을 연결하므로 기간 밖 매수나 매도 전용 필터에서도
+값이 유지된다. 대응 매수 근거가 없으면 null이다. 주문 판단 시세 `market_price_at_decision`,
+현재 시장가, 수수료를 포함한 원가 평단가로 대체하지 않는다. Trade JSONL은 수정하지 않는다.
+
+개별 거래 수수료는 실제 `fee_amount`와 `fee_asset`을 우선 표시하며 유효 소수 자릿수를 자르지
+않는다. ETH·BNB 수수료의 USDT 환산액은 `≈`로 구분해 보조 표시한다. 원 수수료가 USDT이면
+원 금액만 표시한다. MIXED 수수료는 quote 환산액에 `환산`을 명시하고 자산별 원 수수료를 함께
+표시한다. 계좌 요약 카드와 손익 계산은 기존 quote 환산 회계 기준을 유지한다.
 
 ## 5. CSV schema와 파일 정책
 

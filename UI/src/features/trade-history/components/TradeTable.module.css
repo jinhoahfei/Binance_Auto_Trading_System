@@ -231,6 +231,10 @@
   color: var(--color-text-secondary);
 }
 
+.table td.fee {
+  white-space: normal;
+}
+
 .emphasized {
   font-weight: 600;
 }

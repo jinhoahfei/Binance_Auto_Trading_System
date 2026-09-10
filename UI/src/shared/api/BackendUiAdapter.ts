@@ -798,8 +798,9 @@ function validate_trade_details(
 
     const wire_details = details as unknown as BackendTradeDetails;
     const records = wire_details.rows.map((row) => {
-        // 신규 BNB 평가 설명만 optional로 허용하고 나머지 상세 응답 shape는 그대로 검사한다.
-        require_exact_record(row, Object.hasOwn(row as object, 'fee_note') ? [...TRADE_KEYS, 'fee_note'] : TRADE_KEYS, 'trade row');
+        // 수수료 설명·원 매수 체결가의 명시적 확장만 허용하고 나머지 상세 응답 shape는 검사한다.
+        const optional_trade_keys = ['fee_note', 'entry_price'].filter((key) => Object.hasOwn(row as object, key));
+        require_exact_record(row, [...TRADE_KEYS, ...optional_trade_keys], 'trade row');
         return map_trade_record(validate_trade_snapshot(row));
     });
 
