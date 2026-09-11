@@ -6,6 +6,7 @@
   "platforms": ["macOS", "windows"],
   "permissions": [
     "allow-get-backend-connection-descriptor",
+    "allow-record-chart-diagnostics",
     "allow-choose-csv-export-directory",
     "allow-await-backend-sidecar-exit",
     "allow-arm-native-exit-intent-bridge",

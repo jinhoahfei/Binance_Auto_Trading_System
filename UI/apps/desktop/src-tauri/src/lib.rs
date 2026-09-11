@@ -1,5 +1,6 @@
 //! Tauri 데스크톱 앱과 sidecar를 연결하며, 현재 메인 화면의 인증 연결 복구와 native lifecycle을 소유한다.
 mod dialog;
+mod chart_diagnostics;
 mod exit_bridge;
 #[cfg(target_os = "macos")]
 mod macos_quit_guard;
@@ -680,10 +681,12 @@ pub fn run() {
     let application_result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendConnectionDescriptorState::default())
+        .manage(chart_diagnostics::ChartDiagnosticsState::default())
         .manage(sidecar_state)
         .manage(exit_intent_bridge)
         .invoke_handler(tauri::generate_handler![
             get_backend_connection_descriptor,
+            chart_diagnostics::record_chart_diagnostics,
             dialog::choose_csv_export_directory,
             sidecar::await_backend_sidecar_exit,
             exit_bridge::arm_native_exit_intent_bridge,

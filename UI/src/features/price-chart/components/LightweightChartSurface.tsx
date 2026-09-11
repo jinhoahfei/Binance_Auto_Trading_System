@@ -28,6 +28,8 @@ import type {
 } from '../types';
 
 import styles from './LightweightChartSurface.module.css';
+import { record_chart_diagnostic } from '../data/chartDiagnostics';
+import { describe_chart_data_error } from '../data/chartDataError';
 
 const FALLBACK_CHART_END_TIME = Date.UTC(2026, 5, 22, 2, 0, 0);
 const INITIAL_VISIBLE_BAR_COUNT = 180;
@@ -66,6 +68,7 @@ interface HoveredCandleViewModel {
 interface SeriesRenderState {
     readonly bollinger_is_visible: boolean;
     readonly candle_count: number;
+    readonly data_revision: number;
     readonly ema_is_visible: boolean;
     readonly first_open_time: number | null;
     readonly interval: ChartInterval;
@@ -98,6 +101,7 @@ export interface ChartCoordinateSpace {
 }
 
 export interface LightweightChartSurfaceProps {
+    readonly dataRevision?: number;
     readonly position_average_entry_price?: string | null;
     readonly bollingerLower: ReadonlyArray<LinePointViewModel>;
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;
@@ -853,6 +857,7 @@ function read_crosshair_candle(
  * 작성 날짜: 2026/08/20
  */
 export function LightweightChartSurface({
+    dataRevision = 0,
     bollingerLower,
     bollingerUpper,
     candles,
@@ -872,6 +877,7 @@ export function LightweightChartSurface({
     const loaded_candle_count_ref = useRef(candles.length);
     const minimum_bar_spacing_ref = useRef<number | null>(null);
     const series_render_state_ref = useRef<SeriesRenderState | null>(null);
+    const render_diagnostic_ref = useRef({ interval, next_at: 0 });
     const [hovered_candle, set_hovered_candle] = useState<HoveredCandleViewModel | null>(null);
     const [is_ready, set_is_ready] = useState(false);
     const latest_candle = useMemo(() => {
@@ -1054,6 +1060,7 @@ export function LightweightChartSurface({
             && first_open_time < earliest_open_time_ref.current;
         const previous_render_state = series_render_state_ref.current;
         const can_update_latest_only = previous_render_state !== null
+            && previous_render_state.data_revision === dataRevision
             && previous_render_state.interval === interval
             && previous_render_state.first_open_time === first_open_time
             && candles.length >= previous_render_state.candle_count
@@ -1062,115 +1069,130 @@ export function LightweightChartSurface({
             && previous_render_state.bollinger_is_visible === indicatorSettings.bollingerBand;
         const latest_candle = candles.at(-1);
 
-        if (can_update_latest_only && latest_candle !== undefined) {
-            const latest_candle_index = candles.length - 1;
-            const latest_ema_point = ema.at(-1);
-            const latest_bollinger_upper_point = bollingerUpper.at(-1);
-            const latest_bollinger_lower_point = bollingerLower.at(-1);
+        try {
+            if (can_update_latest_only && latest_candle !== undefined) {
+                const latest_candle_index = candles.length - 1;
+                const latest_ema_point = ema.at(-1);
+                const latest_bollinger_upper_point = bollingerUpper.at(-1);
+                const latest_bollinger_lower_point = bollingerLower.at(-1);
 
-            handles.candle_series.update(create_candlestick_data(
-                latest_candle,
-                latest_candle_index,
-                candles.length,
-                interval,
-            ));
-            handles.volume_series.update(create_volume_data(
-                latest_candle,
-                latest_candle_index,
-                candles.length,
-                interval,
-            ));
-            if (indicatorSettings.ema9 && latest_ema_point !== undefined) {
-                handles.ema_series.update(create_line_data(
-                    latest_ema_point,
-                    ema.length - 1,
-                    ema.length,
-                    candles,
+                handles.candle_series.update(create_candlestick_data(
+                    latest_candle,
+                    latest_candle_index,
+                    candles.length,
                     interval,
                 ));
-            }
-            if (indicatorSettings.bollingerBand
-                && latest_bollinger_upper_point !== undefined
-                && latest_bollinger_lower_point !== undefined) {
-                handles.bollinger_upper_series.update(create_line_data(
-                    latest_bollinger_upper_point,
-                    bollingerUpper.length - 1,
-                    bollingerUpper.length,
-                    candles,
+                handles.volume_series.update(create_volume_data(
+                    latest_candle,
+                    latest_candle_index,
+                    candles.length,
                     interval,
                 ));
-                handles.bollinger_lower_series.update(create_line_data(
-                    latest_bollinger_lower_point,
-                    bollingerLower.length - 1,
-                    bollingerLower.length,
-                    candles,
-                    interval,
-                ));
-            }
-        } else {
-            handles.candle_series.setData(candles.map((candle, index) => {
-                return create_candlestick_data(candle, index, candles.length, interval);
-            }));
-            handles.ema_series.setData(indicatorSettings.ema9
-                ? ema.map((point, index) => {
-                    return create_line_data(point, index, ema.length, candles, interval);
-                })
-                : []);
-            handles.bollinger_upper_series.setData(indicatorSettings.bollingerBand
-                ? bollingerUpper.map((point, index) => {
-                    return create_line_data(
-                        point,
-                        index,
+                if (indicatorSettings.ema9 && latest_ema_point !== undefined) {
+                    handles.ema_series.update(create_line_data(
+                        latest_ema_point,
+                        ema.length - 1,
+                        ema.length,
+                        candles,
+                        interval,
+                    ));
+                }
+                if (indicatorSettings.bollingerBand
+                    && latest_bollinger_upper_point !== undefined
+                    && latest_bollinger_lower_point !== undefined) {
+                    handles.bollinger_upper_series.update(create_line_data(
+                        latest_bollinger_upper_point,
+                        bollingerUpper.length - 1,
                         bollingerUpper.length,
                         candles,
                         interval,
-                    );
-                })
-                : []);
-            handles.bollinger_lower_series.setData(indicatorSettings.bollingerBand
-                ? bollingerLower.map((point, index) => {
-                    return create_line_data(
-                        point,
-                        index,
+                    ));
+                    handles.bollinger_lower_series.update(create_line_data(
+                        latest_bollinger_lower_point,
+                        bollingerLower.length - 1,
                         bollingerLower.length,
                         candles,
                         interval,
-                    );
-                })
-                : []);
-            handles.volume_series.setData(candles.map((candle, index) => {
-                return create_volume_data(candle, index, candles.length, interval);
-            }));
-        }
-        handles.volume_series.applyOptions({ visible: indicatorSettings.volume });
-        if (candles.length > 0 && fitted_interval_ref.current !== interval) {
-            if (candles.length <= INITIAL_VISIBLE_BAR_COUNT) {
-                handles.chart.timeScale().fitContent();
+                    ));
+                }
             } else {
-                handles.chart.timeScale().setVisibleLogicalRange({
-                    from: candles.length - INITIAL_VISIBLE_BAR_COUNT,
-                    to: candles.length + 2.35,
-                });
+                handles.candle_series.setData(candles.map((candle, index) => {
+                    return create_candlestick_data(candle, index, candles.length, interval);
+                }));
+                handles.ema_series.setData(indicatorSettings.ema9
+                    ? ema.map((point, index) => {
+                        return create_line_data(point, index, ema.length, candles, interval);
+                    })
+                    : []);
+                handles.bollinger_upper_series.setData(indicatorSettings.bollingerBand
+                    ? bollingerUpper.map((point, index) => {
+                        return create_line_data(
+                            point,
+                            index,
+                            bollingerUpper.length,
+                            candles,
+                            interval,
+                        );
+                    })
+                    : []);
+                handles.bollinger_lower_series.setData(indicatorSettings.bollingerBand
+                    ? bollingerLower.map((point, index) => {
+                        return create_line_data(
+                            point,
+                            index,
+                            bollingerLower.length,
+                            candles,
+                            interval,
+                        );
+                    })
+                    : []);
+                handles.volume_series.setData(candles.map((candle, index) => {
+                    return create_volume_data(candle, index, candles.length, interval);
+                }));
             }
-            fitted_interval_ref.current = interval;
-        } else if (history_was_prepended && visible_range_before_update !== null) {
-            handles.chart.timeScale().setVisibleRange(visible_range_before_update);
-        }
+            handles.volume_series.applyOptions({ visible: indicatorSettings.volume });
+            if (candles.length > 0 && fitted_interval_ref.current !== interval) {
+                if (candles.length <= INITIAL_VISIBLE_BAR_COUNT) {
+                    handles.chart.timeScale().fitContent();
+                } else {
+                    handles.chart.timeScale().setVisibleLogicalRange({
+                        from: candles.length - INITIAL_VISIBLE_BAR_COUNT,
+                        to: candles.length + 2.35,
+                    });
+                }
+                fitted_interval_ref.current = interval;
+            } else if (history_was_prepended && visible_range_before_update !== null) {
+                handles.chart.timeScale().setVisibleRange(visible_range_before_update);
+            }
 
-        earliest_open_time_ref.current = first_open_time;
-        series_render_state_ref.current = {
-            bollinger_is_visible: indicatorSettings.bollingerBand,
-            candle_count: candles.length,
-            ema_is_visible: indicatorSettings.ema9,
-            first_open_time,
-            interval,
-        };
-        set_is_ready(true);
-        coordinate_space_publish_ref.current();
+            earliest_open_time_ref.current = first_open_time;
+            series_render_state_ref.current = {
+                bollinger_is_visible: indicatorSettings.bollingerBand,
+                candle_count: candles.length,
+                data_revision: dataRevision,
+                ema_is_visible: indicatorSettings.ema9,
+                first_open_time,
+                interval,
+            };
+            set_is_ready(true);
+            coordinate_space_publish_ref.current();
+            if (render_diagnostic_ref.current.interval !== interval || Date.now() >= render_diagnostic_ref.current.next_at) {
+                render_diagnostic_ref.current = { interval, next_at: Date.now() + 30_000 };
+                record_chart_diagnostic({ event: 'render_applied', interval, connection_id: dataRevision, intervals: [{
+                    interval, received_at_ms: null, event_time_ms: null,
+                    open_time_ms: latest_candle?.open_time ?? null, close: latest_candle?.close ?? null,
+                    count: candles.length,
+                }] });
+            }
+        } catch (error: unknown) {
+            record_chart_diagnostic({ event: 'render_failed', interval, connection_id: dataRevision, ...describe_chart_data_error(error) });
+            throw error;
+        }
     }, [
         bollingerLower,
         bollingerUpper,
         candles,
+        dataRevision,
         ema,
         indicatorSettings,
         interval,

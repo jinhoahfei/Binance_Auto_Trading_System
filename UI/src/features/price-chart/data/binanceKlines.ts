@@ -1,4 +1,5 @@
 import type { ChartInterval } from '../types';
+import { ChartHttpError, describe_chart_data_error } from './chartDataError';
 import type {
     KlinesByInterval,
     LoadAllKlinesOptions,
@@ -188,6 +189,37 @@ function parse_rest_klines(
 }
 
 /**
+ * 함수 이름: with_chart_request_timeout()
+ * 기능: 응답 body를 포함한 REST 작업을 15초로 제한하고 종료 시 timer·listener를 정리한다.
+ * 인자: operation -> 취소 가능한 요청, signal -> 상위 연결의 취소 signal
+ * 반환값: 요청 결과 또는 시간 제한·취소 오류
+ * 작성 날짜: 2026/09/11
+ */
+async function with_chart_request_timeout<T>(
+    operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal,
+): Promise<T> {
+    const controller = new AbortController();
+    let reject_cancellation: (reason: unknown) => void = () => undefined;
+    const cancelled = new Promise<never>((resolve, reject) => { reject_cancellation = reject; });
+    const abort = () => {
+        reject_cancellation(new DOMException('Chart request aborted', 'AbortError'));
+        controller.abort();
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(() => {
+        reject_cancellation(new DOMException('Chart request deadline exceeded', 'TimeoutError'));
+        controller.abort();
+    }, 15_000);
+    try {
+        if (signal?.aborted) abort();
+        return await Promise.race([cancelled, operation(controller.signal)]);
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+    }
+}
+
+/**
  * 함수 이름: fetch_interval_klines()
  * 기능: 공식 Binance public REST endpoint에서 단일 주기의 kline을 조회한다.
  * 인자: symbol -> 조회할 symbol
@@ -216,22 +248,23 @@ async function fetch_interval_klines(
         request_url.searchParams.set('endTime', String(end_time));
     }
 
-    const request_options: RequestInit = signal === undefined ? {} : { signal };
-    const response = await fetch_implementation(request_url, request_options);
+    return with_chart_request_timeout(async (request_signal) => {
+        const response = await fetch_implementation(request_url, { signal: request_signal });
 
-    if (!response.ok) {
-        throw new Error(`Binance ${interval} kline request failed with HTTP ${response.status}.`);
-    }
+        if (!response.ok) {
+            throw new ChartHttpError(response.status, interval);
+        }
 
-    let response_payload: unknown;
+        let response_payload: unknown;
 
-    try {
-        response_payload = await response.json();
-    } catch (error: unknown) {
-        throw new Error(`Binance ${interval} kline response is not valid JSON.`, { cause: error });
-    }
+        try {
+            response_payload = await response.json();
+        } catch (error: unknown) {
+            throw new Error(`Binance ${interval} kline response is not valid JSON.`, { cause: error });
+        }
 
-    return parse_rest_klines(response_payload, symbol, interval);
+        return parse_rest_klines(response_payload, symbol, interval);
+    }, signal);
 }
 
 /**
@@ -260,15 +293,24 @@ export async function load_all_klines(
     }
 
     const interval_results = await Promise.all(supported_chart_intervals.map(async (interval) => {
-        const klines = await fetch_interval_klines(
-            normalized_symbol,
-            interval,
-            limit,
-            options.signal,
-            fetch_implementation,
-        );
-
-        return [interval, klines] as const;
+        const started_at = performance.now();
+        options.on_request_event?.({ event: 'rest_started', interval, elapsed_ms: 0 });
+        try {
+            const klines = await fetch_interval_klines(
+                normalized_symbol, interval, limit, options.signal, fetch_implementation,
+            );
+            options.on_request_event?.({ event: 'rest_completed', interval, elapsed_ms: Math.round(performance.now() - started_at) });
+            return [interval, klines] as const;
+        } catch (error: unknown) {
+            if (!((error instanceof Error || error instanceof DOMException) && error.name === 'AbortError')) {
+                options.on_request_event?.({
+                    event: (error instanceof Error || error instanceof DOMException) && error.name === 'TimeoutError' ? 'rest_timeout' : 'rest_failed',
+                    interval, elapsed_ms: Math.round(performance.now() - started_at),
+                    ...describe_chart_data_error(error),
+                });
+            }
+            throw error;
+        }
     }));
 
     return Object.fromEntries(interval_results) as unknown as KlinesByInterval;
@@ -415,6 +457,7 @@ export function parse_combined_kline_message(payload: unknown): NormalizedKline 
 
     return {
         symbol: event_symbol,
+        event_time: read_integer(parsed_payload.data.E, 'E'),
         interval,
         open_time,
         close_time,

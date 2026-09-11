@@ -50,6 +50,7 @@ export function PriceChartPanel({
     candles,
     contextMenuPosition = null,
     dataStatus = 'idle',
+    dataRevision = 0,
     drawingActive = false,
     drawings = [],
     ema,
@@ -132,6 +133,7 @@ export function PriceChartPanel({
                 bollingerLower={bollingerLower}
                 bollingerUpper={bollingerUpper}
                 candles={candles}
+                dataRevision={dataRevision}
                 contextMenuPosition={contextMenuPosition}
                 dataStatus={dataStatus}
                 drawingActive={drawingActive}

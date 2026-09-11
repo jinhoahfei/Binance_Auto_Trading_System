@@ -1293,7 +1293,7 @@ class MarketDataController:
         )
 
         # 모든 required interval을 한 update에 넣어 어느 arrival permutation에도 stale open을 노출하지 않는다.
-        self._merge_klines_into_snapshot(boundary_sources)
+        self._merge_klines_into_snapshot(boundary_sources, include_deferred=False)
         self._awaiting_post_boundary_thirty_minute_open = True
         self._clear_pending_atomic_boundary()
 
@@ -1315,6 +1315,15 @@ class MarketDataController:
             thirty_minute_close,
             source_klines=boundary_sources,
         )
+
+        # 경계와 독립적인 upper 진행 tick은 별도 version으로 보존한다.
+        # source tuple 검증을 완화하거나 일봉을 strategy source로 위장하지 않는다.
+        deferred_sources = tuple(self._deferred_live_klines.values())
+        for deferred_source in deferred_sources:
+            if deferred_source.interval not in (Interval.FOUR_HOURS, Interval.ONE_DAY):
+                raise MarketDataStreamStateError("unexpected deferred strategy source at atomic boundary")
+            self._merge_klines_into_snapshot((deferred_source,), include_deferred=False)
+            self._publish_market_evaluation(deferred_source)
 
         # 30분 OPEN을 먼저 commit해야 뒤따르는 1분 source가 새 전략 candle에 정확히 결합된다.
         if pending_thirty_minute_open is not None:
@@ -1444,11 +1453,14 @@ class MarketDataController:
     def _merge_klines_into_snapshot(
         self,
         observed_klines: tuple[Kline, ...],
+        *,
+        include_deferred: bool = True,
     ) -> None:
         """
         함수 이름: _merge_klines_into_snapshot()
         기능: 새 봉을 open time으로 덮어쓴 전체 history를 구성해 snapshot을 원자 갱신한다.
         인자: observed_klines -> 한 version에 함께 반영할 정규화 WebSocket Kline tuple
+            include_deferred -> 일반 경계의 대기 봉을 함께 반영할지 여부
         반환값: 없음
         작성 날짜: 2026/08/25
         """
@@ -1461,7 +1473,8 @@ class MarketDataController:
         for interval in MARKET_INTERVALS:
             if sum(key[0] is interval for key in self._deferred_live_klines) > 2:
                 raise MarketDataStreamStateError("pending boundary exceeded two candles per interval")
-        observed_klines = tuple(self._deferred_live_klines.values())
+        if include_deferred:
+            observed_klines = tuple(self._deferred_live_klines.values())
         # 기존 history를 복사한 뒤 같은 open time의 새 사실만 candidate mapping에서 교체한다.
         next_klines_by_interval = {
             interval: {
@@ -1515,7 +1528,8 @@ class MarketDataController:
                 )
                 raise _PendingCandleBoundary() from error
             raise
-        self._deferred_live_klines.clear()
+        for committed_kline in observed_klines:
+            self._deferred_live_klines.pop((committed_kline.interval, committed_kline.open_time), None)
 
     def _publish_market_evaluation(
         self,
@@ -1543,6 +1557,7 @@ class MarketDataController:
         self._diagnostics.record(
             "market_input_observed", source_event_id=source_event_id, market_version=self._market_snapshot.version,
             klines=(observed_kline,) if source_klines is None else source_klines,
+            snapshot_source_klines=self._market_snapshot.update_source_klines,
         )  # 입력 봉과 계산 시점을 연결해 지표 계산 전에 멈춘 경우도 원본을 확인한다.
         boundary_observer = getattr(
             market_observer,

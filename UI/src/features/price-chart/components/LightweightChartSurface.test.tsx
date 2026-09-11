@@ -202,6 +202,19 @@ afterEach(() => {
 });
 
 describe('LightweightChartSurface', () => {
+    it('재연결로 보정된 과거 봉도 다시 반영하며 기존 확대 범위를 유지한다', () => {
+        const candles = create_candles(3, INITIAL_OPEN_TIME);
+        const props = { bollingerLower: [], bollingerUpper: [], ema: [],
+            indicatorSettings: INDICATOR_SETTINGS, interval: '1m' as const };
+        const { rerender } = render(<LightweightChartSurface {...props} candles={candles} dataRevision={1} />);
+        const corrected = candles.map((candle, index) => index === 0 ? { ...candle, high: 150, close: 140 } : candle);
+        rerender(<LightweightChartSurface {...props} candles={corrected} dataRevision={3} />);
+        expect(chart_harness.candle_series.setData).toHaveBeenCalledTimes(2);
+        expect(chart_harness.candle_series.setData.mock.calls.at(-1)?.[0][0].close).toBe(140);
+        expect(chart_harness.candle_series.update).not.toHaveBeenCalled();
+        expect(chart_harness.time_scale.fitContent).toHaveBeenCalledOnce();
+    });
+
     it('backend 평단가를 초기화·갱신·재연결하고 포지션 종료 시 파란 선과 가격표를 제거한다', () => {
         // Backend 원본 문자열을 실제 mapper·actor·presenter·panel 경계를 거쳐 차트에 전달한다.
         const backend_snapshot = create_backend_snapshot_fixture();

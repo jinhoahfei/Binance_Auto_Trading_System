@@ -58,6 +58,7 @@ export interface PriceChartViewModel {
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;
     readonly candles: ReadonlyArray<CandleViewModel>;
     readonly dataStatus?: PriceChartDataStatus;
+    readonly dataRevision?: number;
     readonly ema: ReadonlyArray<LinePointViewModel>;
     readonly interval: ChartInterval;
     readonly statusMessage?: string | null;

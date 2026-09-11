@@ -61,7 +61,7 @@ describe('binanceKlines', () => {
         expect(requested_urls).toContain(
             'https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=30m&limit=42',
         );
-        expect(requested_signals).toEqual(Array.from({ length: 4 }, () => abort_controller.signal));
+        expect(requested_signals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(true);
     });
 
     it('builds one Binance combined stream URL for all chart intervals', () => {
@@ -76,7 +76,7 @@ describe('binanceKlines', () => {
         const abort_controller = new AbortController();
         const fetch_implementation: typeof fetch = async (input, options) => {
             requested_url = String(input);
-            expect(options?.signal).toBe(abort_controller.signal);
+            expect(options?.signal).toBeInstanceOf(AbortSignal);
 
             return new Response(JSON.stringify([[
                 1_000,
@@ -169,6 +169,7 @@ describe('binanceKlines', () => {
         }));
 
         expect(result).toEqual({
+            event_time: 2_000,
             symbol: 'ETHUSDT',
             interval: '30m',
             open_time: 1_000,

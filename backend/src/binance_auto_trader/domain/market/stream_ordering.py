@@ -32,6 +32,13 @@ def classify_kline(previous: Kline, current: Kline) -> str:
     if current.event_time < previous.event_time:
         return "stale"
     if current.event_time == previous.event_time:
+        # 거래소는 직전 확정 봉과 정확한 다음 진행 봉에 동일 E를 부여할 수 있다.
+        # 같은 봉의 모순된 수정이나 중간 봉을 건너뛴 전환은 계속 conflict로 처리한다.
+        if (previous.symbol == current.symbol and previous.interval is current.interval
+                and previous.closed and not current.closed
+                and current.open_time == previous.open_time + _DURATIONS[current.interval.value]
+                and current.event_time >= current.open_time):
+            return "accept"
         if same_candle and not previous.closed and current.closed:
             if (current.open == previous.open and current.high >= previous.high
                     and current.low <= previous.low and current.volume >= previous.volume):

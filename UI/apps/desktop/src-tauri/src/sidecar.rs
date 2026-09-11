@@ -497,6 +497,19 @@ impl Default for SidecarProcessState {
 }
 
 impl SidecarProcessState {
+    /// 함수 이름: diagnostic_runtime_identity()
+    /// 기능: native 차트 로그와 Python 실행 로그를 연결할 검증된 PID·시작 ID만 반환한다.
+    /// 인자: 없음
+    /// 반환값: 준비된 Python identity 또는 None
+    /// 작성 날짜: 2026/09/11
+    pub fn diagnostic_runtime_identity(&self) -> Option<(u32, String)> {
+        self.shared.lifecycle.lock().ok().and_then(|lifecycle| {
+            lifecycle.python_runtime_identity.as_ref().map(|identity| {
+                (identity.runtime_pid, identity.process_start_id.clone())
+            })
+        })
+    }
+
     /// 함수 이름: install()
     /// 기능: launcher/Python identity를 분리한 child와 stop pipe를 소유하고 exit monitor를 시작한다.
     /// 인자: child -> launcher handle과 optional Python identity를 소유한 child wrapper,

@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChartInterval } from '../types';
+import type { ChartDiagnostic } from '../data/chartDiagnostics';
 import {
     use_realtime_chart_data,
     type WebSocketFactory,
@@ -254,8 +255,150 @@ function create_web_socket_kline_message(
     });
 }
 
+/**
+ * 함수 이름: emit_initial_klines()
+ * 기능: 연결 open과 실제 네 주기 수신을 구분해 정상 LIVE fixture를 준비한다.
+ * 인자: socket -> 수신 대상, close_values -> 선택적인 주기별 종가
+ * 반환값: 없음
+ * 작성 날짜: 2026/09/11
+ */
+function emit_initial_klines(socket: FakeWebSocket | undefined, close_values = {'1m':101,'30m':130,'4h':140,'1d':150}): void {
+    supported_intervals.forEach((interval) => socket?.emit_message(create_web_socket_kline_message(interval, close_values[interval])));
+}
+
 afterEach(() => {
     vi.useRealTimers();
+});
+
+describe('차트 연결 복구와 진단', () => {
+    /**
+     * 함수 이름: prepare_connection()
+     * 기능: 주기별 시세·REST·진단을 명시적으로 제어하는 hook을 준비한다.
+     * 인자: 없음
+     * 반환값: hook과 가짜 전송 경계
+     * 작성 날짜: 2026/09/11
+     */
+    function prepare_connection() {
+        vi.useFakeTimers();
+        const requests: Array<PendingFetchRequest> = [];
+        const sockets: Array<FakeWebSocket> = [];
+        const diagnostics: Array<ChartDiagnostic> = [];
+        const fetch_implementation = create_pending_fetch(requests);
+        const web_socket_factory = create_fake_web_socket_factory(sockets);
+        const diagnostic_sink = (event: ChartDiagnostic) => { diagnostics.push(event); };
+        const hook = renderHook(() => use_realtime_chart_data({ fetch_implementation, web_socket_factory, diagnostic_sink }));
+        return { ...hook, requests, sockets, diagnostics };
+    }
+
+    it('연결 open과 REST만으로는 LIVE를 표시하지 않는다', async () => {
+        const test = prepare_connection();
+        await act(async () => {
+            test.sockets[0]!.emit_open();
+            resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
+        });
+        expect(test.result.current.data_status).toBe('reconnecting');
+        act(() => { emit_initial_klines(test.sockets[0]); });
+        expect(test.result.current.data_status).toBe('live');
+        expect(test.diagnostics.filter((event) => event.event === 'first_kline')).toHaveLength(4);
+        expect(test.diagnostics.filter((event) => event.event === 'connection_ready')).toHaveLength(1);
+        await act(async () => { test.unmount(); });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('조용한 수신 정지를 감지하고 늦은 이전 응답을 차단한 뒤 최신 봉으로 복구한다', async () => {
+        const test = prepare_connection();
+        await act(async () => {
+            test.sockets[0]!.emit_open(); emit_initial_klines(test.sockets[0]);
+            resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
+        });
+        const old_handler = test.sockets[0]!.onmessage!;
+        await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+        expect(test.result.current.data_status).toBe('reconnecting');
+        expect(test.diagnostics.some((event) => event.event === 'stream_stale')).toBe(true);
+        act(() => { old_handler.call(test.sockets[0] as unknown as WebSocket, new MessageEvent('message', {
+            data: create_web_socket_kline_message('30m',999),
+        })); });
+        expect(test.result.current.klines_by_interval['30m'].at(-1)?.close).toBe(130);
+        expect(test.result.current.data_status).toBe('reconnecting');
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(test.sockets).toHaveLength(2);
+        await act(async () => {
+            test.sockets[1]!.emit_open();
+            emit_initial_klines(test.sockets[1], {'1m':201,'30m':232,'4h':240,'1d':250});
+            resolve_rest_requests(test.requests.slice(4), {'1m':201,'30m':230,'4h':240,'1d':250});
+        });
+        expect(test.result.current.data_status).toBe('live');
+        expect(test.result.current.klines_by_interval['30m'].at(-1)?.close).toBe(232);
+        expect(test.diagnostics.filter((event) => event.event === 'connection_ready')).toHaveLength(2);
+        await act(async () => { test.unmount(); });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('다른 주기가 계속 와도 30분봉의 정지를 별도로 감지한다', async () => {
+        const test = prepare_connection();
+        await act(async () => {
+            test.sockets[0]!.emit_open(); emit_initial_klines(test.sockets[0]);
+            resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
+        });
+        const previous_time = test.result.current.updated_at_by_interval?.['30m'];
+        await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
+        act(() => {
+            (['1m','4h','1d'] as const).forEach((interval) => test.sockets[0]!.emit_message(create_web_socket_kline_message(interval,111)));
+        });
+        expect(test.result.current.updated_at_by_interval?.['30m']).toBe(previous_time);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(test.result.current.data_status).toBe('reconnecting');
+        expect(test.diagnostics).toContainEqual(expect.objectContaining({ event:'stream_stale', interval:'30m' }));
+        await act(async () => { test.unmount(); });
+    });
+
+    it('REST 하나가 응답하지 않아도 15초 뒤 취소하고 재시도한다', async () => {
+        const test = prepare_connection();
+        await act(async () => {
+            test.sockets[0]!.emit_open(); emit_initial_klines(test.sockets[0]);
+            resolve_rest_requests(test.requests.slice(0,3), {'1m':101,'30m':130,'4h':140,'1d':150});
+        });
+        await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
+        act(() => { emit_initial_klines(test.sockets[0]); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(test.requests[3]!.signal?.aborted).toBe(true);
+        expect(test.diagnostics.some((event) => event.event === 'rest_timeout')).toBe(true);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(test.sockets).toHaveLength(2);
+        await act(async () => { test.unmount(); });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('WebSocket open 무응답과 잘못된 메시지를 기록하고 복구한다', async () => {
+        const test = prepare_connection();
+        await act(async () => {
+            resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
+            await vi.advanceTimersByTimeAsync(16_000);
+        });
+        expect(test.diagnostics.some((event) => event.event === 'connect_timeout')).toBe(true);
+        expect(test.sockets).toHaveLength(2);
+        act(() => {
+            test.sockets[1]!.emit_open();
+            test.sockets[1]!.emit_message('invalid private payload');
+        });
+        expect(test.diagnostics.some((event) => event.event === 'parse_error')).toBe(true);
+        expect(JSON.stringify(test.diagnostics)).not.toContain('private payload');
+        await act(async () => { test.unmount(); });
+    });
+
+    it('REST 장애의 주기와 HTTP 상태를 원본 body 없이 기록한다', async () => {
+        const test = prepare_connection();
+        await act(async () => {
+            test.requests[1]!.resolve_response(new Response('private upstream body', { status: 429 }));
+        });
+        expect(test.diagnostics).toContainEqual(expect.objectContaining({
+            event: 'rest_failed', interval: '30m', error_kind: 'http_error', http_status: 429,
+        }));
+        expect(JSON.stringify(test.diagnostics)).not.toContain('private upstream body');
+        expect(test.requests[0]!.signal?.aborted).toBe(true);
+        await act(async () => { test.unmount(); });
+        expect(vi.getTimerCount()).toBe(0);
+    });
 });
 
 describe('use_realtime_chart_data', () => {
@@ -304,6 +447,7 @@ describe('use_realtime_chart_data', () => {
 
         act(() => {
             sockets[0]?.emit_open();
+            emit_initial_klines(sockets[0]);
             sockets[0]?.emit_message(create_web_socket_kline_message('1m', 222));
         });
 
@@ -353,6 +497,7 @@ describe('use_realtime_chart_data', () => {
 
         act(() => {
             sockets[0]?.emit_open();
+            emit_initial_klines(sockets[0]);
         });
         await act(async () => {
             resolve_rest_requests(pending_requests, {
@@ -403,6 +548,7 @@ describe('use_realtime_chart_data', () => {
         });
         act(() => {
             sockets[0]?.emit_open();
+            emit_initial_klines(sockets[0]);
         });
         await act(async () => {
             resolve_rest_requests(pending_requests.slice(0, 4), {
@@ -515,6 +661,7 @@ describe('use_realtime_chart_data', () => {
         });
         act(() => {
             sockets[0]?.emit_open();
+            emit_initial_klines(sockets[0]);
         });
         await act(async () => {
             resolve_rest_requests(pending_requests.slice(0, 4), {
@@ -599,6 +746,7 @@ describe('use_realtime_chart_data', () => {
         });
         act(() => {
             sockets[0]?.emit_open();
+            emit_initial_klines(sockets[0]);
         });
         await act(async () => {
             resolve_rest_requests(pending_requests.slice(0, 4), {
@@ -640,6 +788,7 @@ describe('use_realtime_chart_data', () => {
         });
         act(() => {
             sockets[1]?.emit_open();
+            emit_initial_klines(sockets[1], {'1m':202,'30m':230,'4h':240,'1d':250});
         });
         await act(async () => {
             resolve_rest_requests(pending_requests.slice(5, 9), {
@@ -686,6 +835,7 @@ describe('use_realtime_chart_data', () => {
         });
         act(() => {
             sockets[0]?.emit_open();
+            emit_initial_klines(sockets[0]);
         });
         await act(async () => {
             resolve_rest_requests(pending_requests.slice(0, 4), {
@@ -751,7 +901,7 @@ describe('use_realtime_chart_data', () => {
         expect(pending_requests).toHaveLength(8);
         expect(sockets[0]?.close_calls).toContainEqual({
             code: 1_000,
-            reason: 'Binance 시장 데이터 연결을 갱신합니다.',
+            reason: '가격 차트 시세를 다시 동기화합니다.',
         });
 
         unmount();
@@ -781,15 +931,15 @@ describe('use_realtime_chart_data', () => {
         act(() => {
             socket?.emit_close();
         });
-        expect(vi.getTimerCount()).toBe(1);
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
         const snapshot_before_unmount = result.current;
 
-        unmount();
+        await act(async () => { unmount(); });
 
         expect(pending_requests.every((request) => request.signal?.aborted === true)).toBe(true);
         expect(socket?.close_calls).toEqual([{
             code: 1_000,
-            reason: '가격 차트 구독을 종료합니다.',
+            reason: '가격 차트 시세를 다시 동기화합니다.',
         }]);
         expect(socket?.onclose).toBeNull();
         expect(socket?.onerror).toBeNull();

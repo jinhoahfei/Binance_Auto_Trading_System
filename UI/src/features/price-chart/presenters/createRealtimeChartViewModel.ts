@@ -15,6 +15,7 @@ export interface RealtimePriceChartViewModel {
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;
     readonly candles: ReadonlyArray<CandleViewModel>;
     readonly dataStatus: PriceChartDataStatus;
+    readonly dataRevision: number;
     readonly ema: ReadonlyArray<LinePointViewModel>;
     readonly statusMessage: string | null;
     readonly symbol: string;
@@ -113,9 +114,11 @@ export function create_realtime_chart_view_model(
         bollingerUpper: bollinger_upper,
         candles: klines.map(create_candle_view_model),
         dataStatus: snapshot.data_status,
+        dataRevision: snapshot.data_revision ?? 0,
         ema,
         statusMessage: snapshot.status_message,
         symbol: snapshot.symbol,
-        timestampLabel: format_timestamp_label(snapshot.updated_at),
+        timestampLabel: format_timestamp_label(snapshot.updated_at_by_interval === undefined
+            ? snapshot.updated_at : snapshot.updated_at_by_interval[interval] ?? null),
     };
 }

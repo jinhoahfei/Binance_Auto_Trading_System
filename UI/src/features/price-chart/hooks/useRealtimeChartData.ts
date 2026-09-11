@@ -6,6 +6,8 @@ import {
 } from 'react';
 
 import type { ChartInterval, PriceChartDataStatus } from '../types';
+import { record_chart_diagnostic, type ChartDiagnostic, type ChartIntervalDiagnostic } from '../data/chartDiagnostics';
+import { describe_chart_data_error } from '../data/chartDataError';
 import {
     build_combined_kline_stream_url,
     load_all_klines,
@@ -27,6 +29,8 @@ export interface RealtimeChartDataSnapshot {
     readonly status_message: string | null;
     readonly symbol: string;
     readonly updated_at: number | null;
+    readonly data_revision?: number;
+    readonly updated_at_by_interval?: Partial<Record<ChartInterval, number>>;
 }
 
 export interface ChartHistoryLoadState {
@@ -49,6 +53,7 @@ export interface RealtimeChartDataRuntime extends RealtimeChartDataSnapshot {
 
 export interface UseRealtimeChartDataOptions {
     readonly enabled?: boolean;
+    readonly diagnostic_sink?: (diagnostic: ChartDiagnostic) => void;
     readonly fetch_implementation?: typeof fetch;
     readonly history_page_limit?: number;
     readonly limit?: number;
@@ -139,7 +144,7 @@ function get_error_message(error: unknown): string {
  * 작성 날짜: 2026/08/20
  */
 function is_abort_error(error: unknown): boolean {
-    return error instanceof Error && error.name === 'AbortError';
+    return (error instanceof Error || error instanceof DOMException) && error.name === 'AbortError';
 }
 
 /**
@@ -294,6 +299,30 @@ export function use_realtime_chart_data(
         let is_disposed = false;
         let reconnect_attempt = 0;
         let reconnect_timer: ReturnType<typeof setTimeout> | null = null;
+        let connection_started_at = performance.now();
+        let socket_opened_at: number | null = null;
+        let next_heartbeat_at = performance.now() + 30_000;
+        let interval_diagnostics: Array<ChartIntervalDiagnostic> = [];
+        let last_received_monotonic: Partial<Record<ChartInterval, number>> = {};
+        const diagnostic_sink = options.diagnostic_sink ?? record_chart_diagnostic;
+
+        /**
+         * 함수 이름: record_diagnostic()
+         * 기능: 연결 세대·가시성·네트워크 상태와 주기별 수신 사실을 진단 경계에 전달한다.
+         * 인자: diagnostic -> 이번 고정 사건과 선택적 수치
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/11
+         */
+        function record_diagnostic(diagnostic: ChartDiagnostic): void {
+            try {
+                diagnostic_sink({ connection_id: connection_version,
+                    visible: document.visibilityState === 'visible', online: navigator.onLine,
+                    intervals: interval_diagnostics.map((entry) => ({ ...entry })), ...diagnostic });
+            } catch {
+                console.error('CHART_DIAGNOSTIC_SINK_FAILED');
+            }
+        }
+
         const history_abort_controllers = create_history_abort_controllers();
         const web_socket_factory = options.web_socket_factory
             ?? (typeof WebSocket === 'undefined' ? null : create_default_web_socket);
@@ -477,6 +506,19 @@ export function use_realtime_chart_data(
             const reconnect_delay = reconnect_delays[delay_index] ?? 30_000;
 
             reconnect_attempt += 1;
+            record_diagnostic({ event: 'reconnect_scheduled', attempt: reconnect_attempt, delay_ms: reconnect_delay });
+            // 실패한 세대의 늦은 REST·socket callback이 LIVE를 되살릴 수 없게 즉시 폐기한다.
+            connection_version += 1;
+            active_abort_controller?.abort();
+            if (active_socket !== null) {
+                active_socket.onopen = null;
+                active_socket.onmessage = null;
+                active_socket.onerror = null;
+                active_socket.onclose = null;
+                active_socket.close(1_000, '가격 차트 시세를 다시 동기화합니다.');
+                active_socket = null;
+            }
+            socket_opened_at = null;
             set_snapshot((current_snapshot) => ({
                 ...current_snapshot,
                 data_status: has_any_klines(current_snapshot.klines_by_interval)
@@ -504,186 +546,227 @@ export function use_realtime_chart_data(
             const buffered_klines = create_buffer_by_interval();
             let historical_data_is_ready = false;
             let socket_is_open = false;
-
+            let ready_was_recorded = false;
+            let parse_failure_was_recorded = false;
+            connection_started_at = performance.now();
+            socket_opened_at = null;
+            last_received_monotonic = {};
+            interval_diagnostics = supported_chart_intervals.map((interval) => ({
+                interval, received_at_ms: null, open_time_ms: null, event_time_ms: null, close: null, count: 0,
+            }));
+            record_diagnostic({ event: 'connection_started' });
             active_abort_controller?.abort();
             active_socket?.close(1_000, 'Binance 시장 데이터 연결을 갱신합니다.');
-            active_abort_controller = new AbortController();
-            set_snapshot((current_snapshot) => {
-                const retained_klines = current_snapshot.symbol === symbol
-                    ? current_snapshot.klines_by_interval
-                    : create_empty_klines_by_interval();
-                const next_snapshot: RealtimeChartDataSnapshot = {
-                    ...current_snapshot,
-                    data_status: has_any_klines(retained_klines) ? 'reconnecting' : 'loading',
-                    klines_by_interval: retained_klines,
-                    status_message: 'Binance 실시간 봉을 동기화하고 있습니다.',
-                    symbol,
-                };
+            const request_controller = new AbortController();
+            active_abort_controller = request_controller;
+            set_snapshot((current_snapshot) => ({
+                ...current_snapshot,
+                data_status: has_any_klines(current_snapshot.klines_by_interval) ? 'reconnecting' : 'loading',
+                klines_by_interval: current_snapshot.symbol === symbol
+                    ? current_snapshot.klines_by_interval : create_empty_klines_by_interval(),
+                updated_at_by_interval: {},
+                status_message: 'Binance 실시간 봉을 동기화하고 있습니다.', symbol,
+            }));
 
-                snapshot_ref.current = next_snapshot;
-                return next_snapshot;
-            });
+            /**
+             * 함수 이름: is_current_connection()
+             * 기능: 정리·재연결 이후 도착한 이전 세대 callback을 차단한다.
+             * 인자: 없음
+             * 반환값: 현재 세대 여부
+             * 작성 날짜: 2026/09/11
+             */
+            function is_current_connection(): boolean {
+                return !is_disposed && current_connection_version === connection_version;
+            }
+
+            /**
+             * 함수 이름: is_live()
+             * 기능: REST 동기화와 네 주기의 실제 최근 수신이 모두 확인된 때만 LIVE를 허용한다.
+             * 인자: 없음
+             * 반환값: 검증된 실시간 수신 상태
+             * 작성 날짜: 2026/09/11
+             */
+            function is_live(): boolean {
+                const ready = historical_data_is_ready && socket_is_open
+                    && supported_chart_intervals.every((interval) => {
+                        const received_at = last_received_monotonic[interval];
+                        return received_at !== undefined && performance.now() - received_at < 15_000;
+                    });
+                if (ready && !ready_was_recorded) {
+                    ready_was_recorded = true;
+                    reconnect_attempt = 0;
+                    record_diagnostic({ event: 'connection_ready', elapsed_ms: Math.round(performance.now() - connection_started_at) });
+                }
+                return ready;
+            }
 
             if (web_socket_factory !== null) {
                 try {
                     const socket = web_socket_factory(build_combined_kline_stream_url(symbol));
-
                     active_socket = socket;
                     socket.onopen = () => {
-                        if (is_disposed || current_connection_version !== connection_version) {
-                            return;
-                        }
-
+                        if (!is_current_connection()) return;
                         socket_is_open = true;
-                        reconnect_attempt = 0;
-
-                        if (historical_data_is_ready) {
-                            set_snapshot((current_snapshot) => ({
-                                ...current_snapshot,
-                                data_status: 'live',
-                                status_message: null,
-                            }));
-                        }
+                        socket_opened_at = performance.now();
+                        record_diagnostic({ event: 'socket_opened' });
                     };
                     socket.onmessage = (event) => {
-                        if (is_disposed || current_connection_version !== connection_version) {
-                            return;
-                        }
-
+                        if (!is_current_connection()) return;
                         try {
                             const incoming_kline = parse_combined_kline_message(event.data);
-
+                            if (incoming_kline.symbol !== symbol) throw new Error('Unexpected chart symbol');
+                            const received_at = Date.now();
+                            const previous = interval_diagnostics.find((entry) => entry.interval === incoming_kline.interval)!;
+                            // 이전 세대/봉의 역행 tick으로 화면이나 수신 시각을 되돌리지 않는다.
+                            if (previous.open_time_ms !== null && incoming_kline.open_time < previous.open_time_ms) return;
+                            if (previous.event_time_ms !== null && incoming_kline.event_time !== undefined
+                                && incoming_kline.event_time < previous.event_time_ms) return;
+                            last_received_monotonic[incoming_kline.interval] = performance.now();
+                            interval_diagnostics = interval_diagnostics.map((entry) => entry.interval !== incoming_kline.interval ? entry : {
+                                interval: entry.interval, received_at_ms: received_at, open_time_ms: incoming_kline.open_time,
+                                event_time_ms: incoming_kline.event_time ?? null, close: incoming_kline.close, count: entry.count + 1,
+                            });
+                            if (previous.count === 0) record_diagnostic({ event: 'first_kline', interval: incoming_kline.interval });
                             if (!historical_data_is_ready) {
-                                buffered_klines[incoming_kline.interval] = [
-                                    ...merge_klines(
-                                        buffered_klines[incoming_kline.interval],
-                                        [incoming_kline],
-                                        limit,
-                                    ),
-                                ];
+                                buffered_klines[incoming_kline.interval] = [...merge_klines(
+                                    buffered_klines[incoming_kline.interval], [incoming_kline], limit,
+                                )];
                                 return;
                             }
-
+                            const live = is_live();
                             set_snapshot((current_snapshot) => ({
-                                ...current_snapshot,
-                                data_status: 'live',
-                                klines_by_interval: {
-                                    ...current_snapshot.klines_by_interval,
-                                    [incoming_kline.interval]: merge_live_kline(
-                                        current_snapshot.klines_by_interval[incoming_kline.interval],
-                                        incoming_kline,
-                                    ),
-                                },
-                                status_message: null,
-                                updated_at: Date.now(),
+                                ...current_snapshot, data_status: live ? 'live' : 'reconnecting',
+                                klines_by_interval: { ...current_snapshot.klines_by_interval,
+                                    [incoming_kline.interval]: merge_live_kline(current_snapshot.klines_by_interval[incoming_kline.interval], incoming_kline) },
+                                updated_at_by_interval: { ...current_snapshot.updated_at_by_interval, [incoming_kline.interval]: received_at },
+                                status_message: live ? null : '주기별 실시간 시세 수신을 확인하고 있습니다.',
+                                updated_at: received_at,
                             }));
                         } catch (error: unknown) {
-                            set_snapshot((current_snapshot) => ({
-                                ...current_snapshot,
-                                status_message: `잘못된 Binance 봉을 건너뛰었습니다: ${get_error_message(error)}`,
-                            }));
+                            if (!parse_failure_was_recorded) {
+                                parse_failure_was_recorded = true;
+                                record_diagnostic({ event: 'parse_error', ...describe_chart_data_error(error) });
+                            }
+                            schedule_reconnect('차트 시세 형식을 확인하지 못했습니다.');
                         }
                     };
                     socket.onerror = () => {
-                        if (is_disposed || current_connection_version !== connection_version) {
-                            return;
-                        }
-
+                        if (!is_current_connection()) return;
+                        record_diagnostic({ event: 'socket_error' });
                         schedule_reconnect('Binance WebSocket 연결에 오류가 발생했습니다.');
                     };
-                    socket.onclose = () => {
-                        if (is_disposed || current_connection_version !== connection_version) {
-                            return;
-                        }
-
+                    socket.onclose = (event) => {
+                        if (!is_current_connection()) return;
                         socket_is_open = false;
+                        record_diagnostic({ event: 'socket_closed', close_code: event.code, clean: event.wasClean });
                         schedule_reconnect('Binance WebSocket 연결이 종료되었습니다.');
                     };
-                } catch (error: unknown) {
-                    schedule_reconnect(`Binance WebSocket을 시작하지 못했습니다: ${get_error_message(error)}`);
+                } catch {
+                    record_diagnostic({ event: 'socket_error' });
+                    schedule_reconnect('Binance WebSocket을 시작하지 못했습니다.');
+                    return;
                 }
             }
 
+            record_diagnostic({ event: 'rest_started' });
             try {
                 const historical_klines = await load_all_klines(symbol, {
-                    limit,
-                    signal: active_abort_controller.signal,
-                    ...(options.fetch_implementation === undefined
-                        ? {}
-                        : { fetch_implementation: options.fetch_implementation }),
+                    limit, signal: request_controller.signal,
+                    on_request_event: (event) => { if (is_current_connection()) record_diagnostic(event); },
+                    ...(options.fetch_implementation === undefined ? {} : { fetch_implementation: options.fetch_implementation }),
                 });
-
-                if (is_disposed || current_connection_version !== connection_version) {
-                    return;
-                }
-
+                if (!is_current_connection()) return;
                 historical_data_is_ready = true;
+                record_diagnostic({ event: 'rest_completed', elapsed_ms: Math.round(performance.now() - connection_started_at) });
                 supported_chart_intervals.forEach((interval) => {
-                    if (historical_klines[interval].length < limit) {
-                        replace_history_load_state(interval, {
-                            ...history_load_state_ref.current[interval],
-                            is_exhausted: true,
-                        });
-                    }
+                    if (historical_klines[interval].length < limit) replace_history_load_state(interval, {
+                        ...history_load_state_ref.current[interval], is_exhausted: true,
+                    });
                 });
+                const live = is_live();
                 set_snapshot((current_snapshot) => {
                     const current_klines = current_snapshot.symbol === symbol
-                        ? current_snapshot.klines_by_interval
-                        : create_empty_klines_by_interval();
-                    const merged_klines = Object.fromEntries(
-                        supported_chart_intervals.map((interval) => {
-                            const historical_and_current = merge_klines_without_truncation(
-                                historical_klines[interval],
-                                current_klines[interval],
-                            );
-
-                            return [
-                                interval,
-                                merge_klines_without_truncation(
-                                    historical_and_current,
-                                    buffered_klines[interval],
-                                ),
-                            ] as const;
-                        }),
-                    ) as unknown as KlinesByInterval;
+                        ? current_snapshot.klines_by_interval : create_empty_klines_by_interval();
+                    const merged_klines = Object.fromEntries(supported_chart_intervals.map((interval) => [interval,
+                        merge_klines_without_truncation(
+                            merge_klines_without_truncation(current_klines[interval], historical_klines[interval]),
+                            buffered_klines[interval],
+                        ),
+                    ])) as unknown as KlinesByInterval;
                     const next_snapshot: RealtimeChartDataSnapshot = {
-                        data_status: socket_is_open
-                            ? 'live'
-                            : web_socket_factory === null
-                                ? 'error'
-                                : 'reconnecting',
+                        data_status: live ? 'live' : web_socket_factory === null ? 'error' : 'reconnecting',
                         klines_by_interval: merged_klines,
-                        status_message: socket_is_open
-                            ? null
-                            : web_socket_factory === null
-                                ? '이 실행 환경에서는 실시간 WebSocket을 사용할 수 없습니다.'
-                                : '과거 봉을 표시하며 실시간 연결을 기다리고 있습니다.',
-                        symbol,
+                        status_message: live ? null : '주기별 실시간 시세 수신을 확인하고 있습니다.', symbol,
                         updated_at: Date.now(),
+                        data_revision: current_connection_version,
+                        updated_at_by_interval: Object.fromEntries(interval_diagnostics
+                            .filter((entry) => entry.received_at_ms !== null)
+                            .map((entry) => [entry.interval, entry.received_at_ms!])),
                     };
-
                     snapshot_ref.current = next_snapshot;
                     return next_snapshot;
                 });
             } catch (error: unknown) {
-                if (is_disposed || current_connection_version !== connection_version || is_abort_error(error)) {
-                    return;
-                }
-
-                const error_message = get_error_message(error);
-
-                set_snapshot((current_snapshot) => ({
-                    ...current_snapshot,
-                    data_status: 'error',
-                    status_message: `Binance 과거 봉을 불러오지 못했습니다: ${error_message}`,
-                }));
-                schedule_reconnect('시장 데이터 초기화에 실패했습니다.');
+                if (!is_current_connection() || is_abort_error(error)) return;
+                record_diagnostic({ event: (error instanceof Error || error instanceof DOMException) && error.name === 'TimeoutError' ? 'rest_timeout' : 'rest_failed' });
+                schedule_reconnect('차트 과거 봉 동기화에 실패했습니다.');
             }
         }
+
+        /**
+         * 함수 이름: check_connection_health()
+         * 기능: 연결 무응답과 주기별 수신 정지를 감지하고 정기 수신 요약을 남긴다.
+         * 인자: 없음
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/11
+         */
+        function check_connection_health(): void {
+            if (is_disposed || reconnect_timer !== null || web_socket_factory === null) return;
+            const current_time = performance.now();
+            if (current_time >= next_heartbeat_at) {
+                next_heartbeat_at = current_time + 30_000;
+                record_diagnostic({ event: 'heartbeat' });
+            }
+            if (socket_opened_at === null) {
+                if (current_time - connection_started_at >= 15_000) {
+                    record_diagnostic({ event: 'connect_timeout' });
+                    schedule_reconnect('차트 시세 연결 응답이 지연되고 있습니다.');
+                }
+                return;
+            }
+            const stale_interval = supported_chart_intervals.find((interval) =>
+                current_time - (last_received_monotonic[interval] ?? socket_opened_at!) >= 15_000);
+            if (stale_interval !== undefined) {
+                record_diagnostic({ event: 'stream_stale', interval: stale_interval,
+                    elapsed_ms: Math.round(current_time - (last_received_monotonic[stale_interval] ?? socket_opened_at)) });
+                schedule_reconnect(`${stale_interval} 차트 시세 수신이 지연되고 있습니다.`);
+            }
+        }
+
+        /**
+         * 함수 이름: observe_browser_state()
+         * 기능: 절전·백그라운드·네트워크 복귀의 시각을 남기고 즉시 수신 상태를 확인한다.
+         * 인자: event -> 가시성 또는 네트워크 변경 event
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/11
+         */
+        function observe_browser_state(event: Event): void {
+            record_diagnostic({ event: event.type === 'visibilitychange' ? 'visibility_changed' : 'browser_online' });
+            check_connection_health();
+        }
+        const health_timer = setInterval(check_connection_health, 1_000);
+        document.addEventListener('visibilitychange', observe_browser_state);
+        window.addEventListener('online', observe_browser_state);
+        window.addEventListener('offline', observe_browser_state);
 
         initialize_market_data();
 
         return () => {
+            record_diagnostic({ event: 'stopped' });
+            clearInterval(health_timer);
+            document.removeEventListener('visibilitychange', observe_browser_state);
+            window.removeEventListener('online', observe_browser_state);
+            window.removeEventListener('offline', observe_browser_state);
             is_disposed = true;
             connection_version += 1;
             active_abort_controller?.abort();
@@ -706,6 +789,7 @@ export function use_realtime_chart_data(
         history_page_limit,
         limit,
         options.fetch_implementation,
+        options.diagnostic_sink,
         options.web_socket_factory,
         reconnect_delays,
         symbol,

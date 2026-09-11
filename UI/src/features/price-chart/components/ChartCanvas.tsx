@@ -69,6 +69,7 @@ export interface ChartCanvasProps {
     readonly bollingerUpper: ReadonlyArray<LinePointViewModel>;
     readonly candles: ReadonlyArray<CandleViewModel>;
     readonly dataStatus?: PriceChartDataStatus;
+    readonly dataRevision?: number;
     readonly drawingActive?: boolean;
     readonly drawings?: ReadonlyArray<ChartDrawing>;
     readonly ema: ReadonlyArray<LinePointViewModel>;
@@ -442,6 +443,7 @@ export function ChartCanvas({
     bollingerUpper,
     candles,
     dataStatus = 'idle',
+    dataRevision = 0,
     drawingActive = false,
     drawings = [],
     ema,
@@ -626,6 +628,7 @@ export function ChartCanvas({
                 bollingerLower={bollingerLower}
                 bollingerUpper={bollingerUpper}
                 candles={candles}
+                dataRevision={dataRevision}
                 ema={ema}
                 indicatorSettings={visible_indicators}
                 interval={interval}
