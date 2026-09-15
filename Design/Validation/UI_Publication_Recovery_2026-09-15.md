@@ -32,10 +32,10 @@ Chromium의 실제 App·React 외부 store·facade·backend adapter를 연결한
 | 로컬 앱 서명 | ad hoc 서명 후 deep/strict 검증 통과 |
 | 실계좌 주문·자산 이동 | 이 작업에서 수행하지 않음 |
 
-브라우저 검증은 Chromium과 메모리 fixture로 수행했으며 실제 macOS WebView의 절전 동작 전체를 재현한 장시간 실계좌 검증은 아니다. 현재 실행 중인 개발 앱을 새로고침하거나 종료하지 않도록 별도 `codex/ui-publication-recovery` 작업본에서 변경했다. 이 브랜치를 원래 개발 체크아웃에 반영하려면 실행 중인 개발 앱의 안전 종료 이후 진행한다.
+브라우저 검증은 Chromium과 메모리 fixture로 수행했으며 실제 macOS WebView의 절전 동작 전체를 재현한 장시간 실계좌 검증은 아니다. 별도 `codex/ui-publication-recovery` 작업본에서 수정과 검증을 완료한 뒤, 사용자의 요청에 따라 원래 프로젝트의 `main`에도 동일한 변경을 충돌 없이 반영했다.
 
 ## 결과물
 
 - 앱: `/Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader.app`
 - 검증 로그와 브라우저 비교: `/Users/oscar/Desktop/Binance_Auto/Log_History/ui_publication_recovery_20260915/`
-- 실행 중인 앱은 기존 코드로 유지된다. 안전 종료 후 수정된 앱을 열면 이 변경이 적용된다.
+- 본 코드: `/Users/oscar/Desktop/Binance_Auto`의 `main`. 이 프로젝트에서 실행하거나 빌드할 때도 수정 내용이 적용된다. 이미 실행 중인 앱의 전체 반영은 안전 종료 후 다시 실행하면 확실히 적용된다.
