@@ -58,3 +58,17 @@ backend/.venv/bin/python scripts/market_stability_soak.py --hours 48 --output Lo
 `backend/.venv/bin/python scripts/verify_runtime_logging.py`는 외부 연결 없이 합성 장애를 재현하고 실제 저장된 로그를 검증한다. 추가 시나리오는 과거 장애의 원본 payload를 복원한 것이 아니다. 원시 응답과 인증 정보는 기록하지 않는다. 변경은 다음 프로그램 시작부터 적용되며 이미 실행 중인 프로세스에는 소급 적용되지 않는다. 이 기록 보완은 48시간 연속 운용 합격을 뜻하지 않는다.
 
 로그 보완 검증: 파일 저장 검증 20개 통과, 백엔드 전체 1,129개 실행(10개 건너뜀), 실패 없음. 검증 원문은 `Log_History/logging_enhancement_verification_20260910/`에 보존한다.
+
+## 2026-09-13 UI–백엔드 연결과 종료 복구
+
+전체 상태를 다시 읽는 중 일시적 오류가 발생해도 UI 인증 정보를 폐기하지 않고 단일 작업으로 재시도한다. 재연결한 snapshot과 정상 이벤트 수신까지 확인한 뒤 화면을 online으로 복원한다. UI 연결만 끊겼을 때 정상 백엔드의 자동매매는 유지하며 화면 명령은 복구까지 차단한다. 종료는 최신 상태 확인·중지·정상 종료를 거치고, 치명적 UI 오류에서도 같은 백엔드의 좁은 종료 API를 사용할 수 있다.
+
+UI 최초 오류를 백엔드 통신과 독립된 native 로그에 저장한다. 발생 단계, 고정 오류 코드·타입, 검증 필드, request/incident/session 식별자, HTTP 상태·소요 시간, 소켓 close code, 마지막 정상 수신, 재시도 및 저장 유실 수를 남긴다. 자세한 원인·수정·분석 방법은 `Design/Validation/Backend_Connection_Recovery_2026-09-13.md`에 정리했다.
+
+검증: 백엔드 1,159개 실행(10개 제외), UI 531개, native 51개 통과. 배포용 macOS 앱 빌드 완료. 주문 없는 실제 loopback 통신 24시간 점검은 `Log_History/backend_connection_soak_24h_20260913_final/status.json`에서 진행 상태를 확인한다. 이는 가짜 계좌 runtime과 Node 진단 파일 sink를 사용하는 통신 통합 검사이며 실제 WebView·거래소·실주문 장시간 운용을 대체하지 않는다. 24시간 완료 여부는 해당 기록으로 별도 확인한다.
+
+## 2026-09-14 UI–백엔드 24시간 점검 분석
+
+2026-09-13 01:23:57~2026-09-14 01:23:57 KST에 최종 점검을 완료했다. 장애 95회 모두 복구됐고 중앙 복구 시간은 4.074초, 최장은 5.022초였다. UI 진단 4,546건·backend 진단 3,832건은 sequence 유실 없이 보존됐다. 소켓은 최대 1개, backend thread는 준비 후 4개로 유지됐다.
+
+검증한 통신 복구·진단 범위 내 통과로 판정했다. Node heap 증가 후 감소를 관찰했지만 GC trace와 heap snapshot이 없어 누수 부재를 확정하지 않는다. 실제 WebView·Tauri 저장 전체 경로·거래소·매매는 장시간 검증 범위 밖이다. 자세한 분석과 원본 연결은 `Design/Validation/Backend_Connection_Soak_Result_2026-09-14.md`에 기록했다. 원본 상태 파일의 `completed_needs_review`는 보존하고 분석 판정은 별도 파일에 저장했다.

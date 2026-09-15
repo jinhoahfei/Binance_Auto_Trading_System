@@ -1766,7 +1766,10 @@ class BinanceSpotRESTClient:
         """
         if method not in {"GET", "POST", "DELETE"}:
             raise ValueError("unsupported HTTP method")
-        if not isinstance(endpoint, str) or not endpoint.startswith("/v3/"):
+        from .earn_residual import EARN_READ_ENDPOINTS
+
+        earn_read = (self._base_url == LIVE_REST_BASE_URL and method == "GET" and signed and endpoint in EARN_READ_ENDPOINTS)
+        if not isinstance(endpoint, str) or (not endpoint.startswith("/v3/") and not earn_read):
             raise ValueError("endpoint must start with /v3/")
 
         # Signed parameter에는 server offset timestamp와 작은 recvWindow를 attempt마다 새로 넣는다.
@@ -1794,6 +1797,8 @@ class BinanceSpotRESTClient:
 
         # GET은 query string, POST/DELETE는 form body를 사용해 공식 method별 규칙을 따른다.
         request_base_url = self._base_url
+        if earn_read:
+            request_base_url = LIVE_REST_BASE_URL.removesuffix("/api")
         if self._use_mainnet_market_data and endpoint == "/v3/klines":
             if method != "GET" or signed:
                 raise ValueError("mainnet Klines require unsigned GET")

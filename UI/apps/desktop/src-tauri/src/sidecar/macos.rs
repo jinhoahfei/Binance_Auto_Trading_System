@@ -226,10 +226,11 @@ pub(super) fn platform_prepare_backend_sidecar(
                         ready_payload,
                         token,
                     }),
+                    startup_failure_code: "BACKEND_SIDECAR_STARTUP_FAILED",
                 },
             ));
         }
-        Err(ReadyDescriptorReadFailure::Terminal(_failure)) => {
+        Err(ReadyDescriptorReadFailure::Terminal(failure)) => {
             debug_assert_eq!(
                 select_startup_child_recovery_policy(true),
                 StartupChildRecoveryPolicy::RetainAmbiguousExposure
@@ -239,6 +240,7 @@ pub(super) fn platform_prepare_backend_sidecar(
                     child: OwnedSidecarChild::new(child, None),
                     stop_writer,
                     late_ready_recovery: None,
+                    startup_failure_code: failure.code,
                 },
             ));
         }

@@ -16,6 +16,17 @@ class BinanceReadOnlyRESTFacade:
 
     __slots__ = ()  # Credential과 delegate 저장 책임은 mode별 adapter에 남긴다.
 
+    def fetch_earn_residual_evidence(self, *, since):
+        """
+        함수 이름: fetch_earn_residual_evidence()
+        기능: 예치 조회를 지원하는 live delegate에만 읽기 전용 근거 조회를 전달한다.
+        인자: since -> 잔여 발생 시각
+        반환값: 예치 근거 또는 미지원 None
+        작성 날짜: 2026/09/15
+        """
+        reader = getattr(self._delegate, "fetch_earn_residual_evidence", None)
+        return reader(since=since) if callable(reader) else None
+
     def get_klines(
         self,
         *,

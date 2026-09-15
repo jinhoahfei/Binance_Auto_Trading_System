@@ -34,3 +34,14 @@
     color: var(--color-text-secondary);
     font-size: 13px;
 }
+
+.connectionRecovery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    padding: 12px 24px;
+    border-bottom: 1px solid #675726;
+    background: #292719;
+    color: #efdc9f;
+    font-size: 13px;
+}

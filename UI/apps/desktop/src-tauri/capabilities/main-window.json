@@ -7,6 +7,7 @@
   "permissions": [
     "allow-get-backend-connection-descriptor",
     "allow-record-chart-diagnostics",
+    "allow-record-backend-connection-diagnostics",
     "allow-choose-csv-export-directory",
     "allow-await-backend-sidecar-exit",
     "allow-arm-native-exit-intent-bridge",

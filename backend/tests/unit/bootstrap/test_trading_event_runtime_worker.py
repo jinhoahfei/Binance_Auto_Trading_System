@@ -96,6 +96,58 @@ class TradingEventRuntimeWorkerTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_idle_state_heartbeat_does_not_depend_on_diagnostics(self) -> None:
+        """
+        함수 이름: test_idle_state_heartbeat_does_not_depend_on_diagnostics()
+        기능: 로그를 끈 idle runtime도 60초 경계에서 상태를 게시하고 매 cycle에는 게시하지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/13
+        """
+        published = Event()
+        publications = []
+
+        async def idle_cycle():
+            """
+            함수 이름: idle_cycle()
+            기능: 빈 처리 결과를 반환한다.
+            인자: 없음
+            반환값: 빈 tuple
+            작성 날짜: 2026/09/13
+            """
+            return ()
+
+        def publish():
+            """
+            함수 이름: publish()
+            기능: 상태 게시를 기록하고 대기 중인 테스트를 깨운다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/09/13
+            """
+            publications.append(True)
+            published.set()
+
+        with patch("binance_auto_trader.bootstrap.application.monotonic", return_value=1_000) as clock:
+            worker = _TradingEventRuntimeWorker(idle_cycle, lambda: None, lambda: True,
+                lambda: 0, RLock(), state_update_observer=publish, poll_interval_seconds=0.01)
+            try:
+                worker.start()
+                Event().wait(0.04)
+                self.assertEqual(publications, [])
+                clock.return_value = 1_060
+                worker.request_processing()
+                self.assertTrue(published.wait(1))
+                Event().wait(0.04)
+                self.assertEqual(len(publications), 1)
+                published.clear()
+                clock.return_value = 1_120
+                worker.request_processing()
+                self.assertTrue(published.wait(1))
+                self.assertEqual(len(publications), 2)
+            finally:
+                worker.close()
+
     def test_cycle_failure_marks_fail_closed_once_and_stops_worker(
         self,
     ) -> None:

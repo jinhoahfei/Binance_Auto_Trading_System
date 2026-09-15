@@ -1655,6 +1655,22 @@ class APIGateway:
             "recent order",
         )
 
+    def fetch_earn_residual_evidence(self, since: datetime):
+        """
+        함수 이름: fetch_earn_residual_evidence()
+        기능: live 조회 근거의 domain 타입을 검증하며 미지원과 확인 성공을 구분한다.
+        인자: since -> 최초 잔여 발생 시각
+        반환값: EarnResidualEvidence 또는 None
+        작성 날짜: 2026/09/15
+        """
+        from binance_auto_trader.domain.trading.residual import EarnResidualEvidence
+
+        reader = getattr(self._rest_client, "fetch_earn_residual_evidence", None)
+        evidence = reader(since=since) if callable(reader) else None
+        if evidence is not None and type(evidence) is not EarnResidualEvidence:
+            raise ValueError("invalid Earn residual evidence")
+        return evidence
+
     def list_account_executions_since(self, symbol: str, order_id: str) -> tuple[AccountExecution, ...] | None:
         """
         함수 이름: list_account_executions_since()

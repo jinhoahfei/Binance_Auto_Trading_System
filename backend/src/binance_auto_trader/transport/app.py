@@ -47,6 +47,7 @@ from .contracts import (
     validate_uuid_text,
 )
 from .event_stream import BackendEventStream
+from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
 from .routes import RouteContext
 from .routes.connection_status import get_binance_connection_status
 from .routes.csv_export import create_csv_export
@@ -1060,6 +1061,23 @@ class LoopbackTransportServer:
         if server_thread is not None:
             server_thread.join(timeout=5.0)
 
+    def _record_transport(self, event: str, *, error: BaseException | None = None, **details: object) -> None:
+        """
+        함수 이름: _record_transport()
+        기능: UI 연결·조회 단계와 상관관계를 runtime 로그에 남기고 원본 헤더·payload는 제외한다.
+        인자: event -> 고정 사건, error -> 타입·내부 위치만 추출할 오류, details -> 검증된 진단 값
+        반환값: 없음
+        작성 날짜: 2026/09/13
+        """
+        diagnostics = getattr(self._runtime, "diagnostics", None)
+        if not isinstance(diagnostics, RuntimeDiagnostics):
+            return
+        fields = {"transport_session_id": self._event_stream.session_id, **details}
+        diagnostics.record(event, level="ERROR" if error is not None else "INFO", **fields)
+        if error is not None:
+            exception_fields = {("transport_stage" if key == "stage" else key): value for key, value in fields.items()}
+            diagnostics.record_exception(event, error, **exception_fields)
+
     def handle_request(self, handler: _LoopbackRequestHandler) -> None:
         """
         함수 이름: handle_request()
@@ -1093,6 +1111,7 @@ class LoopbackTransportServer:
         response_request_id = _safe_request_id(handler)
         response_origin: str | None = None
         response_path: str | None = None
+        request_started = monotonic()
 
         try:
             request_target = _parse_request_target(handler.path)
@@ -1106,6 +1125,8 @@ class LoopbackTransportServer:
             self._validate_http_authentication(handler)
             request_id = _require_request_id(handler)
             response_request_id = request_id
+            if request_target.path in ("/v1/snapshot", "/v1/shutdown", "/v1/shutdown/state"):
+                self._record_transport("ui_http_request_started", request_id=request_id, route=request_target.path)
             if request_target.query and request_target.path != "/v1/trades":
                 raise TransportContractError(
                     "MALFORMED_REQUEST",
@@ -1120,7 +1141,8 @@ class LoopbackTransportServer:
             )
         except TransportContractError as error:
             response = error_response(response_request_id, error)
-        except Exception:
+        except Exception as error:
+            self._record_transport("ui_http_request_failed", error=error, request_id=response_request_id)
             # raw exception, body, header와 stack trace를 network response나 log에 넣지 않는다.
             internal_error = TransportContractError(
                 "INTERNAL_TRANSPORT_ERROR",
@@ -1130,7 +1152,15 @@ class LoopbackTransportServer:
             )
             response = error_response(response_request_id, internal_error)
 
-        _send_http_response(handler, response, response_origin)
+        try:
+            _send_http_response(handler, response, response_origin)
+        except (ConnectionError, OSError) as error:
+            self._record_transport("ui_http_response_failed", error=error, request_id=response_request_id,
+                                   http_status=response.status)
+            raise
+        if response_path in ("/v1/snapshot", "/v1/shutdown", "/v1/shutdown/state") or response.status >= 400:
+            self._record_transport("ui_http_request_completed", request_id=response_request_id,
+                                   http_status=response.status, elapsed_ms=round((monotonic() - request_started) * 1000))
         if (
             response_path == "/v1/shutdown"
             and response.status == 202
@@ -1654,6 +1684,12 @@ class LoopbackTransportServer:
         작성 날짜: 2026/08/21
         """
         websocket = _WebSocketConnection(client_socket)
+        connection_id = str(uuid4())
+        stage = "authentication"
+        current_sequence = 0
+        sent_count = 0
+        next_heartbeat = monotonic() + 30
+        self._record_transport("ui_stream_opened", connection_id=connection_id)
         try:
             authentication_deadline = (
                 monotonic() + _WEBSOCKET_AUTH_TIMEOUT_SECONDS
@@ -1665,11 +1701,13 @@ class LoopbackTransportServer:
                 websocket,
                 authentication_frame,
             )
+            self._record_transport("ui_stream_authenticated", connection_id=connection_id, after_sequence=after_sequence)
             client_socket.settimeout(_WEBSOCKET_SEND_TIMEOUT_SECONDS)
 
             # 인증이 성공하기 전에는 replay를 포함한 application event를 보내지 않는다.
             current_sequence = after_sequence
             while True:
+                stage = "replay_wait"
                 replay_batch = self._event_stream.wait_for_events(
                     current_sequence,
                     timeout=_WEBSOCKET_LIVE_WAIT_SECONDS,
@@ -1677,6 +1715,9 @@ class LoopbackTransportServer:
                 if replay_batch.requires_resync:
                     if replay_batch.resync_reason is None:
                         raise RuntimeError("resync batch has no reason")
+                    self._record_transport("ui_stream_resync_required", connection_id=connection_id,
+                                           reason=replay_batch.resync_reason, last_sequence=current_sequence)
+                    stage = "send"
                     websocket.send_text_object(
                         self._event_stream.build_resync_control(
                             replay_batch.resync_reason
@@ -1687,12 +1728,19 @@ class LoopbackTransportServer:
 
                 # replay와 live event 모두 하나의 ordered tuple 경로로 전송한다.
                 for event_envelope in replay_batch.events:
+                    stage = "send"
                     websocket.send_text_object(event_envelope.to_dto())
                     current_sequence = event_envelope.sequence
+                    sent_count += 1
                 if replay_batch.closed:
                     websocket.send_close(1001, "server shutting down")
                     return
 
+                if monotonic() >= next_heartbeat:
+                    self._record_transport("ui_stream_heartbeat", connection_id=connection_id,
+                                           last_sequence=current_sequence, sent_count=sent_count)
+                    next_heartbeat = monotonic() + 30
+                stage = "receive"
                 readable_sockets, _, _ = select.select(
                     [websocket.socket],
                     [],
@@ -1701,16 +1749,27 @@ class LoopbackTransportServer:
                 )
                 if readable_sockets and self._handle_client_websocket_frame(websocket):
                     return
-        except socket.timeout:
-            _send_close_safely(websocket, 1008, "authentication timeout")
+        except socket.timeout as error:
+            close_code = 1008 if stage == "authentication" else 1011
+            self._record_transport("ui_stream_timeout", error=error, connection_id=connection_id,
+                                   stage=stage, close_code=close_code, last_sequence=current_sequence)
+            _send_close_safely(websocket, close_code, "authentication timeout" if stage == "authentication" else "transport timeout")
         except _WebSocketProtocolError as error:
+            self._record_transport("ui_stream_protocol_failed", error=error, connection_id=connection_id,
+                                   stage=stage, close_code=error.close_code, last_sequence=current_sequence)
             _send_close_safely(websocket, error.close_code, error.reason)
-        except (_WebSocketClosed, ConnectionError, OSError):
+        except (_WebSocketClosed, ConnectionError, OSError) as error:
+            self._record_transport("ui_stream_connection_lost", error=error, connection_id=connection_id,
+                                   stage=stage, last_sequence=current_sequence)
             return
-        except Exception:
+        except Exception as error:
+            self._record_transport("ui_stream_internal_failed", error=error, connection_id=connection_id,
+                                   stage=stage, last_sequence=current_sequence)
             # Upgrade 뒤의 내부 오류는 HTTP envelope를 쓰지 않고 generic close로만 끝낸다.
             _send_close_safely(websocket, 1011, "internal transport error")
         finally:
+            self._record_transport("ui_stream_closed", connection_id=connection_id, stage=stage,
+                                   last_sequence=current_sequence, sent_count=sent_count)
             # socket shutdown 오류는 이미 종료 중인 connection에서 무시한다.
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)
@@ -2103,6 +2162,7 @@ def run_transport_process(
     token_fd_open = True
     ready_fd_open = True
     stop_fd_open = True
+    ready_publication_started = False
     try:
         # Production child가 credential을 읽기 전에 app-data lifetime lock을 잡아 중복 runtime을 차단한다.
         if require_closed_before_stop:
@@ -2126,6 +2186,7 @@ def run_transport_process(
         )
         descriptor = transport_application.start()
         ready_payload = json_bytes(descriptor.to_dto()) + b"\n"
+        ready_publication_started = True
         _write_all_to_fd(ready_fd, ready_payload)
         os.close(ready_fd)
         ready_fd_open = False
@@ -2140,6 +2201,15 @@ def run_transport_process(
                 stop_fd,
                 runtime_ownership_lock=runtime_ownership_lock,
             )
+    except Exception as startup_error:
+        if ready_fd_open and not ready_publication_started:
+            from .startup_failure import startup_failure_payload
+
+            try:
+                _write_all_to_fd(ready_fd, json_bytes(startup_failure_payload(startup_error)) + b"\n")
+            except OSError:
+                pass  # 부모 pipe가 사라져도 원래 실패와 cleanup을 보존한다.
+        raise
     finally:
         if token_fd_open:
             _close_file_descriptor_safely(token_fd)

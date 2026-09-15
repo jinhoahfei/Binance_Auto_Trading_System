@@ -5,7 +5,7 @@ from typing import Protocol
 
 from binance_auto_trader.domain.history.trade import Trade
 from binance_auto_trader.domain.trading.position import Position
-from binance_auto_trader.domain.trading.residual import ResidualTransfer, history_digest
+from binance_auto_trader.domain.trading.residual import EarnResidualEvidence, ResidualTransfer, history_digest
 from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 
@@ -134,6 +134,36 @@ class ResidualSettlement:
             and 0 < submitted < position.quantity
             and position.quantity - submitted < step_size
         )
+
+    def matches_earn_custody(self, evidence: EarnResidualEvidence, trades: tuple[Trade, ...]) -> bool:
+        """
+        함수 이름: matches_earn_custody()
+        기능: 각 자동 예치가 당시 잔여와 검증된 상환액 안에 있는지 시간순으로 검증한다.
+        인자: evidence -> 완전한 AUTO/SPOT 예치 근거, trades -> 검증된 이력
+        반환값: 예치된 원금이 잔여에서 나왔음을 설명하면 True
+        작성 날짜: 2026/09/15
+        """
+        from datetime import datetime, timezone
+
+        if not self.transfers or type(evidence) is not EarnResidualEvidence:
+            return False
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        with localcontext() as context:
+            context.prec = 34
+            deposited = Decimal("0")
+            for _, timestamp, amount in sorted(evidence.subscriptions, key=lambda entry: (entry[1], entry[0])):
+                available = Decimal("0")
+                for transfer in self.transfers:
+                    delta = trades[transfer.history_count - 1].executed_at - epoch
+                    transfer_ms = (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
+                    if transfer_ms < timestamp:
+                        available += transfer.quantity
+                # 이미 상환된 원금·검증된 보상의 재예치는 같은 자산을 새 원금으로 중복 계산하지 않는다.
+                available += sum((entry[2] for entry in evidence.redemptions if entry[1] < timestamp), Decimal("0"))
+                deposited += amount
+                if deposited > available:
+                    return False  # 전략 보유량의 자동 예치를 잔여 예치로 바꾸지 않는다.
+        return True
 
     def settle(self, position: Position, trades: tuple[Trade, ...], step_size: Decimal) -> bool:
         """

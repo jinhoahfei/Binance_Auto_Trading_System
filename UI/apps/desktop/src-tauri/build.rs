@@ -25,6 +25,7 @@ fn main() {
     let application_manifest = tauri_build::AppManifest::new().commands(&[
         "get_backend_connection_descriptor",
         "record_chart_diagnostics",
+        "record_backend_connection_diagnostics",
         "choose_csv_export_directory",
         "await_backend_sidecar_exit",
         "arm_native_exit_intent_bridge",

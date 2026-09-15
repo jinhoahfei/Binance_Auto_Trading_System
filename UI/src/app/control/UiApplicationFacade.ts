@@ -1,3 +1,4 @@
+import type { BackendConnectionStatus } from '../../shared/api/BackendUiAdapter';
 import {
     createActor,
     type ActorRefFrom,
@@ -217,6 +218,7 @@ export type UiApplicationIntent =
     | { readonly type: 'API_CONNECTED'; readonly sequence?: number }
     | { readonly type: 'API_DISCONNECTED'; readonly reason?: string }
     | { readonly type: 'RECONNECT_FAILED'; readonly reason: string }
+    | { readonly type: 'BACKEND_CONNECTION_STATUS'; readonly status: BackendConnectionStatus }
     | { readonly type: 'START_TRADING_CLICKED' }
     | { readonly type: 'START_TRADING_CONFIRMED' }
     | { readonly type: 'START_TRADING_CANCELED' }
@@ -389,6 +391,7 @@ export interface AppViewModel {
         readonly is_online: boolean;
         readonly is_pending: boolean;
         readonly reconnect_attempt: number;
+        readonly recovery?: BackendConnectionStatus | null;
         readonly error: string | null;
     };
     readonly trading: {
@@ -530,6 +533,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
                 || snapshot.connection.matches('reconnecting'),
             reconnect_attempt: snapshot.connection.context.reconnect_attempt,
             error: snapshot.connection.context.last_error,
+            recovery: snapshot.connection.context.recovery,
         },
         trading: {
             command_enabled: snapshot.trading.context.command_enabled,
@@ -921,6 +925,9 @@ export class UiApplicationFacade {
                     ? { type: 'API_DISCONNECTED' }
                     : { type: 'API_DISCONNECTED', reason: intent.reason });
                 this.actors.trading.send({ type: 'API_DISCONNECTED' });
+                break;
+            case 'BACKEND_CONNECTION_STATUS':
+                this.actors.connection.send(intent);
                 break;
             case 'RECONNECT_FAILED':
                 this.actors.connection.send(intent);

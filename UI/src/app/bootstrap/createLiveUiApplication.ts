@@ -16,12 +16,13 @@ import type { UiApplicationFactory, UiApplicationRuntime } from './types';
 export interface LiveUiApplicationOptions {
     readonly adapter_dependencies?: BackendUiAdapterDependencies;
     readonly today?: LocalDateString;
+    readonly on_terminal_failure?: (error: BackendAdapterError) => void;
 }
 
 /**
  * 이미 생성한 live adapter를 재사용하는 snapshot hydration 옵션이다.
  */
-export type LiveUiHydrationOptions = Pick<LiveUiApplicationOptions, 'today'>;
+export type LiveUiHydrationOptions = Pick<LiveUiApplicationOptions, 'today' | 'on_terminal_failure'>;
 
 /**
  * snapshot-first bootstrap이 생성한 facade와 실제 loopback adapter 묶음이다.
@@ -145,14 +146,18 @@ export async function hydrate_live_ui_application(
                         type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
                         snapshot: remapped_snapshot.server_snapshot,
                     });
+                    facade.dispatch({ type: 'API_DISCONNECTED', reason: '이벤트 수신 재개를 확인 중입니다.' });
                 },
                 on_reconnecting: (reason) => {
                     facade.dispatch({ type: 'API_DISCONNECTED', reason });
                 },
+                on_ready: () => facade.dispatch({ type: 'API_CONNECTED' }),
+                on_connection_status: (status) => facade.dispatch({ type: 'BACKEND_CONNECTION_STATUS', status }),
                 on_failure: (error) => {
                     // Online과 reconnecting 양쪽에서 동일하게 typed offline 최종 상태로 수렴시킨다.
                     facade.dispatch({ type: 'API_DISCONNECTED', reason: error.code });
                     facade.dispatch({ type: 'RECONNECT_FAILED', reason: error.message });
+                    options.on_terminal_failure?.(error);
                 },
             });
         },

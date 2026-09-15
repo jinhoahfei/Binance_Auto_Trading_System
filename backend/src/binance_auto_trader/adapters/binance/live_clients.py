@@ -5,6 +5,7 @@ from decimal import Decimal
 from datetime import datetime
 from binance_auto_trader.adapters.binance.bnb_fee_valuator import BnbFeeValuator
 from binance_auto_trader.domain.trading.fee_valuation import BnbFeeValuation
+from .earn_residual import EARN_READ_ENDPOINTS, read_earn_residual_evidence
 
 from binance_auto_trader.adapters.binance.live_endpoints import (
     LIVE_REST_BASE_URL, _LIVE_ENDPOINT_CAPABILITY,
@@ -51,7 +52,7 @@ class _LiveHTTPTransport:
         반환값: HTTP 응답
         작성 날짜: 2026/09/08
         """
-        # Origin prefix 뒤 exact API path까지 고정해 유사 host·SAPI·fallback을 거부한다.
+        # Spot와 잔여 예치 조회의 exact path만 허용하며 예치·상환 API는 제공하지 않는다.
         request_path = url.split("?", 1)[0]
         read_paths = {
             "/v3/time", "/v3/klines", "/v3/account", "/v3/account/commission",
@@ -61,6 +62,9 @@ class _LiveHTTPTransport:
         allowed_read = method == "GET" and request_path in {
             LIVE_REST_BASE_URL + path for path in read_paths
         }
+        allowed_read = allowed_read or (method == "GET" and request_path in {
+            LIVE_REST_BASE_URL.removesuffix("/api") + path for path in EARN_READ_ENDPOINTS
+        })
         allowed_mutation = self._allow_orders and method in {"POST", "DELETE"} and request_path == LIVE_REST_BASE_URL + "/v3/order"
         if not (allowed_read or allowed_mutation):
             raise ValueError("live HTTP request denied")
@@ -105,6 +109,25 @@ class BinanceLiveRESTClient(BinanceSpotRESTClient):
             _live_endpoint_capability=_LIVE_ENDPOINT_CAPABILITY,
         )  # Live는 -1021에서도 POST를 자동 재전송하지 않는다.
 
+
+    def fetch_earn_residual_evidence(self, *, since: datetime):
+        """
+        함수 이름: fetch_earn_residual_evidence()
+        기능: 고정 Simple Earn GET만 기존 서명·시간 동기화·redirect 차단 경계에서 실행한다.
+        인자: since -> 잔여 발생 UTC 시각
+        반환값: 검증된 자동 예치 근거 또는 None
+        작성 날짜: 2026/09/15
+        """
+        def request(endpoint, parameters):
+            """
+            함수 이름: request()
+            기능: 검증된 Earn 조회 경로를 signed GET으로만 호출한다.
+            인자: endpoint -> 고정 Earn 경로, parameters -> 조회 조건
+            반환값: 해석된 JSON
+            작성 날짜: 2026/09/15
+            """
+            return self._request_json(method="GET", endpoint=endpoint, parameters=parameters, signed=True).payload
+        return read_earn_residual_evidence(request, since, self.get_server_timestamp_milliseconds())
 
     def resolve_bnb_fee(self, executed_at: datetime) -> BnbFeeValuation:
         """

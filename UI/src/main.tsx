@@ -25,6 +25,7 @@ import {
     BackendUiAdapter,
     validate_connection_descriptor,
 } from './shared/api';
+import { flush_backend_connection_diagnostics } from './shared/api/backendConnectionDiagnostics';
 import './shared/styles/global.css';
 
 /**
@@ -149,6 +150,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
     let live_application: LiveUiApplication | null = null;
     let application_is_active = false;
     let recovery_adapter: BackendUiAdapter | null = null;
+    let expected_backend_session: string | null = null;
     let recovery_error: unknown = null;
     let recovery_is_pending = false;
     let recovery_is_visible = false;
@@ -255,7 +257,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
      * 작성 날짜: 2026/09/05
      */
     async function get_recovery_adapter(): Promise<BackendUiAdapter> {
-        if (recovery_adapter !== null) {
+        if (recovery_adapter !== null && !recovery_adapter.is_disposed) {
             return recovery_adapter;
         }
         if (!is_tauri_runtime()) {
@@ -267,6 +269,10 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             const descriptor = validate_connection_descriptor(
                 await invoke<unknown>('get_backend_connection_descriptor'),
             );
+            if (expected_backend_session !== null && descriptor.session_id !== expected_backend_session) {
+                throw new BackendAdapterError('SESSION_MISMATCH', '백엔드 실행이 변경돼 연결 복구를 중단했습니다.', false);
+            }
+            expected_backend_session = descriptor.session_id;
             recovery_adapter = new BackendUiAdapter(descriptor);
             return recovery_adapter;
         } catch (error) {
@@ -290,6 +296,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         }
 
         recovery_window_is_finalized = true;
+        await flush_backend_connection_diagnostics();
         remove_native_listeners();
         try {
             await getCurrentWindow().destroy();
@@ -329,6 +336,22 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             recovery_is_pending = false;
             render_bootstrap_recovery();
         }
+    }
+
+    /** 실행 중 치명적 연결 오류는 같은 backend의 연결 정보로 복구·안전 종료할 수 있는 화면에 전달한다. */
+    function show_runtime_connection_failure(error: BackendAdapterError): void {
+        const failed_application = live_application;
+        // 상태 machine callback 안에서 React를 unmount하지 않는다. 실제 sidecar exit가 우선한다.
+        queueMicrotask(() => {
+            if (live_application !== failed_application || recovery_sidecar_has_exited) return;
+            recovery_error = error;
+            recovery_is_pending = false;
+            recovery_adapter = null;
+            live_application = null;
+            application_is_active = false;
+            failed_application?.deactivate();
+            render_bootstrap_recovery();
+        });
     }
 
     /**
@@ -386,7 +409,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         render_bootstrap_recovery();
         try {
             const adapter = await get_recovery_adapter();
-            const application = await hydrate_live_ui_application(adapter);
+            const application = await hydrate_live_ui_application(adapter, { on_terminal_failure: show_runtime_connection_failure });
             if (recovery_sidecar_has_exited) {
                 application.deactivate();
                 render_bootstrap_recovery();
@@ -547,7 +570,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         // 새 document도 실행 중인 동일 backend에 인증하고 최신 snapshot부터 화면을 다시 구성한다.
         const adapter = await get_recovery_adapter();
         recovery_is_pending = true;
-        const application = await hydrate_live_ui_application(adapter);
+        const application = await hydrate_live_ui_application(adapter, { on_terminal_failure: show_runtime_connection_failure });
         install_live_application(application);
     } catch (error) {
         // READY child가 살아 있을 수 있으므로 token/listener를 버리지 않고 operator recovery로 남긴다.

@@ -144,6 +144,7 @@ def run_framed_transport_process(
     """
     transport_application: LoopbackTransportApplication | None = None
     runtime_ownership_lock: _RuntimeOwnershipLock | None = None
+    ready_publication_started = False
     try:
         # 공통 ownership adapter를 먼저 잠가 중복 runtime의 외부 startup을 차단한다.
         runtime_pid, process_start_id = _get_runtime_process_identity()
@@ -160,6 +161,7 @@ def run_framed_transport_process(
             close_runtime=close_runtime,
         )
         descriptor = transport_application.start()
+        ready_publication_started = True
         write_json_frame(output_stream, descriptor.to_dto(), maximum_bytes=MAX_READY_FRAME_BYTES)
         _wait_for_safe_framed_ack(
             transport_application.runtime,
@@ -167,6 +169,15 @@ def run_framed_transport_process(
             input_stream,
             runtime_ownership_lock=runtime_ownership_lock,
         )
+    except Exception as startup_error:
+        if not ready_publication_started:
+            from .startup_failure import startup_failure_payload
+
+            try:
+                write_json_frame(output_stream, startup_failure_payload(startup_error), maximum_bytes=MAX_READY_FRAME_BYTES)
+            except (OSError, ValueError):
+                pass  # 부모 pipe 손실은 원래 오류와 소유권 정리를 대체하지 않는다.
+        raise
     finally:
         try:
             if transport_application is not None:

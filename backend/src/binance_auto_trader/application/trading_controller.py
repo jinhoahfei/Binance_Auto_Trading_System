@@ -474,6 +474,16 @@ class StartupOrderReconciliationError(RuntimeError):
     code = "STARTUP_ORDER_RECONCILIATION_FAILED"
 
 
+class ResidualBalanceMismatchError(StartupOrderReconciliationError):
+    """
+    클래스 이름: ResidualBalanceMismatchError
+    기능: 잔여 장부와 현물 ETH 불일치를 일반 주문 조회 실패와 구분한다.
+    작성 날짜: 2026/09/15
+    """
+
+    code = "RESIDUAL_BALANCE_MISMATCH"
+
+
 class AccountStreamRecoveryBlockedError(StartupOrderReconciliationError):
     """
     클래스 이름: AccountStreamRecoveryBlockedError
@@ -2301,11 +2311,16 @@ class TradingController:
             raise ValueError("reason must be non-empty without outer whitespace")
 
         with self._session_lock:
+            first_loss = not self._process_ownership_ambiguous
             self._record_reconciliation_cause_locked(
                 ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS
             )
             self._process_ownership_ambiguous = True
             self._stream_reconciliation_required = True
+            self._recovery_phase = "blocked"
+            self._recovery_block_reason = "PROCESS_OWNERSHIP_AMBIGUOUS"
+            if self._recovery_started_at is None:
+                self._recovery_started_at = self._clock()
 
             # Context publication 실패보다 먼저 공개 status를 닫아 active effect가 재개되지 않게 한다.
             if self._status in (
@@ -2322,6 +2337,15 @@ class TradingController:
                 self._scheduler.clear()
                 if self._event_queue is not None:
                     self._event_queue.clear()
+                if first_loss:
+                    self._record_diagnostic(
+                        "process_ownership_lost", level="ERROR",
+                        reason=reason if reason in ("parent_stop_pipe_eof", "parent_identity_lost") else "process_ownership_ambiguous",
+                        recovery_phase=self._recovery_phase,
+                        block_reason=self._recovery_block_reason,
+                        last_strategy_evaluation_at=self._last_strategy_evaluation_at,
+                        last_market_input_at=self._last_market_input_at,
+                    )
                 # Publication 예외도 queued effect cleanup과 status commit을 되돌리지 못한다.
 
     @property
@@ -4986,8 +5010,63 @@ class TradingController:
             with localcontext() as context:
                 context.prec = 34
                 total = self._require_position().quantity + residual_quantity
-            if total != self._account.get_holdings(_BASE_ASSET):
-                raise StartupOrderReconciliationError("residual ledger differs from exchange ETH balance")
+            exchange_quantity = self._account.get_holdings(_BASE_ASSET)
+            if total != exchange_quantity:
+                if self._try_reconcile_earn_residual(exchange_quantity):
+                    return
+                self._record_diagnostic(
+                    "residual_balance_mismatch",
+                    level="ERROR",
+                    position_quantity=self._require_position().quantity,
+                    residual_quantity=residual_quantity,
+                    expected_quantity=total,
+                    exchange_quantity=exchange_quantity,
+                )
+                raise ResidualBalanceMismatchError("residual ledger differs from exchange ETH balance")
+
+    def _try_reconcile_earn_residual(self, exchange_quantity: Decimal) -> bool:
+        """
+        함수 이름: _try_reconcile_earn_residual()
+        기능: 기존 잔여의 자동 예치·상환·보상을 두 번 대조하며 전략 수량과 장부는 보존한다.
+        인자: exchange_quantity -> 현재 현물 ETH 수량
+        반환값: 예치 근거와 안정된 현물 잔고로 불일치가 설명되면 True
+        작성 날짜: 2026/09/15
+        """
+        settlement = self._residual_settlement
+        # 전략 lot까지 Earn으로 이동했다면 잔여 보관 근거로 거래 권한을 되살리지 않는다.
+        if settlement is None or not settlement.transfers or self._require_position().quantity > exchange_quantity:
+            return False
+        history = self._require_trade_history_controller().trade_history.trades
+        since = history[settlement.transfers[0].history_count - 1].executed_at
+        try:
+            evidence = self._api_gateway.fetch_earn_residual_evidence(since)
+            if evidence is None or not settlement.matches_earn_custody(evidence, history):
+                return False
+            with localcontext() as context:
+                context.prec = 34
+                expected_spot = self._require_position().quantity + settlement.totals[0] + evidence.rewards - evidence.quantity
+            if exchange_quantity != expected_spot:
+                return False
+            first_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
+            repeated = self._api_gateway.fetch_earn_residual_evidence(since)
+            confirmed_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
+            if (repeated is None or repeated.subscriptions != evidence.subscriptions or repeated.redemptions != evidence.redemptions
+                    or repeated.rewards != evidence.rewards or not settlement.matches_earn_custody(repeated, history)):
+                return False
+            first_eth = tuple(balance for balance in first_account.balances if balance.asset == _BASE_ASSET)
+            confirmed_eth = tuple(balance for balance in confirmed_account.balances if balance.asset == _BASE_ASSET)
+            if len(confirmed_eth) != 1 or first_eth != confirmed_eth or confirmed_eth[0].total != exchange_quantity:
+                return False
+            if (not self._web_socket_gateway.account_ready or self._process_lifetime_reconciliation_required_locked()
+                    or self._account.get_holdings(_BASE_ASSET) != exchange_quantity):
+                return False
+            self._record_diagnostic("residual_custody_reconciled", custody="spot" if repeated.quantity == 0 else "simple_earn",
+                                    residual_quantity=settlement.totals[0], earn_quantity=repeated.quantity,
+                                    earn_rewards=repeated.rewards, spot_quantity=exchange_quantity)
+            return True  # 잔여 원금·원가는 유지하고 보상이나 Earn 수량을 전략 Position에 넣지 않는다.
+        except Exception as error:
+            self._diagnostics.record_exception("residual_earn_reconciliation", error)
+            return False
 
     def _allows_residual_rounding(self, requested: Decimal, submitted: Decimal) -> bool:
         """

@@ -41,7 +41,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 vi.mock('@tauri-apps/api/window', () => ({
-    getCurrentWindow: () => ({ destroy: destroy_window_mock }),
+    getCurrentWindow: () => ({ destroy: destroy_window_mock, onCloseRequested: async () => () => {} }),
 }));
 
 /**
@@ -128,6 +128,7 @@ describe('production main bootstrap recovery', () => {
                 || command === 'arm_native_exit_intent_bridge') {
                 return { armed: true };
             }
+            if (command === 'record_backend_connection_diagnostics') return undefined;
             if (command === 'get_backend_connection_descriptor') {
                 return create_live_descriptor();
             }
@@ -144,6 +145,44 @@ describe('production main bootstrap recovery', () => {
         vi.unstubAllGlobals();
         Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
         document.body.innerHTML = '';
+    });
+
+    it.each([false, true])('실행 중 치명적 연결 오류 후 새 연결로 안전 종료하며 위험 상태에서는 창을 유지한다: %s', async (blocked) => {
+        const sockets: Array<{ onmessage: ((event: MessageEvent) => void) | null }> = [];
+        vi.stubGlobal('WebSocket', class {
+            onopen = null; onmessage = null; onclose = null; onerror = null;
+            constructor() { sockets.push(this); }
+            send() {} close() {}
+        });
+        const paths: string[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const path = new URL(String(input)).pathname;
+            paths.push(path);
+            const request_id = request_headers(init).request_id!;
+            if (path === '/v1/snapshot') return create_success_response(request_id, create_backend_snapshot_fixture());
+            if (path === '/v1/shutdown/state') return create_success_response(request_id, {
+                session_id: TEST_BACKEND_SESSION_ID, version: 42, status: 'terminated',
+            });
+            if (path === '/v1/shutdown') {
+                if (blocked) return new Response(JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION, request_id,
+                    ok: false, error: { code: 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE', message: 'Exposure remains', retryable: false, details: { accepted: false, status: 'blocked', version: 42, position_open: true, pending_order: true, reconciliation_required: true } } }), { status: 409 });
+                return create_success_response(request_id, { accepted: true, status: 'accepted', version: 42 }, 202);
+            }
+            throw new Error('Unexpected request');
+        }));
+        await act(async () => { await import('./main'); });
+        await waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+        await act(async () => { sockets[0]!.onmessage?.({ data: '{invalid' } as MessageEvent); });
+        fireEvent.click(await screen.findByRole('button', { name: '안전 종료' }));
+        if (blocked) {
+            expect(await screen.findByText('SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE')).toBeInTheDocument();
+            expect(destroy_window_mock).not.toHaveBeenCalled();
+            // 테스트가 남기는 복구 adapter도 명시적 native 종료 경계로 정리한다.
+            await act(async () => { native_listeners.get('backend-sidecar-exited')?.({ payload: { code: 0 } }); });
+        } else await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
+        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown']);
+        expect(invoke_mock.mock.calls.filter(([command]) => command === 'get_backend_connection_descriptor')).toHaveLength(2);
+        expect(document.body).not.toHaveTextContent(TEST_BACKEND_TOKEN);
     });
 
     it.each(['연결 다시 확인', '안전 종료'] as const)('연결 정보가 없던 화면의 %s 버튼도 native 연결을 복구한다', async (action_name) => {

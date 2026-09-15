@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from threading import Event, Lock, RLock, Thread, current_thread
 from uuid import uuid4
+from time import monotonic
 
 from binance_auto_trader.adapters.binance import (
     APIGateway,
@@ -723,6 +724,7 @@ class _TradingEventRuntimeWorker:
     """
 
     _POLL_INTERVAL_SECONDS = 0.25
+    _STATE_HEARTBEAT_SECONDS = 60.0
 
     def __init__(
         self,
@@ -777,6 +779,7 @@ class _TradingEventRuntimeWorker:
         self._fail_closed_operation = fail_closed_operation
         self._processing_allowed = processing_allowed
         self._state_snapshot = state_snapshot
+        self._next_state_heartbeat = monotonic() + self._STATE_HEARTBEAT_SECONDS
         self._application_lock = application_lock
         self._state_update_observer = state_update_observer
         self._diagnostics = diagnostics or RuntimeDiagnostics()  # 상태 게시 실패도 거래 평가 파일에서 찾는다.
@@ -923,8 +926,9 @@ class _TradingEventRuntimeWorker:
                         failure_stage = (
                             _TradingEventRuntimeFailureStage.STATE_COMPARISON
                         )
+                        state_heartbeat_due = monotonic() >= self._next_state_heartbeat
                         should_publish = (
-                            heartbeat_due or bool(cycle_results) or state_after != state_before
+                            state_heartbeat_due or heartbeat_due or bool(cycle_results) or state_after != state_before
                         )
                         if (
                             should_publish
@@ -934,6 +938,7 @@ class _TradingEventRuntimeWorker:
                                 _TradingEventRuntimeFailureStage.STATE_PUBLICATION
                             )
                             self._state_update_observer()
+                            self._next_state_heartbeat = monotonic() + self._STATE_HEARTBEAT_SECONDS
                 except BaseException as error:
                     self._diagnostics.record_exception("event_runtime_worker", error, failure_stage=failure_stage)
                     # Fail-close publication 전에 최초 stage와 정규화된 타입·내부 위치만 원자 봉인한다.

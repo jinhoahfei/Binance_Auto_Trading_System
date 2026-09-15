@@ -92,7 +92,7 @@ pub struct ChartDiagnostic {
 #[derive(Default)]
 pub struct ChartDiagnosticsState(Mutex<Option<ChartLogWriter>>);
 
-struct ChartLogWriter {
+pub(crate) struct ChartLogWriter {
     directory: PathBuf,
     run_name: String,
     part: u32,
@@ -100,12 +100,16 @@ struct ChartLogWriter {
 }
 
 impl ChartLogWriter {
+    pub(crate) fn new(directory: PathBuf, run_name: String) -> Self {
+        Self { directory, run_name, part: 1, size: 0 }
+    }
+
     /// 함수 이름: append()
     /// 기능: 한 batch를 즉시 기록하고 5MiB마다 새 파일로 분할하고 과거 파일을 보존한다.
     /// 인자: bytes -> 검증·직렬화한 JSONL
     /// 반환값: 파일 처리 결과
     /// 작성 날짜: 2026/09/11
-    fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         fs::create_dir_all(&self.directory)?;
         if self.size + bytes.len() as u64 > 5 * 1024 * 1024 {
             self.part += 1;

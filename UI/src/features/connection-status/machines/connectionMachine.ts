@@ -1,6 +1,8 @@
+import type { BackendConnectionStatus } from '../../../shared/api/BackendUiAdapter';
 import { assign, setup } from 'xstate';
 
 export interface ConnectionMachineContext {
+    readonly recovery: BackendConnectionStatus | null;
     readonly status: 'offline' | 'connecting' | 'online' | 'reconnecting';
     readonly reconnect_attempt: number;
     readonly last_sequence: number | null;
@@ -12,7 +14,8 @@ export type ConnectionMachineEvent =
     | { readonly type: 'API_CONNECTED'; readonly sequence?: number }
     | { readonly type: 'API_DISCONNECTED'; readonly reason?: string }
     | { readonly type: 'RECONNECT_REQUESTED' }
-    | { readonly type: 'RECONNECT_FAILED'; readonly reason: string };
+    | { readonly type: 'RECONNECT_FAILED'; readonly reason: string }
+    | { readonly type: 'BACKEND_CONNECTION_STATUS'; readonly status: BackendConnectionStatus };
 
 /**
  * 함수 이름: create_connection_machine()
@@ -63,7 +66,9 @@ export function create_connection_machine() {
     }).createMachine({
         id: 'connectionMachine',
         initial: 'api_offline',
+        on: { BACKEND_CONNECTION_STATUS: { actions: assign({ recovery: ({ event }) => event.status }) } },
         context: {
+            recovery: null,
             status: 'offline',
             reconnect_attempt: 0,
             last_sequence: null,

@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { flush_backend_connection_diagnostics } from '../../shared/api/backendConnectionDiagnostics';
 
 /**
  * OS 창 닫기 요청을 UI 상태 머신과 연결할 때 사용하는 최소 event 계약이다.
@@ -31,6 +32,7 @@ class TauriDesktopWindowLifecycle implements DesktopWindowLifecycle {
      * 작성 날짜: 2026/08/12
      */
     async destroy(): Promise<void> {
+        await flush_backend_connection_diagnostics();
         await getCurrentWindow().destroy();
     }
 

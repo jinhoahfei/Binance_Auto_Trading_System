@@ -225,7 +225,7 @@ class TransportProcessRunnerTests(unittest.TestCase):
     def test_runner_rejects_not_ready_runtime_without_descriptor(self) -> None:
         """
         함수 이름: test_runner_rejects_not_ready_runtime_without_descriptor()
-        기능: CREATED runtime이 ready pipe를 쓰지 않고 runtime과 stream을 정리하는지 검증한다.
+        기능: CREATED runtime이 READY 대신 고정 실패만 전달하고 runtime과 stream을 정리하는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -283,6 +283,11 @@ class TransportProcessRunnerTests(unittest.TestCase):
             )
 
         os.close(stop_write_fd)
+        failure_payload = os.read(ready_read_fd, 4096)
+        self.assertEqual(json.loads(failure_payload), {
+            "type": "STARTUP_FAILED", "schema_version": 3, "code": "BACKEND_SIDECAR_STARTUP_FAILED",
+        })
+        self.assertNotIn(token.encode("ascii"), failure_payload)
         self.assertEqual(os.read(ready_read_fd, 1), b"")
         os.close(ready_read_fd)
         self.assertEqual(cleanup_calls, [runtime])

@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
+import { connection_error_origin, record_backend_connection_diagnostic, type ConnectionDiagnostic, type ConnectionDiagnosticStage } from './backendConnectionDiagnostics';
+import { safe_connection_error_code } from './connectionErrorCodes';
 
 import type {
     BackendAuthenticateMessage,
@@ -137,7 +139,18 @@ export interface BackendWebSocket {
 /**
  * transport와 native picker 의존성을 browser global 대신 test에서 결정적으로 주입하는 옵션이다.
  */
+export interface BackendConnectionStatus {
+    readonly phase: 'connecting' | 'live' | 'recovering' | 'blocked' | 'closing' | 'stopped';
+    readonly attempt: number;
+    readonly error_code: string | null;
+    readonly last_received_at_ms: number | null;
+    readonly next_retry_at_ms: number | null;
+}
+
 export interface BackendUiAdapterDependencies {
+    readonly connect_timeout_ms?: number;
+    readonly stale_timeout_ms?: number;
+    readonly diagnostic?: (record: ConnectionDiagnostic) => void;
     readonly fetch?: typeof fetch;
     readonly create_web_socket?: (url: string) => BackendWebSocket;
     readonly create_uuid?: () => string;
@@ -156,6 +169,8 @@ export interface BackendUiAdapterCallbacks {
     on_full_resync(snapshot: BackendSnapshot): void;
     on_reconnecting(reason: string): void;
     on_failure(error: BackendAdapterError): void;
+    on_connection_status?(status: BackendConnectionStatus): void;
+    on_ready?(): void;
 }
 
 /**
@@ -844,6 +859,24 @@ function validate_csv_receipt(value: unknown): CsvExportReceipt {
 export class BackendUiAdapter implements UiCommandPort {
     readonly session_id: string;
 
+    readonly #connect_timeout_ms: number;
+    readonly #stale_timeout_ms: number;
+    readonly #diagnostic: (record: ConnectionDiagnostic) => void;
+    readonly #adapter_id = globalThis.crypto.randomUUID();
+    #incident_id: string | undefined;
+    #first_failure_code: string | null = null;
+    #last_received_at_ms: number | null = null;
+    #last_received_monotonic = 0;
+    #last_heartbeat_monotonic = 0;
+    #retry_attempt = 0;
+    #recovering = false;
+    #retry_timer: ReturnType<typeof setTimeout> | null = null;
+    #socket_timer: ReturnType<typeof setTimeout> | null = null;
+    #resync_abort: AbortController | null = null;
+    #shutdown_task: Promise<void> | null = null;
+    #shutdown_requested = false;
+    #shutdown_expected_version: number | null = null;
+    #remove_environment_listeners: (() => void) | null = null;
     readonly #fetch: typeof fetch;
     readonly #create_web_socket: (url: string) => BackendWebSocket;
     readonly #create_uuid: () => string;
@@ -891,6 +924,9 @@ export class BackendUiAdapter implements UiCommandPort {
         dependencies: BackendUiAdapterDependencies = {},
     ) {
         const validated_descriptor = validate_connection_descriptor(descriptor);
+        this.#connect_timeout_ms = dependencies.connect_timeout_ms ?? 10_000;
+        this.#stale_timeout_ms = dependencies.stale_timeout_ms ?? 75_000;
+        this.#diagnostic = dependencies.diagnostic ?? record_backend_connection_diagnostic;
         const request_timeout_ms = dependencies.request_timeout_ms
             ?? DEFAULT_REQUEST_TIMEOUT_MS;
         const shutdown_wait_timeout_ms = dependencies.shutdown_wait_timeout_ms
@@ -898,7 +934,8 @@ export class BackendUiAdapter implements UiCommandPort {
         const shutdown_poll_interval_ms = dependencies.shutdown_poll_interval_ms
             ?? DEFAULT_SHUTDOWN_POLL_INTERVAL_MS;
 
-        if (!Number.isSafeInteger(request_timeout_ms) || request_timeout_ms <= 0
+        if (![this.#connect_timeout_ms, this.#stale_timeout_ms].every((value) => Number.isSafeInteger(value) && value > 0)
+            || !Number.isSafeInteger(request_timeout_ms) || request_timeout_ms <= 0
             || !Number.isSafeInteger(shutdown_wait_timeout_ms)
             || shutdown_wait_timeout_ms <= 0
             || !Number.isSafeInteger(shutdown_poll_interval_ms)
@@ -935,12 +972,18 @@ export class BackendUiAdapter implements UiCommandPort {
      * 반환값: coherent backend snapshot Promise
      * 작성 날짜: 2026/08/21
      */
-    async load_snapshot(): Promise<BackendSnapshot> {
+    async load_snapshot(signal?: AbortSignal, generation = this.#connection_generation): Promise<BackendSnapshot> {
         const snapshot = await this.request_json(
             'GET',
             '/v1/snapshot',
-            validate_backend_snapshot,
+            validate_backend_snapshot, undefined, false, signal,
         );
+        if (generation !== this.#connection_generation || signal?.aborted) {
+            throw new BackendAdapterError('STALE_CONNECTION_RESULT', '이전 연결의 응답을 폐기했습니다.', true);
+        }
+        if (snapshot.session_id !== this.session_id) {
+            throw new BackendAdapterError('SESSION_MISMATCH', '백엔드 실행 정보가 달라 연결을 차단했습니다.', false);
+        }
 
         // Snapshot은 이후 모든 command의 expected_version과 split-ratio 기준값을 원자적으로 갱신한다.
         this.synchronize_command_state(snapshot);
@@ -999,6 +1042,7 @@ export class BackendUiAdapter implements UiCommandPort {
         this.synchronize_command_state(snapshot);
         this.#is_stopped = false;
         this.clear_seen_events();
+        this.install_environment_listeners();
         this.open_event_stream();
     }
 
@@ -1014,6 +1058,10 @@ export class BackendUiAdapter implements UiCommandPort {
             return;
         }
 
+        this.record_connection('stopped', { stage: 'lifecycle' });
+        this.clear_recovery_work();
+        this.#remove_environment_listeners?.();
+        this.#remove_environment_listeners = null;
         this.#is_stopped = true;
         this.#is_resynchronizing = false;
         this.#callbacks = null;
@@ -1375,10 +1423,38 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     async shutdown_application(): Promise<void> {
-        if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
-            await this.await_safe_trading_terminal_state();
+        return this.run_shutdown(false);
+    }
+
+    private async run_shutdown(recovery: boolean): Promise<void> {
+        if (this.#shutdown_task !== null) return this.#shutdown_task;
+        this.#shutdown_requested = true;
+        this.record_connection('shutdown_started', { stage: 'shutdown' });
+        this.clear_recovery_work();
+        ++this.#connection_generation;
+        this.close_current_socket('shutdown requested');
+        this.publish_connection_status('closing');
+        const operation = async () => {
+            if (recovery) await this.perform_recovery_shutdown();
+            else {
+                if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
+                    // 연결 장애 중의 오래된 trading version으로 STOP을 보내지 않는다.
+                    if (this.#recovering) await this.load_snapshot();
+                    await this.await_safe_trading_terminal_state();
+                }
+                await this.request_shutdown_and_await_exit(false);
+            }
+        };
+        this.#shutdown_task = Promise.resolve().then(operation);
+        try { await this.#shutdown_task; }
+        catch (error) { this.record_failure(error, 'shutdown'); throw error; }
+        finally {
+            this.#shutdown_task = null;
+            this.#shutdown_requested = false;
+            if (!this.#is_stopped && !this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
+                void this.full_resynchronize('SHUTDOWN_NOT_ACCEPTED');
+            }
         }
-        await this.request_shutdown_and_await_exit(false);
     }
 
     /**
@@ -1389,6 +1465,10 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/09/05
      */
     async shutdown_recovery_application(): Promise<void> {
+        return this.run_shutdown(true);
+    }
+
+    private async perform_recovery_shutdown(): Promise<void> {
         if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
             const state = await this.request_json(
                 'GET',
@@ -1412,7 +1492,8 @@ export class BackendUiAdapter implements UiCommandPort {
      */
     private async request_shutdown_and_await_exit(from_recovery: boolean): Promise<void> {
         if (!this.#shutdown_was_accepted) {
-            const expected_version = this.require_trading_version();
+            const expected_version = this.#shutdown_expected_version ?? this.require_trading_version();
+            this.#shutdown_expected_version = expected_version;
             let receipt: BackendShutdownReceipt;
 
             this.#shutdown_is_in_flight = true;
@@ -1455,6 +1536,7 @@ export class BackendUiAdapter implements UiCommandPort {
                     && (error.code === 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE'
                         || error.code === 'STALE_CONTEXT_VERSION')) {
                     this.#shutdown_outcome_is_ambiguous = false;
+                    this.#shutdown_expected_version = null;
                     if (stream_was_closed) {
                         // 명시적 409 뒤 닫힌 stream은 정상 live resync 경로로 복구한다.
                         void this.full_resynchronize('EVENT_STREAM_CLOSED');
@@ -1502,6 +1584,7 @@ export class BackendUiAdapter implements UiCommandPort {
             );
         }
         validate_sidecar_exit_receipt(native_exit_receipt);
+        this.record_connection('shutdown_completed', { stage: 'shutdown' });
 
         // Backend process가 정상 종료된 뒤에만 renderer의 launch token 참조를 폐기한다.
         this.stop();
@@ -1573,6 +1656,9 @@ export class BackendUiAdapter implements UiCommandPort {
         timeout_ms: number | null = this.#request_timeout_ms,
         expected_success_status: number | null = null,
     ): Promise<Data> {
+        if ((this.#recovering || this.#shutdown_requested) && is_command && !((this.#shutdown_requested || this.#shutdown_outcome_is_ambiguous) && (path === '/v1/shutdown' || path === '/v1/trading/stop'))) {
+            throw new BackendAdapterError('BACKEND_CONNECTION_RECOVERING', '백엔드의 최신 상태를 확인 중입니다. 연결 복구 후 다시 시도해 주세요.', true);
+        }
         if (this.#shutdown_outcome_is_ambiguous && path !== '/v1/shutdown') {
             throw new BackendAdapterError(
                 'SHUTDOWN_OUTCOME_AMBIGUOUS',
@@ -1629,7 +1715,15 @@ export class BackendUiAdapter implements UiCommandPort {
                 abort_controller.abort(REQUEST_TIMEOUT_ABORT_REASON);
             }, timeout_ms);
         let response_status: number | null = null;
-
+        let request_stage: ConnectionDiagnosticStage = 'request';
+        let original_decode_error: unknown;
+        const started = performance.now();
+        const operation: ConnectionDiagnostic['operation'] = path === '/v1/snapshot' ? 'snapshot'
+            : path === '/v1/shutdown/state' ? 'shutdown_state' : path === '/v1/shutdown' ? 'shutdown'
+            : path.startsWith('/v1/trading/') ? 'trading' : path.startsWith('/v1/regime/') ? 'regime'
+            : path.startsWith('/v1/trades') ? 'history' : path.startsWith('/v1/csv') ? 'csv'
+            : path === '/v1/binance/connection-status' ? 'connection_status' : 'other';
+        this.record_connection('request_started', { stage: 'request', request_id, operation });
         try {
             if (abort_controller.signal.aborted) {
                 throw abort_controller.signal.reason;
@@ -1642,11 +1736,13 @@ export class BackendUiAdapter implements UiCommandPort {
                 ...(serialized_body === undefined ? {} : { body: serialized_body }),
             });
             response_status = response.status;
+            request_stage = 'decode';
             let response_json: unknown;
 
             try {
                 response_json = await response.json() as unknown;
-            } catch {
+            } catch (error) {
+                original_decode_error = error;
                 throw new BackendAdapterError(
                     'MALFORMED_BACKEND_RESPONSE',
                     'Backend returned a malformed JSON response',
@@ -1654,6 +1750,7 @@ export class BackendUiAdapter implements UiCommandPort {
                 );
             }
 
+            request_stage = 'map';
             const decoded_data = decode_backend_http_envelope(
                 response_json,
                 request_id,
@@ -1669,8 +1766,15 @@ export class BackendUiAdapter implements UiCommandPort {
             if (command_fingerprint !== null) {
                 this.#pending_idempotency_keys.delete(command_fingerprint);
             }
+            this.record_connection('request_succeeded', { stage: 'request', request_id, operation, http_status: response.status, elapsed_ms: Math.round(performance.now() - started) });
             return decoded_data;
         } catch (error) {
+            if (!caller_signal?.aborted && abort_controller.signal.reason !== ADAPTER_STOP_ABORT_REASON) {
+                const failure = abort_controller.signal.reason === REQUEST_TIMEOUT_ABORT_REASON
+                    ? new BackendAdapterError('BACKEND_REQUEST_TIMEOUT', 'Backend request timed out', true) : error;
+                this.record_failure(failure, abort_controller.signal.aborted ? 'request' : request_stage, { request_id, operation, ...(response_status === null ? {} : { http_status: response_status }), elapsed_ms: Math.round(performance.now() - started), ...(original_decode_error === undefined ? {} : { error_type: this.error_type(original_decode_error), origin: connection_error_origin(original_decode_error) }) });
+                this.record_connection('request_failed', { stage: request_stage, error_code: safe_connection_error_code(this.normalize_adapter_failure(failure).code === 'BACKEND_EVENT_STREAM_FAILED' ? 'BACKEND_UNREACHABLE' : this.normalize_adapter_failure(failure).code), error_type: this.error_type(failure), request_id, operation, ...(response_status === null ? {} : { http_status: response_status }), elapsed_ms: Math.round(performance.now() - started) });
+            }
             if (abort_controller.signal.reason === CALLER_REQUEST_ABORT_REASON) {
                 throw new BackendAdapterError(
                     'BACKEND_REQUEST_CANCELLED',
@@ -1777,78 +1881,59 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     private open_event_stream(): void {
-        if (this.#is_stopped || this.#session_token === null) {
-            return;
-        }
-
+        if (this.#is_stopped || this.#session_token === null || this.#shutdown_requested
+            || this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) return;
         const generation = ++this.#connection_generation;
+        this.record_connection('connection_started', { stage: 'connect' });
         let web_socket: BackendWebSocket;
-        try {
-            // Browser constructor의 동기 보안·URL 실패도 callback lifecycle과 같은 typed 상태로 닫는다.
-            web_socket = this.#create_web_socket(this.#web_socket_url);
-        } catch {
-            this.fail_closed(new BackendAdapterError(
-                'EVENT_STREAM_CONNECTION_FAILED',
-                'Backend event stream connection failed',
-                true,
-            ));
+        try { web_socket = this.#create_web_socket(this.#web_socket_url); }
+        catch (error) {
+            this.handle_connection_failure(new BackendAdapterError('EVENT_STREAM_CONNECTION_FAILED', '백엔드 연결을 다시 시도합니다.', true), 'connect', error);
             return;
         }
         this.#web_socket = web_socket;
-
+        this.arm_socket_timeout(this.#connect_timeout_ms, 'EVENT_STREAM_CONNECT_TIMEOUT', generation, web_socket);
         web_socket.onopen = () => {
-            if (!this.is_current_generation(generation, web_socket)) {
-                return;
-            }
-
+            if (!this.is_current_generation(generation, web_socket)) return;
+            this.record_connection('socket_opened', { stage: 'connect' });
             const token = this.#session_token;
-            if (token === null) {
-                return;
-            }
-
-            // AUTHENTICATE는 반드시 첫 client frame이며 token은 URL/subprotocol에 존재하지 않는다.
+            if (token === null) return;
             const authentication_message: BackendAuthenticateMessage = {
-                schema_version: BACKEND_SCHEMA_VERSION,
-                type: 'AUTHENTICATE',
-                token,
+                schema_version: BACKEND_SCHEMA_VERSION, type: 'AUTHENTICATE', token,
                 after_sequence: this.#last_sequence,
             };
             try {
                 web_socket.send(JSON.stringify(authentication_message));
-            } catch {
-                this.fail_closed(new BackendAdapterError(
-                    'EVENT_STREAM_AUTHENTICATION_FAILED',
-                    'Backend event stream authentication failed',
-                    true,
-                ));
+                this.record_connection('authentication_sent', { stage: 'authenticate' });
+                this.arm_socket_timeout(this.#stale_timeout_ms, 'EVENT_STREAM_STALE', generation, web_socket);
+            } catch (error) {
+                this.handle_connection_failure(new BackendAdapterError('EVENT_STREAM_AUTHENTICATION_FAILED', '백엔드 인증 전송을 다시 시도합니다.', true), 'authenticate', error);
             }
         };
-        web_socket.onmessage = (message_event) => {
-            if (!this.is_current_generation(generation, web_socket)
-                || this.#is_resynchronizing) {
-                return;
+        web_socket.onmessage = (event) => {
+            if (this.is_current_generation(generation, web_socket) && !this.#is_resynchronizing) {
+                this.handle_event_frame(event.data);
             }
-
-            this.handle_event_frame(message_event.data);
         };
         web_socket.onerror = () => {
-            // Browser WebSocket error에는 안전한 진단 정보가 없으므로 close callback이 resync를 시작한다.
+            if (!this.is_current_generation(generation, web_socket)) return;
+            this.record_connection('socket_error', { stage: 'receive' });
+            // Browser는 원본 socket 오류를 공개하지 않는다. unknown을 인증 실패로 추측하지 않는다.
+            this.handle_connection_failure(new BackendAdapterError('EVENT_STREAM_SOCKET_ERROR', '백엔드 통신 오류로 연결을 다시 시도합니다.', true), 'receive');
         };
-        web_socket.onclose = () => {
-            if (!this.is_current_generation(generation, web_socket)) {
+        web_socket.onclose = (event) => {
+            if (!this.is_current_generation(generation, web_socket)) return;
+            this.record_connection('socket_closed', { stage: 'receive', close_code: event.code, clean: event.wasClean });
+            this.close_current_socket('peer closed');
+            if (this.#shutdown_is_in_flight) { this.#shutdown_stream_closed_during_request = true; return; }
+            if (this.#shutdown_requested || this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) return;
+            if ([1002, 1003, 1007, 1008, 1009].includes(event.code)) {
+                const error = new BackendAdapterError('EVENT_STREAM_REJECTED', '백엔드가 연결을 거부했습니다. 연결 정보를 다시 확인해 주세요.', false);
+                this.record_failure(error, 'receive', { close_code: event.code, clean: event.wasClean });
+                this.fail_closed(error);
                 return;
             }
-
-            this.#web_socket = null;
-            if (this.#shutdown_is_in_flight) {
-                // 202와 stream close 순서를 판별할 수 있도록 request-local 사실을 보존한다.
-                this.#shutdown_stream_closed_during_request = true;
-                return;
-            }
-            if (this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) {
-                // Backend는 202 body보다 stream을 먼저 닫을 수 있으므로 accepted 판정 전 resync도 억제한다.
-                return;
-            }
+            this.record_failure(new BackendAdapterError('EVENT_STREAM_CLOSED', '백엔드 연결이 끊어졌습니다.', true), 'receive', { close_code: event.code, clean: event.wasClean });
             void this.full_resynchronize('EVENT_STREAM_CLOSED');
         };
     }
@@ -1861,6 +1946,7 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     private handle_event_frame(frame_data: unknown): void {
+        let stage: ConnectionDiagnosticStage = 'decode';
         try {
             const parsed_message = parse_backend_web_socket_message(frame_data);
 
@@ -1898,13 +1984,18 @@ export class BackendUiAdapter implements UiCommandPort {
                 return;
             }
 
+            stage = 'map';
             const intents = map_backend_event_to_intents(event);
             const applicable_intents = this.synchronize_command_state_from_intents(intents);
+            stage = 'publish';
             this.#callbacks?.on_event(applicable_intents, event);
             this.#last_sequence = event.sequence;
             this.remember_event_id(event.event_id);
+            this.mark_event_stream_ready();
         } catch (error) {
-            this.fail_closed(this.normalize_adapter_failure(error));
+            this.record_failure(error, stage, { retryable: false });
+            const failure = this.normalize_adapter_failure(error);
+            this.fail_closed(new BackendAdapterError(failure.code, failure.message, false));
         }
     }
 
@@ -1978,40 +2069,156 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     private async full_resynchronize(reason: string): Promise<void> {
-        if (this.#is_stopped || this.#is_resynchronizing) {
-            return;
-        }
-
+        if (this.#is_stopped || this.#is_resynchronizing || this.#shutdown_requested
+            || this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) return;
+        this.clear_recovery_work();
+        this.#recovering = true;
         this.#is_resynchronizing = true;
-        this.#connection_generation += 1;
+        const generation = ++this.#connection_generation;
         this.close_current_socket('full resync');
         this.clear_seen_events();
         this.#callbacks?.on_reconnecting(reason);
-
+        this.publish_connection_status('recovering');
+        const controller = new AbortController();
+        this.#resync_abort = controller;
+        let stage: ConnectionDiagnosticStage = 'resync';
         try {
-            const snapshot = await this.load_snapshot();
-            if (this.#is_stopped) {
-                return;
-            }
-            if (snapshot.session_id !== this.session_id) {
-                throw new BackendAdapterError(
-                    'SESSION_MISMATCH',
-                    'Backend snapshot session does not match the launch descriptor',
-                    false,
-                );
-            }
-
-            // Snapshot callback이 facade의 server-owned state를 원자적으로 전체 교체한다.
+            const snapshot = await this.load_snapshot(controller.signal, generation);
+            if (this.#is_stopped || controller.signal.aborted || generation !== this.#connection_generation) return;
+            stage = 'publish';
             this.#callbacks?.on_full_resync(snapshot);
             this.#active_session_id = snapshot.session_id;
             this.#last_sequence = snapshot.last_sequence;
             this.#is_resynchronizing = false;
+            this.#resync_abort = null;
             this.open_event_stream();
         } catch (error) {
+            if (controller.signal.aborted || generation !== this.#connection_generation || this.#is_stopped) return;
             this.#is_resynchronizing = false;
-            this.fail_closed(this.normalize_adapter_failure(error));
+            this.#resync_abort = null;
+            if (stage === 'publish') {
+                this.record_failure(error, stage, { error_code: 'UI_STATE_PUBLICATION_FAILED', retryable: false });
+                this.fail_closed(new BackendAdapterError('UI_STATE_PUBLICATION_FAILED', '화면 상태를 반영하지 못해 연결 복구가 필요합니다.', false));
+            } else this.handle_connection_failure(this.normalize_adapter_failure(error), 'resync', error);
         }
     }
+
+    /** 재시도 timer와 조회 수명은 한 세대만 소유한다. 명령의 멱등 식별자는 건드리지 않는다. */
+    private clear_recovery_work(): void {
+        if (this.#retry_timer !== null) clearTimeout(this.#retry_timer);
+        if (this.#socket_timer !== null) clearTimeout(this.#socket_timer);
+        this.#retry_timer = null;
+        this.#socket_timer = null;
+        this.#resync_abort?.abort();
+        this.#resync_abort = null;
+        this.#is_resynchronizing = false;
+    }
+
+    private handle_connection_failure(error: BackendAdapterError, stage: ConnectionDiagnosticStage, original: unknown = error): void {
+        this.record_failure(error, stage, { error_type: this.error_type(original), origin: connection_error_origin(original) });
+        if (!error.retryable) { this.fail_closed(error); return; }
+        if (this.#is_stopped || this.#shutdown_requested || this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) return;
+        this.clear_recovery_work();
+        ++this.#connection_generation;
+        this.close_current_socket('retry pending');
+        this.#recovering = true;
+        const delays = [1_000, 2_000, 5_000, 10_000, 30_000];
+        const delay = delays[Math.min(this.#retry_attempt++, delays.length - 1)]!;
+        this.#callbacks?.on_reconnecting(error.code);
+        this.record_connection('retry_scheduled', { stage: 'resync', attempt: this.#retry_attempt, delay_ms: delay });
+        this.publish_connection_status('recovering', Date.now() + delay);
+        this.#retry_timer = setTimeout(() => { this.#retry_timer = null; void this.full_resynchronize(error.code); }, delay);
+    }
+
+    private arm_socket_timeout(delay: number, code: string, generation: number, socket: BackendWebSocket): void {
+        if (this.#socket_timer !== null) clearTimeout(this.#socket_timer);
+        this.#socket_timer = setTimeout(() => {
+            this.#socket_timer = null;
+            if (this.is_current_generation(generation, socket)) {
+                this.handle_connection_failure(new BackendAdapterError(code, '백엔드 응답 대기 시간이 초과돼 재연결합니다.', true), code === 'EVENT_STREAM_CONNECT_TIMEOUT' ? 'connect' : 'receive');
+            }
+        }, delay);
+    }
+
+    private mark_event_stream_ready(): void {
+        this.#last_received_at_ms = Date.now();
+        this.#last_received_monotonic = performance.now();
+        if (this.#web_socket !== null) this.arm_socket_timeout(this.#stale_timeout_ms, 'EVENT_STREAM_STALE', this.#connection_generation, this.#web_socket);
+        // 통신이 살아 있는 동안의 단일 HTTP 실패도 다음 정상 수신에서 사건 경계를 닫는다.
+        // 저장된 최초 오류는 유지하고, 이후 독립 장애가 과거 오류에 묶이지 않게 한다.
+        if (!this.#recovering && this.#incident_id !== undefined) {
+            this.record_connection('connection_ready', { stage: 'receive' });
+            this.#incident_id = undefined;
+            this.#first_failure_code = null;
+        }
+        if (this.#recovering) {
+            this.#recovering = false;
+            this.#retry_attempt = 0;
+            this.record_connection('connection_ready', { stage: 'receive' });
+            this.#incident_id = undefined;
+            this.#first_failure_code = null;
+            this.#callbacks?.on_ready?.();
+            this.publish_connection_status('live');
+        }
+        if (performance.now() - this.#last_heartbeat_monotonic >= 30_000 || this.#last_heartbeat_monotonic === 0) {
+            this.#last_heartbeat_monotonic = performance.now();
+            this.record_connection('heartbeat', { stage: 'receive' });
+            this.publish_connection_status('live');
+        }
+    }
+
+    private install_environment_listeners(): void {
+        if (typeof window === 'undefined' || this.#remove_environment_listeners !== null) return;
+        const observe = () => {
+            this.record_connection('environment_changed', { stage: 'lifecycle', visible: document.visibilityState === 'visible', online: navigator.onLine });
+            if (this.#last_received_at_ms !== null && !this.#recovering && Math.max(
+                Date.now() - this.#last_received_at_ms, performance.now() - this.#last_received_monotonic,
+            ) >= this.#stale_timeout_ms) {
+                this.handle_connection_failure(new BackendAdapterError('EVENT_STREAM_STALE', '백엔드 연결 상태를 다시 확인합니다.', true), 'receive');
+            }
+        };
+        window.addEventListener('online', observe);
+        window.addEventListener('offline', observe);
+        document.addEventListener('visibilitychange', observe);
+        this.#remove_environment_listeners = () => {
+            window.removeEventListener('online', observe); window.removeEventListener('offline', observe);
+            document.removeEventListener('visibilitychange', observe);
+        };
+    }
+
+    private publish_connection_status(phase: BackendConnectionStatus['phase'], next_retry_at_ms: number | null = null): void {
+        this.#callbacks?.on_connection_status?.({ phase, attempt: this.#retry_attempt,
+            error_code: this.#first_failure_code, last_received_at_ms: this.#last_received_at_ms, next_retry_at_ms });
+    }
+
+    private error_type(error: unknown): ConnectionDiagnostic['error_type'] {
+        return error instanceof BackendContractError ? 'ContractError' : error instanceof BackendAdapterError ? 'AdapterError'
+            : error instanceof BackendCommandError ? 'CommandError' : error instanceof TypeError ? 'TypeError'
+            : error instanceof RangeError ? 'RangeError' : error instanceof SyntaxError ? 'SyntaxError'
+            : error instanceof Error && error.name === 'AbortError' ? 'AbortError' : 'Unknown';
+    }
+
+    private record_failure(error: unknown, stage: ConnectionDiagnosticStage, details: Partial<ConnectionDiagnostic> = {}): void {
+        // 명시적인 명령 거부는 HTTP request_failed에 남기며 통신 장애의 최초 원인으로 삼지 않는다.
+        if (error instanceof BackendCommandError && !error.retryable
+            && ['SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE', 'STALE_CONTEXT_VERSION', 'REGIME_SELECTION_REQUIRED'].includes(error.code)) return;
+        const normalized = this.normalize_adapter_failure(error);
+        const code = safe_connection_error_code(stage === 'request' && normalized.code === 'BACKEND_EVENT_STREAM_FAILED' ? 'BACKEND_UNREACHABLE' : normalized.code);
+        const first = this.#incident_id === undefined;
+        this.#incident_id ??= globalThis.crypto.randomUUID();
+        this.#first_failure_code ??= code;
+        this.record_connection(first ? 'first_failure' : 'failure', { stage, error_code: code,
+            retryable: normalized.retryable, error_type: this.error_type(error), origin: connection_error_origin(error), validation_field: error instanceof BackendContractError ? error.validation_field : undefined, ...details });
+    }
+
+    private record_connection(event: ConnectionDiagnostic['event'], details: Partial<ConnectionDiagnostic> = {}): void {
+        try { this.#diagnostic({ event, session_id: this.session_id, adapter_id: this.#adapter_id,
+            generation: this.#connection_generation, last_sequence: this.#last_sequence,
+            last_received_at_ms: this.#last_received_at_ms, ...(this.#incident_id === undefined ? {} : { incident_id: this.#incident_id }), ...details }); }
+        catch { /* 진단 저장 장애가 거래 연결 수명주기에 전파되지 않게 한다. */ }
+    }
+
+    get is_disposed(): boolean { return this.#session_token === null; }
 
     /**
      * 함수 이름: remember_event_id()
@@ -2077,7 +2284,8 @@ export class BackendUiAdapter implements UiCommandPort {
         web_socket.onmessage = null;
         web_socket.onclose = null;
         web_socket.onerror = null;
-        web_socket.close(NORMAL_CLIENT_CLOSE_CODE, reason);
+        try { web_socket.close(NORMAL_CLIENT_CLOSE_CODE, reason); }
+        catch (error) { this.record_failure(error, 'lifecycle'); }
     }
 
     /**
@@ -2134,6 +2342,11 @@ export class BackendUiAdapter implements UiCommandPort {
             return;
         }
 
+        this.record_connection('terminal_failure', { stage: 'lifecycle', error_code: safe_connection_error_code(error.code), retryable: false });
+        this.publish_connection_status('blocked');
+        this.clear_recovery_work();
+        this.#remove_environment_listeners?.();
+        this.#remove_environment_listeners = null;
         this.#is_stopped = true;
         this.#connection_generation += 1;
         this.close_current_socket('fail closed');

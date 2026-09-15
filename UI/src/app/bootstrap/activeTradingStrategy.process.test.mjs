@@ -171,7 +171,7 @@ async function mount_replay_application(initial_event) {
  * 반환값: 두 표시 영역의 자동 갱신이 확인되면 완료되는 Promise
  * 작성 날짜: 2026/09/05
  */
-async function expect_shared_strategy(application, step) {
+async function expect_shared_strategy(application, step, connected = true) {
     await waitFor(() => {
         // actor 값만 비교하지 않고 사용자에게 보이는 두 Boundary를 각각 검증한다.
         const chart_state = screen.getByLabelText('현재 실행 전략');
@@ -198,8 +198,8 @@ async function expect_shared_strategy(application, step) {
             const identity = `${row.strategy ?? 'common'}:${row.phase}:${row.condition_id}`;
             const displayed = panel.querySelector(`[data-condition-id="${identity}"]`);
             expect(displayed, identity).not.toBeNull();
-            expect(displayed).toHaveAttribute('data-tone', row.satisfied === null ? 'neutral' : row.satisfied ? 'positive' : 'negative');
-            if (row.satisfied === null) expect(displayed.querySelector('strong')).toHaveTextContent('—');
+            expect(displayed).toHaveAttribute('data-tone', !connected || row.satisfied === null ? 'neutral' : row.satisfied ? 'positive' : 'negative');
+            if (!connected || row.satisfied === null) expect(displayed.querySelector('strong')).toHaveTextContent('—');
         }
         expect(panel).not.toHaveTextContent('27s');
     });
@@ -234,7 +234,10 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
             await act(async () => release_snapshot());
             const notice = await screen.findByRole('dialog', { name: 'API 연결이 필요합니다' });
             await userEvent.click(within(notice).getByRole('button', { name: '확인', exact: true }));
-            await expect_shared_strategy(application, next);
+            await expect_shared_strategy(application, next, false);
+            const resumed = scenario.steps[scenario.steps.indexOf(next) + 1];
+            await act(async () => transport.sockets[1].receive(resumed.event));
+            await expect_shared_strategy(application, resumed);
         } finally {
             release_snapshot?.();
             rendered.unmount();
@@ -346,10 +349,10 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
             await act(async () => transport.sockets[0].receive(reset_step.event));
             const notice = await screen.findByRole('dialog', { name: 'API 연결이 필요합니다' });
             await userEvent.click(within(notice).getByRole('button', { name: '확인', exact: true }));
-            await expect_shared_strategy(application, reset_step);
+            await expect_shared_strategy(application, reset_step, false);
             const row = document.querySelector('[data-condition-id$=":c_recovery_window"]');
-            expect(within(row).getByRole('timer')).toHaveTextContent('03:00');
-            expect(row).toHaveTextContent('시간 초과로 재시작');
+            // 전체 snapshot만으로 연결 정상 판정을 하지 않는다. 다음 유효 event까지 타이머도 대기한다.
+            expect(row.querySelector('[data-timer-state]')).toHaveAttribute('data-timer-state', 'unavailable');
             expect(transport.snapshot_request_count).toBe(2);
 
             // 새 socket의 다음 저점 갱신도 정상적으로 이어져 이전 회차가 살아나지 않아야 한다.
@@ -377,7 +380,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
             const connection_notice = await screen.findByRole('dialog', { name: 'API 연결이 필요합니다' });
             expect(application.facade.get_view_model().chart.active_trading_logic_state).toBe(filled_step.expected_label);
             await userEvent.click(within(connection_notice).getByRole('button', { name: '확인', exact: true }));
-            await expect_shared_strategy(application, filled_step);
+            await expect_shared_strategy(application, filled_step, false);
             expect(transport.snapshot_request_count).toBe(2);
             expect(transport.sockets[0].is_closed).toBe(true);
             expect(transport.sockets[1].after_sequence).toBe(filled_step.event.sequence);

@@ -417,6 +417,7 @@ pub struct AmbiguousBackendSidecar {
     pub child: OwnedSidecarChild,
     pub stop_writer: ControlWriter,
     pub late_ready_recovery: Option<LateReadySidecarRecovery>,
+    pub startup_failure_code: &'static str,
 }
 
 /// Initial timeout 뒤 FD4 framing과 token을 zeroizing 상태로 보유하는 late READY recovery이다.
@@ -444,6 +445,7 @@ struct SidecarProcessLifecycle {
     exit_record: Option<BackendSidecarExitPayload>,
     exit_event_armed: bool,
     exit_event_delivered: bool,
+    startup_failure_code: &'static str,
 }
 
 impl Default for SidecarProcessLifecycle {
@@ -464,6 +466,7 @@ impl Default for SidecarProcessLifecycle {
             exit_record: None,
             exit_event_armed: false,
             exit_event_delivered: false,
+            startup_failure_code: "BACKEND_SIDECAR_STARTUP_FAILED",
         }
     }
 }
@@ -720,6 +723,41 @@ impl SidecarProcessState {
             .lock()
             .map(|state| state.child_handle.is_some() && state.exit_record.is_none())
             .unwrap_or(true) // poisoned state에서는 native app exit를 허용하지 않는다.
+    }
+
+    /// 함수 이름: wait_for_startup_exit()
+    /// 기능: 시작 실패 뒤 실제 child 종료 관찰을 기다리며 신호·kill·CLOSED ACK를 보내지 않는다.
+    /// 인자: timeout -> 종료 관찰 최대 대기 시간
+    /// 반환값: 없음; 호출자는 최신 lifecycle로 안내 문구를 선택한다.
+    /// 작성 날짜: 2026/09/15
+    pub(crate) fn wait_for_startup_exit(&self, timeout: Duration) {
+        if let Ok(lifecycle) = self.shared.lifecycle.lock() {
+            let _result = self.shared.exit_condition.wait_timeout_while(
+                lifecycle,
+                timeout,
+                |state| state.child_handle.is_some() && state.exit_record.is_none(),
+            );
+        }
+    }
+
+    /// 함수 이름: set_startup_failure_code()
+    /// 기능: parser가 허용한 실패 코드를 종료 기록 이후에도 보존한다.
+    /// 인자: code -> 고정 실패 코드
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/15
+    pub(crate) fn set_startup_failure_code(&self, code: &'static str) {
+        let mut lifecycle = self.shared.lifecycle.lock().unwrap_or_else(|error| error.into_inner());
+        lifecycle.startup_failure_code = code;
+    }
+
+    /// 함수 이름: startup_failure_code()
+    /// 기능: 대화상자에서 사용할 검증된 시작 실패 코드를 읽는다.
+    /// 인자: 없음
+    /// 반환값: 고정 실패 코드
+    /// 작성 날짜: 2026/09/15
+    pub(crate) fn startup_failure_code(&self) -> &'static str {
+        self.shared.lifecycle.lock().map(|state| state.startup_failure_code)
+            .unwrap_or("BACKEND_SIDECAR_STARTUP_FAILED")
     }
 
     /// 함수 이름: record_exit()
@@ -1035,7 +1073,8 @@ pub fn start_late_ready_recovery(
                     return;
                 }
             }
-            Err(ReadyDescriptorReadFailure::Terminal(_failure)) => {
+            Err(ReadyDescriptorReadFailure::Terminal(failure)) => {
+                process_state.set_startup_failure_code(failure.code);
                 schedule_late_ready_terminal_recovery(app_handle, process_state);
                 return;
             }
@@ -1103,16 +1142,11 @@ fn schedule_late_ready_terminal_recovery(
     app_handle: AppHandle,
     process_state: SidecarProcessState,
 ) {
-    if !process_state.is_running() {
-        return;
-    }
     let dispatch_handle = app_handle.clone();
     let dispatch_process_state = process_state.clone();
     let dispatch_result = app_handle.run_on_main_thread(move || {
-        if dispatch_process_state.is_running() {
-            dispatch_process_state.finish_late_ready_recovery();
-            crate::schedule_ready_fatal_recovery(dispatch_handle);
-        }
+        dispatch_process_state.finish_late_ready_recovery();
+        crate::schedule_ready_fatal_recovery(dispatch_handle);
     });
 
     // Main-thread dispatch가 불가능하면 기존 status callback이 fatal operator surface로 전환한다.
@@ -1379,6 +1413,36 @@ fn select_allowed_origin(is_development: bool) -> &'static str {
 /// 반환값: strict ready wire 또는 descriptor failure
 /// 작성 날짜: 2026/08/24
 fn parse_ready_descriptor(payload: &[u8]) -> Result<ReadyDescriptorWire, SidecarFailure> {
+    // 명시된 실패도 종료 증거는 아니다. Parent는 별도로 child exit를 관찰한다.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StartupFailureWire {
+        #[serde(rename = "type")]
+        message_type: String,
+        schema_version: u32,
+        code: String,
+    }
+    if let Ok(failure) = serde_json::from_slice::<StartupFailureWire>(payload) {
+        if failure.message_type != "STARTUP_FAILED" || failure.schema_version != BACKEND_SCHEMA_VERSION {
+            return Err(SidecarFailure::descriptor_rejected());
+        }
+        let code = match failure.code.as_str() {
+            "RESIDUAL_BALANCE_MISMATCH" => "RESIDUAL_BALANCE_MISMATCH",
+            "ORDER_RECONCILIATION_FAILED" => "ORDER_RECONCILIATION_FAILED",
+            "ORDER_RECONCILIATION_NOT_READY" => "ORDER_RECONCILIATION_NOT_READY",
+            "ACCOUNT_INITIALIZATION_FAILED" => "ACCOUNT_INITIALIZATION_FAILED",
+            "ACCOUNT_NOT_READY" => "ACCOUNT_NOT_READY",
+            "MARKET_INITIALIZATION_FAILED" => "MARKET_INITIALIZATION_FAILED",
+            "MARKET_NOT_READY" => "MARKET_NOT_READY",
+            "REGIME_NOT_READY" => "REGIME_NOT_READY",
+            "HISTORY_INITIALIZATION_FAILED" => "HISTORY_INITIALIZATION_FAILED",
+            "APPLICATION_ALREADY_STARTING" => "APPLICATION_ALREADY_STARTING",
+            "APPLICATION_CLOSED" => "APPLICATION_CLOSED",
+            "BACKEND_SIDECAR_STARTUP_FAILED" => "BACKEND_SIDECAR_STARTUP_FAILED",
+            _ => return Err(SidecarFailure::descriptor_rejected()),
+        };
+        return Err(SidecarFailure { code, message: "Backend startup failed." });
+    }
     let ready: ReadyDescriptorWire =
         serde_json::from_slice(payload).map_err(|_| SidecarFailure::descriptor_rejected())?;
     if ready.port == 0
@@ -1472,6 +1536,65 @@ fn recover_child_lock(child_handle: &Arc<Mutex<Child>>) -> MutexGuard<'_, Child>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 함수 이름: startup_failure_wire_is_typed_and_never_a_ready_descriptor()
+    /// 기능: 실패 코드 전달·schema와 unknown-field 거부를 실제 FD4 reader에서 검사한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/15
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_failure_wire_is_typed_and_never_a_ready_descriptor() {
+        let (reader_fd, writer_fd) = create_anonymous_pipe().unwrap();
+        let mut reader = File::from(reader_fd);
+        let mut writer = File::from(writer_fd);
+        writer.write_all(b"{\"type\":\"STARTUP_FAILED\",\"schema_version\":3,\"code\":\"RESIDUAL_BALANCE_MISMATCH\"}\n").unwrap();
+        drop(writer);
+        let mut payload = Zeroizing::new(Vec::new());
+        match read_ready_descriptor(&mut reader, &mut payload, Duration::from_secs(1)) {
+            Err(ReadyDescriptorReadFailure::Terminal(failure)) => assert_eq!(failure.code, "RESIDUAL_BALANCE_MISMATCH"),
+            _ => panic!("startup failure must remain terminal"),
+        }
+        assert!(payload.is_empty());
+        for invalid in [
+            r#"{"type":"STARTUP_FAILED","schema_version":4,"code":"RESIDUAL_BALANCE_MISMATCH"}"#,
+            r#"{"type":"STARTUP_FAILED","schema_version":3,"code":"secret-text"}"#,
+            r#"{"type":"STARTUP_FAILED","schema_version":3,"code":"RESIDUAL_BALANCE_MISMATCH","token":"secret"}"#,
+        ] {
+            assert_eq!(parse_ready_descriptor(invalid.as_bytes()).unwrap_err().code, "INVALID_BACKEND_DESCRIPTOR");
+        }
+    }
+
+    /// 함수 이름: startup_failure_wait_observes_exit_without_killing_live_child()
+    /// 기능: 살아 있는 child는 timeout 뒤에도 보존하고 종료 뒤에는 실제 상태와 원인을 유지한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/15
+    #[cfg(unix)]
+    #[test]
+    fn startup_failure_wait_observes_exit_without_killing_live_child() {
+        use std::process::{Command, Stdio};
+        let child = Command::new("/bin/cat").stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
+        let child = Arc::new(Mutex::new(child));
+        let state = SidecarProcessState::default();
+        state.shared.lifecycle.lock().unwrap().child_handle = Some(child.clone());
+        state.set_startup_failure_code("RESIDUAL_BALANCE_MISMATCH");
+        state.wait_for_startup_exit(Duration::from_millis(1));
+        assert!(state.is_running());
+        assert!(child.lock().unwrap().try_wait().unwrap().is_none());
+        let exit_state = state.clone();
+        let monitor = thread::spawn(move || {
+            let mut child = child.lock().unwrap();
+            drop(child.stdin.take());
+            let status = child.wait().unwrap();
+            exit_state.record_exit(status.code());
+        });
+        state.wait_for_startup_exit(Duration::from_secs(2));
+        monitor.join().unwrap();
+        assert!(!state.is_running());
+        assert_eq!(state.startup_failure_code(), "RESIDUAL_BALANCE_MISMATCH");
+        assert!(!state.shared.lifecycle.lock().unwrap().expected_exit_requested);
+    }
     #[cfg(target_os = "macos")]
     use std::{
         fs::{self, OpenOptions},

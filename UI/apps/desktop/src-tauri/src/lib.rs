@@ -1,6 +1,7 @@
 //! Tauri 데스크톱 앱과 sidecar를 연결하며, 현재 메인 화면의 인증 연결 복구와 native lifecycle을 소유한다.
 mod dialog;
 mod chart_diagnostics;
+mod backend_connection_diagnostics;
 mod exit_bridge;
 #[cfg(target_os = "macos")]
 mod macos_quit_guard;
@@ -354,7 +355,9 @@ fn continue_backend_startup(app_handle: &AppHandle) {
                 child,
                 stop_writer,
                 late_ready_recovery,
+                startup_failure_code,
             } = ambiguous_sidecar;
+            sidecar_state.set_startup_failure_code(startup_failure_code);
             if sidecar_state
                 .install(child, stop_writer, app_handle.clone())
                 .is_err()
@@ -579,28 +582,46 @@ pub(crate) fn schedule_ready_fatal_recovery(app_handle: AppHandle) {
         .state::<sidecar::SidecarProcessState>()
         .inner()
         .clone();
-    if !sidecar_state.is_running() {
-        app_handle.exit(1);
-        return;
-    }
-    let repeat_handle = app_handle.clone();
-    let repeat_state = sidecar_state.clone();
-
-    // READY exposure를 timed kill하거나 descriptor 없는 renderer를 열지 않고 native operator surface를 계속 유지한다.
-    app_handle
-        .dialog()
-        .message(
-            "백엔드는 실행 중이며 자동 종료되지 않았습니다. 애플리케이션을 강제 종료하지 말고 운영자에게 수동 복구를 요청하세요.",
-        )
-        .title("네이티브 안전 복구가 필요합니다")
-        .kind(MessageDialogKind::Error)
-        .show(move |_| {
-            if repeat_state.is_running() {
-                schedule_ready_fatal_recovery(repeat_handle);
-            } else {
-                repeat_handle.exit(1);
-            }
+    // EOF 직후 launcher가 정리 중인 race를 event loop 밖에서 기다린다. Timeout은 kill 조건이 아니다.
+    tauri::async_runtime::spawn_blocking(move || {
+        sidecar_state.wait_for_startup_exit(std::time::Duration::from_secs(2));
+        let dispatch_handle = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            let running = sidecar_state.is_running();
+            let (title, message) = startup_recovery_copy(sidecar_state.startup_failure_code(), running);
+            let repeat_handle = dispatch_handle.clone();
+            dispatch_handle.dialog().message(message).title(title)
+                .kind(MessageDialogKind::Error)
+                .show(move |_| {
+                    if sidecar_state.is_running() {
+                        schedule_ready_fatal_recovery(repeat_handle);
+                    } else {
+                        repeat_handle.exit(1);
+                    }
+                });
         });
+    });
+}
+
+/// 함수 이름: startup_recovery_copy()
+/// 기능: 고정 시작 실패 사유와 관찰된 child 종료 상태를 구분해 안내한다.
+/// 인자: code -> 검증된 실패 코드, running -> 종료가 아직 관찰되지 않았는지 여부
+/// 반환값: native 제목과 설명
+/// 작성 날짜: 2026/09/15
+fn startup_recovery_copy(code: &str, running: bool) -> (&'static str, String) {
+    let reason = match code {
+        "RESIDUAL_BALANCE_MISMATCH" => "저장된 잔여 ETH 수량과 Binance 현물 잔고가 일치하지 않아 시작을 중단했습니다. 거래소 자산 이동 내역과 잔여 장부를 확인해 주세요.",
+        "ORDER_RECONCILIATION_FAILED" | "ORDER_RECONCILIATION_NOT_READY" => "저장된 주문·포지션과 Binance 계좌 상태를 대조하지 못해 시작을 중단했습니다. 거래 기록과 계좌 상태를 확인해 주세요.",
+        "ACCOUNT_INITIALIZATION_FAILED" | "ACCOUNT_NOT_READY" => "Binance 계좌 정보를 준비하지 못했습니다. 계좌 연결과 API 권한을 확인해 주세요.",
+        "MARKET_INITIALIZATION_FAILED" | "MARKET_NOT_READY" | "REGIME_NOT_READY" => "시세 정보를 준비하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 실행해 주세요.",
+        "HISTORY_INITIALIZATION_FAILED" => "저장된 거래 이력을 불러오지 못했습니다. 거래 이력 파일을 확인해 주세요.",
+        _ => "백엔드 연결을 준비하지 못했습니다. 실행 로그에서 시작 실패 원인을 확인해 주세요.",
+    };
+    if running {
+        ("백엔드 상태 확인이 필요합니다", format!("{reason}\n\n백엔드 프로세스의 종료는 아직 확인되지 않았습니다. 확인을 누르면 종료 상태를 다시 확인합니다."))
+    } else {
+        ("백엔드 시작에 실패했습니다", format!("{reason}\n\n백엔드 프로세스의 종료를 확인했습니다. 확인을 누르면 앱을 닫습니다."))
+    }
 }
 
 /// 함수 이름: schedule_late_ready_status()
@@ -682,11 +703,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendConnectionDescriptorState::default())
         .manage(chart_diagnostics::ChartDiagnosticsState::default())
+        .manage(backend_connection_diagnostics::BackendConnectionDiagnosticsState::default())
         .manage(sidecar_state)
         .manage(exit_intent_bridge)
         .invoke_handler(tauri::generate_handler![
             get_backend_connection_descriptor,
             chart_diagnostics::record_chart_diagnostics,
+            backend_connection_diagnostics::record_backend_connection_diagnostics,
             dialog::choose_csv_export_directory,
             sidecar::await_backend_sidecar_exit,
             exit_bridge::arm_native_exit_intent_bridge,
@@ -728,6 +751,24 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 함수 이름: startup_recovery_distinguishes_unobserved_and_confirmed_exit()
+    /// 기능: 잔여 오류 원인이 표시되고 살아 있는지 모르는 상태를 종료나 실행 중으로 단정하지 않는다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/15
+    #[test]
+    fn startup_recovery_distinguishes_unobserved_and_confirmed_exit() {
+        let (title, closed) = startup_recovery_copy("RESIDUAL_BALANCE_MISMATCH", false);
+        assert_eq!(title, "백엔드 시작에 실패했습니다");
+        assert!(closed.contains("잔여 ETH"));
+        assert!(closed.contains("종료를 확인했습니다"));
+        let (_, pending) = startup_recovery_copy("RESIDUAL_BALANCE_MISMATCH", true);
+        assert!(pending.contains("종료는 아직 확인되지 않았습니다"));
+        for message in [closed, pending] {
+            assert!(!message.contains("백엔드는 실행 중"));
+        }
+    }
 
     const TEST_SESSION_ID: &str = "3c73d583-c1c8-4830-8393-cc31639a40fd";
     const TEST_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";

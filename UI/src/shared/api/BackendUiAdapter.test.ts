@@ -1692,7 +1692,7 @@ describe('BackendUiAdapter bootstrap recovery shutdown', () => {
 });
 
 describe('BackendUiAdapter WebSocket lifecycle', () => {
-    it('WebSocket constructor 동기 실패를 밖으로 던지지 않고 token과 online lifecycle을 닫는다', async () => {
+    it('WebSocket constructor의 일시 실패는 token을 보존하고 재연결한다', async () => {
         const callbacks = create_callbacks();
         const adapter = new BackendUiAdapter(create_descriptor(), {
             fetch: vi.fn() as unknown as typeof fetch,
@@ -1706,13 +1706,10 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         expect(() => {
             adapter.start_live_events(create_backend_snapshot_fixture(), callbacks);
         }).not.toThrow();
-        expect(callbacks.on_failure).toHaveBeenCalledWith(expect.objectContaining({
-            code: 'EVENT_STREAM_CONNECTION_FAILED',
-            retryable: true,
-        }));
-        await expect(adapter.load_snapshot()).rejects.toMatchObject({
-            code: 'ADAPTER_STOPPED',
-        });
+        expect(callbacks.on_failure).not.toHaveBeenCalled();
+        expect(callbacks.on_reconnecting).toHaveBeenCalledWith('EVENT_STREAM_CONNECTION_FAILED');
+        expect(adapter.is_disposed).toBe(false);
+        adapter.stop();
         expect(JSON.stringify(adapter)).not.toContain(TEST_BACKEND_TOKEN);
     });
 

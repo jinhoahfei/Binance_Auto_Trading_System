@@ -1,3 +1,4 @@
+import { identify_connection_validation_field } from './connectionValidationFields';
 import { is_trading_indicator_snapshot } from './tradingIndicatorValidation';
 import type {
     BackendAccountSnapshot,
@@ -100,6 +101,7 @@ const BACKEND_RISK_BLOCK_REASONS: ReadonlySet<BackendRiskBlockReason> = new Set(
  */
 export class BackendContractError extends Error {
     readonly code: string;
+    readonly validation_field: string | undefined;
 
     /**
      * 함수 이름: BackendContractError.constructor()
@@ -112,6 +114,7 @@ export class BackendContractError extends Error {
     constructor(code: string, message: string) {
         super(message);
         this.name = 'BackendContractError';
+        this.validation_field = identify_connection_validation_field(message);
         this.code = code;
     }
 }
