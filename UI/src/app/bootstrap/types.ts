@@ -10,6 +10,7 @@ export interface UiApplicationRuntime {
     readonly load_binance_connection_status?: (
         signal?: AbortSignal,
     ) => Promise<BackendBinanceConnectionStatus>;
+    readonly on_publication_failure?: (error: unknown) => void;
     activate(): void;
     deactivate(): void;
 }

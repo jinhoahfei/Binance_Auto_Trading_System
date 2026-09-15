@@ -26,6 +26,7 @@ import {
     validate_connection_descriptor,
 } from './shared/api';
 import { flush_backend_connection_diagnostics } from './shared/api/backendConnectionDiagnostics';
+import { connection_recovery_message } from './shared/api/connectionRecoveryMessage';
 import './shared/styles/global.css';
 
 /**
@@ -72,7 +73,10 @@ function BootstrapStatus({
             }}
         >
             <strong>{children}</strong>
-            {code === undefined ? null : <small>{code}</small>}
+            {code === undefined ? null : <>
+                <span>{connection_recovery_message(code)}</span>
+                <details><summary>오류 세부 정보</summary><small>{code}</small></details>
+            </>}
             {detail === undefined ? null : <span>{detail}</span>}
             {actions === undefined ? null : (
                 <div
@@ -243,7 +247,9 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
                 >
                     {recovery_is_pending
                         ? '백엔드 복구 상태를 확인하는 중입니다.'
-                        : '백엔드 연결 복구가 필요합니다.'}
+                        : failure_code === 'UI_STATE_PUBLICATION_FAILED'
+                            ? '화면 정보를 자동으로 복구하지 못했습니다.'
+                            : '백엔드 연결 복구가 필요합니다.'}
                 </BootstrapStatus>
             </StrictMode>,
         );

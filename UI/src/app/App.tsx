@@ -15,6 +15,7 @@ import {
 import type { UiApplicationFactory } from './bootstrap';
 
 import styles from './App.module.css';
+import { connection_recovery_message } from '../shared/api/connectionRecoveryMessage';
 
 const DashboardPage = lazy(async () => {
     const route_module = await import('../routes/dashboard/DashboardPage');
@@ -86,14 +87,13 @@ export function App({ applicationFactory }: AppProps) {
 
             {view_model.connection.recovery != null && !view_model.connection.is_online && (
                 <div className={styles.connectionRecovery} role="status" aria-live="polite">
-                    <strong>{view_model.connection.recovery.phase === 'closing' ? '안전 종료 상태 확인 중' : '백엔드 연결 복구 중'}</strong>
+                    <strong>{view_model.connection.recovery.phase === 'closing' ? '안전 종료 상태 확인 중'
+                        : view_model.connection.recovery.error_code === 'UI_STATE_PUBLICATION_FAILED' ? '최신 화면 정보 복구 중' : '백엔드 연결 복구 중'}</strong>
                     <span>재시도 {view_model.connection.recovery.attempt}회 · 마지막 정상 수신 {
                         view_model.connection.recovery.last_received_at_ms === null ? '확인 중'
                             : new Date(view_model.connection.recovery.last_received_at_ms).toLocaleTimeString('ko-KR', { hour12: false })
                     }</span>
-                    <span>{view_model.connection.recovery.error_code?.includes('TIMEOUT') ? '응답 대기 시간이 초과됐습니다.'
-                        : view_model.connection.recovery.error_code === 'EVENT_STREAM_STALE' ? '실시간 상태 수신이 지연됐습니다.'
-                        : '화면의 연결을 복구하고 있습니다.'} 최신 지표를 확인할 때까지 새 명령을 사용할 수 없습니다.</span>
+                    <span>{connection_recovery_message(view_model.connection.recovery.error_code)} 자동으로 최신 상태를 다시 받고 있습니다. 최신 지표를 확인할 때까지 새 명령을 사용할 수 없습니다.</span>
                 </div>
             )}
 

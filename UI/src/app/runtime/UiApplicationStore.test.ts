@@ -32,7 +32,10 @@ function create_test_application(): DemoUiApplication {
 }
 
 describe('UiApplicationStore', () => {
-    it('첫 구독에서 facade를 시작하고 dispatch snapshot을 React listener로 발행한다', () => {
+    afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+    it('첫 구독에서 facade를 시작하고 dispatch snapshot을 React listener로 발행한다', async () => {
+        vi.useFakeTimers();
         const store = new UiApplicationStore(create_test_application);
         let notification_count = 0;
 
@@ -46,8 +49,44 @@ describe('UiApplicationStore', () => {
         store.dispatch({ type: 'API_DISCONNECTED', reason: 'test' });
 
         expect(store.get_snapshot().connection.is_online).toBe(false);
+        await vi.advanceTimersByTimeAsync(20);
         expect(notification_count).toBeGreaterThan(0);
         unsubscribe();
+    });
+
+    it('300개 연속 상태는 즉시 최신 값으로 보존하고 React에는 한 프레임만 발행한다', async () => {
+        vi.useFakeTimers();
+        const application = create_test_application();
+        const store = new UiApplicationStore(() => application);
+        const listener = vi.fn();
+        const unsubscribe = store.subscribe(listener);
+        for (let index = 0; index < 300; index++) {
+            application.facade.dispatch({ type: index % 2 === 0 ? 'API_CONNECTED' : 'API_DISCONNECTED' });
+        }
+        expect(store.get_snapshot().connection.is_online).toBe(false);
+        expect(listener).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(20);
+        expect(listener).toHaveBeenCalledOnce();
+        unsubscribe();
+        await Promise.resolve();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('비동기 화면 알림 예외를 같은 runtime에 전달하고 구독 종료 후 알림은 취소한다', async () => {
+        vi.useFakeTimers();
+        const on_publication_failure = vi.fn();
+        const application = { ...create_test_application(), on_publication_failure };
+        const store = new UiApplicationStore(() => application);
+        const error = new Error('fixture publication failure');
+        const unsubscribe = store.subscribe(() => { throw error; });
+        await vi.advanceTimersByTimeAsync(20);
+        expect(on_publication_failure).toHaveBeenCalledExactlyOnceWith(error);
+        application.facade.dispatch({ type: 'API_DISCONNECTED' });
+        unsubscribe();
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(20);
+        expect(on_publication_failure).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it('StrictMode식 즉시 구독 교체에서는 동일 애플리케이션 snapshot을 유지한다', async () => {

@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BackendConnectionDiagnosticWriter, type ConnectionDiagnostic, type StoredConnectionDiagnostic } from './backendConnectionDiagnostics';
+import { BackendConnectionDiagnosticWriter, connection_error_origin, type ConnectionDiagnostic, type StoredConnectionDiagnostic } from './backendConnectionDiagnostics';
 import { CONNECTION_ERROR_CODES, safe_connection_error_code } from './connectionErrorCodes';
 import { CONNECTION_VALIDATION_FIELDS, identify_connection_validation_field } from './connectionValidationFields';
+import { connection_recovery_message } from './connectionRecoveryMessage';
 
 const record: ConnectionDiagnostic = { event: 'heartbeat', session_id: '00000000-0000-4000-8000-000000000001',
     adapter_id: '00000000-0000-4000-8000-000000000002', generation: 1, last_sequence: 42, last_received_at_ms: 1000 };
@@ -57,5 +58,15 @@ describe('independent backend connection log persistence', () => {
         expect(safe_connection_error_code('SECRET_CANARY')).toBe('UNCLASSIFIED_CONNECTION_ERROR');
         expect(identify_connection_validation_field('market.current_price must be a decimal')).toBe('market.current_price');
         expect(identify_connection_validation_field('SECRET_CANARY')).toBeUndefined();
+    });
+
+    it('keeps the originating UI frame without exposing URLs or error messages', () => {
+        const error = new Error('SECRET_CANARY');
+        error.stack = 'Error: SECRET_CANARY\n at notify (http://127.0.0.1:5173/src/UiApplicationStore.ts:145:12?token=SECRET)\n at BackendUiAdapter.ts:2000:5';
+        expect(connection_error_origin(error)).toBe('UiApplicationStore.ts:145:12');
+        expect(connection_recovery_message('UI_STATE_PUBLICATION_FAILED')).toContain('화면에 반영');
+        expect(connection_recovery_message('EVENT_STREAM_SOCKET_ERROR')).toContain('통신');
+        expect(connection_recovery_message('MALFORMED_BACKEND_PAYLOAD')).toContain('형식');
+        expect(connection_recovery_message('SECRET_CANARY')).not.toContain('SECRET');
     });
 });

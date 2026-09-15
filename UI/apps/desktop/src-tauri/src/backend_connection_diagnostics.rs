@@ -19,7 +19,7 @@ pub enum ConnectionEvent {
 pub enum ConnectionStage { Connect, Authenticate, Receive, Decode, Map, Publish, Resync, Request, Shutdown, Lifecycle }
 
 #[derive(Deserialize, Serialize)]
-pub enum ConnectionErrorType { TypeError, RangeError, SyntaxError, AbortError, ContractError, AdapterError, CommandError, Unknown }
+pub enum ConnectionErrorType { TypeError, RangeError, SyntaxError, AbortError, ContractError, AdapterError, CommandError, Error, Unknown }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,7 +60,9 @@ pub struct ConnectionDiagnostic {
 fn valid_origin(origin: &str) -> bool {
     let parts: Vec<_> = origin.split(':').collect();
     parts.len() == 3 && matches!(parts[0], "BackendUiAdapter.ts" | "BackendUiAdapter.js"
-        | "backendEventMapper.ts" | "backendEventMapper.js" | "tradingIndicatorValidation.ts" | "tradingIndicatorValidation.js")
+        | "backendEventMapper.ts" | "backendEventMapper.js" | "tradingIndicatorValidation.ts" | "tradingIndicatorValidation.js"
+        | "UiApplicationFacade.ts" | "UiApplicationFacade.js" | "UiApplicationStore.ts" | "UiApplicationStore.js"
+        | "createLiveUiApplication.ts" | "createLiveUiApplication.js")
         && parts[1..].iter().all(|part| !part.is_empty() && part.len() < 8 && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
@@ -135,6 +137,12 @@ mod tests {
     fn rejects_free_text_and_accepts_fixed_failure_context() {
         let value = sample();
         assert!(validate_record(&serde_json::from_value(value.clone()).unwrap()));
+        let mut publication = value.clone();
+        publication["stage"] = serde_json::json!("publish");
+        publication["error_type"] = serde_json::json!("Error");
+        publication["error_code"] = serde_json::json!("UI_STATE_PUBLICATION_FAILED");
+        publication["origin"] = serde_json::json!("UiApplicationStore.ts:212:18");
+        assert!(validate_record(&serde_json::from_value(publication).unwrap()));
         for key in ["token", "payload", "message", "headers"] {
             let mut unsafe_value = value.clone(); unsafe_value[key] = serde_json::json!("SECRET_CANARY");
             assert!(serde_json::from_value::<ConnectionDiagnostic>(unsafe_value).is_err());
@@ -181,6 +189,8 @@ const ALLOWED_ERROR_CODES: &[&str] = &[
     "EVENT_STREAM_CLOSED",
     "EVENT_STREAM_CONNECTION_FAILED",
     "EVENT_STREAM_CONNECT_TIMEOUT",
+    "EVENT_STREAM_DECODE_FAILED",
+    "EVENT_STREAM_MAPPING_FAILED",
     "EVENT_STREAM_REJECTED",
     "EVENT_STREAM_SOCKET_ERROR",
     "EVENT_STREAM_STALE",

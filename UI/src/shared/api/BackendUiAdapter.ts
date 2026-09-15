@@ -42,6 +42,8 @@ import { validate_binance_connection_status } from './binanceConnectionStatus';
 const CANONICAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_TRACKED_EVENT_IDS = 10_000;
 const MAX_PENDING_IDEMPOTENCY_KEYS = 128;
+const MAX_PUBLICATION_RECOVERY_ATTEMPTS = 3;
+const PUBLICATION_HEALTHY_WINDOW_MS = 60_000;
 const NORMAL_CLIENT_CLOSE_CODE = 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_SHUTDOWN_WAIT_TIMEOUT_MS = 30_000;
@@ -869,6 +871,8 @@ export class BackendUiAdapter implements UiCommandPort {
     #last_received_monotonic = 0;
     #last_heartbeat_monotonic = 0;
     #retry_attempt = 0;
+    #publication_recovery_attempts = 0;
+    #publication_healthy_since: number | null = null;
     #recovering = false;
     #retry_timer: ReturnType<typeof setTimeout> | null = null;
     #socket_timer: ReturnType<typeof setTimeout> | null = null;
@@ -1946,6 +1950,13 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     private handle_event_frame(frame_data: unknown): void {
+        // WebView가 멈춘 동안 timer도 늦어진다. 대기하던 첫 frame부터 최신 상태를 다시 받는다.
+        if (!this.#recovering && this.event_stream_is_stale()) {
+            const error = new BackendAdapterError('EVENT_STREAM_STALE', '화면 복귀 후 최신 상태를 다시 확인합니다.', true);
+            this.record_failure(error, 'receive');
+            void this.full_resynchronize(error.code);
+            return;
+        }
         let stage: ConnectionDiagnosticStage = 'decode';
         try {
             const parsed_message = parse_backend_web_socket_message(frame_data);
@@ -1993,10 +2004,49 @@ export class BackendUiAdapter implements UiCommandPort {
             this.remember_event_id(event.event_id);
             this.mark_event_stream_ready();
         } catch (error) {
-            this.record_failure(error, stage, { retryable: false });
+            if (stage === 'publish') {
+                this.recover_publication(error);
+                return;
+            }
             const failure = this.normalize_adapter_failure(error);
-            this.fail_closed(new BackendAdapterError(failure.code, failure.message, false));
+            const code = failure.code === 'BACKEND_EVENT_STREAM_FAILED'
+                ? stage === 'decode' ? 'EVENT_STREAM_DECODE_FAILED' : 'EVENT_STREAM_MAPPING_FAILED'
+                : failure.code;
+            this.record_failure(error, stage, { error_code: code, retryable: false });
+            this.fail_closed(new BackendAdapterError(code, failure.message, false));
         }
+    }
+
+    /**
+     * 함수 이름: recover_publication()
+     * 기능: 부분 반영된 event를 재실행하지 않고 같은 인증으로 최신 snapshot을 제한 횟수 복구한다.
+     * 인자: error -> 화면 반영 예외
+     * 반환값: 없음
+     * 작성 날짜: 2026/09/15
+     */
+    private recover_publication(error: unknown): void {
+        this.#publication_healthy_since = null;
+        const retryable = this.#publication_recovery_attempts++ < MAX_PUBLICATION_RECOVERY_ATTEMPTS;
+        const failure = new BackendAdapterError('UI_STATE_PUBLICATION_FAILED',
+            '화면 정보를 갱신하지 못했습니다. 최신 상태를 다시 확인합니다.', retryable);
+        if (retryable) this.handle_connection_failure(failure, 'publish', error);
+        else {
+            this.record_failure(error, 'publish', { error_code: failure.code, retryable: false });
+            this.fail_closed(failure);
+        }
+    }
+
+    /**
+     * 함수 이름: recover_ui_publication()
+     * 기능: 프레임 단위 화면 알림의 예외를 event 반영 오류와 같은 제한된 복구 경로로 보낸다.
+     * 인자: error -> 화면 listener 예외
+     * 반환값: 없음
+     * 작성 날짜: 2026/09/15
+     */
+    recover_ui_publication(error: unknown): void {
+        if (this.#is_stopped || this.#callbacks === null || this.#shutdown_requested
+            || this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) return;
+        this.recover_publication(error);
     }
 
     /**
@@ -2073,12 +2123,12 @@ export class BackendUiAdapter implements UiCommandPort {
             || this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) return;
         this.clear_recovery_work();
         this.#recovering = true;
+        this.#publication_healthy_since = null;
         this.#is_resynchronizing = true;
         const generation = ++this.#connection_generation;
         this.close_current_socket('full resync');
         this.clear_seen_events();
-        this.#callbacks?.on_reconnecting(reason);
-        this.publish_connection_status('recovering');
+        this.publish_recovery_status(reason);
         const controller = new AbortController();
         this.#resync_abort = controller;
         let stage: ConnectionDiagnosticStage = 'resync';
@@ -2097,8 +2147,7 @@ export class BackendUiAdapter implements UiCommandPort {
             this.#is_resynchronizing = false;
             this.#resync_abort = null;
             if (stage === 'publish') {
-                this.record_failure(error, stage, { error_code: 'UI_STATE_PUBLICATION_FAILED', retryable: false });
-                this.fail_closed(new BackendAdapterError('UI_STATE_PUBLICATION_FAILED', '화면 상태를 반영하지 못해 연결 복구가 필요합니다.', false));
+                this.recover_publication(error);
             } else this.handle_connection_failure(this.normalize_adapter_failure(error), 'resync', error);
         }
     }
@@ -2122,12 +2171,22 @@ export class BackendUiAdapter implements UiCommandPort {
         ++this.#connection_generation;
         this.close_current_socket('retry pending');
         this.#recovering = true;
+        this.#publication_healthy_since = null;
         const delays = [1_000, 2_000, 5_000, 10_000, 30_000];
         const delay = delays[Math.min(this.#retry_attempt++, delays.length - 1)]!;
-        this.#callbacks?.on_reconnecting(error.code);
         this.record_connection('retry_scheduled', { stage: 'resync', attempt: this.#retry_attempt, delay_ms: delay });
-        this.publish_connection_status('recovering', Date.now() + delay);
         this.#retry_timer = setTimeout(() => { this.#retry_timer = null; void this.full_resynchronize(error.code); }, delay);
+        this.publish_recovery_status(error.code, Date.now() + delay);
+    }
+
+    /** 복구 안내 자체가 실패해도 이미 예약한 읽기 전용 snapshot 복구는 진행한다. */
+    private publish_recovery_status(reason: string, next_retry_at_ms: number | null = null): void {
+        try {
+            this.#callbacks?.on_reconnecting(reason);
+            this.publish_connection_status('recovering', next_retry_at_ms);
+        } catch (error) {
+            this.record_failure(error, 'publish', { error_code: 'UI_STATE_PUBLICATION_FAILED', retryable: true });
+        }
     }
 
     private arm_socket_timeout(delay: number, code: string, generation: number, socket: BackendWebSocket): void {
@@ -2165,15 +2224,25 @@ export class BackendUiAdapter implements UiCommandPort {
             this.record_connection('heartbeat', { stage: 'receive' });
             this.publish_connection_status('live');
         }
+        // 한 frame 성공만으로 반복 오류의 예산을 초기화하지 않는다.
+        this.#publication_healthy_since ??= performance.now();
+        if (performance.now() - this.#publication_healthy_since >= PUBLICATION_HEALTHY_WINDOW_MS) {
+            this.#publication_recovery_attempts = 0;
+        }
+    }
+
+    /** 단조 시계와 벽시계를 함께 사용해 절전·화면 정지 중의 긴 수신 공백을 검출한다. */
+    private event_stream_is_stale(): boolean {
+        return this.#last_received_at_ms !== null && Math.max(
+            Date.now() - this.#last_received_at_ms, performance.now() - this.#last_received_monotonic,
+        ) >= this.#stale_timeout_ms;
     }
 
     private install_environment_listeners(): void {
         if (typeof window === 'undefined' || this.#remove_environment_listeners !== null) return;
         const observe = () => {
             this.record_connection('environment_changed', { stage: 'lifecycle', visible: document.visibilityState === 'visible', online: navigator.onLine });
-            if (this.#last_received_at_ms !== null && !this.#recovering && Math.max(
-                Date.now() - this.#last_received_at_ms, performance.now() - this.#last_received_monotonic,
-            ) >= this.#stale_timeout_ms) {
+            if (!this.#recovering && this.event_stream_is_stale()) {
                 this.handle_connection_failure(new BackendAdapterError('EVENT_STREAM_STALE', '백엔드 연결 상태를 다시 확인합니다.', true), 'receive');
             }
         };
@@ -2195,7 +2264,8 @@ export class BackendUiAdapter implements UiCommandPort {
         return error instanceof BackendContractError ? 'ContractError' : error instanceof BackendAdapterError ? 'AdapterError'
             : error instanceof BackendCommandError ? 'CommandError' : error instanceof TypeError ? 'TypeError'
             : error instanceof RangeError ? 'RangeError' : error instanceof SyntaxError ? 'SyntaxError'
-            : error instanceof Error && error.name === 'AbortError' ? 'AbortError' : 'Unknown';
+            : error instanceof Error && error.name === 'AbortError' ? 'AbortError'
+            : error instanceof Error ? 'Error' : 'Unknown';
     }
 
     private record_failure(error: unknown, stage: ConnectionDiagnosticStage, details: Partial<ConnectionDiagnostic> = {}): void {
@@ -2343,7 +2413,8 @@ export class BackendUiAdapter implements UiCommandPort {
         }
 
         this.record_connection('terminal_failure', { stage: 'lifecycle', error_code: safe_connection_error_code(error.code), retryable: false });
-        this.publish_connection_status('blocked');
+        try { this.publish_connection_status('blocked'); }
+        catch (publication_error) { this.record_failure(publication_error, 'publish', { error_code: 'UI_STATE_PUBLICATION_FAILED', retryable: false }); }
         this.clear_recovery_work();
         this.#remove_environment_listeners?.();
         this.#remove_environment_listeners = null;

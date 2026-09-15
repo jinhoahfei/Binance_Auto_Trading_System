@@ -206,14 +206,97 @@ describe('long-running backend connection recovery', () => {
         expect(JSON.stringify(logs)).not.toContain('SECRET_CANARY');
     });
 
-    it('a UI publication bug is terminal and keeps its original exception type', async () => {
-        const { sockets, callbacks, logs } = setup();
-        callbacks.on_full_resync = () => { throw new TypeError('SECRET_CANARY'); };
-        sockets[0]!.disconnect(); await vi.advanceTimersByTimeAsync(0);
+    it('automatically replaces a partially published event with a verified snapshot without replaying commands', async () => {
+        const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => response(init, { ...create_backend_snapshot_fixture(), last_sequence: 200 }));
+        const { adapter, sockets, callbacks, logs } = setup(fetcher);
+        vi.mocked(callbacks.on_event).mockImplementationOnce(() => { throw new Error('SECRET_CANARY'); });
+        sockets[0]!.open(); sockets[0]!.receive();
+        expect(adapter.is_disposed).toBe(false);
+        await expect(adapter.stop_trading()).rejects.toMatchObject({ code: 'BACKEND_CONNECTION_RECOVERING' });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(callbacks.on_full_resync).toHaveBeenCalledWith(expect.objectContaining({ last_sequence: 200 }));
+        expect(callbacks.on_ready).not.toHaveBeenCalled();
+        sockets[1]!.open(); sockets[1]!.receive(201);
+        expect(callbacks.on_ready).toHaveBeenCalledOnce();
+        expect(callbacks.on_failure).not.toHaveBeenCalled();
+        expect(logs.find((record) => record.event === 'first_failure')).toMatchObject({ stage: 'publish', error_code: 'UI_STATE_PUBLICATION_FAILED', error_type: 'Error', retryable: true });
+        expect(fetcher.mock.calls.every(([input, init]) => new URL(String(input)).pathname === '/v1/snapshot' && init?.method === 'GET')).toBe(true);
+        expect(JSON.stringify(logs)).not.toContain('SECRET_CANARY');
+    });
+
+    it('bounds repeated publication failures and preserves the original exception type', async () => {
+        const { sockets, callbacks, logs, adapter } = setup();
+        callbacks.on_event = () => { throw new TypeError('SECRET_CANARY'); };
+        callbacks.on_full_resync = vi.fn(() => { throw new TypeError('SECRET_CANARY'); });
+        sockets[0]!.open(); sockets[0]!.receive();
+        await vi.advanceTimersByTimeAsync(8_000);
+        expect(callbacks.on_full_resync).toHaveBeenCalledTimes(3);
         expect(callbacks.on_failure).toHaveBeenCalledWith(expect.objectContaining({ code: 'UI_STATE_PUBLICATION_FAILED', retryable: false }));
+        expect(adapter.is_disposed).toBe(true);
         expect(logs.some((record) => record.stage === 'publish' && record.error_type === 'TypeError' && record.retryable === false)).toBe(true);
         expect(vi.getTimerCount()).toBe(0);
         expect(JSON.stringify(logs)).not.toContain('SECRET_CANARY');
+    });
+
+    it('discards queued frames after browser suspension before they can publish stale state', async () => {
+        const { sockets, callbacks, logs } = setup(async (_input, init) => response(init, { ...create_backend_snapshot_fixture(), last_sequence: 400 }));
+        sockets[0]!.open(); sockets[0]!.receive();
+        vi.mocked(callbacks.on_event).mockClear();
+        const delayed_message = sockets[0]!.onmessage;
+        // OS가 timer와 visibility callback을 함께 미뤄도 첫 수신에서 벽시계 공백을 확인한다.
+        vi.setSystemTime(Date.now() + 5 * 60_000);
+        for (let sequence = 11; sequence <= 200; sequence++) {
+            delayed_message?.({ data: JSON.stringify(create_backend_event_fixture(sequence, 'ACCOUNT_UPDATED', { account: create_backend_account_fixture() }, crypto.randomUUID())) } as MessageEvent);
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(callbacks.on_event).not.toHaveBeenCalled();
+        expect(callbacks.on_full_resync).toHaveBeenCalledOnce();
+        expect(logs.find((record) => record.event === 'first_failure')).toMatchObject({ error_code: 'EVENT_STREAM_STALE' });
+        sockets[1]!.open(); sockets[1]!.receive(401);
+        expect(callbacks.on_event).toHaveBeenCalledOnce();
+        expect(callbacks.on_ready).toHaveBeenCalledOnce();
+        expect(callbacks.on_failure).not.toHaveBeenCalled();
+    });
+
+    it('continues snapshot recovery when the recovering banner itself cannot be published', async () => {
+        const { adapter, sockets, callbacks, logs } = setup();
+        vi.mocked(callbacks.on_event).mockImplementationOnce(() => { throw new Error('SECRET_CANARY'); });
+        callbacks.on_reconnecting = () => { throw new Error('SECRET_BANNER'); };
+        sockets[0]!.open(); sockets[0]!.receive();
+        await vi.advanceTimersByTimeAsync(1_000);
+        sockets[1]!.open(); sockets[1]!.receive();
+        expect(adapter.is_disposed).toBe(false);
+        expect(callbacks.on_full_resync).toHaveBeenCalledOnce();
+        expect(callbacks.on_ready).toHaveBeenCalledOnce();
+        expect(callbacks.on_failure).not.toHaveBeenCalled();
+        expect(JSON.stringify(logs)).not.toContain('SECRET_');
+    });
+
+    it('one good event between publication errors does not allow an endless recovery loop', async () => {
+        const { sockets, callbacks, adapter } = setup();
+        for (let attempt = 0; attempt < 4; attempt++) {
+            const socket = sockets.at(-1)!;
+            socket.open();
+            socket.receive();
+            vi.mocked(callbacks.on_event).mockImplementationOnce(() => { throw new Error('publication'); });
+            socket.receive(11);
+            await vi.advanceTimersByTimeAsync(1_000);
+        }
+        expect(callbacks.on_full_resync).toHaveBeenCalledTimes(3);
+        expect(callbacks.on_failure).toHaveBeenCalledOnce();
+        expect(adapter.is_disposed).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('explicit disposal cancels a scheduled publication recovery', async () => {
+        const { adapter, sockets, callbacks } = setup();
+        vi.mocked(callbacks.on_event).mockImplementationOnce(() => { throw new Error('publication'); });
+        sockets[0]!.open(); sockets[0]!.receive();
+        adapter.stop();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(callbacks.on_full_resync).not.toHaveBeenCalled();
+        expect(sockets).toHaveLength(1);
+        expect(vi.getTimerCount()).toBe(0);
     });
 
 });

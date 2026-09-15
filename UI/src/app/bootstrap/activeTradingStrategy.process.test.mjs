@@ -282,12 +282,12 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
                 }
                 if (step.stage.includes('같은 보유 단계 지표 갱신')) {
                     const row = panel.querySelector(`[data-condition-id$=":${prefix}_profit_zone"]`);
-                    expect(row.querySelector('strong')).toHaveTextContent(prefix === 'b' ? '0.61' : '0.09');
+                    await waitFor(() => expect(row.querySelector('strong')).toHaveTextContent(prefix === 'b' ? '0.61' : '0.09'));
                     observed_holding = true;
                 }
                 if (step.stage.includes('시각 오차 후 보유 지표 갱신')) {
                     const row = panel.querySelector(`[data-condition-id$=":${prefix}_profit_zone"]`);
-                    expect(row.querySelector('strong')).toHaveTextContent(prefix === 'b' ? '0.62' : '0.07');
+                    await waitFor(() => expect(row.querySelector('strong')).toHaveTextContent(prefix === 'b' ? '0.62' : '0.07'));
                     const timer = within(panel.querySelector(`[data-condition-id$=":${prefix}_time_exit"]`)).getByRole('timer');
                     expect(timer.textContent).not.toBe(first_timer_text);
                     observed_update = true;

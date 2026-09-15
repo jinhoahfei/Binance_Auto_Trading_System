@@ -119,6 +119,7 @@ export async function hydrate_live_ui_application(
         initial_session_id: initial_snapshot.session_id,
         environment: initial_snapshot.environment ?? null,  // 같은 backend session의 불변 실행 환경을 보존한다.
         load_binance_connection_status: (signal) => command_adapter.load_binance_connection_status(signal),
+        on_publication_failure: (error) => command_adapter.recover_ui_publication(error),
         activate: () => {
             if (is_active) {
                 return;
@@ -155,9 +156,12 @@ export async function hydrate_live_ui_application(
                 on_connection_status: (status) => facade.dispatch({ type: 'BACKEND_CONNECTION_STATUS', status }),
                 on_failure: (error) => {
                     // Online과 reconnecting 양쪽에서 동일하게 typed offline 최종 상태로 수렴시킨다.
-                    facade.dispatch({ type: 'API_DISCONNECTED', reason: error.code });
-                    facade.dispatch({ type: 'RECONNECT_FAILED', reason: error.message });
-                    options.on_terminal_failure?.(error);
+                    try {
+                        facade.dispatch({ type: 'API_DISCONNECTED', reason: error.code });
+                        facade.dispatch({ type: 'RECONNECT_FAILED', reason: error.message });
+                    } finally {
+                        options.on_terminal_failure?.(error);  // 화면 actor 오류가 최종 복구 안내를 막지 않는다.
+                    }
                 },
             });
         },
@@ -191,6 +195,7 @@ export function create_live_ui_application_factory(
         facade: application.facade,
         environment: application.environment ?? null,
         load_binance_connection_status: (signal) => application.command_adapter.load_binance_connection_status(signal),
+        on_publication_failure: (error) => application.command_adapter.recover_ui_publication(error),
         activate: () => {
             if (has_activated) {
                 return;

@@ -15,7 +15,7 @@ export interface ConnectionDiagnostic {
     readonly last_received_at_ms: number | null;
     readonly incident_id?: string;
     readonly error_code?: string;
-    readonly error_type?: 'TypeError' | 'RangeError' | 'SyntaxError' | 'AbortError' | 'ContractError' | 'AdapterError' | 'CommandError' | 'Unknown' | undefined;
+    readonly error_type?: 'TypeError' | 'RangeError' | 'SyntaxError' | 'AbortError' | 'ContractError' | 'AdapterError' | 'CommandError' | 'Error' | 'Unknown' | undefined;
     readonly stage?: ConnectionDiagnosticStage;
     readonly origin?: string | undefined;
     readonly validation_field?: string | undefined;
@@ -118,7 +118,7 @@ export async function flush_backend_connection_diagnostics(): Promise<void> {
 export function connection_error_origin(error: unknown): string | undefined {
     if (!(error instanceof Error)) return undefined;
     const location = error.stack?.split('\n').slice(1).map((line) =>
-        line.match(/(?:backendEventMapper|tradingIndicatorValidation|BackendUiAdapter)\.(?:ts|js):(\d+):(\d+)/u)?.[0],
+        line.match(/(?:backendEventMapper|tradingIndicatorValidation|BackendUiAdapter|UiApplicationFacade|UiApplicationStore|createLiveUiApplication)\.(?:ts|js):(\d+):(\d+)/u)?.[0],
     ).find(Boolean);
     return location;
 }

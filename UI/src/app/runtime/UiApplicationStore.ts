@@ -31,6 +31,7 @@ export class UiApplicationStore implements UiApplicationController {
     private current_view_model: AppViewModel;
     private is_active = false;
     private deactivation_version = 0;
+    private cancel_pending_notification: (() => void) | null = null;
 
     /**
      * 함수 이름: UiApplicationStore.constructor()
@@ -109,7 +110,10 @@ export class UiApplicationStore implements UiApplicationController {
      * 작성 날짜: 2026/08/12
      */
     dispatch(intent: UiApplicationIntent): boolean {
-        return this.application?.facade.dispatch(intent) ?? false;
+        const accepted = this.application?.facade.dispatch(intent) ?? false;
+        // 사용자 클릭과 native 종료 의도는 즉시 보인다. 수신 event는 facade 구독에서 프레임별로 합친다.
+        if (this.cancel_pending_notification !== null) this.publish_notification();
+        return accepted;
     }
 
     /**
@@ -176,6 +180,8 @@ export class UiApplicationStore implements UiApplicationController {
      * 작성 날짜: 2026/08/12
      */
     private deactivate_application(): void {
+        this.cancel_pending_notification?.();
+        this.cancel_pending_notification = null;
         this.facade_unsubscribe?.();
         this.facade_unsubscribe = null;
         this.application?.deactivate();
@@ -185,12 +191,33 @@ export class UiApplicationStore implements UiApplicationController {
 
     /**
      * 함수 이름: notify_listeners()
-     * 기능: 등록된 모든 React listener에 캐시 ViewModel 변경을 알린다.
+     * 기능: 상태는 즉시 보존하면서 React 갱신은 한 프레임에 한 번으로 합쳐 누적 event의 중첩 렌더링을 막는다.
      * 인자: 없음
      * 반환값: 없음
      * 작성 날짜: 2026/08/12
      */
     private notify_listeners(): void {
-        this.listeners.forEach((listener) => listener());
+        if (this.cancel_pending_notification !== null || this.listeners.size === 0) return;
+        const publish = () => this.publish_notification();
+        if (typeof requestAnimationFrame === 'function') {
+            const frame = requestAnimationFrame(publish);
+            this.cancel_pending_notification = () => cancelAnimationFrame(frame);
+        } else {
+            const timer = setTimeout(publish, 0);
+            this.cancel_pending_notification = () => clearTimeout(timer);
+        }
+    }
+
+    /** 한 번의 paint 또는 사용자 동작 경계에서 최신 캐시만 발행하고 실패를 같은 runtime으로 전달한다. */
+    private publish_notification(): void {
+        this.cancel_pending_notification?.();
+        this.cancel_pending_notification = null;
+        if (!this.is_active) return;
+        try {
+            this.listeners.forEach((listener) => listener());
+        } catch (error) {
+            if (this.application?.on_publication_failure !== undefined) this.application.on_publication_failure(error);
+            else throw error;
+        }
     }
 }
