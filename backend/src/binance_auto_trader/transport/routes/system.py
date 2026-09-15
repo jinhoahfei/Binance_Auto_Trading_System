@@ -16,6 +16,39 @@ from ..contracts import (
     success_response,
 )
 from . import RouteContext, application_error_response, require_ready_runtime
+from binance_auto_trader.bootstrap.shutdown_preparation import get_shutdown_preparation, start_shutdown_preparation
+
+
+def read_shutdown_preparation(request_id: str, context: RouteContext) -> TransportResponse:
+    """
+    함수 이름: read_shutdown_preparation()
+    기능: 인증된 요청에 종료 준비 상태를 반환한다.
+    인자: request_id, context -> 해당 작업에 필요한 입력 값
+    반환값: 해당 단계의 처리 결과 또는 없음
+    작성 날짜: 2026/09/16
+    """
+    state = get_shutdown_preparation(context.runtime)
+    if state is None:
+        return error_response(request_id, TransportContractError("SHUTDOWN_PREPARATION_NOT_STARTED",
+            "Shutdown preparation has not started.", status=409))
+    return success_response(request_id, state)
+
+
+def prepare_shutdown(request_id: str, context: RouteContext, request_body: JsonObject, command_id: str) -> TransportResponse:
+    """
+    함수 이름: prepare_shutdown()
+    기능: 정확한 요청 형식과 청산 동의를 검증한 후 종료 준비를 시작한다.
+    인자: request_id, context, request_body, command_id -> 해당 작업에 필요한 입력 값
+    반환값: 해당 단계의 처리 결과 또는 없음
+    작성 날짜: 2026/09/16
+    """
+    require_command_fields(request_body, ("expected_version", "liquidation_confirmed"))
+    version = require_expected_version(request_body)
+    confirmed = request_body.get("liquidation_confirmed")
+    if type(confirmed) is not bool:
+        raise TransportContractError("MALFORMED_REQUEST", "liquidation_confirmed must be boolean", status=400)
+    state = start_shutdown_preparation(context.runtime, expected_version=version, liquidation_confirmed=confirmed)
+    return success_response(request_id, state, status=202)
 
 
 def get_health(request_id: str, context: RouteContext) -> TransportResponse:
@@ -55,17 +88,25 @@ def get_shutdown_state(request_id: str, context: RouteContext) -> TransportRespo
     반환값: 안전 종료 허가가 아닌 최소 optimistic command 기준값
     작성 날짜: 2026/09/05
     """
-    # 화면 데이터에 오류가 있어도 종료 기준은 동일 application publication에서 읽는다.
-    with context.runtime.application_lock:
-        readiness_failure = require_ready_runtime(request_id, context)
-        if readiness_failure is not None:
-            return readiness_failure
-        trading_controller = context.runtime.trading_controller
-        shutdown_state = {
-            "session_id": context.event_stream.session_id,
-            "version": trading_controller.context.version,
-            "status": trading_controller.status.value,
-        }
+    # 이 값은 종료 허가가 아닌 낙관적 기준이다. 공용 잠금이 막혀도 준비를 요청할 수 있어야 한다.
+    if hasattr(context.runtime, "_state_store"):
+        ready = context.runtime._state_store.state.ready
+    else:
+        ready = context.runtime.ready
+    if not ready:
+        return error_response(request_id, TransportContractError("BACKEND_NOT_READY", "Backend startup is not complete.", status=503, retryable=True))
+    trading_controller = context.runtime.trading_controller
+    read_basis = getattr(trading_controller, "shutdown_command_basis", None)
+    if callable(read_basis):
+        # Immutable publication을 읽는다. worker가 잠금을 보유해도 종료 요청을 시작할 수 있다.
+        version, status = read_basis()
+    else:
+        version, status = trading_controller.context.version, trading_controller.status.value
+    shutdown_state = {
+        "session_id": context.event_stream.session_id,
+        "version": version,
+        "status": status,
+    }
 
     return success_response(request_id, shutdown_state)  # Exposure 검사는 POST owner가 다시 수행한다.
 

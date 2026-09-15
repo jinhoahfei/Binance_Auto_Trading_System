@@ -141,7 +141,7 @@ class BnbFeeAccountingTests(unittest.TestCase):
         self.assertEqual(BnbFeeValuator(request).resolve(TEST_TIME), evidence)
         self.assertFalse(request.call_args.kwargs["signed"])
         self.assertEqual(request.call_args.kwargs["parameters"]["symbol"], "BNBUSDT")
-        for payload in ([], [row, row], [row[:8] + [0] + row[9:]], [row[:4] + ["NaN"] + row[5:]], [[True] + row[1:]]):
+        for payload in ([], [row, row], [row[:8] + [-1] + row[9:]], [row[:4] + ["NaN"] + row[5:]], [[True] + row[1:]]):
             request.return_value = SimpleNamespace(payload=payload)
             with self.assertRaises((ValueError, TypeError)):
                 BnbFeeValuator(request, wait=Mock()).resolve(TEST_TIME)

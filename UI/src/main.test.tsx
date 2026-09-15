@@ -1,3 +1,4 @@
+import { shutdown_preparation_fixture } from './shared/api/shutdownTestFixtures';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -163,6 +164,7 @@ describe('production main bootstrap recovery', () => {
             if (path === '/v1/shutdown/state') return create_success_response(request_id, {
                 session_id: TEST_BACKEND_SESSION_ID, version: 42, status: 'terminated',
             });
+            if (path === '/v1/shutdown/prepare') return create_success_response(request_id!, shutdown_preparation_fixture({ version: 42 }), 202);
             if (path === '/v1/shutdown') {
                 if (blocked) return new Response(JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION, request_id,
                     ok: false, error: { code: 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE', message: 'Exposure remains', retryable: false, details: { accepted: false, status: 'blocked', version: 42, position_open: true, pending_order: true, reconciliation_required: true } } }), { status: 409 });
@@ -180,7 +182,7 @@ describe('production main bootstrap recovery', () => {
             // 테스트가 남기는 복구 adapter도 명시적 native 종료 경계로 정리한다.
             await act(async () => { native_listeners.get('backend-sidecar-exited')?.({ payload: { code: 0 } }); });
         } else await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
-        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown']);
+        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
         expect(invoke_mock.mock.calls.filter(([command]) => command === 'get_backend_connection_descriptor')).toHaveLength(2);
         expect(document.body).not.toHaveTextContent(TEST_BACKEND_TOKEN);
     });
@@ -211,6 +213,7 @@ describe('production main bootstrap recovery', () => {
                     session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started',
                 });
             }
+            if (path === '/v1/shutdown/prepare') return create_success_response(request_id!, shutdown_preparation_fixture(), 202);
             if (path === '/v1/shutdown') {
                 return create_success_response(request_id, { accepted: true, status: 'accepted', version: 0 }, 202);
             }
@@ -233,7 +236,7 @@ describe('production main bootstrap recovery', () => {
         expect(descriptor_attempts).toBe(2);
         expect(requested_paths).toEqual([
             ...(action_name === '연결 다시 확인' ? ['/v1/snapshot'] : []),
-            '/v1/shutdown/state', '/v1/shutdown',
+            '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown',
         ]);
         expect(document.body).not.toHaveTextContent(TEST_BACKEND_TOKEN);
     });
@@ -271,6 +274,7 @@ describe('production main bootstrap recovery', () => {
                     session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started',
                 });
             }
+            if (path === '/v1/shutdown/prepare') return create_success_response(request_id!, shutdown_preparation_fixture(), 202);
             if (path === '/v1/shutdown') {
                 return create_success_response(request_id, {
                     accepted: true, status: 'accepted', version: 0,
@@ -284,7 +288,7 @@ describe('production main bootstrap recovery', () => {
         fireEvent.click(screen.getByRole('button', { name: '안전 종료' }));
 
         await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
-        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown']);
+        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
         expect(invoke_mock).toHaveBeenCalledWith('await_backend_sidecar_exit');
     });
 
@@ -315,7 +319,8 @@ describe('production main bootstrap recovery', () => {
                         snapshot_attempt === 1 ? not_ready_snapshot : ready_snapshot,
                     );
                 }
-                if (path === '/v1/shutdown') {
+                if (path === '/v1/shutdown/prepare') return create_success_response(request_id!, shutdown_preparation_fixture(), 202);
+            if (path === '/v1/shutdown') {
                     shutdown_attempt += 1;
                     if (shutdown_attempt === 1) {
                         throw new TypeError('Simulated response loss after shutdown send');
@@ -375,10 +380,11 @@ describe('production main bootstrap recovery', () => {
                 ([command]) => command === 'get_backend_connection_descriptor',
             )).toHaveLength(1);
             expect(invoke_mock).toHaveBeenCalledWith('await_backend_sidecar_exit');
-            expect(fetch_mock).toHaveBeenCalledTimes(4);
+            expect(fetch_mock).toHaveBeenCalledTimes(5);
             expect(fetch_mock.mock.calls.map(([input]) => new URL(input.toString()).pathname)).toEqual([
                 '/v1/snapshot',
                 '/v1/shutdown/state',
+                '/v1/shutdown/prepare',
                 '/v1/shutdown',
                 '/v1/shutdown',
             ]);
@@ -387,8 +393,8 @@ describe('production main bootstrap recovery', () => {
                     `Bearer ${TEST_BACKEND_TOKEN}`,
                 );
             });
-            const first_shutdown_init = fetch_mock.mock.calls[2]?.[1];
-            const retried_shutdown_init = fetch_mock.mock.calls[3]?.[1];
+            const first_shutdown_init = fetch_mock.mock.calls[3]?.[1];
+            const retried_shutdown_init = fetch_mock.mock.calls[4]?.[1];
 
             expect(first_shutdown_init?.body).toBe(JSON.stringify({
                 schema_version: BACKEND_SCHEMA_VERSION,

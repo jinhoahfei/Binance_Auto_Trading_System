@@ -13,6 +13,17 @@ from binance_auto_trader.domain.trading.states import OrderSide, ExitReason
 _ACCOUNTING_SUPPORTED_FEE_ASSETS = frozenset({"ETH", "USDT"})
 
 
+from binance_auto_trader.adapters.binance.mappers import SymbolFilterError
+
+
+class _LiveOrderLimitError(LiveConfigurationError, SymbolFilterError):
+    """
+    클래스 이름: _LiveOrderLimitError
+    기능: 설정 오류와 실제 준비 주문의 금액 한도 위반을 구분한다.
+    작성 날짜: 2026/09/16
+    """
+
+
 class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
     """
     클래스 이름: LiveOrderPermissionRESTClient
@@ -176,7 +187,7 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
             final_notional > configured_cap
             or final_notional > LIVE_NOTIONAL_CAP
         ):
-            raise LiveConfigurationError(
+            raise _LiveOrderLimitError(
                 "prepared live order exceeds the configured or absolute cap"
             )
 

@@ -50,6 +50,15 @@ export interface BackendShutdownState {
     readonly status: BackendTradingStatus;
 }
 
+export interface BackendShutdownPreparation {
+    readonly operation_id: string;
+    readonly phase: 'checking' | 'settling_orders' | 'liquidating' | 'ready' | 'blocked';
+    readonly step: 'workers' | 'account' | 'orders' | 'liquidation' | 'history' | 'complete';
+    readonly version: number;
+    readonly reason_code: string | null;
+    readonly retryable: boolean;
+}
+
 export interface BackendMarketSnapshot {
     readonly symbol: string;
     readonly current_price: BackendDecimalString | null;

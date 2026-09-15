@@ -62,6 +62,7 @@ export type {
     BackendSnapshot,
     BackendRuntimeEnvironment,
     BackendShutdownState,
+    BackendShutdownPreparation,
     BackendSuccessEnvelope,
     BackendStrategyType,
     BackendSwingSnapshot,

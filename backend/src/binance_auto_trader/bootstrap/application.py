@@ -395,6 +395,8 @@ class _ApplicationShutdownStore:
     )
     result: object | None = field(default=None, repr=False, compare=False)
     error: BaseException | None = field(default=None, repr=False, compare=False)
+    preparation_lock: RLock = field(default_factory=RLock, repr=False, compare=False)
+    preparation: object | None = field(default=None, repr=False, compare=False)
 
 
 class _AccountStreamRecoveryWorker:
@@ -1546,6 +1548,7 @@ def create_application_runtime(
                     and application_state_store.state.status
                     is ApplicationStatus.READY
                     and trading_controller.startup_reconciliation_complete
+                and not trading_controller._shutdown_preparing
                     and not (
                         trading_controller.external_execution_reconciliation_required
                     )
@@ -1599,6 +1602,7 @@ def create_application_runtime(
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
+                and not trading_controller._shutdown_preparing
                 and not (
                     trading_controller.external_execution_reconciliation_required
                 )
@@ -1691,6 +1695,7 @@ def create_application_runtime(
         return (
             application_state_store.state.status
             is ApplicationStatus.READY
+            and not trading_controller._shutdown_preparing
         )  # Caller가 application RLock을 보유하므로 한 lifecycle snapshot만 읽는다.
 
     def publish_trading_session_update() -> object | None:
@@ -1737,6 +1742,7 @@ def create_application_runtime(
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
+                and not trading_controller._shutdown_preparing
                 and not (
                     trading_controller.external_execution_reconciliation_required
                 )
@@ -1822,6 +1828,7 @@ def create_application_runtime(
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
+                and not trading_controller._shutdown_preparing
             )
 
         recovery_worker = market_stream_recovery_worker
@@ -1845,6 +1852,7 @@ def create_application_runtime(
                 and application_state_store.state.status
                 is ApplicationStatus.READY
                 and trading_controller.startup_reconciliation_complete
+                and not trading_controller._shutdown_preparing
                 and (trading_controller.market_stream_reconciliation_required
                      or trading_controller.market_session_recovery_pending)
                 and not trading_controller.process_ownership_ambiguous

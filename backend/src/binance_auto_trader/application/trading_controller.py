@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -10,7 +11,7 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 import hashlib
 import sys
-from threading import RLock
+from threading import RLock, get_ident
 from time import sleep
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -19,6 +20,9 @@ from binance_auto_trader.adapters.binance.api_gateway import (
     APP_CLIENT_ORDER_ID_PREFIX,
     APIGateway,
 )
+from binance_auto_trader.adapters.binance.bnb_fee_valuator import BnbValuationUnavailableError, BnbValuationInvalidError
+from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
+from binance_auto_trader.adapters.binance.mappers import SymbolFilterError, BinancePayloadError
 from binance_auto_trader.adapters.binance.websocket_gateway import (
     Subscription,
     WebSocketGateway,
@@ -61,6 +65,7 @@ from binance_auto_trader.domain.trading.action_requests import (
     TradingActionRequest,
     patch,
 )
+from binance_auto_trader.domain.trading.conditions import condition_met, condition_unmet
 from binance_auto_trader.domain.trading.context import (
     ContextVersionConflictError,
     MarketEvaluationSnapshot,
@@ -75,6 +80,7 @@ from binance_auto_trader.domain.trading.event_queue import (
 )
 from binance_auto_trader.domain.trading.events import (
     BuyAttemptPayload,
+    PreparationExpiredPayload,
     BuyRiskBlockedPayload,
     EventPriority,
     ForceSellOutcomePayload,
@@ -144,6 +150,7 @@ _ORDER_RECONCILIATION_DELAYS = (
     timedelta(seconds=8),
 )
 _FORCE_SELL_RETRY_DELAY = timedelta(seconds=3)
+_PREPARATION_RETRY_SECONDS = (1, 2, 5, 10, 30)
 _PUBLIC_MARKET_EVENT_TYPES = frozenset(
     {
         TradingEventType.MARKET_DATA_UPDATED,
@@ -341,6 +348,8 @@ class ReconciliationCauseCategory(str, Enum):
     ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION = (
         "ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION"
     )
+    PREPARE_DATA_INVALID = "PREPARE_DATA_INVALID"
+    PREPARE_INTERNAL_ERROR = "PREPARE_INTERNAL_ERROR"
     PREPARE_FILTER_OR_CAP_REJECTED = "PREPARE_FILTER_OR_CAP_REJECTED"
     EVENT_WORKER_OR_RUNTIME_FAILED = "EVENT_WORKER_OR_RUNTIME_FAILED"
     MARKET_STREAM_FAILED = "MARKET_STREAM_FAILED"
@@ -517,6 +526,9 @@ class OrderExecutionFailureCode(str, Enum):
     작성 날짜: 2026/08/22
     """
 
+    ORDER_PREPARATION_DEFERRED = "ORDER_PREPARATION_DEFERRED"
+    ORDER_PREPARATION_INVALID_DATA = "ORDER_PREPARATION_INVALID_DATA"
+    ORDER_PREPARATION_FAILED = "ORDER_PREPARATION_FAILED"
     ZERO_ORDER_QUANTITY = "ZERO_ORDER_QUANTITY"
     SUBMISSION_BUDGET_EXHAUSTED = "SUBMISSION_BUDGET_EXHAUSTED"
     QUERY_BUDGET_EXHAUSTED = "QUERY_BUDGET_EXHAUSTED"
@@ -1289,6 +1301,16 @@ class TradingController:
         self._persistence_states_by_order_id: dict[str, _OrderExecutionState] = {}
         self._force_sell_intent_id: str | None = None
         self._force_sell_retry_due_at: datetime | None = None
+        self._preparation_retry_attempt = 0
+        self._preparation_retry_due_at: datetime | None = None
+        self._preparation_retry_intent: str | None = None
+        self._unsubmitted_preparation_intent: str | None = None
+        self._shutdown_preparing = False
+        self._shutdown_verified_version: int | None = None
+        self._shutdown_verified_account_version: int | None = None
+        self._shutdown_cleanup_owner: int | None = None
+        self._shutdown_liquidation_allowed = False
+        self._shutdown_cleanup_check: Callable[[], None] | None = None
         self._order_trace: list[OrderExecutionTraceEntry] = []
         self._public_market_boundary_trace: list[
             PublicMarketBoundaryTraceEntry
@@ -1457,6 +1479,7 @@ class TradingController:
         # Testnet startup·연결 복구와 중단 session의 operator 재조정이 끝난 경우에만 공개 gate를 연다.
         return (
             self._mode_command_enabled
+            and not self._shutdown_preparing
             and self._web_socket_gateway.account_ready
             and not self._requires_manual_kill_cleanup_locked()
             and not self._stream_reconciliation_required
@@ -1517,6 +1540,11 @@ class TradingController:
         반환값: 미해결 재조정 상태가 하나라도 있으면 True
         작성 날짜: 2026/08/31
         """
+        # 종료 전용 검증은 worker 오류 latch를 지우지 않고 검증한 version에서만 종료를 허용한다.
+        if (self._shutdown_preparing and self._shutdown_verified_version == self._context.version
+                and self._shutdown_verified_account_version == self._account.version
+                and not self._process_ownership_ambiguous and not self._external_execution_reconciliation_required):
+            return False
         # Fresh open order만 남아도 cleanup bool을 포함해 shutdown owner를 안전하게 차단한다.
         return (
             self._stream_reconciliation_required
@@ -2928,7 +2956,7 @@ class TradingController:
         self._validate_expected_version_value(expected_version)
         fingerprint = (expected_version,)
 
-        with self._session_lock:
+        with self._session_effect_lock():
             # Exact duplicate만 stale 검사보다 먼저 replay하고 다른 payload 재사용은 거부한다.
             cached = self._read_command_record(
                 "recovered-position-liquidation",
@@ -3204,7 +3232,7 @@ class TradingController:
         self._validate_expected_version_value(expected_version)
         fingerprint = (expected_version,)
 
-        with self._session_lock:
+        with self._session_effect_lock():
             # exact replay를 먼저 반환하고 새 stop만 version·session 상태를 검증한다.
             cached = self._read_command_record(
                 "stop",
@@ -3214,6 +3242,9 @@ class TradingController:
             if cached is not None:
                 return self._require_session_result(cached)
             self._require_expected_version(expected_version)
+            self._preparation_retry_due_at = None
+            self._preparation_retry_intent = None
+            self._preparation_retry_attempt = 0
             active_stm = self._active_stm
             if active_stm is None or self._session_id is None:
                 raise TradingSessionError(
@@ -3323,6 +3354,8 @@ class TradingController:
             raise TypeError("event must be a TradingEvent")
 
         with self._session_lock:
+            if self._shutdown_preparing:
+                return None
             # terminal cleanup가 시작된 뒤에는 callback 재진입을 무조건 no-op으로 만든다.
             if self._cleanup_in_progress:
                 return None  # terminal cleanup callback은 새 event intake를 다시 열 수 없다.
@@ -3429,6 +3462,8 @@ class TradingController:
             raise ValueError("market_version must be a positive exact integer")
 
         with self._session_lock:
+            if self._shutdown_preparing:
+                return None
             # Start 전 REST merge와 terminal session Kline은 다음 run의 evidence로 이월하지 않는다.
             if (
                 self._cleanup_in_progress
@@ -3615,6 +3650,8 @@ class TradingController:
             )
 
         with self._session_lock:
+            if self._shutdown_preparing:
+                return None
             # 비활성·종료 session에는 다음 start로 새 시장 사실을 몰래 이월하지 않는다.
             if (
                 self._cleanup_in_progress
@@ -3655,6 +3692,12 @@ class TradingController:
         반환값: same-source Context와 일치하도록 분류·scope provenance를 갱신한 event
         작성 날짜: 2026/08/29
         """
+        if (self._preparation_retry_intent is not None
+                and self._context.runtime.pending_intent_id == self._preparation_retry_intent
+                and event.event_type in (TradingEventType.CASE_B_BUY_RETRY, TradingEventType.CASE_C_BUY_RETRY)):
+            strategy = StrategyType.CASE_B if event.event_type is TradingEventType.CASE_B_BUY_RETRY else StrategyType.CASE_C
+            if not self._preparation_signal_valid(strategy):
+                return self._expire_order_preparation(strategy)
         if event.market_evaluation is None:
             # 내부 후속·retry에서도 새 signal/체결/timer 기준의 경과시간을 다시 결합한다.
             if self._latest_market_evaluation_version > 0:
@@ -3874,7 +3917,7 @@ class TradingController:
         반환값: 처리 순서가 보존된 TradingSTMResult tuple
         작성 날짜: 2026/08/21
         """
-        with self._session_lock:
+        with self._session_effect_lock():
             # drain도 cleanup·비활성 session에서는 queue를 건드리지 않는 no-op이다.
             processor = self._event_processor
             if self._cleanup_in_progress:
@@ -3927,7 +3970,7 @@ class TradingController:
         if max_microsteps <= 0:
             raise ValueError("max_microsteps must be positive")
 
-        with self._session_lock:
+        with self._session_effect_lock():
             # 비활성 또는 terminal cleanup 중인 session에서는 scheduler와 queue를 모두 보존한다.
             if self._cleanup_in_progress or self._status not in (
                 TradingSessionStatus.RUNNING,
@@ -5410,7 +5453,7 @@ class TradingController:
         self,
         *,
         recovery_commit_observer: Callable[[], object] | None = None,
-    ) -> Subscription:
+    ) -> Subscription | None:
         """
         함수 이름: reconnect_account_stream_after_reconciliation()
         기능: disconnect 뒤 account·open order를 REST 재조정하고 새 user stream 세대를 연다.
@@ -5424,7 +5467,7 @@ class TradingController:
         ):
             raise TypeError("recovery_commit_observer must be callable or None")
 
-        with self._session_lock:
+        with self._session_effect_lock():
             # Parent/runtime ownership을 잃은 process는 network snapshot으로 스스로 gate를 다시 열지 않는다.
             if self._process_ownership_ambiguous:
                 raise AccountStreamRecoveryBlockedError(
@@ -5453,7 +5496,8 @@ class TradingController:
             self._account_free_overlays.clear()
 
             # 첫 full account 직후 signed stream ACK를 열어 이후 order REST의 체결 공백을 닫는다.
-            subscription = self._web_socket_gateway.start_account_info_stream()
+            shutdown_owner = self._shutdown_cleanup_owner == get_ident()
+            subscription = None if shutdown_owner else self._web_socket_gateway.start_account_info_stream()
             try:
                 # Exchange open order가 현재 memory의 app-owned state로 모두 설명되는지 먼저 확인한다.
                 open_results = self._api_gateway.list_open_order_results(
@@ -5801,7 +5845,7 @@ class TradingController:
                     raise AccountStreamRecoveryBlockedError(
                         "account stream recovery gap Position exceeds Binance balance"
                     )  # ACK 공백에서 감소한 잔고도 command gate를 다시 열기 전에 확인한다.
-                if not self._web_socket_gateway.account_ready:
+                if not shutdown_owner and not self._web_socket_gateway.account_ready:
                     raise StartupOrderReconciliationError(
                         "account stream was not caught up during reconnect gap reconciliation"
                     )
@@ -5854,14 +5898,15 @@ class TradingController:
                         ) from error
             except Exception:
                 # ACK 이후 어느 REST·order·rebase 단계가 실패해도 새 handle을 닫고 gate를 유지한다.
-                subscription.close()
+                if subscription is not None:
+                    subscription.close()
                 self._account_subscription = None
                 raise
 
             # Context rebase까지 성공한 뒤에만 새 handle을 publish하고 command gate를 다시 연다.
             self._account_subscription = subscription
             self._stream_reconciliation_required = unresolved_state_remains
-            if self._requires_manual_kill_cleanup_locked():
+            if not shutdown_owner and self._requires_manual_kill_cleanup_locked():
                 self._begin_manual_kill_cleanup_locked(
                     self._manual_kill_cleanup_command_id_locked(),
                     account_reconciliation_complete=True,
@@ -5903,8 +5948,8 @@ class TradingController:
         if (
             self._startup_reconciliation_blocked
             or self._stream_reconciliation_required
-            or not self._market_stream_ready
-            or self._event_runtime_failed
+            or (not self._market_stream_ready and self._shutdown_cleanup_owner != get_ident())
+            or (self._event_runtime_failed and self._shutdown_cleanup_owner != get_ident())
             or self._process_ownership_ambiguous
             or self._external_execution_reconciliation_required
         ):
@@ -5956,7 +6001,7 @@ class TradingController:
                 "Account must be ready before recovery liquidation",
                 current_version=self._context.version,
             )
-        if not self._web_socket_gateway.account_ready:
+        if not self._web_socket_gateway.account_ready and self._shutdown_cleanup_owner != get_ident():
             raise TradingSessionError(
                 TradingSessionFailureCode.CONNECTION_NOT_READY,
                 "Account stream must be caught up before recovery liquidation",
@@ -6391,6 +6436,7 @@ class TradingController:
         self._external_actions.append(action)
         if (
             self._market_stream_interrupted_running_session
+            and not (self._shutdown_preparing and self._shutdown_cleanup_owner == get_ident())
             and isinstance(action, (SubmitOrder, ForceSellAll))
         ):
             self._record_diagnostic("action_blocked", level="WARNING", reason="MARKET_STREAM_INTERRUPTED", action_type=type(action).__name__)
@@ -6428,10 +6474,10 @@ class TradingController:
         # Mode·startup·stream·event worker·owner가 모두 준비된 경우에만 주문 effect를 허용한다.
         return (
             self._mode_command_enabled
-            and self._web_socket_gateway.account_ready
+            and (self._web_socket_gateway.account_ready or self._shutdown_cleanup_owner == get_ident())
             and not self._stream_reconciliation_required
-            and self._market_stream_ready
-            and not self._event_runtime_failed
+            and (self._market_stream_ready or self._shutdown_cleanup_owner == get_ident())
+            and (not self._event_runtime_failed or self._shutdown_cleanup_owner == get_ident())
             and not self._process_ownership_ambiguous
             and not self._external_execution_reconciliation_required
             and (
@@ -6532,6 +6578,9 @@ class TradingController:
 
         # 주문 retry만 intent별 제출 횟수와 bounded schedule을 사용한다.
         intent_id = self._context.runtime.pending_intent_id
+        if (intent_id is not None and intent_id == self._preparation_retry_intent
+                and self._preparation_retry_due_at is not None):
+            return replace(action, earliest_delay=max(timedelta(0), self._preparation_retry_due_at - self._clock()))
         if intent_id is None:
             return action  # 주문 의도와 무관한 backoff는 기존 즉시 trigger 계약을 유지한다.
         submission_count = self._submission_attempts_by_intent.get(intent_id, 0)
@@ -6636,9 +6685,22 @@ class TradingController:
         반환값: terminal·durable 완료 시 concrete outcome tuple
         작성 날짜: 2026/08/22
         """
+        if self._shutdown_cleanup_check is not None:
+            self._shutdown_cleanup_check()
         # 외부 effect 입력과 optional residual 수량을 Gateway 호출 전에 검증한다.
         if not isinstance(action, SubmitOrder):
             raise TypeError("action must be a SubmitOrder")
+        if self._shutdown_preparing and not (
+            force_sell and self._shutdown_liquidation_allowed
+            and self._shutdown_cleanup_owner == get_ident()
+        ):
+            return ()
+
+        if self._preparation_retry_intent == action.idempotency_key:
+            if self._preparation_retry_due_at is not None and self._clock() < self._preparation_retry_due_at:
+                return ()  # 중복 입력은 단일 예약 시각을 앞당기거나 새 주문을 만들지 않는다.
+            if action.side is OrderSide.BUY and not self._preparation_signal_valid(action.strategy):
+                return (self._expire_order_preparation(action.strategy),)
 
         # 일반 Case C SELL은 trace·journal·REST 전에 최초 청산 의도와 exact 대조한다.
         if (
@@ -6791,14 +6853,38 @@ class TradingController:
         try:
             order = self._api_gateway.prepare_order(order)
         except Exception as error:
+            transient = isinstance(error, (BnbValuationUnavailableError, OSError, TimeoutError)) or (
+                isinstance(error, BinanceAPIError) and (error.status_code >= 500 or error.status_code in (418, 429))
+            )
+            failure_code = (
+                OrderExecutionFailureCode.ORDER_PREPARATION_DEFERRED if transient else
+                OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED if isinstance(error, SymbolFilterError) else
+                OrderExecutionFailureCode.ORDER_PREPARATION_INVALID_DATA if isinstance(error, (BnbValuationInvalidError, BinancePayloadError)) else
+                OrderExecutionFailureCode.ORDER_PREPARATION_FAILED
+            )
+            self._unsubmitted_preparation_intent = action.idempotency_key
             self._append_order_trace_values(
                 "5",
                 action.idempotency_key,
                 provisional_client_id,
                 None,
                 context_version,
-                failure_code=OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+                failure_code=failure_code,
             )
+            if transient and (not self._recovered_position_liquidation_session or self._shutdown_cleanup_owner == get_ident()):
+                if self._preparation_retry_intent != action.idempotency_key:
+                    self._preparation_retry_attempt = 0
+                delay = timedelta(seconds=_PREPARATION_RETRY_SECONDS[min(self._preparation_retry_attempt, 4)])
+                if isinstance(error, BinanceAPIError) and error.retry_after is not None:
+                    delay = max(delay, error.retry_after)
+                self._preparation_retry_attempt += 1
+                self._preparation_retry_intent = action.idempotency_key
+                self._preparation_retry_due_at = self._clock() + delay
+                self._record_diagnostic("order_preparation_deferred", failure_code=failure_code,
+                    retry_at=self._preparation_retry_due_at, attempt=self._preparation_retry_attempt)
+                # 준비 단계에서만 생성하는 feedback이다. journal/POST/제출 횟수에는 손대지 않는다.
+                outcome = self._create_order_outcome_event(_OrderExecutionState(order=order, force_sell=force_sell), succeeded=False)
+                return (replace(outcome, event_id=f"{outcome.event_id}:preparation:{self._preparation_retry_attempt}"),)
             # 복구 청산은 durable journal·POST 전 실패이므로 상위 Operation이 원자적 복원한다.
             if self._recovered_position_liquidation_session:
                 raise _RecoveredPositionLiquidationPreflightError(
@@ -6808,10 +6894,20 @@ class TradingController:
             # 일반 자동매매 세션은 기존 fail-closed 정책대로 재조정 상태로 전환한다.
             self._enter_order_reconciliation(
                 None,
-                OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED,
+                failure_code,
                 message_id=None,
+                cause_category=(ReconciliationCauseCategory.PREPARE_DATA_INVALID
+                    if failure_code is OrderExecutionFailureCode.ORDER_PREPARATION_INVALID_DATA else
+                    ReconciliationCauseCategory.PREPARE_INTERNAL_ERROR
+                    if failure_code is OrderExecutionFailureCode.ORDER_PREPARATION_FAILED else
+                    ReconciliationCauseCategory.PREPARE_FILTER_OR_CAP_REJECTED),
             )
             return ()  # filter 위반 수량은 거래소 REST 경계에 도달하지 않는다.
+
+        self._unsubmitted_preparation_intent = None
+        self._preparation_retry_attempt = 0
+        self._preparation_retry_due_at = None
+        self._preparation_retry_intent = None
 
         # 복구 청산은 부분 cap·LOT_SIZE 내림을 허용하지 않고 한 주문의 정확한 전량만 journal에 넣는다.
         if self._recovered_position_liquidation_session:
@@ -6869,6 +6965,13 @@ class TradingController:
                 )  # PREPARED journal과 REST POST 전에 STM에 typed feedback만 전달한다.
             self._append_order_trace(order, "5.1", context_version)
 
+        # 준비 조회 중 도착한 종료 요청도 journal 및 실제 전송보다 먼저 반영한다.
+        if self._shutdown_preparing and not (force_sell and self._shutdown_liquidation_allowed and self._shutdown_cleanup_owner == get_ident()):
+            self._unsubmitted_preparation_intent = action.idempotency_key
+            return ()
+        if self._shutdown_cleanup_check is not None:
+            self._shutdown_cleanup_check()
+
         # Filter 적용을 마친 정확한 Order를 한 submission state와 durable recovery 근거로 묶는다.
         state = _OrderExecutionState(
             order=order,
@@ -6918,7 +7021,7 @@ class TradingController:
         self._publish_pending_order(state)  # Gateway 호출 전부터 client ID를 in-flight 복구 근거로 게시한다.
 
         # Filter·journal 도중 stream이 끊기거나 callback backlog가 생기면 POST 직전에 중단한다.
-        if not self._web_socket_gateway.account_ready:
+        if not self._web_socket_gateway.account_ready and self._shutdown_cleanup_owner != get_ident():
             self._stream_reconciliation_required = True
             self._append_order_trace(
                 order,
@@ -6952,6 +7055,9 @@ class TradingController:
             PendingOrderRecoveryLifecycle.SUBMITTED,
         ):
             return ()  # Lifecycle fsync가 불명하면 REST POST는 시작하지 않는다.
+
+        if self._shutdown_cleanup_check is not None:
+            self._shutdown_cleanup_check()
 
         # 메시지 6/6.1은 실제 Gateway 결과를 관찰한 뒤 성공·실패를 같은 식별자로 기록한다.
         gateway_version = self._context.version
@@ -8272,7 +8378,7 @@ class TradingController:
         if selected_time.tzinfo is None or selected_time.utcoffset() is None:
             raise ValueError("occurred_at must be timezone-aware")
 
-        with self._session_lock:
+        with self._session_effect_lock():
             # 주문 reconciliation은 실행·중지·운영 lock 세 상태에서만 진행할 수 있다.
             if self._status not in (
                 TradingSessionStatus.RUNNING,
@@ -8429,6 +8535,8 @@ class TradingController:
         반환값: terminal 반영과 stop completion에서 생성된 outcome tuple
         작성 날짜: 2026/08/22
         """
+        if self._shutdown_cleanup_check is not None:
+            self._shutdown_cleanup_check()
         # Context가 보존한 exchange/client ID를 Controller state로 해석한 뒤에만 외부 effect를 호출한다.
         state = self._find_state_by_order_identifier(action.order_id)
         if state is None:
@@ -8454,6 +8562,8 @@ class TradingController:
         ):
             return ()  # UNKNOWN/cancel timeout 중에는 force-sell을 동시에 만들지 않는다.
 
+        if self._shutdown_cleanup_check is not None:
+            self._shutdown_cleanup_check()
         self._record_diagnostic("order_cancel_started", order=state.order, reason=action.reason)
         try:
             cancel_result = self._api_gateway.cancel_order(state.order)
@@ -8554,7 +8664,7 @@ class TradingController:
                     message_id=None,
                 )
                 return ()
-            self._force_sell_retry_due_at = self._clock() + _FORCE_SELL_RETRY_DELAY
+            self._force_sell_retry_due_at = self._preparation_retry_due_at or (self._clock() + _FORCE_SELL_RETRY_DELAY)
             self._request_event_runtime_processing()
             return ()  # G-06R action stack에서 즉시 재귀 제출하지 않는다.
 
@@ -9235,9 +9345,9 @@ class TradingController:
         # 시장 중단 provenance를 포함한 어떤 blocker도 STM 문맥 변경만으로 RUNNING을 다시 열 수 없다.
         reconciliation_blocked = (
             self._stream_reconciliation_required
-            or self._market_stream_reconciliation_required
-            or self._market_stream_interrupted_running_session
-            or self._event_runtime_failed
+            or (self._market_stream_reconciliation_required and self._shutdown_cleanup_owner != get_ident())
+            or (self._market_stream_interrupted_running_session and self._shutdown_cleanup_owner != get_ident())
+            or (self._event_runtime_failed and self._shutdown_cleanup_owner != get_ident())
             or self._process_ownership_ambiguous
             or self._external_execution_reconciliation_required
             or self._startup_reconciliation_blocked
@@ -9302,6 +9412,69 @@ class TradingController:
             TradingSessionStatus.RECONCILIATION_REQUIRED,
         )
 
+    def _preparation_signal_valid(self, strategy: StrategyType) -> bool:
+        """
+        함수 이름: _preparation_signal_valid()
+        기능: 제출 전 재시도에서 현재 신호와 시각별 진입 조건을 다시 확인한다.
+        인자: strategy -> 재확인할 매수 전략
+        반환값: 아직 유효한 진입 신호이면 True
+        작성 날짜: 2026/09/16
+        """
+        self._context.update_market(self._enrich_market_evaluation_elapsed(self._context.market, self._clock()))
+        context = self._context.snapshot()
+        runtime = context.runtime
+        if runtime.position_owner is not None or runtime.pending_order_id is not None:
+            return False
+        if strategy is StrategyType.CASE_B:
+            return (runtime.signal_created and not runtime.case_b_entry_paused
+                    and condition_met("b_signal_age", context) and condition_met("b_pullback", context))
+        return (runtime.allow_new_case_c_setup and not runtime.case_c_consumed_for_event
+                and runtime.flush_low is not None and runtime.timer_base_time is not None
+                and condition_met("c_recovery_window", context) and condition_met("c_rebound", context)
+                and condition_met("c_entry_limit", context) and condition_unmet("c_recovery", context)
+                and condition_unmet("c_new_low", context))
+
+    def _expire_order_preparation(self, strategy: StrategyType) -> TradingEvent:
+        """
+        함수 이름: _expire_order_preparation()
+        기능: 만료된 준비 의도를 주문 실패 횟수 소비 없이 전략 감시 상태로 돌려보낸다.
+        인자: strategy -> 만료된 신호의 전략
+        반환값: 제출 전 신호 폐기 이벤트
+        작성 날짜: 2026/09/16
+        """
+        intent = self._preparation_retry_intent
+        self._preparation_retry_intent = None
+        self._preparation_retry_due_at = None
+        self._preparation_retry_attempt = 0
+        self._unsubmitted_preparation_intent = None
+        self._record_diagnostic("order_preparation_expired", strategy=strategy)
+        return TradingEvent(event_type=TradingEventType.ORDER_PREPARATION_EXPIRED,
+            occurred_at=self._clock(), priority=EventPriority.ORDER_OUTCOME,
+            event_id=f"{intent}:preparation-expired", lower_event_id=self._context.runtime.lower_event_id,
+            payload=PreparationExpiredPayload(strategy))
+
+    def shutdown_command_basis(self) -> tuple[int, str]:
+        """
+        함수 이름: shutdown_command_basis()
+        기능: 잠긴 대시보드와 독립적으로 종료 요청의 낙관적 버전 기준을 읽는다.
+        인자: 없음
+        반환값: 현재 버전과 세션 상태 문자열
+        작성 날짜: 2026/09/16
+        """
+        return self._context.version, self._status.value  # 실제 종료 권한은 작업자 정리 후 다시 검증한다.
+
+    def _session_effect_lock(self):
+        """
+        함수 이름: _session_effect_lock()
+        기능: 작업자 정리 후 종료 담당 스레드의 네트워크 대기를 공용 잠금에서 분리한다.
+        인자: 없음
+        반환값: 해당 단계의 처리 결과 또는 없음
+        작성 날짜: 2026/09/16
+        """
+        if self._shutdown_preparing and self._shutdown_cleanup_owner == get_ident():
+            return nullcontext()
+        return self._session_lock
+
     def _require_expected_version(self, expected_version: int) -> None:
         """
         함수 이름: _require_expected_version()
@@ -9312,6 +9485,9 @@ class TradingController:
         """
         # 형식을 먼저 확정한 뒤 authoritative Context와 optimistic version을 비교한다.
         self._validate_expected_version_value(expected_version)
+        if self._shutdown_preparing and self._shutdown_cleanup_owner != get_ident():
+            raise TradingSessionError(TradingSessionFailureCode.COMMAND_DISABLED,
+                "Shutdown preparation owns this session", current_version=self._context.version)
         if expected_version != self._context.version:
             raise TradingSessionError(
                 TradingSessionFailureCode.STALE_CONTEXT_VERSION,

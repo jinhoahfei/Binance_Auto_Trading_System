@@ -498,7 +498,7 @@ export interface AppViewModel {
         readonly receipt_path: string | null;
     };
     readonly app_exit: {
-        readonly status: 'awaiting_exit' | 'force_sell_exit_confirmation' | 'force_selling' | 'awaiting_liquidation_terminal' | 'exit_confirmation' | 'shutting_down' | 'shutdown_exit_recovery' | 'shutdown_outcome_recovery' | 'sidecar_exit_failure' | 'ui_final_state';
+        readonly status: 'awaiting_exit' | 'force_sell_exit_confirmation' | 'exit_confirmation' | 'shutting_down' | 'shutdown_exit_recovery' | 'shutdown_outcome_recovery' | 'sidecar_exit_failure' | 'ui_final_state';
         readonly is_pending: boolean;
         readonly is_final: boolean;
         readonly error: UiCommandFailure | null;
@@ -653,9 +653,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
         },
         app_exit: {
             status: exit_status,
-            is_pending: snapshot.app_exit.matches('force_selling')
-                || snapshot.app_exit.matches('awaiting_liquidation_terminal')
-                || snapshot.app_exit.matches('shutting_down'),
+            is_pending: snapshot.app_exit.matches('shutting_down'),
             is_final: snapshot.app_exit.matches('ui_final_state'),
             error: snapshot.app_exit.context.error,
         },
@@ -1710,9 +1708,7 @@ export class UiApplicationFacade {
         if (exit_snapshot.matches('sidecar_exit_failure')) {
             return 'sidecar_exit_failure';
         }
-        if (exit_snapshot.matches('force_selling')
-            || exit_snapshot.matches('awaiting_liquidation_terminal')
-            || exit_snapshot.matches('shutting_down')) {
+        if (exit_snapshot.matches('shutting_down')) {
             return 'exit_processing';
         }
         if (trading_snapshot.matches('select_regime_notice')) {

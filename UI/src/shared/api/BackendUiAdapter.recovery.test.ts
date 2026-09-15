@@ -1,3 +1,4 @@
+import { shutdown_preparation_fixture } from './shutdownTestFixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BackendUiAdapter, type BackendWebSocket, type BackendUiAdapterCallbacks } from './BackendUiAdapter';
 import type { ConnectionDiagnostic } from './backendConnectionDiagnostics';
@@ -116,15 +117,13 @@ describe('long-running backend connection recovery', () => {
                 const snapshot = create_backend_snapshot_fixture();
                 return response(init, { ...snapshot, trading: { ...snapshot.trading, status: 'running', session_id: TEST_BACKEND_SESSION_ID, version: 42 } });
             }
-            if (path === '/v1/trading/stop') {
-                expect(JSON.parse(String(init?.body)).expected_version).toBe(42);
-                return response(init, { status: 'terminated', session_id: TEST_BACKEND_SESSION_ID, version: 43 });
-            }
+            if (path === '/v1/shutdown/state') return response(init, { session_id: TEST_BACKEND_SESSION_ID, status: 'running', version: 42 });
+            if (path === '/v1/shutdown/prepare') return response(init, shutdown_preparation_fixture({ version: 43 }), 202);
             return response(init, { accepted: true, status: 'accepted', version: 43 }, 202);
         });
         sockets[0]!.disconnect(); await vi.advanceTimersByTimeAsync(0); unavailable = false;
         await Promise.all([adapter.shutdown_application(), adapter.shutdown_application()]);
-        expect(paths).toEqual(['/v1/snapshot', '/v1/snapshot', '/v1/trading/stop', '/v1/shutdown']);
+        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
         expect(adapter.is_disposed).toBe(true);
         await vi.advanceTimersByTimeAsync(120_000);
         expect(sockets).toHaveLength(1);

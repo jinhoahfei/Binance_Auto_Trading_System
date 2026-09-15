@@ -318,7 +318,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
                     continue;
                 }
                 const row = document.querySelector(`[data-condition-id$=":${step.timer_condition_id}"]`);
-                expect(within(row).getByRole('timer')).toHaveTextContent(times[index]);
+                await waitFor(() => expect(within(row).getByRole('timer')).toHaveTextContent(times[index]));
                 const timer = row.querySelector('[data-timer-state]');
                 expect(timer).toHaveAttribute('data-timer-state', index === 0 ? 'waiting' : index === 3 ? 'pending' : 'running');
                 if (index === 4 || index === 5) {

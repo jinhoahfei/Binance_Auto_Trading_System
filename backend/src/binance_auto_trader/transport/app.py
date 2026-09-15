@@ -53,7 +53,7 @@ from .routes.connection_status import get_binance_connection_status
 from .routes.csv_export import create_csv_export
 from .routes.regime import select_regime
 from .routes.snapshot import get_snapshot
-from .routes.system import get_health, get_shutdown_state, request_shutdown
+from .routes.system import get_health, get_shutdown_state, request_shutdown, prepare_shutdown, read_shutdown_preparation
 from .routes.trade_history import get_trades
 from .routes.trading import (
     liquidate_recovered_position,
@@ -97,6 +97,7 @@ _COMMAND_ENDPOINTS = frozenset(
         ("PATCH", "/v1/trading/split-ratios"),
         ("POST", "/v1/csv-exports"),
         ("POST", "/v1/shutdown"),
+        ("POST", "/v1/shutdown/prepare"),
     }
 )
 _BODY_COMMAND_ENDPOINTS = frozenset(
@@ -109,12 +110,14 @@ _BODY_COMMAND_ENDPOINTS = frozenset(
         ("PATCH", "/v1/trading/split-ratios"),
         ("POST", "/v1/csv-exports"),
         ("POST", "/v1/shutdown"),
+        ("POST", "/v1/shutdown/prepare"),
     }
 )
 _KNOWN_ENDPOINTS = frozenset(
     {
         ("GET", "/v1/health"),
         ("GET", "/v1/shutdown/state"),
+        ("GET", "/v1/shutdown/prepare"),
         ("GET", "/v1/binance/connection-status"),
         ("GET", "/v1/snapshot"),
         ("GET", "/v1/trades"),
@@ -1125,7 +1128,7 @@ class LoopbackTransportServer:
             self._validate_http_authentication(handler)
             request_id = _require_request_id(handler)
             response_request_id = request_id
-            if request_target.path in ("/v1/snapshot", "/v1/shutdown", "/v1/shutdown/state"):
+            if request_target.path in ("/v1/snapshot", "/v1/shutdown", "/v1/shutdown/state", "/v1/shutdown/prepare"):
                 self._record_transport("ui_http_request_started", request_id=request_id, route=request_target.path)
             if request_target.query and request_target.path != "/v1/trades":
                 raise TransportContractError(
@@ -1158,7 +1161,7 @@ class LoopbackTransportServer:
             self._record_transport("ui_http_response_failed", error=error, request_id=response_request_id,
                                    http_status=response.status)
             raise
-        if response_path in ("/v1/snapshot", "/v1/shutdown", "/v1/shutdown/state") or response.status >= 400:
+        if response_path in ("/v1/snapshot", "/v1/shutdown", "/v1/shutdown/state", "/v1/shutdown/prepare") or response.status >= 400:
             self._record_transport("ui_http_request_completed", request_id=response_request_id,
                                    http_status=response.status, elapsed_ms=round((monotonic() - request_started) * 1000))
         if (
@@ -1474,6 +1477,7 @@ class LoopbackTransportServer:
         route_by_endpoint = {
             ("GET", "/v1/health"): get_health,
             ("GET", "/v1/shutdown/state"): get_shutdown_state,
+            ("GET", "/v1/shutdown/prepare"): read_shutdown_preparation,
             ("GET", "/v1/binance/connection-status"): get_binance_connection_status,
             ("GET", "/v1/snapshot"): get_snapshot,
             ("GET", "/v1/trades"): get_trades,
@@ -1488,6 +1492,7 @@ class LoopbackTransportServer:
             ("PATCH", "/v1/trading/split-ratios"): update_split_ratios,
             ("POST", "/v1/csv-exports"): create_csv_export,
             ("POST", "/v1/shutdown"): request_shutdown,
+            ("POST", "/v1/shutdown/prepare"): prepare_shutdown,
         }
         route_function = route_by_endpoint[endpoint_key]
 

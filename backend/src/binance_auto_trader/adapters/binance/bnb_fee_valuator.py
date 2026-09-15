@@ -7,10 +7,30 @@ from time import sleep
 from binance_auto_trader.domain.trading.fee_valuation import BnbFeeValuation
 
 
+class BnbValuationUnavailableError(ValueError):
+    """
+    클래스 이름: BnbValuationUnavailableError
+    기능: 공식 가격 봉을 아직 조회하지 못한 재시도 가능 오류를 구분한다.
+    작성 날짜: 2026/09/16
+    """
+
+    code = "BNB_VALUATION_UNAVAILABLE"
+
+
+class BnbValuationInvalidError(ValueError):
+    """
+    클래스 이름: BnbValuationInvalidError
+    기능: 공식 가격의 형식과 시각 검증 실패를 구분한다.
+    작성 날짜: 2026/09/16
+    """
+
+    code = "BNB_VALUATION_INVALID"
+
+
 class BnbFeeValuator:
     """
     클래스 이름: BnbFeeValuator
-    기능: 정확한 과거 1초 구간의 체결 있는 종가를 검증해 평가 근거를 제공한다.
+    기능: 정확한 과거 1초 구간의 공식 종가를 검증해 평가 근거를 제공한다.
     작성 날짜: 2026/09/09
     """
 
@@ -49,33 +69,34 @@ class BnbFeeValuator:
         }
         retry_delays = (1, 1, 2)
         for attempt in range(len(retry_delays) + 1):
-            # HTTP 오류·timeout은 전파한다. 정상 응답의 빈/무체결 구간만 최대 4회 GET으로 재확인한다.
+            # HTTP 오류는 호출자에게 전파하고, 빈 응답만 같은 구간에서 재확인한다.
             response = self._request_json(
                 method="GET", endpoint="/v3/klines", parameters=dict(parameters), signed=False,
             )
             rows = response.payload
             if not isinstance(rows, list) or len(rows) > 1:
-                raise ValueError("invalid BNB valuation kline")
+                raise BnbValuationInvalidError("invalid BNB valuation kline")
             if not rows:
                 failure_reason = "BNB valuation candle unavailable"
             else:
                 row = rows[0]
                 if not isinstance(row, list) or len(row) != 12:
-                    raise ValueError("invalid BNB valuation kline")
+                    raise BnbValuationInvalidError("invalid BNB valuation kline")
                 if type(row[0]) is not int or type(row[6]) is not int or row[0] != open_time or row[6] != open_time + 999:
-                    raise ValueError("BNB valuation window mismatch")
+                    raise BnbValuationInvalidError("BNB valuation window mismatch")
                 if type(row[8]) is not int or row[8] < 0:
-                    raise ValueError("invalid BNB valuation trade count")
+                    raise BnbValuationInvalidError("invalid BNB valuation trade count")
                 if not isinstance(row[4], str):
-                    raise TypeError("BNB rate must be a decimal string")
+                    raise BnbValuationInvalidError("BNB rate must be a decimal string")
 
-                # 무체결이어도 malformed 가격을 대기로 숨기지 않고 domain 검증을 먼저 적용한다.
-                valuation = BnbFeeValuation(row[0], row[6], Decimal(row[4]))
-                if row[8] > 0:
-                    return valuation  # 원 구간의 체결 있는 양수 종가만 회계에 전달한다.
-                failure_reason = "BNB valuation requires actual market trades"
+                try:
+                    valuation = BnbFeeValuation(row[0], row[6], Decimal(row[4]))
+                except (ValueError, ArithmeticError) as error:
+                    raise BnbValuationInvalidError("invalid BNB valuation price") from error
+                # 거래 0건도 해당 완료 구간의 공식 종가는 유효하다. 다른 시각 가격을 사용하지 않는다.
+                return valuation
 
-            # 마지막 시도는 더 기다리지 않고 실패를 보존한다. 영구 무체결의 가격 fallback은 없다.
+            # 빈 응답은 제한 뒤 typed 실패로 돌려주며 임의 환율로 대체하지 않는다.
             if attempt == len(retry_delays):
-                raise ValueError(failure_reason)
+                raise BnbValuationUnavailableError(failure_reason)
             self._wait(retry_delays[attempt])

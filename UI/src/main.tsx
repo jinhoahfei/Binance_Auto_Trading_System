@@ -27,6 +27,7 @@ import {
 } from './shared/api';
 import { flush_backend_connection_diagnostics } from './shared/api/backendConnectionDiagnostics';
 import { connection_recovery_message } from './shared/api/connectionRecoveryMessage';
+import { shutdown_step_message } from './shared/api/shutdownMessages';
 import './shared/styles/global.css';
 
 /**
@@ -160,6 +161,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
     let recovery_is_visible = false;
     let recovery_sidecar_has_exited = false;
     let recovery_window_is_finalized = false;
+    let recovery_shutdown_step: string | undefined;
 
     /**
      * 함수 이름: remove_native_listeners()
@@ -185,7 +187,11 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
     function render_bootstrap_recovery(): void {
         recovery_is_visible = true;
         const failure_code = safe_bootstrap_failure_code(recovery_error);
-        const recovery_detail = recovery_sidecar_has_exited
+        const recovery_detail = recovery_is_pending && recovery_shutdown_step
+            ? shutdown_step_message(recovery_shutdown_step)
+            : recovery_error instanceof BackendAdapterError && recovery_error.code.startsWith('SHUTDOWN_')
+                ? recovery_error.message
+                : recovery_sidecar_has_exited
             ? '백엔드 프로세스가 이미 종료되었습니다. 새 주문은 차단되었으며 창만 닫을 수 있습니다.'
             : pending_native_exit_request
                 ? '창 닫기 또는 Command-Q 요청을 감지했습니다. 아래 안전 종료를 확인해 주세요.'
@@ -232,12 +238,12 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
                             <button
                                 disabled={recovery_is_pending}
                                 onClick={() => {
-                                    void safely_shutdown_recovery_child();
+                                    void safely_shutdown_recovery_child(failure_code === 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED');
                                 }}
                                 style={action_style}
                                 type="button"
                             >
-                                안전 종료
+                                {failure_code === 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED' ? '청산 후 종료' : '안전 종료'}
                             </button>
                         </>
                     )}
@@ -246,8 +252,8 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
                     is_failure
                 >
                     {recovery_is_pending
-                        ? '백엔드 복구 상태를 확인하는 중입니다.'
-                        : failure_code === 'UI_STATE_PUBLICATION_FAILED'
+                        ? recovery_shutdown_step ? '프로그램 종료를 준비하고 있습니다.' : '백엔드 복구 상태를 확인하는 중입니다.'
+                        : failure_code.startsWith('SHUTDOWN_') ? '안전 종료를 확인해 주세요.' : failure_code === 'UI_STATE_PUBLICATION_FAILED'
                             ? '화면 정보를 자동으로 복구하지 못했습니다.'
                             : '백엔드 연결 복구가 필요합니다.'}
                 </BootstrapStatus>
@@ -325,7 +331,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
      * 반환값: 안전 종료 시도 완료 Promise
      * 작성 날짜: 2026/08/24
      */
-    async function safely_shutdown_recovery_child(): Promise<void> {
+    async function safely_shutdown_recovery_child(liquidation_confirmed = false): Promise<void> {
         if (recovery_is_pending || recovery_sidecar_has_exited) {
             return;
         }
@@ -334,7 +340,11 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         render_bootstrap_recovery();
         try {
             const adapter = await get_recovery_adapter();
-            await adapter.shutdown_recovery_application();
+            adapter.set_shutdown_progress_listener((step) => {
+                recovery_shutdown_step = step;
+                render_bootstrap_recovery();
+            });
+            await adapter.shutdown_recovery_application(liquidation_confirmed);
             recovery_sidecar_has_exited = true;
             await finalize_recovery_window();
         } catch (error) {

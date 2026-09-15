@@ -1,3 +1,4 @@
+import { shutdown_preparation_fixture } from './shutdownTestFixtures';
 import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -1038,656 +1039,155 @@ describe('BackendUiAdapter HTTP contract', () => {
         });
     });
 
-    it('shutdown 503의 불명확한 결과는 token을 유지하고 동일 요청만 허용한다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            return init?.method === 'GET'
-                ? create_success_response(request_id, snapshot)
-                : create_failure_response(request_id);
-        }) as typeof fetch;
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock,
-            create_uuid: create_uuid_factory(),
-        });
-
-        await adapter.load_snapshot();
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
-        });
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
-        });
-
-        adapter.stop();
-        await expect(adapter.load_snapshot()).rejects.toBeInstanceOf(BackendAdapterError);
-        expect(JSON.stringify(adapter)).not.toContain(TEST_BACKEND_TOKEN);
-    });
-
-    it('Phase 12: expected version의 shutdown 202 뒤 native 정상 exit까지 기다리고 token을 폐기한다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        const wait_for_sidecar_exit = vi.fn(async () => ({ exited: true, code: 0 }));
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            return init?.method === 'GET'
-                ? create_success_response(request_id, snapshot)
-                : create_success_response(request_id, {
-                    accepted: true,
-                    status: 'accepted',
-                    version: 0,
-                }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit,
-        });
-
-        await adapter.load_snapshot();
-        await adapter.shutdown_application();
-
-        const shutdown_call = fetch_mock.mock.calls[1]!;
-        expect(new URL(shutdown_call[0].toString()).pathname).toBe('/v1/shutdown');
-        expect(JSON.parse(shutdown_call[1]?.body as string) as unknown).toEqual({
-            schema_version: BACKEND_SCHEMA_VERSION,
-            expected_version: 0,
-        });
-        expect(wait_for_sidecar_exit).toHaveBeenCalledOnce();
-        await expect(adapter.load_snapshot()).rejects.toMatchObject({ code: 'ADAPTER_STOPPED' });
-    });
-
-    it('Phase 12: shutdown 202보다 먼저 닫힌 event stream을 reconnect 실패로 오인하지 않는다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        const callbacks = create_callbacks();
-        let event_socket: FakeBackendWebSocket | null = null;
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            if (init?.method === 'GET') {
-                return create_success_response(request_id, snapshot);
-            }
-
-            // Backend shutdown owner의 stream close가 HTTP handler body resolution보다 먼저 도착한다.
-            event_socket?.emit_close();
-            return create_success_response(request_id, {
-                accepted: true,
-                status: 'accepted',
-                version: 0,
-            }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            create_web_socket: (url) => {
-                event_socket = new FakeBackendWebSocket(url);
-                return event_socket;
-            },
-            wait_for_sidecar_exit: async () => ({ exited: true, code: 0 }),
-        });
-
-        await adapter.load_snapshot();
-        adapter.start_live_events(snapshot, callbacks);
-        await adapter.shutdown_application();
-
-        expect(fetch_mock).toHaveBeenCalledTimes(2);
-        expect(callbacks.on_reconnecting).not.toHaveBeenCalled();
-        expect(callbacks.on_failure).not.toHaveBeenCalled();
-    });
-
-    it('Phase 12: stream 종료 뒤 불명확한 shutdown 결과는 같은 key 재시도 외 command를 막는다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        const callbacks = create_callbacks();
-        const wait_for_sidecar_exit = vi.fn(async () => ({ exited: true, code: 0 }));
-        let event_socket: FakeBackendWebSocket | null = null;
-        let shutdown_attempt_count = 0;
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            if (init?.method === 'GET') {
-                return create_success_response(request_id, snapshot);
-            }
-            shutdown_attempt_count += 1;
-            if (shutdown_attempt_count === 1) {
-                // Server commit 뒤 response가 유실된 모호한 transport 순서를 재현한다.
-                event_socket?.emit_close();
-                throw new TypeError('response lost after commit');
-            }
-            return create_success_response(request_id, {
-                accepted: true,
-                status: 'accepted',
-                version: 0,
-            }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            create_web_socket: (url) => {
-                event_socket = new FakeBackendWebSocket(url);
-                return event_socket;
-            },
-            wait_for_sidecar_exit,
-        });
-
-        await adapter.load_snapshot();
-        adapter.start_live_events(snapshot, callbacks);
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
-        });
-        await expect(adapter.load_snapshot()).rejects.toMatchObject({
-            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
-        });
-
-        // 동일 body와 idempotency key로 replay 202를 확인한 뒤에만 native 종료를 승인한다.
-        await expect(adapter.shutdown_application()).resolves.toBeUndefined();
-        const shutdown_calls = fetch_mock.mock.calls.filter((call) => {
-            return new URL(call[0].toString()).pathname === '/v1/shutdown';
-        });
-        expect(shutdown_calls).toHaveLength(2);
-        expect(request_headers(shutdown_calls[0]?.[1])['Idempotency-Key']).toBe(
-            request_headers(shutdown_calls[1]?.[1])['Idempotency-Key'],
-        );
-        expect(wait_for_sidecar_exit).toHaveBeenCalledOnce();
-        expect(callbacks.on_reconnecting).not.toHaveBeenCalled();
-    });
-
-    it('Phase 12: stale-version 202는 accepted로 승격하지 않고 같은 key로만 재검증한다', async () => {
-        const base_snapshot = create_backend_snapshot_fixture();
-        const snapshot = {
-            ...base_snapshot,
-            trading: {
-                ...base_snapshot.trading,
-                version: 2,
-            },
-        };
-        const wait_for_sidecar_exit = vi.fn();
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            return init?.method === 'GET'
-                ? create_success_response(request_id, snapshot)
-                : create_success_response(request_id, {
-                    accepted: true,
-                    status: 'accepted',
-                    version: 1,
-                }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit,
-        });
-
-        await adapter.load_snapshot();
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
-        });
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
-        });
-
-        const shutdown_calls = fetch_mock.mock.calls.filter((call) => {
-            return new URL(call[0].toString()).pathname === '/v1/shutdown';
-        });
-        expect(shutdown_calls).toHaveLength(2);
-        expect(request_headers(shutdown_calls[0]?.[1])['Idempotency-Key']).toBe(
-            request_headers(shutdown_calls[1]?.[1])['Idempotency-Key'],
-        );
-        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
-    });
-
-    it('Phase 12: expected version보다 앞선 shutdown 202도 exact receipt로 수락하지 않는다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        const wait_for_sidecar_exit = vi.fn();
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            return init?.method === 'GET'
-                ? create_success_response(request_id, snapshot)
-                : create_success_response(request_id, {
-                    accepted: true,
-                    status: 'accepted',
-                    version: 1,
-                }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit,
-        });
-
-        await adapter.load_snapshot();
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_OUTCOME_AMBIGUOUS',
-        });
-        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
-    });
-
-    it('Phase 12: zero-position RUNNING도 stop 완료 후에만 shutdown을 요청한다', async () => {
-        const base_snapshot = create_backend_snapshot_fixture();
-        const running_snapshot = {
-            ...base_snapshot,
-            regime: { ...base_snapshot.regime, selected: 'type0' as const },
-            trading: {
-                ...base_snapshot.trading,
-                mode: 'testnet' as const,
-                status: 'running' as const,
-                version: 7,
-                command_enabled: true,
-                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
-            },
-        };
-        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-            const path = new URL(input.toString()).pathname;
-
-            if (path === '/v1/snapshot') {
-                return create_success_response(request_id, running_snapshot);
-            }
-            if (path === '/v1/trading/stop') {
-                return create_success_response(request_id, {
-                    status: 'terminated',
-                    session_id: running_snapshot.trading.session_id,
-                    version: 8,
-                });
-            }
-            return create_success_response(request_id, {
-                accepted: true,
-                status: 'accepted',
-                version: 8,
-            }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit: async () => ({ exited: true, code: 0 }),
-        });
-
-        await adapter.load_snapshot();
-        await adapter.shutdown_application();
-
-        // 포지션 표시가 false여도 실행 중인 session을 생략하지 않고 stop → shutdown을 지킨다.
-        expect(fetch_mock.mock.calls.map((call) => new URL(call[0].toString()).pathname)).toEqual([
-            '/v1/snapshot',
-            '/v1/trading/stop',
-            '/v1/shutdown',
-        ]);
-        expect(JSON.parse(fetch_mock.mock.calls[2]?.[1]?.body as string) as unknown).toEqual({
-            schema_version: BACKEND_SCHEMA_VERSION,
-            expected_version: 8,
-        });
-    });
-
-    it('Phase 12: stopping receipt 뒤 terminal snapshot을 기다린 다음 shutdown한다', async () => {
-        const base_snapshot = create_backend_snapshot_fixture();
-        const stopping_snapshot = {
-            ...base_snapshot,
-            trading: {
-                ...base_snapshot.trading,
-                mode: 'testnet' as const,
-                status: 'stopping' as const,
-                version: 5,
-                command_enabled: true,
-                has_open_position: true,
-                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
-            },
-        };
-        const terminated_snapshot = {
-            ...stopping_snapshot,
-            trading: {
-                ...stopping_snapshot.trading,
-                status: 'terminated' as const,
-                version: 6,
-                has_open_position: false,
-            },
-        };
-        let snapshot_count = 0;
-        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            if (new URL(input.toString()).pathname === '/v1/snapshot') {
-                snapshot_count += 1;
-                return create_success_response(
-                    request_id,
-                    snapshot_count === 1 ? stopping_snapshot : terminated_snapshot,
-                );
-            }
-            return create_success_response(request_id, {
-                accepted: true,
-                status: 'accepted',
-                version: 6,
-            }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            shutdown_poll_interval_ms: 1,
-            wait_for_sidecar_exit: async () => ({ exited: true, code: 0 }),
-        });
-
-        await adapter.load_snapshot();
-        await adapter.shutdown_application();
-
-        expect(fetch_mock.mock.calls.map((call) => new URL(call[0].toString()).pathname)).toEqual([
-            '/v1/snapshot',
-            '/v1/snapshot',
-            '/v1/shutdown',
-        ]);
-    });
-
-    it('시세 조정 상태의 종료는 STOP을 전달하고 terminal 확인 뒤에만 native 종료한다', async () => {
-        const base = create_backend_snapshot_fixture();
-        const blocked = { ...base, trading: { ...base.trading, status: 'reconciliation_required' as const,
-            version: 4, command_enabled: false, has_open_position: false,
-            session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa' } };
-        let stopped = false;
-        const paths: string[] = [];
-        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const path = new URL(input.toString()).pathname;
-            paths.push(path);
-            const request_id = request_headers(init)['X-Request-Id']!;
-            if (path === '/v1/trading/stop') {
-                stopped = true;
-                return create_success_response(request_id, {status: 'reconciliation_required', version: 4, session_id: blocked.trading.session_id});
-            }
-            if (path === '/v1/snapshot') return create_success_response(request_id,
-                stopped ? { ...blocked, trading: { ...blocked.trading, status: 'terminated', version: 5 } } : blocked);
-            expect(stopped).toBe(true);
-            return create_success_response(request_id, {accepted: true, status: 'accepted', version: 5}, 202);
-        });
-        const wait_for_sidecar_exit = vi.fn(async () => ({exited: true, code: 0}));
-        const adapter = new BackendUiAdapter(create_descriptor(), {fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(), shutdown_poll_interval_ms: 1, wait_for_sidecar_exit});
-        await adapter.load_snapshot();
-        await adapter.shutdown_application();
-        expect(paths).toEqual(['/v1/snapshot', '/v1/trading/stop', '/v1/snapshot', '/v1/shutdown']);
-        expect(wait_for_sidecar_exit).toHaveBeenCalledOnce();
-    });
-
-    it('Phase 12: reconciliation timeout은 exposure를 표시하고 shutdown/kill로 진행하지 않는다', async () => {
-        const base_snapshot = create_backend_snapshot_fixture();
-        const reconciliation_snapshot = {
-            ...base_snapshot,
-            trading: {
-                ...base_snapshot.trading,
-                mode: 'testnet' as const,
-                status: 'reconciliation_required' as const,
-                version: 4,
-                command_enabled: false,
-                has_open_position: true,
-                session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
-            },
-        };
-        const wait_for_sidecar_exit = vi.fn();
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            return create_success_response(
-                request_headers(init)['X-Request-Id']!,
-                new URL(_input.toString()).pathname === '/v1/trading/stop'
-                    ? { status: 'reconciliation_required', session_id: reconciliation_snapshot.trading.session_id, version: 4 }
-                    : reconciliation_snapshot,
-            );
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            shutdown_wait_timeout_ms: 2,
-            shutdown_poll_interval_ms: 1,
-            wait_for_sidecar_exit,
-        });
-
-        await adapter.load_snapshot();
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_SAFETY_TIMEOUT',
-            message: expect.stringContaining('열린 포지션: 있음'),
-        });
-        expect(fetch_mock.mock.calls.every((call) => {
-            return ['/v1/snapshot', '/v1/trading/stop'].includes(new URL(call[0].toString()).pathname);
-        })).toBe(true);
-        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
-    });
-
-    it('Phase 12: exposure 409 detail을 검증해 operator 판단 문구를 표시하고 창을 유지한다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        const wait_for_sidecar_exit = vi.fn();
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            return init?.method === 'GET'
-                ? create_success_response(request_id, snapshot)
-                : create_failure_response(
-                    request_id,
-                    'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE',
-                    true,
-                    409,
-                    {
-                        accepted: false,
-                        status: 'blocked',
-                        version: 0,
-                        position_open: true,
-                        pending_order: true,
-                        reconciliation_required: false,
-                    },
-                );
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit,
-        });
-
-        await adapter.load_snapshot();
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE',
-            message: expect.stringContaining('열린 포지션: 있음, 미체결 주문: 있음'),
-        });
-        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
-
-        // 실패 뒤에도 token이 남아 operator의 동일 안전 종료 재시도를 허용한다.
-        await expect(adapter.load_snapshot()).resolves.toBeDefined();
-    });
-
-    it('Phase 12: sidecar exit wait timeout에서 renderer를 닫거나 token을 지우지 않는다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        let native_wait_count = 0;
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            return init?.method === 'GET'
-                ? create_success_response(request_id, snapshot)
-                : create_success_response(request_id, {
-                    accepted: true,
-                    status: 'accepted',
-                    version: 0,
-                }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit: async () => {
-                native_wait_count += 1;
-                if (native_wait_count === 1) {
-                    throw {
-                        code: 'BACKEND_SIDECAR_EXIT_TIMEOUT',
-                        message: 'Backend sidecar did not exit within the allowed time.',
-                    };
-                }
-                return { exited: true, code: 0 };
-            },
-        });
-
-        await adapter.load_snapshot();
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SIDECAR_EXIT_TIMEOUT',
-        });
-        await expect(adapter.load_snapshot()).resolves.toBeDefined();
-
-        // HTTP 202를 다시 보내지 않고 native exit wait만 재시도해 중복 종료 command를 만들지 않는다.
-        await expect(adapter.shutdown_application()).resolves.toBeUndefined();
-        expect(fetch_mock.mock.calls.filter((call) => {
-            return new URL(call[0].toString()).pathname === '/v1/shutdown';
-        })).toHaveLength(1);
-    });
-
-    it('Phase 12: native nonzero exit을 timeout 재시도로 오분류하지 않는다', async () => {
-        const snapshot = create_backend_snapshot_fixture();
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-
-            return init?.method === 'GET'
-                ? create_success_response(request_id, snapshot)
-                : create_success_response(request_id, {
-                    accepted: true,
-                    status: 'accepted',
-                    version: 0,
-                }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch,
-            create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit: async () => {
-                throw {
-                    code: 'BACKEND_SIDECAR_EXIT_FAILED',
-                    message: 'Backend sidecar exited with a non-zero status.',
-                };
-            },
-        });
-
-        await adapter.load_snapshot();
-        await expect(adapter.shutdown_application()).rejects.toMatchObject({
-            code: 'SIDECAR_ABNORMAL_EXIT',
-            retryable: false,
-        });
-    });
 });
 
-describe('BackendUiAdapter bootstrap recovery shutdown', () => {
-    it.each(['not_started', 'running'] as const)('%s 복구는 전체 snapshot이나 청산 없이 backend shutdown owner에 위임한다', async (status) => {
-        const wait_for_sidecar_exit = vi.fn(async () => ({ exited: true, code: 0 }));
+describe('BackendUiAdapter backend-owned shutdown', () => {
+    function fixture(options: {
+        state?: unknown;
+        prepare?: (init: RequestInit) => unknown | Promise<unknown>;
+        finish?: (init: RequestInit) => Response | Promise<Response>;
+        wait?: () => Promise<unknown>;
+    } = {}) {
         const paths: string[] = [];
         const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-            const path = new URL(input.toString()).pathname;
+            const path = new URL(String(input)).pathname;
             paths.push(path);
-            if (path === '/v1/shutdown/state') {
-                return create_success_response(request_id, {
-                    session_id: TEST_BACKEND_SESSION_ID, version: 5, status,
-                });
-            }
-            expect(path).toBe('/v1/shutdown');
-            expect(JSON.parse(init?.body as string)).toEqual({ schema_version: BACKEND_SCHEMA_VERSION, expected_version: 5 });
-            return create_success_response(request_id, {
-                accepted: true, status: 'accepted', version: status === 'running' ? 6 : 5,
-            }, 202);
+            const id = request_headers(init)['X-Request-Id']!;
+            if (path === '/v1/shutdown/state') return create_success_response(id,
+                options.state ?? { session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'running' });
+            if (path === '/v1/shutdown/prepare') return create_success_response(id,
+                options.prepare ? await options.prepare(init!) : shutdown_preparation_fixture(), init?.method === 'POST' ? 202 : 200);
+            if (path === '/v1/shutdown') return options.finish ? await options.finish(init!)
+                : create_success_response(id, { accepted: true, status: 'accepted', version: 0 }, 202);
+            throw new Error(`Unexpected endpoint ${path}`);
         });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch, create_uuid: create_uuid_factory(), wait_for_sidecar_exit,
-        });
+        const wait = vi.fn(options.wait ?? (async () => ({ exited: true, code: 0 })));
+        const adapter = new BackendUiAdapter(create_descriptor(), { fetch: fetch_mock as typeof fetch,
+            create_uuid: () => crypto.randomUUID(), wait_for_sidecar_exit: wait,
+            shutdown_poll_interval_ms: 1, shutdown_wait_timeout_ms: 100 });
+        return { adapter, paths, fetch_mock, wait };
+    }
 
-        await adapter.shutdown_recovery_application();
+    it.each(['normal', 'recovery'])('%s exit uses the same narrow APIs without dashboard or stream', async (mode) => {
+        const f = fixture();
+        await (mode === 'normal' ? f.adapter.shutdown_application() : f.adapter.shutdown_recovery_application());
+        expect(f.paths).toEqual(['/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
+        expect(JSON.parse(String(f.fetch_mock.mock.calls[1]![1]!.body))).toEqual({
+            schema_version: BACKEND_SCHEMA_VERSION, expected_version: 0, liquidation_confirmed: false });
+        expect(f.wait).toHaveBeenCalledOnce();
+        expect(f.adapter.is_disposed).toBe(true);
+        expect(JSON.stringify(f.adapter)).not.toContain(TEST_BACKEND_TOKEN);
+    });
 
-        expect(paths).toEqual(['/v1/shutdown/state', '/v1/shutdown']);
-        expect(wait_for_sidecar_exit).toHaveBeenCalledOnce();
-        await expect(adapter.load_snapshot()).rejects.toMatchObject({ code: 'ADAPTER_STOPPED' });
+    it('coalesces clicks and publishes order/account/history progress before final exit', async () => {
+        const stages = [shutdown_preparation_fixture({ phase: 'settling_orders', step: 'orders' }),
+            shutdown_preparation_fixture({ phase: 'checking', step: 'account' }),
+            shutdown_preparation_fixture({ phase: 'checking', step: 'history' }), shutdown_preparation_fixture()];
+        const f = fixture({ prepare: () => stages.shift()! });
+        const progress = vi.fn(); f.adapter.set_shutdown_progress_listener(progress);
+        await Promise.all([f.adapter.shutdown_application(), f.adapter.shutdown_application()]);
+        expect(progress.mock.calls.map(([step]) => step)).toEqual(['orders', 'account', 'history', 'complete']);
+        expect(f.fetch_mock.mock.calls.filter(([input, init]) => String(input).endsWith('/prepare') && init?.method === 'POST')).toHaveLength(1);
+        expect(f.wait).toHaveBeenCalledOnce();
+    });
+
+    it('a publication error does not prevent safe backend completion', async () => {
+        const f = fixture(); f.adapter.set_shutdown_progress_listener(() => { throw Error('UI fault'); });
+        await f.adapter.shutdown_application(); expect(f.wait).toHaveBeenCalledOnce();
+    });
+
+    it('lost prepare response reuses the exact body and key before polling its operation', async () => {
+        let count = 0;
+        const f = fixture({ prepare: () => { if (++count === 1) throw new TypeError('lost response'); return shutdown_preparation_fixture(); } });
+        await f.adapter.shutdown_application();
+        const calls = f.fetch_mock.mock.calls.filter(([input]) => String(input).endsWith('/prepare'));
+        expect(calls).toHaveLength(2);
+        expect(calls[0]![1]!.body).toBe(calls[1]![1]!.body);
+        expect(request_headers(calls[0]![1])['Idempotency-Key']).toBe(request_headers(calls[1]![1])['Idempotency-Key']);
+        expect(f.wait).toHaveBeenCalledOnce();
+    });
+
+    it.each(['SHUTDOWN_BALANCE_MISMATCH', 'SHUTDOWN_ORDER_UNRESOLVED', 'SHUTDOWN_ACCOUNT_UNREACHABLE', 'SHUTDOWN_HISTORY_SAVE_FAILED', 'SHUTDOWN_PREPARATION_TIMEOUT'])('%s keeps the process and gives a concrete reason', async (code) => {
+        const f = fixture({ prepare: () => shutdown_preparation_fixture({ phase: 'blocked', step: 'account', reason_code: code, retryable: true }) });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code, retryable: true });
+        expect(f.wait).not.toHaveBeenCalled(); expect(f.adapter.is_disposed).toBe(false);
+        expect(f.paths).not.toContain('/v1/shutdown'); f.adapter.stop();
+    });
+
+    it('requires explicit liquidation consent and starts a fresh job after confirmation', async () => {
+        const f = fixture({ prepare: (init) => JSON.parse(String(init.body)).liquidation_confirmed
+            ? shutdown_preparation_fixture()
+            : shutdown_preparation_fixture({ phase: 'blocked', step: 'account', reason_code: 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED' }) });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED' });
+        expect(f.wait).not.toHaveBeenCalled();
+        await f.adapter.shutdown_application(true);
+        expect(f.paths.filter((path) => path === '/v1/shutdown/state')).toHaveLength(2);
+        expect(f.wait).toHaveBeenCalledOnce();
     });
 
     it.each([
-        [{ session_id: SECOND_EVENT_ID, version: 0, status: 'not_started' }, 'SESSION_MISMATCH'],
-        [{ session_id: TEST_BACKEND_SESSION_ID, version: -1, status: 'not_started' }, 'MALFORMED_BACKEND_PAYLOAD'],
-        [{ session_id: TEST_BACKEND_SESSION_ID, version: true, status: 'not_started' }, 'MALFORMED_BACKEND_PAYLOAD'],
-        [{ session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'unknown' }, 'MALFORMED_BACKEND_PAYLOAD'],
-        [{ session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started', force: true }, 'MALFORMED_BACKEND_PAYLOAD'],
-    ])('잘못된 종료 상태 %j에서는 종료를 제출하지 않는다', async (state, code) => {
-        const wait_for_sidecar_exit = vi.fn();
-        const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
-            create_success_response(request_headers(init)['X-Request-Id']!, state)
-        ));
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch, create_uuid: create_uuid_factory(), wait_for_sidecar_exit,
-        });
-
-        await expect(adapter.shutdown_recovery_application()).rejects.toMatchObject({ code });
-        expect(fetch_mock).toHaveBeenCalledOnce();
-        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
+        { session_id: SECOND_EVENT_ID, version: 0, status: 'not_started' },
+        { session_id: TEST_BACKEND_SESSION_ID, version: -1, status: 'not_started' },
+        { session_id: TEST_BACKEND_SESSION_ID, version: true, status: 'not_started' },
+        { session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'unknown' },
+        { session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started', force: true },
+    ])('rejects malformed shutdown state %j', async (state) => {
+        const f = fixture({ state }); await expect(f.adapter.shutdown_recovery_application()).rejects.toBeDefined();
+        expect(f.paths).toEqual(['/v1/shutdown/state']); expect(f.wait).not.toHaveBeenCalled(); f.adapter.stop();
     });
 
-    it('복구 종료의 exposure 차단 뒤에는 새 종료 상태를 읽고 프로세스를 보존한다', async () => {
-        const paths: string[] = [];
-        const wait_for_sidecar_exit = vi.fn();
-        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-            const path = new URL(input.toString()).pathname;
-            paths.push(path);
-            return path === '/v1/shutdown/state'
-                ? create_success_response(request_id, { session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started' })
-                : create_failure_response(request_id, 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE', false, 409, {
-                    accepted: false, status: 'blocked', version: 0,
-                    position_open: true, pending_order: true, reconciliation_required: true,
-                });
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch, create_uuid: create_uuid_factory(), wait_for_sidecar_exit,
-        });
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-            await expect(adapter.shutdown_recovery_application()).rejects.toMatchObject({
-                code: 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE',
-                message: expect.stringContaining('열린 포지션: 있음, 미체결 주문: 있음, 조정 필요: 있음'),
-            });
-        }
-        expect(paths).toEqual(['/v1/shutdown/state', '/v1/shutdown', '/v1/shutdown/state', '/v1/shutdown']);
-        expect(wait_for_sidecar_exit).not.toHaveBeenCalled();
+    it('rejects a changed operation ID and cannot finalize', async () => {
+        let count = 0;
+        const f = fixture({ prepare: () => ++count === 1
+            ? shutdown_preparation_fixture({ phase: 'checking', step: 'account' })
+            : shutdown_preparation_fixture({ operation_id: SECOND_EVENT_ID }) });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'MALFORMED_BACKEND_PAYLOAD' });
+        expect(f.wait).not.toHaveBeenCalled(); f.adapter.stop();
     });
 
-    it('종료 응답 유실은 같은 body/key로 재시도하고 202 이후에는 native wait만 재시도한다', async () => {
-        let command_count = 0;
-        const wait_for_sidecar_exit = vi.fn()
-            .mockRejectedValueOnce({ code: 'BACKEND_SIDECAR_EXIT_TIMEOUT' })
-            .mockResolvedValue({ exited: true, code: 0 });
-        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-            if (new URL(input.toString()).pathname === '/v1/shutdown/state') {
-                return create_success_response(request_id, { session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started' });
-            }
-            if (++command_count === 1) {
-                throw new TypeError('Response lost');
-            }
-            return create_success_response(request_id, { accepted: true, status: 'accepted', version: 0 }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch, create_uuid: create_uuid_factory(), wait_for_sidecar_exit,
-        });
-        await expect(adapter.shutdown_recovery_application()).rejects.toMatchObject({ code: 'SHUTDOWN_OUTCOME_AMBIGUOUS' });
-        await expect(adapter.shutdown_recovery_application()).rejects.toMatchObject({ code: 'SIDECAR_EXIT_TIMEOUT' });
-        await expect(adapter.shutdown_recovery_application()).resolves.toBeUndefined();
-        expect(fetch_mock.mock.calls.map(([input]) => new URL(input.toString()).pathname))
-            .toEqual(['/v1/shutdown/state', '/v1/shutdown', '/v1/shutdown']);
-        expect(fetch_mock.mock.calls[1]![1]!.body).toBe(fetch_mock.mock.calls[2]![1]!.body);
-        expect(request_headers(fetch_mock.mock.calls[1]![1])['Idempotency-Key'])
-            .toBe(request_headers(fetch_mock.mock.calls[2]![1])['Idempotency-Key']);
-        expect(wait_for_sidecar_exit).toHaveBeenCalledTimes(2);
+    it('refreshes a stale prepare version without resending any order', async () => {
+        let count = 0;
+        const f = fixture({ prepare: () => ++count === 1
+            ? shutdown_preparation_fixture({ phase: 'blocked', reason_code: 'STALE_CONTEXT_VERSION', step: 'workers', retryable: true })
+            : shutdown_preparation_fixture() });
+        await f.adapter.shutdown_application();
+        expect(f.paths.filter((path) => path === '/v1/shutdown/state')).toHaveLength(2);
+        expect(f.wait).toHaveBeenCalledOnce();
     });
 
-    it('명시적인 stale version 거부는 불명확한 종료로 잠그지 않고 새 version으로 재시도한다', async () => {
-        let state_reads = 0;
-        const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request_id = request_headers(init)['X-Request-Id']!;
-            if (new URL(input.toString()).pathname === '/v1/shutdown/state') {
-                return create_success_response(request_id, {
-                    session_id: TEST_BACKEND_SESSION_ID, version: state_reads++, status: 'not_started',
-                });
-            }
-            return state_reads === 1
-                ? create_failure_response(request_id, 'STALE_CONTEXT_VERSION', true, 409)
-                : create_success_response(request_id, { accepted: true, status: 'accepted', version: 1 }, 202);
-        });
-        const adapter = new BackendUiAdapter(create_descriptor(), {
-            fetch: fetch_mock as typeof fetch, create_uuid: create_uuid_factory(),
-            wait_for_sidecar_exit: async () => ({ exited: true, code: 0 }),
-        });
-        await expect(adapter.shutdown_recovery_application()).rejects.toMatchObject({ code: 'STALE_CONTEXT_VERSION' });
-        await expect(adapter.shutdown_recovery_application()).resolves.toBeUndefined();
-        expect(state_reads).toBe(2);
-        expect(JSON.parse(fetch_mock.mock.calls[3]![1]!.body as string).expected_version).toBe(1);
+    it.each([-1, 1])('does not trust a final receipt with wrong version %s', async (version) => {
+        const f = fixture({ finish: (init) => create_success_response(request_headers(init)['X-Request-Id']!, { accepted: true, status: 'accepted', version }, 202) });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_OUTCOME_AMBIGUOUS' });
+        expect(f.wait).not.toHaveBeenCalled(); expect(f.adapter.is_disposed).toBe(false); f.adapter.stop();
+    });
+
+    it('lost final response preserves the exact final request and bypasses preparation on retry', async () => {
+        let attempts = 0;
+        const f = fixture({ finish: (init) => { if (++attempts === 1) throw new TypeError('lost');
+            return create_success_response(request_headers(init)['X-Request-Id']!, { accepted: true, status: 'accepted', version: 0 }, 202); } });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_OUTCOME_AMBIGUOUS' });
+        await expect(f.adapter.apply_regime('type0')).rejects.toBeDefined();
+        await f.adapter.shutdown_application();
+        const calls = f.fetch_mock.mock.calls.filter(([input]) => String(input).endsWith('/v1/shutdown'));
+        expect(calls).toHaveLength(2);
+        expect(calls[0]![1]!.body).toBe(calls[1]![1]!.body);
+        expect(request_headers(calls[0]![1])['Idempotency-Key']).toBe(request_headers(calls[1]![1])['Idempotency-Key']);
+        expect(f.paths.filter((path) => path.endsWith('/prepare'))).toHaveLength(1);
+    });
+
+    it('after accepted shutdown only retries native wait, retaining the token until actual exit', async () => {
+        let attempts = 0;
+        const f = fixture({ wait: async () => { if (++attempts === 1) throw { code: 'BACKEND_SIDECAR_EXIT_TIMEOUT' }; return { exited: true, code: 0 }; } });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SIDECAR_EXIT_TIMEOUT' });
+        expect(f.adapter.is_disposed).toBe(false); await f.adapter.shutdown_application();
+        expect(f.paths.filter((path) => path === '/v1/shutdown')).toHaveLength(1);
+        expect(f.wait).toHaveBeenCalledTimes(2); expect(f.adapter.is_disposed).toBe(true);
+    });
+
+    it('nonzero native exit is not treated as another wait timeout', async () => {
+        const f = fixture({ wait: async () => { throw { code: 'BACKEND_SIDECAR_EXIT_FAILED' }; } });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SIDECAR_ABNORMAL_EXIT', retryable: false });
+        expect(f.adapter.is_disposed).toBe(false); f.adapter.stop();
     });
 });
 

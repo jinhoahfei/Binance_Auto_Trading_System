@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { connection_error_origin, record_backend_connection_diagnostic, type ConnectionDiagnostic, type ConnectionDiagnosticStage } from './backendConnectionDiagnostics';
 import { safe_connection_error_code } from './connectionErrorCodes';
+import { shutdown_failure_message } from './shutdownMessages';
 
 import type {
     BackendAuthenticateMessage,
@@ -9,6 +10,7 @@ import type {
     BackendEventEnvelope,
     BackendSnapshot,
     BackendShutdownState,
+    BackendShutdownPreparation,
     BackendTradeDetails,
     BackendTradeDetailsQuery,
     BackendTradeDetailsSummary,
@@ -46,7 +48,7 @@ const MAX_PUBLICATION_RECOVERY_ATTEMPTS = 3;
 const PUBLICATION_HEALTHY_WINDOW_MS = 60_000;
 const NORMAL_CLIENT_CLOSE_CODE = 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
-const DEFAULT_SHUTDOWN_WAIT_TIMEOUT_MS = 30_000;
+const DEFAULT_SHUTDOWN_WAIT_TIMEOUT_MS = 135_000;
 const DEFAULT_SHUTDOWN_POLL_INTERVAL_MS = 250;
 const ADAPTER_STOP_ABORT_REASON = Symbol('ADAPTER_STOP_ABORT_REASON');
 const CALLER_REQUEST_ABORT_REASON = Symbol('CALLER_REQUEST_ABORT_REASON');
@@ -142,6 +144,7 @@ export interface BackendWebSocket {
  * transport와 native picker 의존성을 browser global 대신 test에서 결정적으로 주입하는 옵션이다.
  */
 export interface BackendConnectionStatus {
+    readonly shutdown_step?: BackendShutdownPreparation['step'];
     readonly phase: 'connecting' | 'live' | 'recovering' | 'blocked' | 'closing' | 'stopped';
     readonly attempt: number;
     readonly error_code: string | null;
@@ -448,6 +451,19 @@ function validate_sidecar_exit_receipt(value: unknown): void {
  * 반환값: 검증된 종료 명령 기준값
  * 작성 날짜: 2026/09/05
  */
+function validate_shutdown_preparation(value: unknown): BackendShutdownPreparation {
+    const state = require_exact_record(value, ['operation_id', 'phase', 'step', 'version', 'reason_code', 'retryable'], 'shutdown preparation');
+    if (typeof state.operation_id !== 'string' || !CANONICAL_UUID_PATTERN.test(state.operation_id)
+        || !['checking', 'settling_orders', 'liquidating', 'ready', 'blocked'].includes(state.phase as string)
+        || !['workers', 'account', 'orders', 'liquidation', 'history', 'complete'].includes(state.step as string)
+        || !Number.isSafeInteger(state.version) || (state.version as number) < 0
+        || typeof state.retryable !== 'boolean'
+        || (state.phase === 'blocked' ? typeof state.reason_code !== 'string' : state.reason_code !== null)) {
+        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Invalid shutdown preparation');
+    }
+    return state as unknown as BackendShutdownPreparation;
+}
+
 function validate_shutdown_state(value: unknown, session_id: string): BackendShutdownState {
     const state = require_exact_record(value, ['session_id', 'version', 'status'], 'shutdown state');
     if (state.session_id !== session_id) {
@@ -880,6 +896,10 @@ export class BackendUiAdapter implements UiCommandPort {
     #shutdown_task: Promise<void> | null = null;
     #shutdown_requested = false;
     #shutdown_expected_version: number | null = null;
+    #shutdown_prepare_body: { schema_version: number; expected_version: number; liquidation_confirmed: boolean } | null = null;
+    #shutdown_prepare_operation: string | null = null;
+    #shutdown_step: BackendShutdownPreparation['step'] | undefined;
+    #shutdown_progress_listener: ((step: BackendShutdownPreparation['step']) => void) | null = null;
     #remove_environment_listeners: (() => void) | null = null;
     readonly #fetch: typeof fetch;
     readonly #create_web_socket: (url: string) => BackendWebSocket;
@@ -1426,28 +1446,24 @@ export class BackendUiAdapter implements UiCommandPort {
      * 반환값: backend typed 결과 Promise
      * 작성 날짜: 2026/08/21
      */
-    async shutdown_application(): Promise<void> {
-        return this.run_shutdown(false);
+    async shutdown_application(liquidation_confirmed = false): Promise<void> {
+        return this.run_shutdown(false, liquidation_confirmed);
     }
 
-    private async run_shutdown(recovery: boolean): Promise<void> {
+    private async run_shutdown(_recovery: boolean, liquidation_confirmed = false): Promise<void> {
         if (this.#shutdown_task !== null) return this.#shutdown_task;
         this.#shutdown_requested = true;
         this.record_connection('shutdown_started', { stage: 'shutdown' });
         this.clear_recovery_work();
         ++this.#connection_generation;
         this.close_current_socket('shutdown requested');
-        this.publish_connection_status('closing');
+        try { this.publish_connection_status('closing'); }
+        catch (error) { this.record_failure(error, 'publish', { error_code: 'UI_STATE_PUBLICATION_FAILED' }); }
         const operation = async () => {
-            if (recovery) await this.perform_recovery_shutdown();
-            else {
-                if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
-                    // 연결 장애 중의 오래된 trading version으로 STOP을 보내지 않는다.
-                    if (this.#recovering) await this.load_snapshot();
-                    await this.await_safe_trading_terminal_state();
-                }
-                await this.request_shutdown_and_await_exit(false);
+            if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
+                await this.prepare_shutdown(liquidation_confirmed);
             }
+            await this.request_shutdown_and_await_exit(false);
         };
         this.#shutdown_task = Promise.resolve().then(operation);
         try { await this.#shutdown_task; }
@@ -1456,7 +1472,8 @@ export class BackendUiAdapter implements UiCommandPort {
             this.#shutdown_task = null;
             this.#shutdown_requested = false;
             if (!this.#is_stopped && !this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
-                void this.full_resynchronize('SHUTDOWN_NOT_ACCEPTED');
+                try { this.publish_connection_status('blocked'); }
+                catch (error) { this.record_failure(error, 'publish', { error_code: 'UI_STATE_PUBLICATION_FAILED' }); }
             }
         }
     }
@@ -1468,23 +1485,12 @@ export class BackendUiAdapter implements UiCommandPort {
      * 반환값: backend code 0 확인까지의 Promise
      * 작성 날짜: 2026/09/05
      */
-    async shutdown_recovery_application(): Promise<void> {
-        return this.run_shutdown(true);
+    async shutdown_recovery_application(liquidation_confirmed = false): Promise<void> {
+        return this.run_shutdown(true, liquidation_confirmed);
     }
 
-    private async perform_recovery_shutdown(): Promise<void> {
-        if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
-            const state = await this.request_json(
-                'GET',
-                '/v1/shutdown/state',
-                (value) => validate_shutdown_state(value, this.session_id),
-            );
-            this.#trading_version = state.version;
-            this.#trading_status = state.status;
-        }
-
-        // 복구 화면은 stop/청산을 제출하지 않는다. Backend shutdown owner가 열린 exposure를 거부한다.
-        await this.request_shutdown_and_await_exit(true);
+    set_shutdown_progress_listener(listener: ((step: BackendShutdownPreparation['step']) => void) | null): void {
+        this.#shutdown_progress_listener = listener;
     }
 
     /**
@@ -1541,6 +1547,8 @@ export class BackendUiAdapter implements UiCommandPort {
                         || error.code === 'STALE_CONTEXT_VERSION')) {
                     this.#shutdown_outcome_is_ambiguous = false;
                     this.#shutdown_expected_version = null;
+                    this.#shutdown_prepare_body = null;
+                    this.#shutdown_prepare_operation = null;
                     if (stream_was_closed) {
                         // 명시적 409 뒤 닫힌 stream은 정상 live resync 경로로 복구한다.
                         void this.full_resynchronize('EVENT_STREAM_CLOSED');
@@ -1595,48 +1603,60 @@ export class BackendUiAdapter implements UiCommandPort {
     }
 
     /**
-     * 함수 이름: await_safe_trading_terminal_state()
-     * 기능: 종료 전에 RUNNING을 authoritative stop하고 비동기 청산·조정의 terminal snapshot을 기다린다.
+     * 함수 이름: prepare_shutdown()
+     * 기능: 백엔드 종료 준비 작업 하나를 시작하고 독립적인 진행 API를 조회한다.
      * 인자: 없음
      * 반환값: not_started 또는 terminated에 도달하면 완료되는 Promise
      * 작성 날짜: 2026/08/24
      */
-    private async await_safe_trading_terminal_state(): Promise<void> {
-        if (this.#trading_status === null) {
-            throw new BackendCommandError(
-                'TRADING_SNAPSHOT_REQUIRED',
-                '프로그램 종료 전 최신 거래 상태가 필요합니다.',
-                true,
-            );
-        }
-        if (this.#trading_status === 'running' || this.#trading_status === 'reconciliation_required') {
-            // 재조정 상태도 명시적 종료 의도를 전달해야 복구 뒤 STOP 전이를 진행할 수 있다.
-            await this.stop_trading();
-        }
-        if (this.#trading_status === 'not_started'
-            || this.#trading_status === 'terminated') {
-            return;
-        }
-
+    private async prepare_shutdown(liquidation_confirmed: boolean): Promise<void> {
         const deadline = Date.now() + this.#shutdown_wait_timeout_ms;
+        let stale_retries = 0;
         while (Date.now() < deadline) {
-            await new Promise<void>((resolve) => {
-                globalThis.setTimeout(resolve, this.#shutdown_poll_interval_ms);
-            });
-            const snapshot = await this.load_snapshot();
-
-            if (snapshot.trading.status === 'not_started'
-                || snapshot.trading.status === 'terminated') {
-                return;
+            try {
+                if (this.#shutdown_prepare_body === null) {
+                    const current = await this.request_json('GET', '/v1/shutdown/state',
+                        (value) => validate_shutdown_state(value, this.session_id), undefined, true);
+                    this.#shutdown_prepare_body = { schema_version: BACKEND_SCHEMA_VERSION,
+                        expected_version: current.version, liquidation_confirmed };
+                }
+                const status = this.#shutdown_prepare_operation === null
+                    ? await this.request_json('POST', '/v1/shutdown/prepare', validate_shutdown_preparation,
+                        this.#shutdown_prepare_body, true, undefined, this.#request_timeout_ms, 202)
+                    : await this.request_json('GET', '/v1/shutdown/prepare', validate_shutdown_preparation, undefined, true);
+                if (this.#shutdown_prepare_operation !== null && status.operation_id !== this.#shutdown_prepare_operation) {
+                    throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Shutdown operation changed');
+                }
+                this.#shutdown_prepare_operation = status.operation_id;
+                this.#shutdown_step = status.step;
+                try {
+                    this.publish_connection_status('closing');
+                    this.#shutdown_progress_listener?.(status.step);
+                }
+                catch (error) { this.record_failure(error, 'publish', { error_code: 'UI_STATE_PUBLICATION_FAILED', retryable: true }); }
+                if (status.phase === 'blocked') {
+                    this.#shutdown_prepare_body = null;
+                    this.#shutdown_prepare_operation = null;
+                    if (status.reason_code === 'STALE_CONTEXT_VERSION' && stale_retries++ < 2) continue;
+                    throw new BackendAdapterError(status.reason_code!, shutdown_failure_message(status.reason_code!, status.step), status.retryable);
+                }
+                if (status.phase === 'ready') {
+                    this.#trading_version = status.version;
+                    this.#trading_status = 'terminated';
+                    this.#has_open_position = false;
+                    this.#shutdown_expected_version = null;
+                    return;
+                }
+            } catch (error) {
+                const retryable_read = error instanceof BackendAdapterError
+                    && ['BACKEND_UNREACHABLE', 'BACKEND_REQUEST_TIMEOUT'].includes(error.code);
+                if (!retryable_read) throw error;
+                // POST 응답 유실은 같은 body/멱등 key로 재확인한다. 새 STOP·매도를 만들지 않는다.
             }
+            await new Promise<void>((resolve) => globalThis.setTimeout(resolve, this.#shutdown_poll_interval_ms));
         }
-
-        const position_label = this.#has_open_position ? '있음' : '없음';
-        throw new BackendAdapterError(
-            'SHUTDOWN_SAFETY_TIMEOUT',
-            `안전 종료 대기 시간이 초과되었습니다. 열린 포지션: ${position_label}, 미체결 주문 또는 조정 상태를 확인한 뒤 다시 시도해 주세요.`,
-            true,
-        );
+        throw new BackendAdapterError('SHUTDOWN_PREPARATION_TIMEOUT',
+            shutdown_failure_message('SHUTDOWN_PREPARATION_TIMEOUT', this.#shutdown_step), true);
     }
 
     /**
@@ -1660,7 +1680,7 @@ export class BackendUiAdapter implements UiCommandPort {
         timeout_ms: number | null = this.#request_timeout_ms,
         expected_success_status: number | null = null,
     ): Promise<Data> {
-        if ((this.#recovering || this.#shutdown_requested) && is_command && !((this.#shutdown_requested || this.#shutdown_outcome_is_ambiguous) && (path === '/v1/shutdown' || path === '/v1/trading/stop'))) {
+        if ((this.#recovering || this.#shutdown_requested) && is_command && !((this.#shutdown_requested || this.#shutdown_outcome_is_ambiguous) && (path === '/v1/shutdown' || path === '/v1/shutdown/state' || path === '/v1/shutdown/prepare'))) {
             throw new BackendAdapterError('BACKEND_CONNECTION_RECOVERING', '백엔드의 최신 상태를 확인 중입니다. 연결 복구 후 다시 시도해 주세요.', true);
         }
         if (this.#shutdown_outcome_is_ambiguous && path !== '/v1/shutdown') {
@@ -2257,7 +2277,8 @@ export class BackendUiAdapter implements UiCommandPort {
 
     private publish_connection_status(phase: BackendConnectionStatus['phase'], next_retry_at_ms: number | null = null): void {
         this.#callbacks?.on_connection_status?.({ phase, attempt: this.#retry_attempt,
-            error_code: this.#first_failure_code, last_received_at_ms: this.#last_received_at_ms, next_retry_at_ms });
+            error_code: this.#first_failure_code, last_received_at_ms: this.#last_received_at_ms, next_retry_at_ms,
+            ...(this.#shutdown_step === undefined ? {} : { shutdown_step: this.#shutdown_step }) });
     }
 
     private error_type(error: unknown): ConnectionDiagnostic['error_type'] {

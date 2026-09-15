@@ -1006,6 +1006,19 @@ class TradeHistoryController:
 
             return next_trade_history  # 반환값도 방금 게시한 state의 동일 객체다.
 
+    def verify_durable_history(self) -> bool:
+        """
+        함수 이름: verify_durable_history()
+        기능: 저장 파일을 다시 읽어 게시된 거래 기록과 대조한다.
+        인자: 없음
+        반환값: 해당 단계의 처리 결과 또는 없음
+        작성 날짜: 2026/09/16
+        """
+        with self._operation_lock:
+            if self._pending_publications:
+                raise TradeHistoryPersistencePendingError("pending history publication")
+            return self._repository.get_trade_history() == self.trade_history.trades
+
     def record_order_execution(
         self,
         order: Order,

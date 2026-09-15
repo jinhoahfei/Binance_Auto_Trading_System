@@ -111,5 +111,5 @@ export interface UiCommandPort {
      * 반환값: 종료 준비 완료 Promise
      * 작성 날짜: 2026/08/12
      */
-    shutdown_application(): Promise<void>;
+    shutdown_application(liquidation_confirmed?: boolean): Promise<void>;
 }

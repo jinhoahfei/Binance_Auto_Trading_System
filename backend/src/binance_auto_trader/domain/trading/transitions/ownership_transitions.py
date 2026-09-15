@@ -9,6 +9,7 @@ from ..conditions import condition_met
 from ..context import TradingContextView
 from ..events import (
     BuyAttemptPayload,
+    PreparationExpiredPayload,
     BuyRiskBlockedPayload,
     TradingEvent,
     TradingEventType,
@@ -50,9 +51,9 @@ def handle_ownership_transition(
     event_type = event.event_type
 
     # Journal·POST 전에 차단된 BUY는 retry budget을 소비하지 않고 signal 감시 상태로 복귀한다.
-    if event_type is TradingEventType.BUY_RISK_BLOCKED:
+    if event_type in (TradingEventType.BUY_RISK_BLOCKED, TradingEventType.ORDER_PREPARATION_EXPIRED):
         payload = event.payload
-        if not isinstance(payload, BuyRiskBlockedPayload):
+        if not isinstance(payload, (BuyRiskBlockedPayload, PreparationExpiredPayload)):
             return None
         cleared_order_patch = patch(
             pending_strategy=None,
@@ -63,8 +64,8 @@ def handle_ownership_transition(
         )
         if (
             payload.strategy is StrategyType.CASE_B
-            and state.case_b_signal_state
-            is CaseBSignalState.B_POSITION_OPEN_SIGNALLED
+            and (event_type is TradingEventType.ORDER_PREPARATION_EXPIRED or state.case_b_signal_state
+            is CaseBSignalState.B_POSITION_OPEN_SIGNALLED)
         ):
             return create_transition_outcome(
                 "O-03",
@@ -73,11 +74,16 @@ def handle_ownership_transition(
                     case_b_signal_state=CaseBSignalState.B_WAIT_PULLBACK,
                 ),
                 cleared_order_patch,
+                *((ScheduleReevaluation(
+                    event_type=TradingEventType.RETRY_CASE_B_WAIT_PULLBACK_CONDITION_CHECK if payload.strategy is StrategyType.CASE_B else TradingEventType.RETRY_CASE_C_SETUP_CONDITION_CHECK,
+                    trigger=ReevaluationTrigger.DEADLINE_OR_MARKET_CHANGE,
+                    lower_event_id=runtime.lower_event_id, reason="Order preparation signal expired",
+                ),) if event_type is TradingEventType.ORDER_PREPARATION_EXPIRED else ()),
             )
         if (
             payload.strategy is StrategyType.CASE_C
-            and state.case_c_signal_state
-            is CaseCSignalState.C_POSITION_OPEN_SIGNALLED
+            and (event_type is TradingEventType.ORDER_PREPARATION_EXPIRED or state.case_c_signal_state
+            is CaseCSignalState.C_POSITION_OPEN_SIGNALLED)
         ):
             return create_transition_outcome(
                 "O-07",
@@ -86,6 +92,11 @@ def handle_ownership_transition(
                     case_c_signal_state=CaseCSignalState.C_SETUP,
                 ),
                 cleared_order_patch,
+                *((ScheduleReevaluation(
+                    event_type=TradingEventType.RETRY_CASE_B_WAIT_PULLBACK_CONDITION_CHECK if payload.strategy is StrategyType.CASE_B else TradingEventType.RETRY_CASE_C_SETUP_CONDITION_CHECK,
+                    trigger=ReevaluationTrigger.DEADLINE_OR_MARKET_CHANGE,
+                    lower_event_id=runtime.lower_event_id, reason="Order preparation signal expired",
+                ),) if event_type is TradingEventType.ORDER_PREPARATION_EXPIRED else ()),
             )
         return None  # 전략과 현재 signal state가 다르면 임의 state 복구를 수행하지 않는다.
 

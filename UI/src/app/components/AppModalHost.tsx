@@ -7,6 +7,7 @@ import { present_csv_export_dialog_props } from '../presenters';
 import type { UiApplicationController } from '../runtime';
 import { ExitConfirmationDialog } from './modals/ExitConfirmationDialog';
 import { OperationStatusDialog } from './modals/OperationStatusDialog';
+import { shutdown_step_message } from '../../shared/api/shutdownMessages';
 
 const REGIME_LABELS: Readonly<Record<NonNullable<AppViewModel['regime']['candidate']>, string>> = {
     type0: '횡보',
@@ -218,7 +219,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
                 <OperationStatusDialog
                     actionLabel="동일 종료 요청 다시 확인"
                     actionTone="negative"
-                    description="백엔드가 종료 요청을 처리했는지 응답으로 확정하지 못했습니다. 다른 명령과 정상 화면 복귀를 막고 같은 idempotency 요청으로만 결과를 확인합니다."
+                    description="백엔드의 종료 응답을 받지 못했습니다. 종료 요청을 다시 확인하면 같은 작업의 결과를 확인합니다."
                     detail={viewModel.app_exit.error?.message}
                     onConfirm={() => controller.dispatch({ type: 'APP_EXIT_CONFIRMED' })}
                     open
@@ -242,7 +243,7 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
         case 'exit_processing':
             return (
                 <OperationStatusDialog
-                    description="주문과 연결을 안전하게 정리하고 저장 내용을 반영하고 있습니다."
+                    description={shutdown_step_message(viewModel.connection.recovery?.shutdown_step)}
                     detail={viewModel.app_exit.error?.message}
                     open
                     status="progress"

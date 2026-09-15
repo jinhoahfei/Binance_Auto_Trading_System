@@ -43,6 +43,7 @@ class TradingEventType(StrEnum):
     ACTIVATE_TRADE_MANAGEMENT = "ACTIVATE_TRADE_MANAGEMENT"
 
     CASE_B_POSITION_OPENED = "CASE_B_POSITION_OPENED"
+    ORDER_PREPARATION_EXPIRED = "ORDER_PREPARATION_EXPIRED"
     CASE_B_BUY_FAILED = "CASE_B_BUY_FAILED"
     CASE_B_BUY_RETRY = "CASE_B_BUY_RETRY"
     CASE_C_POSITION_OPENED = "CASE_C_POSITION_OPENED"
@@ -94,6 +95,17 @@ class TradingEventType(StrEnum):
     RETRY_C_WAIT_SETUP = "RETRY_C_WAIT_SETUP"
     START_CASE_C_SETUP_CONDITION_CHECK = "START_CASE_C_SETUP_CONDITION_CHECK"
     RETRY_CASE_C_SETUP_CONDITION_CHECK = "RETRY_CASE_C_SETUP_CONDITION_CHECK"
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationExpiredPayload:
+    """
+    클래스 이름: PreparationExpiredPayload
+    기능: 제출 전 준비 대기 중 만료된 전략 신호를 표시한다.
+    작성 날짜: 2026/09/16
+    """
+
+    strategy: StrategyType
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +190,7 @@ class ForceSellOutcomePayload:
 
 TradingEventPayload: TypeAlias = (
     BuyAttemptPayload
+    | PreparationExpiredPayload
     | BuyRiskBlockedPayload
     | SellAttemptPayload
     | ForceSellOutcomePayload

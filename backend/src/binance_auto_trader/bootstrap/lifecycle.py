@@ -740,6 +740,16 @@ def _read_shutdown_safety_receipt(
         or trading_controller.pending_order_query_count > 0
     )
     reconciliation_required = trading_controller.reconciliation_required
+    preparation = runtime._shutdown_store.preparation
+    if trading_controller._shutdown_preparing:
+        reconciliation_required = reconciliation_required or preparation is None or preparation.snapshot()["phase"] != "ready"
+        try:
+            reconciliation_required = reconciliation_required or not runtime.trade_history_controller.verify_durable_history()
+            residual = trading_controller._residual_settlement
+            if residual is not None:
+                reconciliation_required = reconciliation_required or residual.storage.load() != residual.transfers
+        except Exception:
+            reconciliation_required = True
     if trading_controller.status is TradingSessionStatus.STOPPING:
         reconciliation_required = True  # 미완료 강제 청산 outcome도 안전한 terminal 상태가 아니다.
 
@@ -956,7 +966,8 @@ def request_application_shutdown(
                 raise ShutdownBlockedError(final_safety_receipt)
 
             runtime.trade_history_controller.flush_durable_state()
-            close_application(runtime)
+        close_application(runtime)  # Market/network close must run outside the publication lock.
+        with runtime.application_lock:
             accepted_receipt = ShutdownSafetyReceipt(
                 accepted=True,
                 status=ShutdownReceiptStatus.ACCEPTED,

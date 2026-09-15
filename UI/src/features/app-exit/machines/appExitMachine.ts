@@ -1,14 +1,10 @@
 import { assign, fromPromise, setup } from 'xstate';
 import type { BackendTradingStatus, UiCommandFailure } from '../../../shared/contracts';
 import { to_ui_command_failure } from '../../../shared/errors';
-import type { TradingCommandReceipt, UiCommandPort } from '../../../shared/ports';
+import type { UiCommandPort } from '../../../shared/ports';
 
 export interface AppExitMachineContext {
     readonly had_open_position: boolean;
-    readonly had_recovered_position: boolean;
-    readonly observed_trading_version: number | null;
-    readonly observed_trading_status: BackendTradingStatus | null;
-    readonly observed_has_open_position: boolean | null;
     readonly error: UiCommandFailure | null;
 }
 
@@ -59,69 +55,17 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
             events: {} as AppExitMachineEvent,
         },
         actors: {
-            force_sell: fromPromise<TradingCommandReceipt, boolean>(async ({ input }) => {
-                // NOT_STARTED 복구 Position은 정상 session stop이 아닌 별도 takeover Operation을 사용한다.
-                if (input) {
-                    return command_port.liquidate_recovered_position();
-                }
-                return command_port.force_sell_and_stop();  // 실행 중 Position은 기존 D-05 stop을 유지한다.
-            }),
-            shutdown_application: fromPromise<void>(async () => {
-                await command_port.shutdown_application();
+            shutdown_application: fromPromise<void, boolean>(async ({ input }) => {
+                await command_port.shutdown_application(input);
             }),
         },
         guards: {
+            shutdown_needs_liquidation_confirmation: ({ event }) => 'error' in event
+                && has_failure_code(event.error, 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED'),
             has_open_position: ({ event }) => {
                 return event.type === 'EXIT_CLICKED' && event.has_open_position;
             },
             had_open_position: ({ context }) => context.had_open_position,
-            // Receipt 이상 version의 lifecycle 관찰값을 우선해 비동기 완료와 reconciliation을 판정한다.
-            force_sell_completion_is_stopping: ({ context, event }) => {
-                const receipt = 'output' in event
-                    ? event.output as TradingCommandReceipt
-                    : null;
-                const observation_is_newer = receipt !== null
-                    && context.observed_trading_version !== null
-                    && context.observed_trading_version >= receipt.version;
-
-                return observation_is_newer
-                    ? context.observed_trading_status === 'stopping'
-                    : receipt?.status === 'stopping';
-            },
-            force_sell_completion_requires_reconciliation: ({ context, event }) => {
-                const receipt = 'output' in event
-                    ? event.output as TradingCommandReceipt
-                    : null;
-                const observation_is_newer = receipt !== null
-                    && context.observed_trading_version !== null
-                    && context.observed_trading_version >= receipt.version;
-
-                return observation_is_newer
-                    ? context.observed_trading_status === 'reconciliation_required'
-                    : receipt?.status === 'reconciliation_required';
-            },
-            force_sell_completion_is_terminal: ({ context, event }) => {
-                const receipt = 'output' in event
-                    ? event.output as TradingCommandReceipt
-                    : null;
-                const observation_is_newer = receipt !== null
-                    && context.observed_trading_version !== null
-                    && context.observed_trading_version >= receipt.version;
-
-                return observation_is_newer
-                    ? context.observed_trading_status === 'terminated'
-                        && context.observed_has_open_position === false
-                    : receipt?.status === 'terminated';
-            },
-            trading_session_is_terminal_without_position: ({ event }) => {
-                return event.type === 'TRADING_SESSION_UPDATED'
-                    && event.status === 'terminated'
-                    && !event.has_open_position;
-            },
-            trading_session_requires_reconciliation: ({ event }) => {
-                return event.type === 'TRADING_SESSION_UPDATED'
-                    && event.status === 'reconciliation_required';
-            },
             sidecar_exit_wait_timed_out: ({ event }) => {
                 return 'error' in event
                     && has_failure_code(event.error, 'SIDECAR_EXIT_TIMEOUT');
@@ -136,71 +80,14 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
             },
         },
         actions: {
+            require_liquidation_confirmation: assign({ had_open_position: true }),
             remember_position: assign({
                 had_open_position: ({ event }) => {
                     return event.type === 'EXIT_CLICKED'
                         ? event.has_open_position
                         : false;
                 },
-                had_recovered_position: ({ event }) => {
-                    return event.type === 'EXIT_CLICKED'
-                        && event.has_open_position
-                        && event.is_trading === false;
-                },
                 error: null,
-            }),
-            clear_liquidation_observation: assign({
-                observed_trading_version: null,
-                observed_trading_status: null,
-                observed_has_open_position: null,
-            }),
-            remember_trading_session_update: assign({
-                observed_trading_version: ({ context, event }) => {
-                    const should_update = event.type === 'TRADING_SESSION_UPDATED'
-                        && (context.observed_trading_version === null
-                            || event.version >= context.observed_trading_version);
-
-                    return should_update ? event.version : context.observed_trading_version;
-                },
-                observed_trading_status: ({ context, event }) => {
-                    const should_update = event.type === 'TRADING_SESSION_UPDATED'
-                        && (context.observed_trading_version === null
-                            || event.version >= context.observed_trading_version);
-
-                    return should_update ? event.status : context.observed_trading_status;
-                },
-                observed_has_open_position: ({ context, event }) => {
-                    const should_update = event.type === 'TRADING_SESSION_UPDATED'
-                        && (context.observed_trading_version === null
-                            || event.version >= context.observed_trading_version);
-
-                    return should_update
-                        ? event.has_open_position
-                        : context.observed_has_open_position;
-                },
-            }),
-            remember_force_sell_failure: assign({
-                error: ({ event }) => to_ui_command_failure(
-                    'error' in event ? event.error : null,
-                    'EXIT_FORCE_SELL_FAILED',
-                    '포지션 강제 매도에 실패해 프로그램 종료를 취소했습니다.',
-                ),
-            }),
-            remember_force_sell_success: assign({
-                // Terminal receipt 또는 event가 Position 종료를 확정한 뒤에만 청산 상태를 지운다.
-                had_open_position: false,
-                had_recovered_position: false,
-                observed_trading_version: null,
-                observed_trading_status: null,
-                observed_has_open_position: null,
-                error: null,
-            }),
-            remember_liquidation_reconciliation_required: assign({
-                // 조정 필요 상태에서는 Position 표식을 유지해 shutdown과 중복 신규 명령을 차단한다.
-                error: {
-                    code: 'EXIT_LIQUIDATION_RECONCILIATION_REQUIRED',
-                    message: '포지션 청산 결과를 확정할 수 없어 프로그램을 종료하지 않았습니다. 주문과 포지션 조정 상태를 확인해 주세요.',
-                },
             }),
             remember_shutdown_failure: assign({
                 error: ({ event }) => to_ui_command_failure(
@@ -222,10 +109,6 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
         initial: 'awaiting_exit',
         context: {
             had_open_position: false,
-            had_recovered_position: false,
-            observed_trading_version: null,
-            observed_trading_status: null,
-            observed_has_open_position: null,
             error: null,
         },
         on: {
@@ -258,70 +141,8 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
                         target: 'awaiting_exit',
                     },
                     FORCE_SELL_EXIT_CONFIRMED: {
-                        target: 'force_selling',
+                        target: 'shutting_down',
                     },
-                },
-            },
-            force_selling: {
-                meta: {
-                    spec_ids: ['ES3-05', 'ES3-06', 'ES3-07'],
-                    pending: true,
-                },
-                entry: 'clear_liquidation_observation',
-                invoke: {
-                    id: 'exit_force_sell_command',
-                    src: 'force_sell',
-                    input: ({ context }) => context.had_recovered_position,
-                    onDone: [
-                        {
-                            guard: 'force_sell_completion_requires_reconciliation',
-                            target: 'force_sell_exit_confirmation',
-                            actions: 'remember_liquidation_reconciliation_required',
-                        },
-                        {
-                            guard: 'force_sell_completion_is_stopping',
-                            target: 'awaiting_liquidation_terminal',
-                        },
-                        {
-                            guard: 'force_sell_completion_is_terminal',
-                            target: 'shutting_down',
-                            actions: 'remember_force_sell_success',
-                        },
-                        {
-                            target: 'force_sell_exit_confirmation',
-                            actions: 'remember_force_sell_failure',
-                        },
-                    ],
-                    onError: {
-                        target: 'force_sell_exit_confirmation',
-                        actions: 'remember_force_sell_failure',
-                    },
-                },
-                on: {
-                    TRADING_SESSION_UPDATED: {
-                        actions: 'remember_trading_session_update',
-                    },
-                },
-            },
-            // STOPPING receipt는 lifecycle event가 Position 종료를 증명할 때까지 shutdown을 보류한다.
-            awaiting_liquidation_terminal: {
-                meta: {
-                    spec_ids: ['PHASE9-RECOVERED-POSITION-LIQUIDATION'],
-                    pending: true,
-                },
-                on: {
-                    TRADING_SESSION_UPDATED: [
-                        {
-                            guard: 'trading_session_requires_reconciliation',
-                            target: 'force_sell_exit_confirmation',
-                            actions: 'remember_liquidation_reconciliation_required',
-                        },
-                        {
-                            guard: 'trading_session_is_terminal_without_position',
-                            target: 'shutting_down',
-                            actions: 'remember_force_sell_success',
-                        },
-                    ],
                 },
             },
             exit_confirmation: {
@@ -343,10 +164,16 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
                 invoke: {
                     id: 'shutdown_application_command',
                     src: 'shutdown_application',
+                    input: ({ context }) => context.had_open_position,
                     onDone: {
                         target: 'ui_final_state',
                     },
                     onError: [
+                        {
+                            guard: 'shutdown_needs_liquidation_confirmation',
+                            target: 'force_sell_exit_confirmation',
+                            actions: ['require_liquidation_confirmation', 'remember_shutdown_failure'],
+                        },
                         {
                             guard: 'sidecar_exit_wait_timed_out',
                             target: 'shutdown_exit_recovery',

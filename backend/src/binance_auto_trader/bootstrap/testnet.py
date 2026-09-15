@@ -19,6 +19,7 @@ from binance_auto_trader.adapters.binance.mappers import (
     OrderPreparationFilterEvidence,
     OrderSubmissionAttemptEvidence,
     ReferencePrice,
+    SymbolFilterError,
     SymbolTradingRules,
 )
 from binance_auto_trader.adapters.binance.read_facade import BinanceReadOnlyRESTFacade
@@ -70,6 +71,14 @@ class TestnetConfigurationError(RuntimeError):
     """
 
     code = "TESTNET_CONFIGURATION_INVALID"
+
+
+class _TestnetOrderLimitError(TestnetConfigurationError, SymbolFilterError):
+    """
+    클래스 이름: _TestnetOrderLimitError
+    기능: 설정 오류와 실제 준비 주문의 금액 한도 위반을 구분한다.
+    작성 날짜: 2026/09/16
+    """
 
 
 class _TestnetOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
@@ -472,7 +481,7 @@ class _TestnetOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
             final_notional > configured_cap
             or final_notional > BINANCE_TESTNET_ABSOLUTE_MAX_NOTIONAL
         ):
-            raise TestnetConfigurationError(
+            raise _TestnetOrderLimitError(
                 "prepared testnet order exceeds the configured or absolute cap"
             )
 
