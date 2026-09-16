@@ -523,7 +523,6 @@ describe('UiApplicationFacade', () => {
 
         facade.start();
         facade.dispatch({ type: 'CHART_INTERVAL_SELECTED', interval: '4h' });
-        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
         facade.dispatch({ type: 'REGIME_TYPE_CLICKED', regime: 'type4' });
         expect(facade.get_view_model().active_modal).toBe('regime_change_confirmation');
 
@@ -612,7 +611,7 @@ describe('UiApplicationFacade', () => {
         const view_model = facade.get_view_model();
 
         expect(notification_count).toBe(1);
-        expect(view_model.route).toBe('trade_history');
+        expect(view_model.route).toBe('dashboard');
         expect(view_model.chart.interval).toBe('4h');
         expect(view_model.active_modal).toBe('regime_change_confirmation');
         expect(view_model.regime.candidate).toBe('type4');

@@ -23,6 +23,7 @@ export interface CsvExportMachineContext {
     readonly end_date: LocalDateString | null;
     readonly file_name: string;
     readonly file_name_draft: string;
+    readonly file_name_committed: boolean;
     readonly calendar_target: 'start_date' | 'end_date' | null;
     readonly validation_errors: CsvValidationErrors;
     readonly command_error: UiCommandFailure | null;
@@ -197,6 +198,7 @@ export function create_csv_export_machine(
                     end_date: current_today,
                     file_name: current_default_file_name,
                     file_name_draft: current_default_file_name,
+                    file_name_committed: false,
                     calendar_target: null,
                     validation_errors: empty_validation_errors,
                     command_error: null,
@@ -293,6 +295,7 @@ export function create_csv_export_machine(
                 },
             }),
             commit_file_name: assign({
+                file_name_committed: true,
                 file_name: ({ context }) => normalize_file_name(context.file_name_draft),
                 file_name_draft: ({ context }) => normalize_file_name(context.file_name_draft),
                 validation_errors: ({ context }) => ({
@@ -337,6 +340,7 @@ export function create_csv_export_machine(
             end_date: options.today,
             file_name: initial_default_file_name,
             file_name_draft: initial_default_file_name,
+            file_name_committed: false,
             calendar_target: null,
             validation_errors: empty_validation_errors,
             command_error: null,

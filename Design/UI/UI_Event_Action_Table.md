@@ -67,8 +67,8 @@ REGIME Panel은 추천 type 표시, type 선택 상태 표시, type 지표 표�
 
 | 상태 ID | STM 표기 |
 | --- | --- |
-| TYPE_SELECTION | REGIME type 선택 및 선택 상태 표시 |
-| TYPE_CHANGING_POPUP_DISPLAYED | 자동매매 실행 중 type 변경 확인 팝업 표시 |
+| TYPE_SELECTION | 적용 REGIME 표시 및 변경 후보 선택 대기 |
+| TYPE_CHANGING_POPUP_DISPLAYED | 자동매매 실행 여부와 관계없이 type 변경 확인 팝업 표시 |
 
 ###### 1.3.1.1.3 REGIME Panel의 Region_3 — type 지표 표시
 
@@ -280,10 +280,19 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | AWAITING_EXIT | 프로그램 종료 요청 대기 |
 | FORCE_SELL_EXIT_POPUP_DISPLAYED | 포지션 보유 중 강제 매도 후 종료 확인 팝업 표시 |
 | FORCE_SELL_EXIT_PROCESSING | 강제 매도 체결 확인 대기 |
-| EXIT_POPUP_DISPLAYED | 포지션 미보유 종료 확인 팝업 표시 |
+| EXIT_POPUP_DISPLAYED | 일반 종료 확인 또는 종료 준비 실패 후 재확인 팝업 표시 |
   
   
 ## 2. Event-Action Table  
+
+실행 동작 공통 주석(2026-09-16):
+
+- 표의 조회·저장·거래 로직 초기화는 책임 경계를 포함한다. UI는 backend snapshot/이벤트를 표시하고 `UiCommandPort`에 명령을 요청한다. 체결 영속 저장과 거래 세션 초기화는 backend가 담당하며 UI의 화면 진입이 이를 다시 실행하지 않는다. M4의 체결 저장 표현도 backend에서 저장된 결과를 수신·목록에 반영하는 뜻이다.
+- 비동기 요청 수락은 작업 완료가 아니다. 중지·청산 요청이 수락되어도 authoritative lifecycle이 종료를 확인하기 전에는 대기를 유지한다. CSV는 결과 응답 후 완료/실패 팝업을 표시하고, 프로그램 종료는 backend 종료 준비와 네이티브 종료 확인까지 마친 후 최상위 `UI_FINAL_STATE`에 도달한다. API 단절 후에도 중지 완료는 서버 상태로 확인한다.
+- REGIME 선택은 실행·정지 모두 `UI_Rule.md` CR-03을 따른다. 적용 성공 전에 후보를 실제 적용값으로 바꾸지 않는다.
+- TD2-01/TD3-01의 오늘·전체 설정은 최초 진입에 해당한다. 이후 재진입은 기존 기간·거래 종류를 유지하며 결합 조건으로 다시 조회한다. 조회 중에는 필터 입력을 무시한다. 이탈 시 진행 중 조회를 취소하고, 오래된 응답으로 현재 결과를 덮지 않는다. 필터 조회는 기존 요약 카드를 유지하고, 화면 진입·명시적 새로고침·체결/서버 갱신 등 요약 갱신 경로를 구분한다.
+- H*는 실제 하위 활성 상태를 복원한다. 화면 밖에서 갱신된 서버 데이터는 최신값을 유지하며, 이미 제출한 쓰기 명령은 복귀만으로 재제출하지 않는다. CSV 기본 파일명은 창을 새로 열 때 설정하고 기간·날짜 변경만으로 자동 변경하지 않는다.
+
 
 ### 2.1 Etire UI System의 Region_1(Upper Status Bar)
 
@@ -345,10 +354,10 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
 | ----- | -------------- | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | R2-01 | Initial Pseudo State | None | None | 1) type0 ~ type4 버튼에 색칠되어있지 않은 상태로 표시 | TYPE_SELECTION |
-| R2-02 | TYPE_SELECTION | TYPE_CLICKED | 자동매매 실행 중 O | 1) 색칠되어있는 버튼의 색칠을 제거, 2) 이번에 선택된 해당 type 버튼에 색칠하여 표시, 3) 팝업창 표시 | TYPE_CHANGING_POPUP_DISPLAYED |
-| R2-03 | TYPE_SELECTION | TYPE_CLICKED | 자동매매 실행 중 X | 1) 색칠되어있는 버튼의 색칠을 제거, 2) 이번에 선택된 해당 type 버튼에 색칠하여 표시, 3) 선택된 type으로 투자 로직을 불러오기 | TYPE_SELECTION |
-| R2-04 | TYPE_CHANGING_POPUP_DISPLAYED | CONFIRM_TYPE_CHANGE | None | 1) 팝업 제거, 2) 선택된 type으로 투자 로직을 불러오기 | TYPE_SELECTION |
-| R2-05 | TYPE_CHANGING_POPUP_DISPLAYED | CANCEL_TYPE_CHANGE | None | 1) 팝업 제거, 2) 이전에 구동중이었던 type 버튼에 색칠하여 표시 | TYPE_SELECTION |
+| R2-02 | TYPE_SELECTION | TYPE_CLICKED | 자동매매 실행 중 O | 1) 적용값은 유지하고 클릭한 type을 변경 후보로 표시, 2) 변경 확인 팝업 표시 | TYPE_CHANGING_POPUP_DISPLAYED |
+| R2-03 | TYPE_SELECTION | TYPE_CLICKED | 자동매매 실행 중 X | 1) 적용값은 유지하고 클릭한 type을 변경 후보로 표시, 2) 변경 확인 팝업 표시 | TYPE_CHANGING_POPUP_DISPLAYED |
+| R2-04 | TYPE_CHANGING_POPUP_DISPLAYED | CONFIRM_TYPE_CHANGE | None | 1) 후보 type의 backend 적용을 요청하고 대기 표시, 2) 성공 시 적용값 확정 및 팝업 제거, 3) 실패 시 기존 적용값을 유지하고 오류 표시 | 성공: TYPE_SELECTION / 실패: TYPE_CHANGING_POPUP_DISPLAYED |
+| R2-05 | TYPE_CHANGING_POPUP_DISPLAYED | CANCEL_TYPE_CHANGE | None | 1) 후보 폐기 및 팝업 제거, 2) 기존 적용 type 표시 유지 | TYPE_SELECTION |
 
 ###### 2.2.1.1.3 REGIME Panel의 Region3(type 지표 표시)
 | ID | 현재 상태 | EVENT | 가드 | Action | 다음 상태 |
@@ -602,6 +611,6 @@ Display Account Info는 현재 투자 로직 표시, 보유 자산 표시, 분�
 | ES3-04 | FORCE_SELL_EXIT_POPUP_DISPLAYED | FORCE_SELL_EXIT_CANCELED | None | 1) 종료 시 보유한 포지션이 강제 매도됨을 알리는 팝업 제거 | AWAITING_EXIT |
 | ES3-05 | FORCE_SELL_EXIT_POPUP_DISPLAYED | FORCE_SELL_EXIT_CONFIRMED | None | 1) 포지션 강제 매도 주문 제출, 2) 강제 매도 처리 중 상태 표시 | FORCE_SELL_EXIT_PROCESSING |
 | ES3-06 | FORCE_SELL_EXIT_PROCESSING | FORCE_SELL_EXIT_SUCCEEDED | None | 1) 자동매매 중단, 2) API 및 WebSocket 연결 종료, 3) 저장 데이터 반영, 4) 프로그램 종료 | UI_FINAL_STATE |
-| ES3-07 | FORCE_SELL_EXIT_PROCESSING | FORCE_SELL_EXIT_FAILED | None | 1) 강제 매도 실패 원인을 표시, 2) 프로그램 종료 취소, 3) 강제 매도 후 종료 확인 팝업을 다시 표시 | FORCE_SELL_EXIT_POPUP_DISPLAYED |
+| ES3-07 | FORCE_SELL_EXIT_PROCESSING | FORCE_SELL_EXIT_FAILED | None | 1) 종료 실패 원인 표시, 2) 일반 종료 확인에서 안전 조건 재평가; 청산 동의 요구 오류는 청산 확인으로, 종료 결과 불명·프로세스 대기 시간 초과는 해당 복구 상태로 이동 | 일반 실패: EXIT_POPUP_DISPLAYED / 청산 동의 필요: FORCE_SELL_EXIT_POPUP_DISPLAYED / 그 외: 종료 복구 상태 |
 | ES3-08 | EXIT_POPUP_DISPLAYED | EXIT_CANCELED | None | 1) 종료 확인 팝업 제거 | AWAITING_EXIT |
 | ES3-09 | EXIT_POPUP_DISPLAYED | EXIT_CONFIRMED | None | 1) 자동매매 중단, 2) API 및 WebSocket 연결 종료, 3) 저장 데이터 반영, 4) 프로그램 종료 | UI_FINAL_STATE |

@@ -82,6 +82,7 @@ describe('UiApplicationFacade Phase 13 negative Communication trace', () => {
         // 닫힌 CSV actor는 option patch를 무시하고, 열린 invalid draft는 export port를 호출하지 않는다.
         facade.dispatch({ type: 'CSV_PERIOD_SELECTED', period: 'last30days' });
         expect(facade.get_view_model().csv_export.period).toBe('today');
+        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
         expect(facade.dispatch({ type: 'OPEN_CSV_EXPORT' })).toBe(true);
         facade.dispatch({ type: 'CSV_EXPORT_SUBMITTED' });
         expect(facade.get_view_model().csv_export.validation_errors.directory).not.toBeNull();
@@ -98,6 +99,7 @@ describe('UiApplicationFacade Phase 13 negative Communication trace', () => {
         const facade = new UiApplicationFacade(command_adapter, { today: '2026-08-25' });
 
         facade.start();
+        facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
         facade.dispatch({ type: 'OPEN_CSV_EXPORT' });
         expect(facade.dispatch({ type: 'CSV_DIRECTORY_SELECT_CLICKED' })).toBe(true);
         await wait_for_facade_settlement();
