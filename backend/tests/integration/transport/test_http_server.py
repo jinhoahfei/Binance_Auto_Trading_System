@@ -324,6 +324,7 @@ class LoopbackHttpServerTests(unittest.TestCase):
             request_id=str(uuid4()),
         )
         self.assertEqual(status, 200)
+        self.assertIsInstance(payload["data"].pop("checked_at_ms"), int)
         self.assertEqual(payload["data"], {
             "api": "online", "market_stream": "offline", "account_stream": "online",
         })

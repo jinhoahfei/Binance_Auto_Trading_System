@@ -13,13 +13,17 @@ import type { BackendBinanceConnectionStatus } from '../../shared/contracts';
 export function use_binance_connection_status(
     load_status: (signal?: AbortSignal) => Promise<BackendBinanceConnectionStatus>,
     enabled = true,
+    transport_online = true,
 ) {
     const [is_open, set_is_open] = useState(false);
     const [connection_details, set_connection_details] = useState<BackendBinanceConnectionStatus | null>(null);
     const [has_error, set_has_error] = useState(false);
+    const [checked_at_ms, set_checked_at_ms] = useState<number | null>(null);
 
     useEffect(() => {
-        if (!is_open || !enabled) {
+        if (!is_open || !enabled || !transport_online) {
+            set_connection_details(null);
+            set_checked_at_ms(null);
             return;
         }
 
@@ -42,12 +46,14 @@ export function use_binance_connection_status(
                     return;
                 }
                 set_connection_details(next_details);
+                set_checked_at_ms(next_details.checked_at_ms ?? null);
                 set_has_error(false);
             } catch {
                 if (abort_controller.signal.aborted) {
                     return;
                 }
                 set_connection_details(null);
+                set_checked_at_ms(null);
                 set_has_error(true);
             }
 
@@ -59,7 +65,8 @@ export function use_binance_connection_status(
             abort_controller.abort();
             clearTimeout(refresh_timer);
         };
-    }, [enabled, is_open, load_status]);
+    }, [enabled, is_open, load_status, transport_online]);
 
-    return { connection_details, has_error, set_is_open };
+    return { connection_details: transport_online ? connection_details : null,
+        checked_at_ms: transport_online ? checked_at_ms : null, has_error, set_is_open };
 }

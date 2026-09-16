@@ -42,3 +42,6 @@ dist/
 
 # Local Windows development toolchains and caches
 .dev-tools/
+
+# 주문 없는 WebView soak의 독립 빌드 산출물
+UI/apps/desktop/soak-dist/

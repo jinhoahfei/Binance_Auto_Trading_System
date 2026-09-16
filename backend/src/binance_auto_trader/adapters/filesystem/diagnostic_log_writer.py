@@ -126,7 +126,7 @@ class DiagnosticLogWriter:
             # 수신 순서와 실제 기록 시각을 시장 evaluated_at과 분리해 지연·재연결도 추적한다.
             next_sequence = self._sequence + 1
             envelope = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "timestamp_kst": timestamp.astimezone(KST),
                 "timestamp_utc": timestamp.astimezone(timezone.utc),
                 "run_id": self.run_id,

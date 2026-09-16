@@ -39,6 +39,7 @@ export interface BackendConnectionSnapshot {
 }
 
 export interface BackendBinanceConnectionStatus {
+    readonly checked_at_ms?: number;
     readonly api: 'online' | 'offline';
     readonly market_stream: 'online' | 'offline';
     readonly account_stream: 'online' | 'offline';
@@ -375,6 +376,7 @@ export interface BackendAuthenticateMessage {
     readonly type: 'AUTHENTICATE';
     readonly token: string;
     readonly after_sequence: number;
+    readonly client_connection_id?: string;
 }
 
 export interface BackendEventEnvelope<TPayload = Readonly<Record<string, unknown>>> {

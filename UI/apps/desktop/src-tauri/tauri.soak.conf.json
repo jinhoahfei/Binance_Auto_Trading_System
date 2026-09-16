@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Background Liveness Soak",
+  "version": "0.1.0",
+  "identifier": "com.binance-auto.liveness-soak",
+  "build": { "frontendDist": "../soak-dist" },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* https://data-api.binance.vision wss://data-stream.binance.vision",
+      "capabilities": ["background-soak"]
+    }
+  },
+  "bundle": { "active": false }
+}

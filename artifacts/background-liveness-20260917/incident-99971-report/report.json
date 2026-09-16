@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "incidents": [
+    {
+      "cause": "ui_receive_gap",
+      "confidence": "confirmed",
+      "observed_issues": [],
+      "root_cause": "unknown",
+      "root_confidence": "unknown",
+      "missing_evidence": [
+        "native_observer_unavailable_in_this_log_version",
+        "no_direct_os_execution_evidence",
+        "unambiguous_socket_close_open_pair_missing"
+      ],
+      "os_collection_statuses": [],
+      "evidence": [
+        {
+          "file": "backend/tests/fixtures/liveness/incident_99971.jsonl",
+          "line": 1
+        },
+        {
+          "file": "backend/tests/fixtures/liveness/incident_99971.jsonl",
+          "line": 2
+        }
+      ],
+      "incident_id": "7d6347c6-f321-4938-b14e-a1176740a425",
+      "renderer_id": "7a97ec89-06b9-46be-9456-a3e6a9db3258",
+      "session_id": "91b0aea2-6aec-45ad-ac95-7edcb2d19b29",
+      "last_received_at_ms": 1789568168094,
+      "detected_at_ms": 1789568266076,
+      "recovered_at_ms": 1789568268065,
+      "ui_receive_gap": {
+        "ms": 99971,
+        "basis": "wall_clock_unverified"
+      },
+      "detection_delay": {
+        "ms": 97982,
+        "basis": "wall_clock_unverified"
+      },
+      "recovery_time": {
+        "ms": 1989,
+        "basis": "wall_clock_unverified"
+      },
+      "observed_socket_gap": {
+        "ms": null,
+        "basis": "missing"
+      },
+      "engine_observed_max_cycle_age_ms": null,
+      "engine_gap_basis": "missing",
+      "backend_market_inputs": 0,
+      "backend_evaluations": 0,
+      "exchange_outage_duration_ms": null
+    }
+  ],
+  "native_incidents": [],
+  "read_problems": []
+}

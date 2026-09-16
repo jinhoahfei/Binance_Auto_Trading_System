@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "incidents": [
+    {
+      "cause": "renderer_execution_delayed",
+      "confidence": "confirmed",
+      "observed_issues": [
+        "renderer_execution_delayed"
+      ],
+      "root_cause": "background_execution_delay",
+      "root_confidence": "inferred",
+      "missing_evidence": [
+        "no_direct_os_execution_evidence"
+      ],
+      "os_collection_statuses": [
+        "available",
+        "size_limit"
+      ],
+      "evidence": [
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/ui/connection_32102_part0001.log",
+          "line": 7
+        },
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/ui/connection_32102_part0001.log",
+          "line": 14
+        },
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/native/runtime_1789571403911_32102_part0001.log",
+          "line": 14
+        },
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/native/runtime_1789571403911_32102_part0001.log",
+          "line": 16
+        },
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/backend/2026-09-17_00-10-03-683679_KST_disabled_32111_ce3ce4ea2d324e208af0f4523f5e4be5_part0001.log",
+          "line": 10
+        },
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/backend/2026-09-17_00-10-03-683679_KST_disabled_32111_ce3ce4ea2d324e208af0f4523f5e4be5_part0001.log",
+          "line": 13
+        }
+      ],
+      "incident_id": "96d88d83-36ba-449d-98ba-5a9b67916a29",
+      "renderer_id": "f7410fd3-e5da-46b5-b94a-bc54a438b2a5",
+      "session_id": "37d84952-564b-4732-9ccd-2b2e1dbad139",
+      "last_received_at_ms": 1789571413733,
+      "detected_at_ms": 1789571513924,
+      "recovered_at_ms": 1789571516100,
+      "ui_receive_gap": {
+        "ms": 102367,
+        "basis": "monotonic",
+        "wall_clock_jump": false
+      },
+      "detection_delay": {
+        "ms": 100191,
+        "basis": "monotonic",
+        "wall_clock_jump": false
+      },
+      "recovery_time": {
+        "ms": 2176,
+        "basis": "monotonic",
+        "wall_clock_jump": false
+      },
+      "observed_socket_gap": {
+        "ms": 1114,
+        "basis": "monotonic",
+        "wall_clock_jump": false
+      },
+      "engine_observed_max_cycle_age_ms": 1977,
+      "engine_gap_basis": "sampled_age_lower_bound",
+      "backend_market_inputs": 0,
+      "backend_evaluations": 0,
+      "exchange_outage_duration_ms": null
+    }
+  ],
+  "native_incidents": [
+    {
+      "cause": "renderer_execution_delayed",
+      "confidence": "confirmed",
+      "observed_issues": [
+        "renderer_execution_delayed"
+      ],
+      "root_cause": "background_execution_delay",
+      "root_confidence": "inferred",
+      "missing_evidence": [
+        "no_direct_os_execution_evidence"
+      ],
+      "os_collection_statuses": [
+        "available",
+        "size_limit"
+      ],
+      "evidence": [
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/native/runtime_1789571403911_32102_part0001.log",
+          "line": 14
+        },
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/native/runtime_1789571403911_32102_part0001.log",
+          "line": 16
+        },
+        {
+          "file": "artifacts/background-liveness-20260917/renderer-freeze-03/native/runtime_1789571403911_32102_part0001.log",
+          "line": 8
+        }
+      ],
+      "incident_id": "c72b3b11-6bda-4492-9499-cc360913dfa5",
+      "native_run_id": "873e9818-9270-4aa9-b0be-511a9c9aac5d",
+      "detected_at_ms": 1789571429074,
+      "recovered_at_ms": 1789571515648,
+      "recovery_time": {
+        "ms": 86574,
+        "basis": "monotonic",
+        "wall_clock_jump": false
+      },
+      "heartbeat_gap_lower_bound_ms": 101334
+    }
+  ],
+  "read_problems": []
+}

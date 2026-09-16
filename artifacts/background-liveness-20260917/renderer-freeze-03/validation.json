@@ -1,0 +1,29 @@
+{
+  "status": "passed",
+  "issues": [],
+  "phase": "hidden",
+  "elapsed_seconds": 150.02,
+  "formal_24h_complete": false,
+  "formal_20m_complete": false,
+  "occluded_samples": 29,
+  "minimized_samples": 0,
+  "sample_count": 30,
+  "max_heartbeat_age_ms": 101334,
+  "last_summary": {
+    "received_events": 23,
+    "recoveries": 1,
+    "errors": 0,
+    "chart_live": true
+  },
+  "native_resources": null,
+  "total_log_bytes": 121455,
+  "classification": [
+    {
+      "cause": "renderer_execution_delayed",
+      "root_confidence": "inferred",
+      "missing_evidence": [
+        "no_direct_os_execution_evidence"
+      ]
+    }
+  ]
+}

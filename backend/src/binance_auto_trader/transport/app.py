@@ -21,7 +21,7 @@ import struct
 from threading import Event, RLock, Thread
 from time import monotonic, sleep
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from binance_auto_trader.adapters.platform.runtime_lock import (
     acquire_runtime_file_lock,
@@ -54,6 +54,7 @@ from .routes.csv_export import create_csv_export
 from .routes.regime import select_regime
 from .routes.snapshot import get_snapshot
 from .routes.system import get_health, get_shutdown_state, request_shutdown, prepare_shutdown, read_shutdown_preparation
+from .routes.diagnostics import get_liveness
 from .routes.trade_history import get_trades
 from .routes.trading import (
     liquidate_recovered_position,
@@ -116,6 +117,7 @@ _BODY_COMMAND_ENDPOINTS = frozenset(
 _KNOWN_ENDPOINTS = frozenset(
     {
         ("GET", "/v1/health"),
+        ("GET", "/v1/diagnostics/liveness"),
         ("GET", "/v1/shutdown/state"),
         ("GET", "/v1/shutdown/prepare"),
         ("GET", "/v1/binance/connection-status"),
@@ -953,7 +955,7 @@ class LoopbackTransportServer:
         self._session_token = validated_token
         self._allowed_origins = normalized_origins
         self._event_stream = selected_event_stream
-        self._route_context = RouteContext(runtime, selected_event_stream)
+        self._route_context = RouteContext(runtime, selected_event_stream, _get_runtime_process_identity()[1])
         self._lifecycle_lock = RLock()
         self._idempotency_lock = RLock()
         self._idempotency_records: dict[str, _IdempotencyRecord] = {}
@@ -1476,6 +1478,7 @@ class LoopbackTransportServer:
         """
         route_by_endpoint = {
             ("GET", "/v1/health"): get_health,
+            ("GET", "/v1/diagnostics/liveness"): get_liveness,
             ("GET", "/v1/shutdown/state"): get_shutdown_state,
             ("GET", "/v1/shutdown/prepare"): read_shutdown_preparation,
             ("GET", "/v1/binance/connection-status"): get_binance_connection_status,
@@ -1693,6 +1696,7 @@ class LoopbackTransportServer:
         stage = "authentication"
         current_sequence = 0
         sent_count = 0
+        client_connection_id = None
         next_heartbeat = monotonic() + 30
         self._record_transport("ui_stream_opened", connection_id=connection_id)
         try:
@@ -1702,11 +1706,12 @@ class LoopbackTransportServer:
             authentication_frame = websocket.receive_frame(
                 deadline=authentication_deadline
             )
-            after_sequence = self._authenticate_websocket_frame(
+            after_sequence, client_connection_id = self._authenticate_websocket_frame(
                 websocket,
                 authentication_frame,
             )
-            self._record_transport("ui_stream_authenticated", connection_id=connection_id, after_sequence=after_sequence)
+            self._record_transport("ui_stream_authenticated", connection_id=connection_id,
+                                   client_connection_id=client_connection_id, after_sequence=after_sequence)
             client_socket.settimeout(_WEBSOCKET_SEND_TIMEOUT_SECONDS)
 
             # 인증이 성공하기 전에는 replay를 포함한 application event를 보내지 않는다.
@@ -1734,7 +1739,12 @@ class LoopbackTransportServer:
                 # replay와 live event 모두 하나의 ordered tuple 경로로 전송한다.
                 for event_envelope in replay_batch.events:
                     stage = "send"
+                    send_started = monotonic()
                     websocket.send_text_object(event_envelope.to_dto())
+                    diagnostics = getattr(self._runtime, "diagnostics", None)
+                    if isinstance(diagnostics, RuntimeDiagnostics):
+                        diagnostics.liveness.observe("ui_send", {"sequence": event_envelope.sequence,
+                            "duration_ms": round((monotonic() - send_started) * 1000)})
                     current_sequence = event_envelope.sequence
                     sent_count += 1
                 if replay_batch.closed:
@@ -1773,7 +1783,7 @@ class LoopbackTransportServer:
             # Upgrade 뒤의 내부 오류는 HTTP envelope를 쓰지 않고 generic close로만 끝낸다.
             _send_close_safely(websocket, 1011, "internal transport error")
         finally:
-            self._record_transport("ui_stream_closed", connection_id=connection_id, stage=stage,
+            self._record_transport("ui_stream_closed", connection_id=connection_id, client_connection_id=client_connection_id, stage=stage,
                                    last_sequence=current_sequence, sent_count=sent_count)
             # socket shutdown 오류는 이미 종료 중인 connection에서 무시한다.
             try:
@@ -1786,7 +1796,7 @@ class LoopbackTransportServer:
         self,
         websocket: _WebSocketConnection,
         authentication_frame: _WebSocketFrame,
-    ) -> int:
+    ) -> tuple[int, str | None]:
         """
         함수 이름: _authenticate_websocket_frame()
         기능: 첫 masked text frame의 exact AUTHENTICATE schema와 token을 검증한다.
@@ -1817,8 +1827,15 @@ class LoopbackTransportServer:
             "token",
             "after_sequence",
         }
-        if set(authentication_value) != required_keys:
+        if set(authentication_value) not in (required_keys, required_keys | {"client_connection_id"}):
             raise _WebSocketProtocolError(1008, "malformed authentication frame")
+        client_connection_id = authentication_value.get("client_connection_id")
+        if "client_connection_id" in authentication_value:
+            try:
+                if not isinstance(client_connection_id, str) or str(UUID(client_connection_id)) != client_connection_id:
+                    raise ValueError()
+            except ValueError as error:
+                raise _WebSocketProtocolError(1008, "invalid client connection id") from error
         authentication_schema_version = authentication_value.get("schema_version")
         if (
             isinstance(authentication_schema_version, bool)
@@ -1851,7 +1868,7 @@ class LoopbackTransportServer:
         # 인증 payload와 token 참조를 live loop에 보존하지 않는다.
         authentication_value.clear()
         candidate_token = ""
-        return after_sequence
+        return after_sequence, client_connection_id
 
     def _handle_client_websocket_frame(
         self,

@@ -73,6 +73,7 @@ pub struct ChartDiagnostic {
     event: ChartEvent,
     renderer_id: String,
     at_ms: u64,
+    monotonic_ms: Option<u64>,
     sequence: u64,
     dropped_before: u64,
     error_kind: Option<ChartErrorKind>,
@@ -91,6 +92,13 @@ pub struct ChartDiagnostic {
 
 #[derive(Default)]
 pub struct ChartDiagnosticsState(Mutex<Option<ChartLogWriter>>);
+
+#[cfg(feature = "background-liveness-smoke")]
+impl ChartDiagnosticsState {
+    pub(crate) fn in_directory(directory: PathBuf) -> Self {
+        Self(Mutex::new(Some(ChartLogWriter::new(directory, format!("chart_{}", std::process::id())))))
+    }
+}
 
 pub(crate) struct ChartLogWriter {
     directory: PathBuf,
@@ -242,7 +250,8 @@ pub async fn record_chart_diagnostics(
     let runtime_identity = sidecar.diagnostic_runtime_identity();
     for record in records {
         let envelope = serde_json::json!({
-            "schema_version": 1, "native_at_ms": now, "native_pid": std::process::id(),
+            "schema_version": 2, "native_at_ms": now, "native_pid": std::process::id(),
+            "native_run_id":app.state::<crate::runtime_diagnostics::RuntimeDiagnosticsState>().0.native_run_id,
             "backend_session_id": session_id, "chart": record,
             "backend_pid": runtime_identity.as_ref().map(|identity| identity.0),
             "backend_process_start_id": runtime_identity.as_ref().map(|identity| &identity.1),

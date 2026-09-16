@@ -1,0 +1,6 @@
+{
+  "identifier": "background-soak",
+  "description": "주문 없는 별도 WebView 검증 앱의 진단 전용 권한",
+  "windows": ["main"],
+  "permissions": ["allow-get-background-soak-descriptor", "allow-record-renderer-heartbeat", "allow-record-backend-connection-diagnostics", "allow-record-chart-diagnostics", "allow-record-background-soak-summary"]
+}

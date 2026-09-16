@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { renderer_instance_id } from './rendererLiveness';
 
 export type ConnectionDiagnosticStage = 'connect' | 'authenticate' | 'receive' | 'decode'
     | 'map' | 'publish' | 'resync' | 'request' | 'shutdown' | 'lifecycle';
@@ -30,6 +31,9 @@ export interface ConnectionDiagnostic {
     readonly delay_ms?: number;
     readonly visible?: boolean;
     readonly online?: boolean;
+    readonly client_connection_id?: string;
+    readonly monotonic_ms?: number;
+    readonly last_received_monotonic_ms?: number | null;
 }
 
 export interface StoredConnectionDiagnostic extends ConnectionDiagnostic {
@@ -41,7 +45,7 @@ export interface StoredConnectionDiagnostic extends ConnectionDiagnostic {
 
 /** Native IPC 실패 중에도 최초 오류를 보존하는 bounded queue. 인증 값과 원본 응답은 받지 않는다. */
 export class BackendConnectionDiagnosticWriter {
-    private readonly renderer_id = globalThis.crypto.randomUUID();
+    private readonly renderer_id = renderer_instance_id;
     private pending: StoredConnectionDiagnostic[] = [];
     private sequence = 0;
     private dropped = 0;
@@ -52,6 +56,7 @@ export class BackendConnectionDiagnosticWriter {
 
     record(diagnostic: ConnectionDiagnostic): void {
         this.pending.push({ ...diagnostic, renderer_id: this.renderer_id, at_ms: Date.now(),
+            monotonic_ms: Math.round(performance.now()),
             sequence: ++this.sequence, dropped_before: 0 });
         // 최초 오류는 일반 heartbeat/후속 오류보다 오래 보존한다. 전부 최초 오류일 때만 가장 오래된 것을 버린다.
         if (this.pending.length > 256) {

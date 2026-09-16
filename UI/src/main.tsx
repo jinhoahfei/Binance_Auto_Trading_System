@@ -27,6 +27,7 @@ import {
 } from './shared/api';
 import { flush_backend_connection_diagnostics } from './shared/api/backendConnectionDiagnostics';
 import { connection_recovery_message } from './shared/api/connectionRecoveryMessage';
+import { start_renderer_liveness } from './shared/api/rendererLiveness';
 import { shutdown_step_message } from './shared/api/shutdownMessages';
 import './shared/styles/global.css';
 
@@ -612,5 +613,8 @@ if (bootstrap_hot_data?.bootstrap_started === true) {
         import.meta.hot.accept();
     }
     const react_root = createRoot(root_element);
+    const stop_liveness = start_renderer_liveness();
+    window.addEventListener('pagehide', stop_liveness, { once: true });
+    import.meta.hot?.dispose(stop_liveness);
     void bootstrap_live_renderer(react_root);
 }

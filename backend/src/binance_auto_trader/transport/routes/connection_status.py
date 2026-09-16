@@ -1,5 +1,7 @@
 """백엔드와 Binance 사이의 API 및 WebSocket 연결 진단을 제공한다."""
 
+from time import time_ns
+
 from ..contracts import TransportResponse, success_response
 from . import RouteContext, require_ready_runtime
 
@@ -30,10 +32,15 @@ def get_binance_connection_status(
     except Exception:
         api_status = "offline"  # 인증·네트워크 오류의 원문이나 계좌 정보는 UI에 보내지 않는다.
 
+    diagnostics = getattr(context.runtime, "diagnostics", None)
+    if diagnostics is not None:
+        diagnostics.liveness.observe("api_observed", {"api": api_status})
+
     return success_response(
         request_id,
         {
             "api": api_status,
+            "checked_at_ms": time_ns() // 1_000_000,
             "market_stream": (
                 "online" if web_socket_gateway.kline_connected else "offline"
             ),

@@ -21,6 +21,7 @@ class RouteContext:
 
     runtime: RuntimeSnapshotSource
     event_stream: BackendEventStream
+    diagnostic_process_start_id: str | None = None
 
     def __post_init__(self) -> None:
         """

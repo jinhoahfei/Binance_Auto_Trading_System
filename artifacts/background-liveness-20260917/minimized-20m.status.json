@@ -1,0 +1,37 @@
+{
+  "status": "passed",
+  "started_at": "2026-09-16T15:29:13.112739+00:00",
+  "target_seconds": 1200,
+  "phase": "minimized",
+  "output": "/Users/oscar/Desktop/Binance_Auto/artifacts/background-liveness-20260917/minimized-20m",
+  "orders_enabled": false,
+  "process_id": 38135,
+  "exit_code": 0,
+  "validation": {
+    "status": "passed",
+    "issues": [],
+    "phase": "minimized",
+    "elapsed_seconds": 1200.023,
+    "continuous_24h_complete": false,
+    "formal_24h_complete": false,
+    "formal_20m_complete": true,
+    "occluded_samples": 39,
+    "minimized_samples": 39,
+    "sample_count": 40,
+    "max_heartbeat_age_ms": 5849,
+    "last_summary": {
+      "received_events": 596,
+      "recoveries": 0,
+      "errors": 0,
+      "chart_live": true
+    },
+    "native_resources": {
+      "cpu_total_ms": 6089,
+      "peak_rss_bytes": 129613824,
+      "scope": "native_process_only"
+    },
+    "total_log_bytes": 268005,
+    "classification": []
+  },
+  "finished_at": "2026-09-16T15:49:14.236177+00:00"
+}

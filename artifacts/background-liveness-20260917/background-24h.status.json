@@ -1,0 +1,9 @@
+{
+  "status": "running",
+  "started_at": "2026-09-16T15:29:13.112713+00:00",
+  "target_seconds": 86400,
+  "phase": "hidden",
+  "output": "/Users/oscar/Desktop/Binance_Auto/artifacts/background-liveness-20260917/background-24h",
+  "orders_enabled": false,
+  "process_id": 38134
+}

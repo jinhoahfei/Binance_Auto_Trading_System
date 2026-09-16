@@ -4,7 +4,8 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import logging
 from threading import RLock
-from time import monotonic
+from time import monotonic, monotonic_ns
+from .liveness_diagnostics import LivenessDiagnostics
 
 
 def describe_exception(error: BaseException) -> tuple[dict[str, object], ...]:
@@ -60,6 +61,7 @@ class RuntimeDiagnostics:
         """
         # 진단은 런타임마다 분리하며 전역 logger handler를 추가하지 않는다.
         self._sink = sink
+        self.liveness = LivenessDiagnostics()
         self._lock = RLock()
         self._dropped_records = 0
         self._failure_count = 0
@@ -96,6 +98,7 @@ class RuntimeDiagnostics:
         반환값: 없음
         작성 날짜: 2026/09/09
         """
+        self.liveness.observe(event, details)
         if self._sink is None:
             return
 
@@ -106,6 +109,7 @@ class RuntimeDiagnostics:
                     "event": event,
                     "level": level,
                     "observed_at": datetime.now(timezone.utc),
+                    "monotonic_ms": monotonic_ns() // 1_000_000,
                     "dropped_records_before": self._dropped_records,
                     "details": details,
                 })

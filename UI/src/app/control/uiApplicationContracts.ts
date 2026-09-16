@@ -152,6 +152,9 @@ export type UiApplicationIntent = {
     readonly type: 'API_DISCONNECTED';
     readonly reason?: string;
 } | {
+    readonly type: 'UI_CONNECTION_DISCONNECTED';
+    readonly reason?: string;
+} | {
     readonly type: 'RECONNECT_FAILED';
     readonly reason: string;
 } | {

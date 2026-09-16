@@ -137,6 +137,10 @@ export class UiIntentRouter {
                     type: 'API_DISCONNECTED',
                 });
                 break;
+            case 'UI_CONNECTION_DISCONNECTED':
+                // 화면 수신 복구는 authoritative 매매 lifecycle이나 실행 중 명령을 변경하지 않는다.
+                this.send('connection', { type: 'API_DISCONNECTED', ...(intent.reason === undefined ? {} : { reason: intent.reason }) });
+                break;
             case 'BACKEND_CONNECTION_STATUS':
                 this.send('connection', intent);
                 break;

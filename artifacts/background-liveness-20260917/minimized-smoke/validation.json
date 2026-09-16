@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "issues": [],
+  "phase": "minimized",
+  "elapsed_seconds": 35.051,
+  "formal_24h_complete": false,
+  "formal_20m_complete": false,
+  "occluded_samples": 1,
+  "minimized_samples": 1,
+  "sample_count": 2,
+  "max_heartbeat_age_ms": 4351,
+  "last_summary": {
+    "received_events": 15,
+    "recoveries": 0,
+    "errors": 0,
+    "chart_live": true
+  },
+  "native_resources": {
+    "cpu_total_ms": 453,
+    "peak_rss_bytes": 128925696,
+    "scope": "native_process_only"
+  },
+  "total_log_bytes": 36154,
+  "classification": []
+}

@@ -35,7 +35,7 @@ class ConnectionDiagnosticsTests(unittest.TestCase):
                 server._event_stream = Mock(session_id="test-session")
                 server._event_stream.wait_for_events.return_value = SimpleNamespace(
                     requires_resync=False, events=(event,), closed=False)
-                server._authenticate_websocket_frame = Mock(return_value=0)
+                server._authenticate_websocket_frame = Mock(return_value=(0, None))
                 websocket = Mock()
                 if stage == "authentication":
                     websocket.receive_frame.side_effect = socket.timeout("SECRET_CANARY")

@@ -8,6 +8,7 @@
     "allow-get-backend-connection-descriptor",
     "allow-record-chart-diagnostics",
     "allow-record-backend-connection-diagnostics",
+    "allow-record-renderer-heartbeat",
     "allow-choose-csv-export-directory",
     "allow-await-backend-sidecar-exit",
     "allow-arm-native-exit-intent-bridge",

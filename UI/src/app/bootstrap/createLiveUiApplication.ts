@@ -147,17 +147,17 @@ export async function hydrate_live_ui_application(
                         type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
                         snapshot: remapped_snapshot.server_snapshot,
                     });
-                    facade.dispatch({ type: 'API_DISCONNECTED', reason: '이벤트 수신 재개를 확인 중입니다.' });
+                    facade.dispatch({ type: 'UI_CONNECTION_DISCONNECTED', reason: '이벤트 수신 재개를 확인 중입니다.' });
                 },
                 on_reconnecting: (reason) => {
-                    facade.dispatch({ type: 'API_DISCONNECTED', reason });
+                    facade.dispatch({ type: 'UI_CONNECTION_DISCONNECTED', reason });
                 },
                 on_ready: () => facade.dispatch({ type: 'API_CONNECTED' }),
                 on_connection_status: (status) => facade.dispatch({ type: 'BACKEND_CONNECTION_STATUS', status }),
                 on_failure: (error) => {
                     // Online과 reconnecting 양쪽에서 동일하게 typed offline 최종 상태로 수렴시킨다.
                     try {
-                        facade.dispatch({ type: 'API_DISCONNECTED', reason: error.code });
+                        facade.dispatch({ type: 'UI_CONNECTION_DISCONNECTED', reason: error.code });
                         facade.dispatch({ type: 'RECONNECT_FAILED', reason: error.message });
                     } finally {
                         options.on_terminal_failure?.(error);  // 화면 actor 오류가 최종 복구 안내를 막지 않는다.

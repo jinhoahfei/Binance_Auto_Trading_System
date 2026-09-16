@@ -5,6 +5,7 @@ import {
     useState,
 } from 'react';
 
+import { observe_renderer_connection } from '../../../shared/api/rendererLiveness';
 import type { ChartInterval, PriceChartDataStatus } from '../types';
 import { record_chart_diagnostic, type ChartDiagnostic, type ChartIntervalDiagnostic } from '../data/chartDiagnostics';
 import { describe_chart_data_error } from '../data/chartDataError';
@@ -301,6 +302,7 @@ export function use_realtime_chart_data(
         let reconnect_timer: ReturnType<typeof setTimeout> | null = null;
         let connection_started_at = performance.now();
         let socket_opened_at: number | null = null;
+        let socket_opened_wall: number | null = null;
         let next_heartbeat_at = performance.now() + 30_000;
         let interval_diagnostics: Array<ChartIntervalDiagnostic> = [];
         let last_received_monotonic: Partial<Record<ChartInterval, number>> = {};
@@ -550,6 +552,7 @@ export function use_realtime_chart_data(
             let parse_failure_was_recorded = false;
             connection_started_at = performance.now();
             socket_opened_at = null;
+            socket_opened_wall = null;
             last_received_monotonic = {};
             interval_diagnostics = supported_chart_intervals.map((interval) => ({
                 interval, received_at_ms: null, open_time_ms: null, event_time_ms: null, close: null, count: 0,
@@ -608,14 +611,18 @@ export function use_realtime_chart_data(
                         if (!is_current_connection()) return;
                         socket_is_open = true;
                         socket_opened_at = performance.now();
+                        socket_opened_wall = Date.now();
                         record_diagnostic({ event: 'socket_opened' });
                     };
                     socket.onmessage = (event) => {
                         if (!is_current_connection()) return;
+                        check_connection_health();
+                        if (!is_current_connection() || reconnect_timer !== null) return;
                         try {
                             const incoming_kline = parse_combined_kline_message(event.data);
                             if (incoming_kline.symbol !== symbol) throw new Error('Unexpected chart symbol');
                             const received_at = Date.now();
+                            observe_renderer_connection({ last_chart_received_at_ms: received_at });
                             const previous = interval_diagnostics.find((entry) => entry.interval === incoming_kline.interval)!;
                             // 이전 세대/봉의 역행 tick으로 화면이나 수신 시각을 되돌리지 않는다.
                             if (previous.open_time_ms !== null && incoming_kline.open_time < previous.open_time_ms) return;
@@ -720,7 +727,7 @@ export function use_realtime_chart_data(
          * 반환값: 없음
          * 작성 날짜: 2026/09/11
          */
-        function check_connection_health(): void {
+        function check_connection_health(resumed_from_sleep = false): void {
             if (is_disposed || reconnect_timer !== null || web_socket_factory === null) return;
             const current_time = performance.now();
             if (current_time >= next_heartbeat_at) {
@@ -735,7 +742,8 @@ export function use_realtime_chart_data(
                 return;
             }
             const stale_interval = supported_chart_intervals.find((interval) =>
-                current_time - (last_received_monotonic[interval] ?? socket_opened_at!) >= 15_000);
+                Math.max(current_time - (last_received_monotonic[interval] ?? socket_opened_at!),
+                    resumed_from_sleep ? Date.now() - (interval_diagnostics.find((entry) => entry.interval === interval)?.received_at_ms ?? socket_opened_wall!) : 0) >= 15_000);
             if (stale_interval !== undefined) {
                 record_diagnostic({ event: 'stream_stale', interval: stale_interval,
                     elapsed_ms: Math.round(current_time - (last_received_monotonic[stale_interval] ?? socket_opened_at)) });
@@ -752,10 +760,11 @@ export function use_realtime_chart_data(
          */
         function observe_browser_state(event: Event): void {
             record_diagnostic({ event: event.type === 'visibilitychange' ? 'visibility_changed' : 'browser_online' });
-            check_connection_health();
+            check_connection_health(event.type === 'desktop-resumed');
         }
         const health_timer = setInterval(check_connection_health, 1_000);
         document.addEventListener('visibilitychange', observe_browser_state);
+        window.addEventListener('desktop-resumed', observe_browser_state);
         window.addEventListener('online', observe_browser_state);
         window.addEventListener('offline', observe_browser_state);
 
@@ -765,6 +774,7 @@ export function use_realtime_chart_data(
             record_diagnostic({ event: 'stopped' });
             clearInterval(health_timer);
             document.removeEventListener('visibilitychange', observe_browser_state);
+            window.removeEventListener('desktop-resumed', observe_browser_state);
             window.removeEventListener('online', observe_browser_state);
             window.removeEventListener('offline', observe_browser_state);
             is_disposed = true;

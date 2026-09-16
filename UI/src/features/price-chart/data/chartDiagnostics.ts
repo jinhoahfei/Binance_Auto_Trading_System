@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { renderer_instance_id, observe_renderer_connection } from '../../../shared/api/rendererLiveness';
 import type { ChartInterval } from '../types';
 import type { ChartErrorDiagnostic } from './chartDataError';
 
@@ -30,13 +31,14 @@ export interface ChartDiagnostic extends ChartErrorDiagnostic {
 }
 
 interface StoredChartDiagnostic extends ChartDiagnostic {
+    readonly monotonic_ms: number;
     readonly renderer_id: string;
     readonly at_ms: number;
     readonly sequence: number;
     readonly dropped_before: number;
 }
 
-const renderer_id = globalThis.crypto.randomUUID();
+const renderer_id = renderer_instance_id;
 const pending_records: Array<StoredChartDiagnostic> = [];
 let sequence = 0;
 let dropped_records = 0;
@@ -86,13 +88,15 @@ async function flush_chart_diagnostics(): Promise<void> {
  * 작성 날짜: 2026/09/11
  */
 export function record_chart_diagnostic(diagnostic: ChartDiagnostic): void {
+    const received = diagnostic.intervals?.map((entry) => entry.received_at_ms ?? 0) ?? [];
+    if (received.some((value) => value > 0)) observe_renderer_connection({ last_chart_received_at_ms: Math.max(...received) });
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
     if (pending_records.length >= 256) {
         const removed = pending_records.shift();
         dropped_records += 1 + (removed?.dropped_before ?? 0);
     }
     pending_records.push({
-        ...diagnostic, renderer_id, at_ms: Date.now(), sequence: ++sequence,
+        ...diagnostic, renderer_id, at_ms: Date.now(), monotonic_ms: Math.round(performance.now()), sequence: ++sequence,
         dropped_before: dropped_records,
     });
     dropped_records = 0;

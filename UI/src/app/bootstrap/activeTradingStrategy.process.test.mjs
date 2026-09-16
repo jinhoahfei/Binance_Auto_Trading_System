@@ -232,8 +232,8 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
                 }
             });
             await act(async () => release_snapshot());
-            const notice = await screen.findByRole('dialog', { name: 'API 연결이 필요합니다' });
-            await userEvent.click(within(notice).getByRole('button', { name: '확인', exact: true }));
+            expect(screen.queryByRole('dialog', { name: 'API 연결이 필요합니다' })).not.toBeInTheDocument();
+            expect(await screen.findByRole('button', { name: '화면 연결 상태: 복구 중' })).toBeInTheDocument();
             await expect_shared_strategy(application, next, false);
             const resumed = scenario.steps[scenario.steps.indexOf(next) + 1];
             await act(async () => transport.sockets[1].receive(resumed.event));
@@ -347,8 +347,8 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
             const reset_step = steps[4];
             transport.snapshot = create_replay_snapshot(reset_step.event);
             await act(async () => transport.sockets[0].receive(reset_step.event));
-            const notice = await screen.findByRole('dialog', { name: 'API 연결이 필요합니다' });
-            await userEvent.click(within(notice).getByRole('button', { name: '확인', exact: true }));
+            expect(screen.queryByRole('dialog', { name: 'API 연결이 필요합니다' })).not.toBeInTheDocument();
+            expect(await screen.findByRole('button', { name: '화면 연결 상태: 복구 중' })).toBeInTheDocument();
             await expect_shared_strategy(application, reset_step, false);
             const row = document.querySelector('[data-condition-id$=":c_recovery_window"]');
             // 전체 snapshot만으로 연결 정상 판정을 하지 않는다. 다음 유효 event까지 타이머도 대기한다.
@@ -376,10 +376,9 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
             transport.snapshot = create_replay_snapshot(filled_step.event);
             await act(async () => transport.sockets[0].receive(filled_step.event));
 
-            // 기존 연결 끊김 알림은 복원 후에도 확인을 기다리므로 사용자가 닫은 뒤 화면을 검사한다.
-            const connection_notice = await screen.findByRole('dialog', { name: 'API 연결이 필요합니다' });
+            // 화면 재동기화는 API 알림이나 매매 중지를 만들지 않는다.
+            expect(screen.queryByRole('dialog', { name: 'API 연결이 필요합니다' })).not.toBeInTheDocument();
             expect(application.facade.get_view_model().chart.active_trading_logic_state).toBe(filled_step.expected_label);
-            await userEvent.click(within(connection_notice).getByRole('button', { name: '확인', exact: true }));
             await expect_shared_strategy(application, filled_step, false);
             expect(transport.snapshot_request_count).toBe(2);
             expect(transport.sockets[0].is_closed).toBe(true);

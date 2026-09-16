@@ -64,6 +64,7 @@ class BinanceConnectionStatusRouteTests(unittest.TestCase):
         response = get_binance_connection_status(REQUEST_ID, self.context)
 
         self.assertEqual(response.status, 200)
+        self.assertIsInstance(response.payload["data"].pop("checked_at_ms"), int)
         self.assertEqual(response.payload["data"], {
             "api": "online",
             "market_stream": "online",
@@ -82,6 +83,7 @@ class BinanceConnectionStatusRouteTests(unittest.TestCase):
         self.runtime.api_gateway.fetch_account_snapshot.side_effect = RuntimeError("private detail")
         response = get_binance_connection_status(REQUEST_ID, self.context)
 
+        self.assertIsInstance(response.payload["data"].pop("checked_at_ms"), int)
         self.assertEqual(response.payload["data"], {
             "api": "offline",
             "market_stream": "online",

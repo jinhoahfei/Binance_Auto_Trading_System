@@ -32,7 +32,7 @@ def main():
     runtime.state = SimpleNamespace(status="READY")
     runtime.diagnostics = RuntimeDiagnostics(DiagnosticLogWriter(Path(sys.argv[1]), "disabled"))
     token = secrets.token_urlsafe(32)
-    server = LoopbackTransportServer(runtime, token, allowed_origins=("http://127.0.0.1:5173",))
+    server = LoopbackTransportServer(runtime, token, allowed_origins=("http://127.0.0.1:5173", "tauri://localhost"))
     controls = {"fail_snapshots": 0, "idle": False, "publications": 0}
     dispatch = server._dispatch_http_request
 
@@ -75,7 +75,7 @@ def main():
 
     server._dispatch_http_request = fault_dispatch
     worker = _TradingEventRuntimeWorker(cycle, lambda: None, lambda: True, lambda: 0,
-        runtime.application_lock, state_update_observer=publish, poll_interval_seconds=2)
+        runtime.application_lock, state_update_observer=publish, poll_interval_seconds=2, diagnostics=runtime.diagnostics)
     server.start()
     worker.start()
     # Descriptor는 부모가 읽는 pipe에만 보낸다. 부모는 token을 어떤 산출물에도 기록하지 않는다.

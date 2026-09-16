@@ -55,6 +55,9 @@ pub struct ConnectionDiagnostic {
     delay_ms: Option<u64>,
     visible: Option<bool>,
     online: Option<bool>,
+    client_connection_id: Option<String>,
+    monotonic_ms: Option<u64>,
+    last_received_monotonic_ms: Option<u64>,
 }
 
 fn valid_origin(origin: &str) -> bool {
@@ -70,6 +73,7 @@ fn validate_record(record: &ConnectionDiagnostic) -> bool {
     [&record.session_id, &record.adapter_id, &record.renderer_id].iter().all(|id| crate::is_canonical_uuid(id))
         && record.incident_id.as_ref().is_none_or(|id| crate::is_canonical_uuid(id))
         && record.request_id.as_ref().is_none_or(|id| crate::is_canonical_uuid(id))
+        && record.client_connection_id.as_ref().is_none_or(|id| crate::is_canonical_uuid(id))
         && record.origin.as_ref().is_none_or(|origin| valid_origin(origin))
         && record.validation_field.as_ref().is_none_or(|field| ALLOWED_VALIDATION_FIELDS.contains(&field.as_str()))
         && record.error_code.as_ref().is_none_or(|code| ALLOWED_ERROR_CODES.contains(&code.as_str()))
@@ -79,6 +83,13 @@ fn validate_record(record: &ConnectionDiagnostic) -> bool {
 
 #[derive(Default)]
 pub struct BackendConnectionDiagnosticsState(Mutex<Option<ChartLogWriter>>);
+
+#[cfg(feature = "background-liveness-smoke")]
+impl BackendConnectionDiagnosticsState {
+    pub(crate) fn in_directory(directory: PathBuf) -> Self {
+        Self(Mutex::new(Some(ChartLogWriter::new(directory, format!("connection_{}", std::process::id())))))
+    }
+}
 
 /// main 창에서 온 고정 schema만 검증하고 append+sync가 성공한 뒤 수신 확인을 반환한다.
 #[tauri::command]
@@ -97,7 +108,7 @@ pub async fn record_backend_connection_diagnostics(
     let now = SystemTime::now().duration_since(UNIX_EPOCH)
         .map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_CLOCK_FAILED")?.as_millis();
     let identity = sidecar.diagnostic_runtime_identity();
-    let bytes = encode_records(records, now, identity)?;
+    let bytes = encode_records(records, now, identity, Some(&app.state::<crate::runtime_diagnostics::RuntimeDiagnosticsState>().0.native_run_id))?;
     let mut writer = state.0.lock().map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_STATE_FAILED")?;
     if writer.is_none() {
         let directory = if cfg!(debug_assertions) {
@@ -111,12 +122,12 @@ pub async fn record_backend_connection_diagnostics(
         .map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_WRITE_FAILED")
 }
 
-fn encode_records(records: Vec<ConnectionDiagnostic>, now: u128, identity: Option<(u32, String)>) -> Result<Vec<u8>, &'static str> {
+fn encode_records(records: Vec<ConnectionDiagnostic>, now: u128, identity: Option<(u32, String)>, native_run_id: Option<&str>) -> Result<Vec<u8>, &'static str> {
     let mut bytes = Vec::new();
     for record in records {
         if !validate_record(&record) { return Err("BACKEND_CONNECTION_DIAGNOSTIC_INVALID_BATCH"); }
-        let envelope = serde_json::json!({"schema_version":1, "native_at_ms":now,
-            "native_pid":std::process::id(), "backend_pid":identity.as_ref().map(|value| value.0),
+        let envelope = serde_json::json!({"schema_version":2, "native_at_ms":now,
+            "native_pid":std::process::id(), "native_run_id":native_run_id, "backend_pid":identity.as_ref().map(|value| value.0),
             "backend_process_start_id":identity.as_ref().map(|value| &value.1), "connection":record});
         serde_json::to_writer(&mut bytes, &envelope).map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_ENCODE_FAILED")?;
         bytes.push(b'\n');
@@ -157,7 +168,7 @@ mod tests {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let directory = std::env::temp_dir().join(format!("backend-connection-log-{}-{now}", std::process::id()));
         let records = vec![serde_json::from_value(sample()).unwrap()];
-        let bytes = encode_records(records, 2000, Some((1234, "test-process-start".into()))).unwrap();
+        let bytes = encode_records(records, 2000, Some((1234, "test-process-start".into())), None).unwrap();
         let mut writer = ChartLogWriter::new(directory.clone(), "test".into());
         writer.append(&bytes).unwrap();
         let saved = std::fs::read(directory.join("test_part0001.log")).unwrap();
@@ -168,7 +179,7 @@ mod tests {
         assert_eq!(envelope["backend_pid"], 1234);
         assert_eq!(envelope["backend_process_start_id"], "test-process-start");
         // Backend 프로세스가 사라진 후에도 마지막 사건을 저장할 수 있어야 한다.
-        writer.append(&encode_records(vec![serde_json::from_value(sample()).unwrap()], 3000, None).unwrap()).unwrap();
+        writer.append(&encode_records(vec![serde_json::from_value(sample()).unwrap()], 3000, None, None).unwrap()).unwrap();
         assert_eq!(std::fs::read_to_string(directory.join("test_part0001.log")).unwrap().lines().count(), 2);
         std::fs::remove_dir_all(directory).unwrap();
     }

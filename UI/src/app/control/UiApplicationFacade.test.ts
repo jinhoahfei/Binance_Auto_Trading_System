@@ -733,6 +733,22 @@ describe('UiApplicationFacade', () => {
         facade.stop();
     });
 
+    it('화면 통신 장애는 실행 중 매매·포지션을 유지하며 중지 명령이나 API 팝업을 만들지 않는다', () => {
+        const adapter = new FakeUiCommandAdapter();
+        const facade = new UiApplicationFacade(adapter, { today: '2026-09-16', applied_regime: 'type0', command_enabled: true });
+        facade.start();
+        facade.dispatch({ type: 'API_CONNECTED', sequence: 1 });
+        facade.dispatch({ type: 'BACKEND_TRADING_STARTED' });
+        facade.dispatch({ type: 'POSITION_UPDATED', has_open_position: true });
+        const before = facade.get_view_model().trading;
+        facade.dispatch({ type: 'UI_CONNECTION_DISCONNECTED', reason: 'EVENT_STREAM_STALE' });
+        expect(facade.get_view_model().trading).toEqual(before);
+        expect(facade.get_view_model().connection.is_online).toBe(false);
+        expect(facade.get_view_model().active_modal).toBeNull();
+        expect(adapter.command_records).toHaveLength(0);
+        facade.stop();
+    });
+
     it('Phase 7 lifecycle event는 stopping을 pending으로 유지하고 terminated에서만 완료한다', () => {
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-21',

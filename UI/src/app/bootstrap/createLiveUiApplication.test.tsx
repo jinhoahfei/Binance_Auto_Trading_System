@@ -123,7 +123,7 @@ describe('create_live_ui_application', () => {
             </StrictMode>,
         );
 
-        expect(await screen.findByRole('button', { name: 'Binance 연결 상태: 연결됨' })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: '화면 연결 상태: 연결됨' })).toBeInTheDocument();
         expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('시세·REGIME 실제 시장');
         expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('계좌 Testnet · 주문 비활성');
         expect(screen.getByRole('button', { name: '자동매매 실행' })).toBeEnabled();

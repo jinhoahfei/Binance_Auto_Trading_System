@@ -2,6 +2,7 @@
 mod dialog;
 mod chart_diagnostics;
 mod backend_connection_diagnostics;
+mod runtime_diagnostics;
 mod exit_bridge;
 #[cfg(target_os = "macos")]
 mod macos_quit_guard;
@@ -704,18 +705,23 @@ pub fn run() {
         .manage(BackendConnectionDescriptorState::default())
         .manage(chart_diagnostics::ChartDiagnosticsState::default())
         .manage(backend_connection_diagnostics::BackendConnectionDiagnosticsState::default())
+        .manage(runtime_diagnostics::RuntimeDiagnosticsState::default())
         .manage(sidecar_state)
         .manage(exit_intent_bridge)
         .invoke_handler(tauri::generate_handler![
             get_backend_connection_descriptor,
             chart_diagnostics::record_chart_diagnostics,
             backend_connection_diagnostics::record_backend_connection_diagnostics,
+            runtime_diagnostics::record_renderer_heartbeat,
             dialog::choose_csv_export_directory,
             sidecar::await_backend_sidecar_exit,
             exit_bridge::arm_native_exit_intent_bridge,
             sidecar::arm_sidecar_exit_event_bridge,
         ])
         .on_window_event(move |window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_)) {
+                window.state::<runtime_diagnostics::RuntimeDiagnosticsState>().window_event();
+            }
             if window.label() != "main" || !window_guard_state.is_running() {
                 return;
             }
@@ -738,6 +744,7 @@ pub fn run() {
 
     // Live child가 남은 app-level quit은 자동 kill/고아 process 대신 UI shutdown lifecycle을 기다린다.
     application.run(move |app_handle, event| {
+        if let tauri::RunEvent::Exit = event { app_handle.state::<runtime_diagnostics::RuntimeDiagnosticsState>().stop(); }
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             if exit_guard_state.is_running() {
                 api.prevent_exit();
@@ -999,3 +1006,8 @@ mod tests {
         );
     }
 }
+
+#[cfg(feature = "background-liveness-smoke")]
+mod background_liveness_soak;
+#[cfg(feature = "background-liveness-smoke")]
+pub use background_liveness_soak::run as run_background_liveness_soak;

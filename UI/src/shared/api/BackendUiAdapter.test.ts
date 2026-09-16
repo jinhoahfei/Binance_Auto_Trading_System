@@ -1265,6 +1265,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             type: 'AUTHENTICATE',
             token: TEST_BACKEND_TOKEN,
             after_sequence: 9,
+            client_connection_id: expect.stringMatching(/^[0-9a-f-]{36}$/u),
         });
         expect(JSON.stringify(adapter)).not.toContain(TEST_BACKEND_TOKEN);
 

@@ -48,6 +48,7 @@ export function App({ applicationFactory }: AppProps) {
     const connection_details = use_binance_connection_status(
         load_binance_connection_status,
         !view_model.app_exit.is_final,
+        view_model.connection.is_online,
     );
     const market_snapshot = use_realtime_chart_data({
         enabled: import.meta.env.MODE !== 'test' && !view_model.app_exit.is_final,
@@ -71,10 +72,11 @@ export function App({ applicationFactory }: AppProps) {
         <div className={styles.application}>
             <AppHeader
                 environment={environment}
-                connectionDetails={connection_details.connection_details}
-                connectionDetailsError={connection_details.has_error}
+                connectionDetails={view_model.connection.is_online ? connection_details.connection_details : null}
+                connectionDetailsError={!view_model.connection.is_online || connection_details.has_error}
+                connectionCheckedAt={view_model.connection.is_online ? connection_details.checked_at_ms : null}
                 hasOpenPosition={view_model.trading.has_open_position}
-                isCommandPending={view_model.trading.is_pending && view_model.trading.lifecycle_status !== 'reconciliation_required'}
+                isCommandPending={!view_model.connection.is_online || (view_model.trading.is_pending && view_model.trading.lifecycle_status !== 'reconciliation_required')}
                 isConnected={view_model.connection.is_online}
                 isTrading={view_model.trading.is_trading}
                 onConnectionDetailsOpenChange={connection_details.set_is_open}
@@ -88,7 +90,7 @@ export function App({ applicationFactory }: AppProps) {
             {view_model.connection.recovery != null && !view_model.connection.is_online && (
                 <div className={styles.connectionRecovery} role="status" aria-live="polite">
                     <strong>{view_model.connection.recovery.phase === 'closing' ? '안전 종료 상태 확인 중'
-                        : view_model.connection.recovery.error_code === 'UI_STATE_PUBLICATION_FAILED' ? '최신 화면 정보 복구 중' : '백엔드 연결 복구 중'}</strong>
+                        : view_model.connection.recovery.error_code === 'UI_STATE_PUBLICATION_FAILED' ? '최신 화면 정보 복구 중' : '화면 연결 복구 중'}</strong>
                     <span>재시도 {view_model.connection.recovery.attempt}회 · 마지막 정상 수신 {
                         view_model.connection.recovery.last_received_at_ms === null ? '확인 중'
                             : new Date(view_model.connection.recovery.last_received_at_ms).toLocaleTimeString('ko-KR', { hour12: false })

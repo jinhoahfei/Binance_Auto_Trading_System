@@ -40,7 +40,7 @@ function setup(fetcher: typeof fetch = async (_input, init) => response(init, cr
 
 describe('long-running backend connection recovery', () => {
     beforeEach(() => vi.useFakeTimers());
-    afterEach(() => { adapters.splice(0).forEach((adapter) => adapter.stop()); vi.useRealTimers(); });
+    afterEach(() => { adapters.splice(0).forEach((adapter) => adapter.stop()); vi.restoreAllMocks(); vi.useRealTimers(); });
 
     it('transient snapshot failures preserve authentication and retry until a verified event resumes', async () => {
         let attempts = 0;
@@ -237,16 +237,19 @@ describe('long-running backend connection recovery', () => {
         expect(JSON.stringify(logs)).not.toContain('SECRET_CANARY');
     });
 
-    it('discards queued frames after browser suspension before they can publish stale state', async () => {
+    it('discards queued frames after a 100-second renderer stall before they can publish stale state', async () => {
         const { sockets, callbacks, logs } = setup(async (_input, init) => response(init, { ...create_backend_snapshot_fixture(), last_sequence: 400 }));
         sockets[0]!.open(); sockets[0]!.receive();
         vi.mocked(callbacks.on_event).mockClear();
         const delayed_message = sockets[0]!.onmessage;
         // OS가 timer와 visibility callback을 함께 미뤄도 첫 수신에서 벽시계 공백을 확인한다.
-        vi.setSystemTime(Date.now() + 5 * 60_000);
+        vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 100_000);
+        vi.setSystemTime(Date.now() + 100_000);
         for (let sequence = 11; sequence <= 200; sequence++) {
             delayed_message?.({ data: JSON.stringify(create_backend_event_fixture(sequence, 'ACCOUNT_UPDATED', { account: create_backend_account_fixture() }, crypto.randomUUID())) } as MessageEvent);
         }
+        window.dispatchEvent(new Event('desktop-resumed'));
+        document.dispatchEvent(new Event('visibilitychange'));
         await vi.advanceTimersByTimeAsync(0);
         expect(callbacks.on_event).not.toHaveBeenCalled();
         expect(callbacks.on_full_resync).toHaveBeenCalledOnce();
@@ -255,6 +258,19 @@ describe('long-running backend connection recovery', () => {
         expect(callbacks.on_event).toHaveBeenCalledOnce();
         expect(callbacks.on_ready).toHaveBeenCalledOnce();
         expect(callbacks.on_failure).not.toHaveBeenCalled();
+    });
+
+    it('a wall clock change alone does not cause false disconnection', async () => {
+        const { sockets, callbacks } = setup();
+        sockets[0]!.open(); sockets[0]!.receive();
+        vi.mocked(callbacks.on_event).mockClear();
+        vi.setSystemTime(Date.now() + 3_600_000);
+        document.dispatchEvent(new Event('visibilitychange'));
+        sockets[0]!.receive(11);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(callbacks.on_event).toHaveBeenCalledOnce();
+        expect(callbacks.on_full_resync).not.toHaveBeenCalled();
+        expect(sockets).toHaveLength(1);
     });
 
     it('continues snapshot recovery when the recovering banner itself cannot be published', async () => {

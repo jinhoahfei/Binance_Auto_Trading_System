@@ -31,6 +31,19 @@ describe('Binance connection status query lifecycle', () => {
         unmount();
     });
 
+    it('화면 통신이 끊기면 과거 정상 표시를 즉시 비우고 백엔드 확인 시각을 보존한다', async () => {
+        const load = vi.fn().mockResolvedValue({ ...ONLINE_STATUS, checked_at_ms: 123456 });
+        const { result, rerender, unmount } = renderHook(({ online }) => use_binance_connection_status(load, true, online), { initialProps: { online: true } });
+        await act(async () => result.current.set_is_open(true));
+        expect(result.current.checked_at_ms).toBe(123456);
+        rerender({ online: false });
+        expect(result.current.connection_details).toBeNull();
+        expect(result.current.checked_at_ms).toBeNull();
+        expect(load.mock.calls[0]?.[0].aborted).toBe(true);
+        expect(load).toHaveBeenCalledTimes(1);
+        unmount();
+    });
+
     it('닫은 뒤 늦게 끝난 이전 요청은 다시 연 팝업의 상태를 덮어쓰지 않는다', async () => {
         let resolve_stale: (status: BackendBinanceConnectionStatus) => void = () => undefined;
         const pending_status = new Promise<BackendBinanceConnectionStatus>((resolve) => {

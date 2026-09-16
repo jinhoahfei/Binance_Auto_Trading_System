@@ -1239,6 +1239,7 @@ pub fn create_ready_main_window(
     WebviewWindowBuilder::from_config(app_handle, &window_configuration)
         .map_err(|_| SidecarFailure::startup())?
         .background_color(tauri::utils::config::Color(11, 14, 17, 255))
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .on_navigation(|url| is_trusted_renderer_url(url, tauri::is_dev()))
         .on_web_resource_request(move |request, response| {
             if request.uri().scheme_str() != Some("tauri") {
@@ -1260,6 +1261,8 @@ pub fn create_ready_main_window(
         })
         .build()
         .map_err(|_| SidecarFailure::startup())?;
+
+    app_handle.state::<crate::runtime_diagnostics::RuntimeDiagnosticsState>().start(app_handle);
 
     Ok(())
 }
@@ -1321,6 +1324,9 @@ fn monitor_child_exit(
         match status_result {
             Ok(Some(status)) => {
                 let (payload, should_emit) = state.record_exit(status.code());
+                if let Some(diagnostics) = app_handle.try_state::<crate::runtime_diagnostics::RuntimeDiagnosticsState>() {
+                    diagnostics.backend_exited(status.code());
+                }
                 // 새로고침 복구용 native token도 backend 수명이 끝나는 즉시 폐기한다.
                 app_handle
                     .state::<crate::BackendConnectionDescriptorState>()

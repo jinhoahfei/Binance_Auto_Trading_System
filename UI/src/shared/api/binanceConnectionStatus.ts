@@ -15,7 +15,8 @@ export function validate_binance_connection_status(value: unknown): BackendBinan
 
     const record = value as Record<string, unknown>;
     const statuses = [record.api, record.market_stream, record.account_stream];
-    if (Object.keys(record).length !== 3
+    if (Object.keys(record).some((key) => !['api', 'market_stream', 'account_stream', 'checked_at_ms'].includes(key))
+        || (record.checked_at_ms !== undefined && (!Number.isSafeInteger(record.checked_at_ms) || (record.checked_at_ms as number) < 0))
         || statuses.some((status) => status !== 'online' && status !== 'offline')) {
         throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Invalid Binance connection status');
     }
@@ -24,5 +25,6 @@ export function validate_binance_connection_status(value: unknown): BackendBinan
         api: record.api as BackendBinanceConnectionStatus['api'],
         market_stream: record.market_stream as BackendBinanceConnectionStatus['market_stream'],
         account_stream: record.account_stream as BackendBinanceConnectionStatus['account_stream'],
+        ...(record.checked_at_ms === undefined ? {} : { checked_at_ms: record.checked_at_ms as number }),
     };
 }

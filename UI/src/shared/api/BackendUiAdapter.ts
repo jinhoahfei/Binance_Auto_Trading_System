@@ -2,6 +2,7 @@ import { is_balance_reconciliation, balance_reconciliation_text } from './balanc
 import { invoke } from '@tauri-apps/api/core';
 import { connection_error_origin, record_backend_connection_diagnostic, type ConnectionDiagnostic, type ConnectionDiagnosticStage } from './backendConnectionDiagnostics';
 import { safe_connection_error_code } from './connectionErrorCodes';
+import { observe_renderer_connection } from './rendererLiveness';
 import { shutdown_failure_message } from './shutdownMessages';
 
 import type {
@@ -893,6 +894,7 @@ export class BackendUiAdapter implements UiCommandPort {
     #last_received_at_ms: number | null = null;
     #last_received_monotonic = 0;
     #last_heartbeat_monotonic = 0;
+    #client_connection_id: string | undefined;
     #retry_attempt = 0;
     #publication_recovery_attempts = 0;
     #publication_healthy_since: number | null = null;
@@ -1917,6 +1919,7 @@ export class BackendUiAdapter implements UiCommandPort {
         if (this.#is_stopped || this.#session_token === null || this.#shutdown_requested
             || this.#shutdown_was_accepted || this.#shutdown_outcome_is_ambiguous) return;
         const generation = ++this.#connection_generation;
+        this.#client_connection_id = globalThis.crypto.randomUUID();
         this.record_connection('connection_started', { stage: 'connect' });
         let web_socket: BackendWebSocket;
         try { web_socket = this.#create_web_socket(this.#web_socket_url); }
@@ -1934,6 +1937,7 @@ export class BackendUiAdapter implements UiCommandPort {
             const authentication_message: BackendAuthenticateMessage = {
                 schema_version: BACKEND_SCHEMA_VERSION, type: 'AUTHENTICATE', token,
                 after_sequence: this.#last_sequence,
+                client_connection_id: this.#client_connection_id!,
             };
             try {
                 web_socket.send(JSON.stringify(authentication_message));
@@ -1979,6 +1983,7 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/08/21
      */
     private handle_event_frame(frame_data: unknown): void {
+        observe_renderer_connection({ session_id: this.session_id, last_received_at_ms: Date.now() });
         // WebView가 멈춘 동안 timer도 늦어진다. 대기하던 첫 frame부터 최신 상태를 다시 받는다.
         if (!this.#recovering && this.event_stream_is_stale()) {
             const error = new BackendAdapterError('EVENT_STREAM_STALE', '화면 복귀 후 최신 상태를 다시 확인합니다.', true);
@@ -2230,6 +2235,8 @@ export class BackendUiAdapter implements UiCommandPort {
 
     private mark_event_stream_ready(): void {
         this.#last_received_at_ms = Date.now();
+        observe_renderer_connection({ session_id: this.session_id, last_applied_at_ms: this.#last_received_at_ms,
+            last_sequence: this.#last_sequence });
         this.#last_received_monotonic = performance.now();
         if (this.#web_socket !== null) this.arm_socket_timeout(this.#stale_timeout_ms, 'EVENT_STREAM_STALE', this.#connection_generation, this.#web_socket);
         // 통신이 살아 있는 동안의 단일 HTTP 실패도 다음 정상 수신에서 사건 경계를 닫는다.
@@ -2260,27 +2267,29 @@ export class BackendUiAdapter implements UiCommandPort {
         }
     }
 
-    /** 단조 시계와 벽시계를 함께 사용해 절전·화면 정지 중의 긴 수신 공백을 검출한다. */
-    private event_stream_is_stale(): boolean {
+    /** 정상 실행은 단조 시계를 사용하고 OS 복귀 알림에서만 잠자기 벽시계 공백을 함께 검사한다. */
+    private event_stream_is_stale(resumed_from_sleep = false): boolean {
         return this.#last_received_at_ms !== null && Math.max(
-            Date.now() - this.#last_received_at_ms, performance.now() - this.#last_received_monotonic,
+            resumed_from_sleep ? Date.now() - this.#last_received_at_ms : 0, performance.now() - this.#last_received_monotonic,
         ) >= this.#stale_timeout_ms;
     }
 
     private install_environment_listeners(): void {
         if (typeof window === 'undefined' || this.#remove_environment_listeners !== null) return;
-        const observe = () => {
+        const observe = (event: Event) => {
             this.record_connection('environment_changed', { stage: 'lifecycle', visible: document.visibilityState === 'visible', online: navigator.onLine });
-            if (!this.#recovering && this.event_stream_is_stale()) {
+            if (!this.#recovering && this.event_stream_is_stale(event.type === 'desktop-resumed')) {
                 this.handle_connection_failure(new BackendAdapterError('EVENT_STREAM_STALE', '백엔드 연결 상태를 다시 확인합니다.', true), 'receive');
             }
         };
         window.addEventListener('online', observe);
         window.addEventListener('offline', observe);
         document.addEventListener('visibilitychange', observe);
+        window.addEventListener('desktop-resumed', observe);
         this.#remove_environment_listeners = () => {
             window.removeEventListener('online', observe); window.removeEventListener('offline', observe);
             document.removeEventListener('visibilitychange', observe);
+            window.removeEventListener('desktop-resumed', observe);
         };
     }
 
@@ -2313,8 +2322,10 @@ export class BackendUiAdapter implements UiCommandPort {
 
     private record_connection(event: ConnectionDiagnostic['event'], details: Partial<ConnectionDiagnostic> = {}): void {
         try { this.#diagnostic({ event, session_id: this.session_id, adapter_id: this.#adapter_id,
+            ...(this.#client_connection_id === undefined ? {} : { client_connection_id: this.#client_connection_id }),
             generation: this.#connection_generation, last_sequence: this.#last_sequence,
-            last_received_at_ms: this.#last_received_at_ms, ...(this.#incident_id === undefined ? {} : { incident_id: this.#incident_id }), ...details }); }
+            last_received_at_ms: this.#last_received_at_ms,
+            last_received_monotonic_ms: this.#last_received_at_ms === null ? null : Math.round(this.#last_received_monotonic), ...(this.#incident_id === undefined ? {} : { incident_id: this.#incident_id }), ...details }); }
         catch { /* 진단 저장 장애가 거래 연결 수명주기에 전파되지 않게 한다. */ }
     }
 

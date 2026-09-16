@@ -922,6 +922,7 @@ class _TradingEventRuntimeWorker:
                             _TradingEventRuntimeFailureStage.STATE_SNAPSHOT_AFTER
                         )
                         state_after = self._state_snapshot()
+                        self._diagnostics.liveness.observe("runtime_cycle", state_after)
                         heartbeat_due = self._diagnostics.heartbeat_due()
                         if heartbeat_due:
                             self._diagnostics.record("runtime_heartbeat", session=state_after)
@@ -1682,6 +1683,14 @@ def create_application_runtime(
         """
         if trading_controller.check_market_liveness():
             request_market_stream_recovery()
+        # 관측 실패는 기존 거래 cycle의 실행 결과나 fail-close 판단을 바꾸지 않는다.
+        try:
+            diagnostics.liveness.observe("exchange_observed", {
+                "market_stream": "online" if web_socket_gateway.kline_connected else "offline",
+                "account_stream": "online" if web_socket_gateway.account_connected else "offline",
+            })
+        except Exception:
+            diagnostics.record("diagnostic_observation_failed", stage="exchange_connection_cache")
         return await trading_controller.run_event_runtime_cycle()
 
     def trading_event_processing_allowed() -> bool:

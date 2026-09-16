@@ -13,6 +13,7 @@ export interface AppHeaderProps {
   environment?: BackendRuntimeEnvironment | null;
   connectionDetails?: BackendBinanceConnectionStatus | null;
   connectionDetailsError?: boolean;
+  connectionCheckedAt?: number | null;
   isConnected: boolean;
   isTrading: boolean;
   hasOpenPosition: boolean;
@@ -33,6 +34,7 @@ export function AppHeader({
   environment = null,
   connectionDetails = null,
   connectionDetailsError = false,
+  connectionCheckedAt = null,
   isConnected,
   isTrading,
   hasOpenPosition,
@@ -81,7 +83,7 @@ export function AppHeader({
         <span className={styles.connectionAnchor}>
           <button
             aria-describedby={is_connection_tooltip_open ? connection_tooltip_id : undefined}
-            aria-label={`Binance 연결 상태: ${isConnected ? '연결됨' : '연결 끊김'}`}
+            aria-label={`화면 연결 상태: ${isConnected ? '연결됨' : '복구 중'}`}
             className={`${styles.connection} ${isConnected ? styles.online : styles.offline}`}
             onBlur={() => set_connection_tooltip_open(false)}
             onFocus={() => set_connection_tooltip_open(true)}
@@ -95,11 +97,12 @@ export function AppHeader({
             type="button"
           >
             <span className={styles.dot} aria-hidden="true" />
-            {isConnected ? '연결됨' : '연결 끊김'}
+            {isConnected ? '화면 연결됨' : '화면 연결 복구 중'}
           </button>
           {is_connection_tooltip_open && (
             <div className={styles.connectionTooltip} id={connection_tooltip_id} role="tooltip">
               <strong className={styles.connectionTooltipTitle}>Binance 연결 상태</strong>
+              {connectionCheckedAt !== null && <small>확인 시각 {new Date(connectionCheckedAt).toLocaleTimeString('ko-KR', { hour12: false })}</small>}
               <dl className={styles.connectionDetails}>
                 {([
                   ['API', 'api'],
