@@ -10,6 +10,7 @@ export const shutdown_step_message = (step?: string): string => ({
 export const shutdown_failure_message = (code: string, step?: string): string => ({
     SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED: '열린 포지션이 확인됐습니다. 청산 후 종료할지 확인해 주세요.',
     SHUTDOWN_ACCOUNT_UNREACHABLE: '거래소에서 잔고와 주문 상태를 확인하지 못했습니다. 연결 복구 후 다시 확인해 주세요.',
+    SHUTDOWN_ACCOUNT_SNAPSHOT_CHANGED: '조회 중 잔고나 기록이 변경되어 다시 확인해야 합니다.',
     SHUTDOWN_ACCOUNT_RECONCILIATION_FAILED: '거래소의 잔고·체결과 저장 기록을 대조하지 못했습니다. 앱을 유지하고 있습니다.',
     SHUTDOWN_BALANCE_MISMATCH: '거래소 잔고와 앱의 포지션·잔여 기록이 일치하지 않아 종료를 보류했습니다.',
     SHUTDOWN_UNEXPLAINED_ORDER: '앱의 기록으로 설명되지 않는 미체결 주문이 있어 종료를 보류했습니다.',

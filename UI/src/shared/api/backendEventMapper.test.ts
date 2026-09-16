@@ -986,6 +986,7 @@ describe('backend snapshot and event mapping', () => {
             position_average_entry_price: null,  // 기존 v3 event의 미제공 평단가는 숨김 값으로 정규화한다.
             residual_quantity: '0',
             residual_cost_basis: '0',
+            balance_reconciliation: null,
             strategy_status: '자동매매 중지 처리 중',
             strategy_status_tone: 'neutral',
             strategy_state_label: '중지 처리 중',  // 실시간 event도 snapshot과 같은 전략 표시 문구를 전달한다.

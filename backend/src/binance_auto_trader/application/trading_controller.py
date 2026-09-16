@@ -31,6 +31,9 @@ from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryController,
 )
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
+from binance_auto_trader.application.balance_reconciliation import (
+    BalanceReconciliation, balance_basis, current_balance_snapshot, reconcile_balance,
+)
 from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics, describe_exception
 from binance_auto_trader.application.trading_diagnostics import describe_trading_evaluation, normalize_order_failure, normalize_stream_reason
 from binance_auto_trader.application.trading_indicator_snapshot import TradingIndicatorStore
@@ -795,6 +798,7 @@ class TradingSessionSnapshot:
     manual_kill_behavior: ManualKillBehavior | None = None
     residual_quantity: Decimal = Decimal("0")
     residual_cost_basis: Decimal = Decimal("0")
+    balance_reconciliation: dict | None = None
     position_average_entry_price: Decimal | None = None  # 열린 Position의 표시용 평단가다.
     recovery: dict[str, object] | None = None
     active_logic: TradingLogicSnapshot | None = None  # 실제 실행 STM의 전략만 공개한다.
@@ -1306,6 +1310,7 @@ class TradingController:
         self._preparation_retry_intent: str | None = None
         self._unsubmitted_preparation_intent: str | None = None
         self._shutdown_preparing = False
+        self._balance_reconciliation: BalanceReconciliation | None = None
         self._shutdown_verified_version: int | None = None
         self._shutdown_verified_account_version: int | None = None
         self._shutdown_cleanup_owner: int | None = None
@@ -1541,10 +1546,16 @@ class TradingController:
         작성 날짜: 2026/08/31
         """
         # 종료 전용 검증은 worker 오류 latch를 지우지 않고 검증한 version에서만 종료를 허용한다.
-        if (self._shutdown_preparing and self._shutdown_verified_version == self._context.version
+        if self._shutdown_preparing:
+            return not (
+                self._shutdown_verified_version == self._context.version
                 and self._shutdown_verified_account_version == self._account.version
-                and not self._process_ownership_ambiguous and not self._external_execution_reconciliation_required):
-            return False
+                and self._balance_reconciliation is not None
+                and self._balance_reconciliation.status == "verified"
+                and self._balance_reconciliation.basis == balance_basis(self)
+                and not self._process_ownership_ambiguous
+                and not self._external_execution_reconciliation_required
+            )
         # Fresh open order만 남아도 cleanup bool을 포함해 shutdown owner를 안전하게 차단한다.
         return (
             self._stream_reconciliation_required
@@ -2547,6 +2558,7 @@ class TradingController:
                 has_open_position=has_open_position,
                 residual_quantity=self.residual_totals[0],
                 residual_cost_basis=self.residual_totals[1],
+                balance_reconciliation=self.balance_reconciliation_snapshot(),
                 position_average_entry_price=position_average_entry_price,
                 active_logic=active_logic,
                 recovery=self.market_recovery_snapshot(),
@@ -5040,76 +5052,26 @@ class TradingController:
         """
         return (Decimal("0"), Decimal("0")) if self._residual_settlement is None else self._residual_settlement.totals
 
-    def _validate_residual_balance(self) -> None:
+    def balance_reconciliation_snapshot(self) -> dict | None:
+        """
+        함수 이름: balance_reconciliation_snapshot()
+        기능: 현재 계좌·기록 버전에 해당하는 보상 포함 대조 결과를 공개한다.
+        인자: 없음
+        반환값: 대조 내역 또는 None
+        작성 날짜: 2026/09/16
+        """
+        return current_balance_snapshot(self)
+
+    def _validate_residual_balance(self, *, strict: bool = False, use_cached: bool = False) -> None:
         """
         함수 이름: _validate_residual_balance()
-        기능: 잔여가 있는 전용 계좌는 전략과 잔여의 합이 실제 ETH와 같은지 검사한다.
-        인자: 없음
+        기능: 시작·재연결·종료가 같은 원금·보상·보관 수량을 대조한다.
+        인자: strict, use_cached -> 전용 계좌 검사와 동일 버전 재사용 여부
         반환값: 없음
-        작성 날짜: 2026/09/08
+        작성 날짜: 2026/09/16
         """
-        residual_quantity = self.residual_totals[0]
-        if residual_quantity > 0:
-            with localcontext() as context:
-                context.prec = 34
-                total = self._require_position().quantity + residual_quantity
-            exchange_quantity = self._account.get_holdings(_BASE_ASSET)
-            if total != exchange_quantity:
-                if self._try_reconcile_earn_residual(exchange_quantity):
-                    return
-                self._record_diagnostic(
-                    "residual_balance_mismatch",
-                    level="ERROR",
-                    position_quantity=self._require_position().quantity,
-                    residual_quantity=residual_quantity,
-                    expected_quantity=total,
-                    exchange_quantity=exchange_quantity,
-                )
-                raise ResidualBalanceMismatchError("residual ledger differs from exchange ETH balance")
-
-    def _try_reconcile_earn_residual(self, exchange_quantity: Decimal) -> bool:
-        """
-        함수 이름: _try_reconcile_earn_residual()
-        기능: 기존 잔여의 자동 예치·상환·보상을 두 번 대조하며 전략 수량과 장부는 보존한다.
-        인자: exchange_quantity -> 현재 현물 ETH 수량
-        반환값: 예치 근거와 안정된 현물 잔고로 불일치가 설명되면 True
-        작성 날짜: 2026/09/15
-        """
-        settlement = self._residual_settlement
-        # 전략 lot까지 Earn으로 이동했다면 잔여 보관 근거로 거래 권한을 되살리지 않는다.
-        if settlement is None or not settlement.transfers or self._require_position().quantity > exchange_quantity:
-            return False
-        history = self._require_trade_history_controller().trade_history.trades
-        since = history[settlement.transfers[0].history_count - 1].executed_at
-        try:
-            evidence = self._api_gateway.fetch_earn_residual_evidence(since)
-            if evidence is None or not settlement.matches_earn_custody(evidence, history):
-                return False
-            with localcontext() as context:
-                context.prec = 34
-                expected_spot = self._require_position().quantity + settlement.totals[0] + evidence.rewards - evidence.quantity
-            if exchange_quantity != expected_spot:
-                return False
-            first_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
-            repeated = self._api_gateway.fetch_earn_residual_evidence(since)
-            confirmed_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
-            if (repeated is None or repeated.subscriptions != evidence.subscriptions or repeated.redemptions != evidence.redemptions
-                    or repeated.rewards != evidence.rewards or not settlement.matches_earn_custody(repeated, history)):
-                return False
-            first_eth = tuple(balance for balance in first_account.balances if balance.asset == _BASE_ASSET)
-            confirmed_eth = tuple(balance for balance in confirmed_account.balances if balance.asset == _BASE_ASSET)
-            if len(confirmed_eth) != 1 or first_eth != confirmed_eth or confirmed_eth[0].total != exchange_quantity:
-                return False
-            if (not self._web_socket_gateway.account_ready or self._process_lifetime_reconciliation_required_locked()
-                    or self._account.get_holdings(_BASE_ASSET) != exchange_quantity):
-                return False
-            self._record_diagnostic("residual_custody_reconciled", custody="spot" if repeated.quantity == 0 else "simple_earn",
-                                    residual_quantity=settlement.totals[0], earn_quantity=repeated.quantity,
-                                    earn_rewards=repeated.rewards, spot_quantity=exchange_quantity)
-            return True  # 잔여 원금·원가는 유지하고 보상이나 Earn 수량을 전략 Position에 넣지 않는다.
-        except Exception as error:
-            self._diagnostics.record_exception("residual_earn_reconciliation", error)
-            return False
+        shutdown_owner = self._shutdown_preparing and self._shutdown_cleanup_owner == get_ident()
+        reconcile_balance(self, strict=strict or shutdown_owner, use_cached=use_cached)
 
     def _allows_residual_rounding(self, requested: Decimal, submitted: Decimal) -> bool:
         """

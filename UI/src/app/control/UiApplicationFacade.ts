@@ -1,3 +1,4 @@
+import type { BackendBalanceReconciliation } from '../../shared/contracts';
 import type { BackendConnectionStatus } from '../../shared/api/BackendUiAdapter';
 import {
     createActor,
@@ -158,6 +159,7 @@ export interface UiApplicationFacadeOptions {
     readonly position_average_entry_price?: BackendDecimalString | null;
     readonly residual_quantity?: BackendDecimalString;
     readonly residual_cost_basis?: BackendDecimalString;
+    readonly balance_reconciliation?: BackendBalanceReconciliation | null;
 }
 
 /**
@@ -202,6 +204,7 @@ export interface UiServerOwnedSnapshot {
     readonly position_average_entry_price?: BackendDecimalString | null;
     readonly residual_quantity?: BackendDecimalString;
     readonly residual_cost_basis?: BackendDecimalString;
+    readonly balance_reconciliation?: BackendBalanceReconciliation | null;
     readonly trading_state_label: BackendTradingStatus;
 }
 
@@ -268,6 +271,7 @@ export type UiApplicationIntent =
         readonly position_average_entry_price?: BackendDecimalString | null;
         readonly residual_quantity?: BackendDecimalString;
         readonly residual_cost_basis?: BackendDecimalString;
+        readonly balance_reconciliation?: BackendBalanceReconciliation | null;
         readonly logic_coverage: ReadonlyArray<TradingLogicCoverage>;
         readonly strategy_status: string;
         readonly strategy_status_tone: 'positive' | 'neutral';
@@ -422,6 +426,7 @@ export interface AppViewModel {
         readonly position_average_entry_price: BackendDecimalString | null;
         readonly residual_quantity?: BackendDecimalString;
         readonly residual_cost_basis?: BackendDecimalString;
+        readonly balance_reconciliation?: BackendBalanceReconciliation | null;
         readonly unavailable_reason: TradingUnavailableReason | null;
         readonly error: UiCommandFailure | null;
     };
@@ -575,6 +580,7 @@ export function select_app_view_model(snapshot: UiApplicationSnapshot): AppViewM
             position_average_entry_price: snapshot.trading.context.position_average_entry_price,
             residual_quantity: snapshot.trading.context.residual_quantity ?? '0',
             residual_cost_basis: snapshot.trading.context.residual_cost_basis ?? '0',
+            balance_reconciliation: snapshot.trading.context.balance_reconciliation ?? null,
             unavailable_reason: snapshot.trading.context.unavailable_reason,
             error: snapshot.trading.context.error,
         },
@@ -848,6 +854,7 @@ export class UiApplicationFacade {
                 position_average_entry_price: options.position_average_entry_price ?? null,
                 residual_quantity: options.residual_quantity ?? '0',
                 residual_cost_basis: options.residual_cost_basis ?? '0',
+                balance_reconciliation: options.balance_reconciliation ?? null,
             })),
         };
 
@@ -1075,6 +1082,7 @@ export class UiApplicationFacade {
                         position_average_entry_price: intent.position_average_entry_price ?? null,
                         residual_quantity: intent.residual_quantity ?? '0',
                         residual_cost_basis: intent.residual_cost_basis ?? '0',
+                        balance_reconciliation: intent.balance_reconciliation ?? null,
                     });
                     // 종료 actor도 같은 authoritative lifecycle과 Position 조합을 받아 shutdown barrier를 판정한다.
                     this.actors.app_exit.send({
@@ -1613,6 +1621,7 @@ export class UiApplicationFacade {
                 position_average_entry_price: synchronized_snapshot.position_average_entry_price ?? null,
                 residual_quantity: synchronized_snapshot.residual_quantity ?? '0',
                 residual_cost_basis: synchronized_snapshot.residual_cost_basis ?? '0',
+                balance_reconciliation: synchronized_snapshot.balance_reconciliation ?? null,
             });
             // Event 유실 뒤 full resync도 app-exit의 동일 terminal·Position barrier를 열 수 있어야 한다.
             this.actors.app_exit.send({

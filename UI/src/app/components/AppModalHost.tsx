@@ -1,3 +1,4 @@
+import { balance_reconciliation_text } from '../../shared/api/balanceReconciliation';
 import { CSVExportDialog } from '../../features/csv-export';
 import { RegimeChangeDialog } from '../../features/regime-selection';
 import { TradingConfirmationDialog } from '../../features/trading-control';
@@ -244,7 +245,9 @@ export function AppModalHost({ controller, viewModel }: AppModalHostProps) {
             return (
                 <OperationStatusDialog
                     description={shutdown_step_message(viewModel.connection.recovery?.shutdown_step)}
-                    detail={viewModel.app_exit.error?.message}
+                    detail={viewModel.connection.recovery?.balance_reconciliation
+                        ? balance_reconciliation_text(viewModel.connection.recovery.balance_reconciliation)
+                        : viewModel.app_exit.error?.message}
                     open
                     status="progress"
                     title="프로그램 종료 준비"

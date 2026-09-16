@@ -329,7 +329,9 @@ export function present_dashboard_props(
             onIntent: (intent) => handle_trader_panel_intent(intent, controller),
         },
         account: {
-            asset: view_model.account_summary.asset,
+            asset: view_model.trading.balance_reconciliation
+                ? { ...view_model.account_summary.asset, balanceReconciliation: view_model.trading.balance_reconciliation }
+                : view_model.account_summary.asset,
             strategy: {
                 ...view_model.account_summary.strategy,
                 status: strategy_status,

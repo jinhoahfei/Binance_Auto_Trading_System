@@ -74,3 +74,5 @@
     from { transform: translateX(-55%); }
     to { transform: translateX(55%); }
 }
+
+.status p { white-space: pre-line; overflow-wrap: anywhere; }

@@ -1,3 +1,4 @@
+import { is_balance_reconciliation, balance_reconciliation_text } from './balanceReconciliation';
 import { invoke } from '@tauri-apps/api/core';
 import { connection_error_origin, record_backend_connection_diagnostic, type ConnectionDiagnostic, type ConnectionDiagnosticStage } from './backendConnectionDiagnostics';
 import { safe_connection_error_code } from './connectionErrorCodes';
@@ -145,6 +146,7 @@ export interface BackendWebSocket {
  */
 export interface BackendConnectionStatus {
     readonly shutdown_step?: BackendShutdownPreparation['step'];
+    readonly balance_reconciliation?: BackendShutdownPreparation['balance_reconciliation'];
     readonly phase: 'connecting' | 'live' | 'recovering' | 'blocked' | 'closing' | 'stopped';
     readonly attempt: number;
     readonly error_code: string | null;
@@ -452,7 +454,12 @@ function validate_sidecar_exit_receipt(value: unknown): void {
  * 작성 날짜: 2026/09/05
  */
 function validate_shutdown_preparation(value: unknown): BackendShutdownPreparation {
-    const state = require_exact_record(value, ['operation_id', 'phase', 'step', 'version', 'reason_code', 'retryable'], 'shutdown preparation');
+    const keys = ['operation_id', 'phase', 'step', 'version', 'reason_code', 'retryable'];
+    if (typeof value === 'object' && value !== null && Object.hasOwn(value, 'balance_reconciliation')) keys.push('balance_reconciliation');
+    const state = require_exact_record(value, keys, 'shutdown preparation');
+    if (state.balance_reconciliation != null && !is_balance_reconciliation(state.balance_reconciliation)) {
+        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Invalid balance reconciliation');
+    }
     if (typeof state.operation_id !== 'string' || !CANONICAL_UUID_PATTERN.test(state.operation_id)
         || !['checking', 'settling_orders', 'liquidating', 'ready', 'blocked'].includes(state.phase as string)
         || !['workers', 'account', 'orders', 'liquidation', 'history', 'complete'].includes(state.step as string)
@@ -899,6 +906,7 @@ export class BackendUiAdapter implements UiCommandPort {
     #shutdown_prepare_body: { schema_version: number; expected_version: number; liquidation_confirmed: boolean } | null = null;
     #shutdown_prepare_operation: string | null = null;
     #shutdown_step: BackendShutdownPreparation['step'] | undefined;
+    #shutdown_balance: BackendShutdownPreparation['balance_reconciliation'] = null;
     #shutdown_progress_listener: ((step: BackendShutdownPreparation['step']) => void) | null = null;
     #remove_environment_listeners: (() => void) | null = null;
     readonly #fetch: typeof fetch;
@@ -1629,6 +1637,7 @@ export class BackendUiAdapter implements UiCommandPort {
                 }
                 this.#shutdown_prepare_operation = status.operation_id;
                 this.#shutdown_step = status.step;
+                this.#shutdown_balance = status.balance_reconciliation ?? null;
                 try {
                     this.publish_connection_status('closing');
                     this.#shutdown_progress_listener?.(status.step);
@@ -1638,7 +1647,7 @@ export class BackendUiAdapter implements UiCommandPort {
                     this.#shutdown_prepare_body = null;
                     this.#shutdown_prepare_operation = null;
                     if (status.reason_code === 'STALE_CONTEXT_VERSION' && stale_retries++ < 2) continue;
-                    throw new BackendAdapterError(status.reason_code!, shutdown_failure_message(status.reason_code!, status.step), status.retryable);
+                    throw new BackendAdapterError(status.reason_code!, [shutdown_failure_message(status.reason_code!, status.step), ...(status.balance_reconciliation ? [balance_reconciliation_text(status.balance_reconciliation)] : [])].join('\n\n'), status.retryable);
                 }
                 if (status.phase === 'ready') {
                     this.#trading_version = status.version;
@@ -2278,7 +2287,7 @@ export class BackendUiAdapter implements UiCommandPort {
     private publish_connection_status(phase: BackendConnectionStatus['phase'], next_retry_at_ms: number | null = null): void {
         this.#callbacks?.on_connection_status?.({ phase, attempt: this.#retry_attempt,
             error_code: this.#first_failure_code, last_received_at_ms: this.#last_received_at_ms, next_retry_at_ms,
-            ...(this.#shutdown_step === undefined ? {} : { shutdown_step: this.#shutdown_step }) });
+            ...(this.#shutdown_step === undefined ? {} : { shutdown_step: this.#shutdown_step, balance_reconciliation: this.#shutdown_balance }) });
     }
 
     private error_type(error: unknown): ConnectionDiagnostic['error_type'] {

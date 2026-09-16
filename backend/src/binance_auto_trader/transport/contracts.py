@@ -1320,6 +1320,7 @@ def map_trading_snapshot(
             "scale_out": getattr(session_snapshot, "scale_out"),
             "residual_quantity": getattr(session_snapshot, "residual_quantity", Decimal("0")),
             "residual_cost_basis": getattr(session_snapshot, "residual_cost_basis", Decimal("0")),
+            "balance_reconciliation": getattr(session_snapshot, "balance_reconciliation", None),
             "has_open_position": getattr(
                 session_snapshot,
                 "has_open_position",
@@ -1540,8 +1541,24 @@ export interface BackendShutdownState {{
     readonly status: BackendTradingStatus;
 }}
 
+export interface BackendBalanceReconciliation {{
+    readonly asset: 'ETH';
+    readonly status: 'verified' | 'mismatch' | 'unavailable' | 'stale';
+    readonly position_quantity: BackendDecimalString;
+    readonly residual_principal_quantity: BackendDecimalString;
+    readonly earn_rewards_quantity: BackendDecimalString;
+    readonly earn_quantity: BackendDecimalString;
+    readonly expected_spot_quantity: BackendDecimalString;
+    readonly exchange_spot_quantity: BackendDecimalString;
+    readonly difference_quantity: BackendDecimalString;
+    readonly checked_at: string;
+    readonly reason_code: string | null;
+    readonly retryable: boolean;
+}}
+
 export interface BackendShutdownPreparation {{
     readonly operation_id: string;
+    readonly balance_reconciliation?: BackendBalanceReconciliation | null;
     readonly phase: 'checking' | 'settling_orders' | 'liquidating' | 'ready' | 'blocked';
     readonly step: 'workers' | 'account' | 'orders' | 'liquidation' | 'history' | 'complete';
     readonly version: number;
@@ -1675,6 +1692,7 @@ export interface BackendTradingSnapshot {{
     readonly position_average_entry_price?: BackendDecimalString | null;
     readonly residual_quantity?: BackendDecimalString;
     readonly residual_cost_basis?: BackendDecimalString;
+    readonly balance_reconciliation?: BackendBalanceReconciliation | null;
     readonly session_id: string | null;
     readonly risk_policy_availability: BackendRiskPolicyAvailability;
     readonly configured_risk_policy_version: number | null;

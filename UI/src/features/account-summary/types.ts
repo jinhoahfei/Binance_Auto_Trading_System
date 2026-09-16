@@ -1,3 +1,4 @@
+import type { BackendBalanceReconciliation } from '../../shared/contracts';
 import type { ReactNode } from 'react';
 
 export type AccountStatusTone = 'positive' | 'negative' | 'neutral';
@@ -11,6 +12,7 @@ export interface StrategySummaryViewModel {
 }
 
 export interface AssetSummaryViewModel {
+    readonly balanceReconciliation?: BackendBalanceReconciliation | null;
     readonly ethAmount: string;
     readonly ethValue: string;
     readonly krwValue: string;

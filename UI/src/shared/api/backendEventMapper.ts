@@ -1,3 +1,4 @@
+import { is_balance_reconciliation } from './balanceReconciliation';
 import { identify_connection_validation_field } from './connectionValidationFields';
 import { is_trading_indicator_snapshot } from './tradingIndicatorValidation';
 import type {
@@ -660,6 +661,10 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
     // 잔여 자산은 Position 종료와 무관하게 원본 Decimal 문자열로 보존한다.
     for (const field of ['residual_quantity', 'residual_cost_basis'] as const) {
         if (trading[field] !== undefined) assert_non_negative_decimal_string(trading[field], `trading.${field}`);
+    }
+
+    if (trading.balance_reconciliation != null && !is_balance_reconciliation(trading.balance_reconciliation)) {
+        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'trading.balance_reconciliation is invalid');
     }
 
     // 실행 로직은 선택 REGIME와 별개인 선택적 표시 계약이며 제공된 값의 enum과 중복을 검증한다.
@@ -1652,6 +1657,7 @@ export function map_backend_snapshot(
         has_open_position: trading.has_open_position,
         residual_quantity: trading.residual_quantity ?? '0',
         residual_cost_basis: trading.residual_cost_basis ?? '0',
+        balance_reconciliation: trading.balance_reconciliation ?? null,
         position_average_entry_price: trading.position_average_entry_price ?? null,  // 원본 소수 문자열을 보존한다.
         trading_state_label: trading.status,
     };
@@ -1697,6 +1703,7 @@ export function map_backend_snapshot(
             has_open_position: server_snapshot.has_open_position,
         residual_quantity: server_snapshot.residual_quantity ?? '0',
         residual_cost_basis: server_snapshot.residual_cost_basis ?? '0',
+        balance_reconciliation: server_snapshot.balance_reconciliation ?? null,
             position_average_entry_price: server_snapshot.position_average_entry_price ?? null,
         },
         server_snapshot,
@@ -1852,6 +1859,7 @@ export function map_backend_event_to_intents(
                 has_open_position: trading.has_open_position,
         residual_quantity: trading.residual_quantity ?? '0',
         residual_cost_basis: trading.residual_cost_basis ?? '0',
+        balance_reconciliation: trading.balance_reconciliation ?? null,
                 position_average_entry_price: trading.position_average_entry_price ?? null,
                 logic_coverage: validate_trading_logic_coverage(trading.logic_coverage),
                 strategy_status: presentation.label,

@@ -23,6 +23,7 @@ class ShutdownPreparation:
     version: int = 0
     reason_code: str | None = None
     retryable: bool = False
+    balance_reconciliation: dict | None = None
     active: bool = True
     version_validated: bool = False
     deadline: float = field(default_factory=lambda: monotonic() + 120)
@@ -38,8 +39,20 @@ class ShutdownPreparation:
         """
         with self.lock:
             return {name: getattr(self, name) for name in (
-                "operation_id", "phase", "step", "version", "reason_code", "retryable",
+                "operation_id", "phase", "step", "version", "reason_code", "retryable", "balance_reconciliation",
             )}
+
+    def update_balance(self, details: dict | None) -> None:
+        """
+        함수 이름: update_balance()
+        기능: 조회 결과는 짧은 상태 잠금으로만 게시한다. 기한 후에는 갱신하지 않는다.
+        인자: details -> 원금·보상·잔고 대조 결과 또는 None
+        반환값: 없음
+        작성 날짜: 2026/09/16
+        """
+        with self.lock:
+            if self.phase not in ("ready", "blocked"):
+                self.balance_reconciliation = details
 
     def check(self) -> None:
         """

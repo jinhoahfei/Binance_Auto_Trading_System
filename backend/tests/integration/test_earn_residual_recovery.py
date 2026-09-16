@@ -14,6 +14,7 @@ from binance_auto_trader.adapters.persistence.residual_repository import Residua
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
 from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
 from binance_auto_trader.application.trading_controller import ResidualBalanceMismatchError
+from binance_auto_trader.application.balance_reconciliation import BalanceObservationChangedError
 from binance_auto_trader.domain.trading.residual import EarnResidualEvidence
 from tests.integration.test_external_exit_recovery import ExternalExitRecoveryTests, recovery_facts
 from tests.integration.test_testnet_restart_reconciliation_flow import _create_recovery_controller, FIXED_TIME
@@ -88,19 +89,22 @@ class EarnRecoveryTests(unittest.TestCase):
             too_much=replace(evidence,quantity=Decimal('0.000192'),subscriptions=(*evidence.subscriptions,('125',int((FIXED_TIME+timedelta(seconds=1)).timestamp()*1000),Decimal('0.000096'))))
             cases=[(None,None),(evidence,changed),(early,early),(too_much,too_much),(OSError('unavailable'),None)]
             original=(path.parent/'residual-ledger.json').read_bytes()
-            for values in cases:
+            for index, values in enumerate(cases):
                 controller,_,position=_create_recovery_controller(path,client)
                 self.addCleanup(controller.close_session_resources)
                 controller._residual_settlement=ResidualSettlement(ResidualRepository(path.parent/'residual-ledger.json'))
                 records=[]
                 controller._diagnostics=RuntimeDiagnostics(records.append)
                 with patch.object(controller._api_gateway,'fetch_earn_residual_evidence',side_effect=values), patch.object(controller._api_gateway,'fetch_symbol_trading_rules',return_value=SimpleNamespace(lot_size=SimpleNamespace(step_size=Decimal('0.0001')))):
-                    with self.assertRaises(ResidualBalanceMismatchError):
+                    expected_error = BalanceObservationChangedError if index == 1 else OSError if index == 4 else ResidualBalanceMismatchError
+                    with self.assertRaises(expected_error):
                         controller.reconcile_startup_state()
                 self.assertFalse(controller.startup_reconciliation_complete)
                 self.assertEqual(position.quantity,0)
                 self.assertEqual((path.parent/'residual-ledger.json').read_bytes(),original)
-                mismatch=next(row for row in records if row['event']=='residual_balance_mismatch')
-                self.assertEqual(mismatch['details']['exchange_quantity'],0)
+                result=controller.balance_reconciliation_snapshot()
+                self.assertEqual(result['exchange_spot_quantity'], '0')
+                self.assertEqual(result['status'], 'stale' if index == 1 else 'unavailable' if index == 4 else 'mismatch')
+                self.assertEqual(result['retryable'], index in (1, 4))
                 controller.close_session_resources()
             self.assertEqual(client.submit_count,0)

@@ -1,10 +1,21 @@
-import { render, screen } from '@testing-library/react';
+import { earned_balance_fixture } from '../../../shared/api/balanceReconciliationFixture';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { AssetCard } from './AssetCard';
 import { StrategyCard } from './StrategyCard';
 
 describe('Account summary live currency rendering', () => {
+    it('shows exact Earn principal, rewards and verified spot quantity', () => {
+        render(<AssetCard ethAmount="0.0001" ethValue="0.23 USDT" krwValue="-" profitLoss="-" totalValue="-"
+            balanceReconciliation={earned_balance_fixture} />);
+        expect(screen.getByText('ETH · 대조 내역')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'ETH · 대조 내역' }));
+        const note = screen.getByRole('note');
+        expect(note).toHaveTextContent('잔여 원금 0.00009600');
+        expect(note).toHaveTextContent('Earn 보상 0.00000001');
+        expect(note).toHaveTextContent('거래소 현물 0.00009601');
+    });
     it('negative USDT 성과에 임의 plus 부호를 붙이지 않는다', () => {
         render(
             <StrategyCard

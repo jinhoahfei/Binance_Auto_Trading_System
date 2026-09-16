@@ -66,3 +66,21 @@
 .card dd.profit {
     color: var(--color-text-positive);
 }
+
+.balanceButton {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.balanceDetails {
+    margin: 20px 0;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    line-height: 1.8;
+}

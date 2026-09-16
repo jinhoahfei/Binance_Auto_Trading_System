@@ -1,12 +1,12 @@
 """종료에만 사용하는 계좌·주문 검증과 기존 STOP 파이프라인 조정."""
 
 import asyncio
-from decimal import localcontext
 from threading import get_ident
 from time import monotonic, sleep
 
 from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
+from binance_auto_trader.application.balance_reconciliation import BalanceObservationChangedError
 from binance_auto_trader.application.trade_history_controller import TradeHistoryPersistencePendingError
 from binance_auto_trader.domain.trading.action_requests import CancelPendingOrder, patch
 from binance_auto_trader.domain.trading.position import Position
@@ -40,7 +40,7 @@ def prepare_shutdown_cycle(controller, operation) -> None:
     작성 날짜: 2026/09/16
     """
     # Controller와 같은 application 계층에서만 종료 전용 상태를 다룬다.
-    from .trading_controller import TradingSessionStatus
+    from .trading_controller import TradingSessionStatus, ResidualBalanceMismatchError
     c = controller
     if not operation.version_validated and c.context.version != operation.expected_version:
         raise ShutdownPreparationBlocked("STALE_CONTEXT_VERSION", True)
@@ -109,11 +109,8 @@ def prepare_shutdown_cycle(controller, operation) -> None:
                 raise ShutdownPreparationBlocked("SHUTDOWN_ORDER_UNRESOLVED")
             position = c._require_position()
             _verify_position_history(c, history, operation)
-            with localcontext() as decimal_context:
-                decimal_context.prec = 34
-                expected_balance = position.quantity + c.residual_totals[0]
-            if c._account.get_holdings("ETH") != expected_balance and not c._try_reconcile_earn_residual(c._account.get_holdings("ETH")):
-                raise ShutdownPreparationBlocked("SHUTDOWN_BALANCE_MISMATCH")
+            c._validate_residual_balance(strict=True, use_cached=True)
+            operation.update_balance(c.balance_reconciliation_snapshot())
             if position.quantity > 0 and not operation.liquidation_confirmed:
                 raise ShutdownPreparationBlocked("SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED")
             operation.check()
@@ -136,10 +133,8 @@ def prepare_shutdown_cycle(controller, operation) -> None:
                 continue
             # Flat은 메모리 bool만으로 판정하지 않는다. 대조된 장부와 잔고도 같아야 한다.
             operation.progress("checking", "history", c.context.version)
-            if c._account.get_holdings("ETH") != c.residual_totals[0]:
-                # 기존 Earn 증거 검증이 성공한 경우에는 거래소 현물과 보관 잔여의 차이가 설명된다.
-                if not c._try_reconcile_earn_residual(c._account.get_holdings("ETH")):
-                    raise ShutdownPreparationBlocked("SHUTDOWN_BALANCE_MISMATCH")
+            c._validate_residual_balance(strict=True, use_cached=True)
+            operation.update_balance(c.balance_reconciliation_snapshot())
             operation.check()
             _verify_history(history)
             try:
@@ -162,6 +157,10 @@ def prepare_shutdown_cycle(controller, operation) -> None:
             c._shutdown_verified_account_version = c._account.version
             c._record_diagnostic("shutdown_state_verified", version=c.context.version)
             return
+    except BalanceObservationChangedError as error:
+        raise ShutdownPreparationBlocked("SHUTDOWN_ACCOUNT_SNAPSHOT_CHANGED", True) from error
+    except ResidualBalanceMismatchError as error:
+        raise ShutdownPreparationBlocked("SHUTDOWN_BALANCE_MISMATCH") from error
     except BinanceAPIError as error:
         raise ShutdownPreparationBlocked("SHUTDOWN_ACCOUNT_UNREACHABLE",
             error.status_code >= 500 or error.status_code in (418, 429)) from error
@@ -215,6 +214,10 @@ def _reconcile(c, operation) -> None:
             previous.close()
             c._account_subscription = None
         c.reconnect_account_stream_after_reconciliation()
+    except ShutdownPreparationBlocked:
+        raise
+    except BalanceObservationChangedError as error:
+        raise ShutdownPreparationBlocked("SHUTDOWN_ACCOUNT_SNAPSHOT_CHANGED", True) from error
     except (OSError, TimeoutError) as error:
         raise ShutdownPreparationBlocked("SHUTDOWN_ACCOUNT_UNREACHABLE", True) from error
     except BinanceAPIError as error:
@@ -230,6 +233,8 @@ def _reconcile(c, operation) -> None:
             "residual ledger differs from exchange ETH balance": "SHUTDOWN_BALANCE_MISMATCH",
         }.get(str(error), "SHUTDOWN_ACCOUNT_RECONCILIATION_FAILED")
         raise ShutdownPreparationBlocked(code) from error
+    finally:
+        operation.update_balance(c.balance_reconciliation_snapshot())
     operation.check()
 
 
@@ -294,7 +299,7 @@ def _retry_reconciliation(c, operation) -> None:
             _reconcile(c, operation)
             return
         except ShutdownPreparationBlocked as error:
-            if error.code != "SHUTDOWN_ACCOUNT_UNREACHABLE" or not error.retryable:
+            if error.code not in ("SHUTDOWN_ACCOUNT_UNREACHABLE", "SHUTDOWN_ACCOUNT_SNAPSHOT_CHANGED") or not error.retryable:
                 raise
             c._diagnostics.record("shutdown_account_retry", attempt=attempt + 1, reason_code=error.code)
             delay = (1, 2, 5, 10, 30)[min(attempt, 4)]

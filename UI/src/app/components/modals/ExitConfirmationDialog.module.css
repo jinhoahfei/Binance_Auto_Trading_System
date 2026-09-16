@@ -34,3 +34,5 @@
     grid-template-columns: 1fr 1fr;
     gap: 18px;
 }
+
+.notice p { white-space: pre-line; overflow-wrap: anywhere; }

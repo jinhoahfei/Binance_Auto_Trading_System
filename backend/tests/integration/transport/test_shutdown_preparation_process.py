@@ -17,10 +17,17 @@ from tests.integration.transport.test_framed_sidecar_process import TEST_ORIGIN,
 
 class ShutdownPreparationProcessTests(unittest.TestCase):
     def test_prepare_response_replay_status_poll_and_verified_process_exit(self):
+        self.exercise_shutdown(False)
+
+    def test_earn_rewards_with_failed_worker_exit_actual_process(self):
+        self.exercise_shutdown(True)
+
+    def exercise_shutdown(self, earn):
         backend_root = Path(__file__).resolve().parents[3]
         token = secrets.token_urlsafe(32)
         with TemporaryDirectory() as directory:
             environment = {'PYTHONPATH': os.pathsep.join((str(backend_root/'src'),str(backend_root))), 'PYTHONUNBUFFERED':'1','PYTHONDONTWRITEBYTECODE':'1'}
+            if earn: environment['SHUTDOWN_FIXTURE_EARN'] = '1'
             if os.name=='nt': environment['SystemRoot']=os.environ['SystemRoot']
             child = subprocess.Popen([sys.executable,'-m','tests.integration.shutdown_preparation_process_fixture'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=directory,env=environment)
             try:
@@ -52,6 +59,11 @@ class ShutdownPreparationProcessTests(unittest.TestCase):
                     if progress['data']['phase'] in ('ready','blocked'):break
                     sleep(.01)
                 self.assertEqual(progress['data']['phase'],'ready',progress)
+                if earn:
+                    details=progress['data']['balance_reconciliation']
+                    self.assertEqual(details['status'], 'verified')
+                    self.assertEqual(details['earn_rewards_quantity'], '0.00000001')
+                    self.assertEqual(details['exchange_spot_quantity'], '0.00009601')
                 self.assertIsNone(child.poll())
                 status,final=request(descriptor,token,'POST','/v1/shutdown',{'schema_version':3,'expected_version':progress['data']['version']})
                 self.assertEqual(status,202,final)

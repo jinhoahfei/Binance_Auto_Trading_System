@@ -1,3 +1,4 @@
+import { earned_balance_fixture } from './balanceReconciliationFixture';
 import { shutdown_preparation_fixture } from './shutdownTestFixtures';
 import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -1111,6 +1112,31 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
         const f = fixture({ prepare: () => shutdown_preparation_fixture({ phase: 'blocked', step: 'account', reason_code: code, retryable: true }) });
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code, retryable: true });
         expect(f.wait).not.toHaveBeenCalled(); expect(f.adapter.is_disposed).toBe(false);
+        expect(f.paths).not.toContain('/v1/shutdown'); f.adapter.stop();
+    });
+
+    it('automatically finishes with a verified Earn reward receipt on repeated clicks', async () => {
+        const f = fixture({ prepare: () => shutdown_preparation_fixture({ balance_reconciliation: earned_balance_fixture }) });
+        await Promise.all([f.adapter.shutdown_application(), f.adapter.shutdown_application()]);
+        expect(f.paths.filter((path) => path === '/v1/shutdown')).toHaveLength(1);
+        expect(f.wait).toHaveBeenCalledOnce();
+    });
+
+    it('a real difference displays its exact quantities and reason', async () => {
+        const f = fixture({ prepare: () => shutdown_preparation_fixture({ phase: 'blocked', step: 'account',
+            reason_code: 'SHUTDOWN_BALANCE_MISMATCH', balance_reconciliation: { ...earned_balance_fixture,
+                status: 'mismatch', reason_code: 'BALANCE_UNEXPLAINED', difference_quantity: '0.00000001', exchange_spot_quantity: '0.00009602' } }) });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_BALANCE_MISMATCH', message: expect.stringContaining('차이 0.00000001 ETH'),
+        });
+        expect(f.paths).not.toContain('/v1/shutdown');
+        f.adapter.stop();
+    });
+
+    it('rejects malformed reward details before final shutdown', async () => {
+        const f = fixture({ prepare: () => ({ ...shutdown_preparation_fixture(),
+            balance_reconciliation: { ...earned_balance_fixture, earn_rewards_quantity: 0.00000001 } }) });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'MALFORMED_BACKEND_PAYLOAD' });
         expect(f.paths).not.toContain('/v1/shutdown'); f.adapter.stop();
     });
 

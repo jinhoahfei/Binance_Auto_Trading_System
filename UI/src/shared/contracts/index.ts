@@ -30,6 +30,7 @@ export type {
     BackendAccountUpdatedPayload,
     BackendAuthenticateMessage,
     BackendBalanceSnapshot,
+    BackendBalanceReconciliation,
     BackendBinanceConnectionStatus,
     BackendConnectionSnapshot,
     BackendCsvExportReceipt,

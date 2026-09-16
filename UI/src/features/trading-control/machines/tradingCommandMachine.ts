@@ -1,3 +1,4 @@
+import type { BackendBalanceReconciliation } from '../../../shared/contracts';
 import { assign, fromPromise, setup } from 'xstate';
 import {
     DEFAULT_TRADING_LOGIC_COVERAGE,
@@ -44,6 +45,7 @@ export interface TradingCommandContext {
     readonly position_average_entry_price: BackendDecimalString | null;
     readonly residual_quantity?: BackendDecimalString;
     readonly residual_cost_basis?: BackendDecimalString;
+    readonly balance_reconciliation?: BackendBalanceReconciliation | null;
     readonly regime_highlight_requested: boolean;
     readonly notice: 'not_running' | null;
     readonly unavailable_reason: TradingUnavailableReason | null;
@@ -84,6 +86,7 @@ export interface TradingCommandMachineOptions {
     readonly position_average_entry_price?: BackendDecimalString | null;
     readonly residual_quantity?: BackendDecimalString;
     readonly residual_cost_basis?: BackendDecimalString;
+    readonly balance_reconciliation?: BackendBalanceReconciliation | null;
 }
 
 export type TradingCommandEvent =
@@ -114,6 +117,7 @@ export type TradingCommandEvent =
         readonly position_average_entry_price?: BackendDecimalString | null;
         readonly residual_quantity?: BackendDecimalString;
         readonly residual_cost_basis?: BackendDecimalString;
+        readonly balance_reconciliation?: BackendBalanceReconciliation | null;
         readonly lifecycle_status: BackendTradingStatus;
     }
     | {
@@ -143,6 +147,7 @@ export type TradingCommandEvent =
         readonly position_average_entry_price?: BackendDecimalString | null;
         readonly residual_quantity?: BackendDecimalString;
         readonly residual_cost_basis?: BackendDecimalString;
+        readonly balance_reconciliation?: BackendBalanceReconciliation | null;
         readonly lifecycle_status: BackendTradingStatus;
     }
     | {
@@ -470,6 +475,7 @@ export function create_trading_command_machine(
                 // 시작·실시간 갱신·재연결에서 보유 여부와 평단가를 한 snapshot으로 교체한다.
                 residual_quantity: ({ context, event }) => (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED' || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') ? event.residual_quantity ?? '0' : context.residual_quantity,
                 residual_cost_basis: ({ context, event }) => (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED' || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') ? event.residual_cost_basis ?? '0' : context.residual_cost_basis,
+                balance_reconciliation: ({ context, event }) => (event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED' || event.type === 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') ? event.balance_reconciliation ?? null : context.balance_reconciliation,
                 position_average_entry_price: ({ context, event }) => {
                     if (event.type !== 'TRADING_SNAPSHOT_SYNCHRONIZED'
                         && event.type !== 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED') {
@@ -643,6 +649,7 @@ export function create_trading_command_machine(
             has_open_position: options.has_open_position ?? false,
             residual_quantity: options.residual_quantity ?? '0',
             residual_cost_basis: options.residual_cost_basis ?? '0',
+            balance_reconciliation: options.balance_reconciliation ?? null,
             position_average_entry_price: options.has_open_position
                 ? options.position_average_entry_price ?? null
                 : null,
