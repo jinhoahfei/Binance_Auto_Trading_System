@@ -15,3 +15,5 @@ export type {
     UiApplicationSnapshot,
     UiServerOwnedSnapshot,
 } from './UiApplicationFacade';
+
+export { UIStateController } from './UIStateController';

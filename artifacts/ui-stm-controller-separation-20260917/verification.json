@@ -1,0 +1,94 @@
+{
+  "date": "2026-09-17",
+  "baseline_commit": "58727e2901a04a2a0faeb6dd594b94dc51b232d8",
+  "xstate_version": "5.32.5",
+  "ui_tests": {
+    "passed_files": 60,
+    "passed_tests": 660,
+    "failed_tests": 0,
+    "includes_local_python_backend_process_fixtures": true,
+    "event_action_ids": 182,
+    "command": "node node_modules/vitest/vitest.mjs run",
+    "working_directory": "UI",
+    "output": "RUN  v4.1.10 /Users/oscar/Desktop/Binance_Auto/UI\n\n\n Test Files  60 passed (60)\n      Tests  660 passed (660)\n   Start at  18:14:59\n   Duration  10.26s (transform 8.38s, setup 6.60s, import 22.32s, tests 36.26s, environment 36.11s)"
+  },
+  "typecheck": {
+    "passed": true,
+    "command": "node node_modules/typescript/bin/tsc -b --pretty false",
+    "working_directory": "UI"
+  },
+  "production_build": {
+    "passed": true,
+    "command": "node node_modules/vite/bin/vite.js build",
+    "working_directory": "UI",
+    "warning": "A minified JavaScript chunk is 503.31 kB, above the 500 kB warning threshold."
+  },
+  "baseline_replays": [
+    {
+      "path": "UI/src/app/control/__snapshots__/ui-separation-navigation.json",
+      "sha256": "727a5eafd8d9bbe05a8cbccf2697a76e1d641382d1dcba953300b2a26506cbfc",
+      "trace_entries": 62,
+      "published_snapshots": 23,
+      "matched_baseline": true
+    },
+    {
+      "path": "UI/src/app/control/__snapshots__/ui-separation-races.json",
+      "sha256": "4d8a036393d2c884bcaad089f30a20c678f6c181ca6cf00ad705ba56f7a6e1eb",
+      "trace_entries": 31,
+      "published_snapshots": 14,
+      "matched_baseline": true
+    },
+    {
+      "path": "UI/src/app/control/__snapshots__/ui-separation-timers.json",
+      "sha256": "08ebc682f28bd6d8e47c28650ea30ce0db08d557d2fcd8314ef5a8c343a206f0",
+      "trace_entries": 20,
+      "published_snapshots": 10,
+      "matched_baseline": true
+    }
+  ],
+  "communication_traceability": {
+    "all_ui_references_valid": true,
+    "ui_references_checked": 132,
+    "full_validator_passed": false,
+    "preexisting_backend_reference_errors": [
+      {
+        "case": "CASE_1",
+        "message_id": "6.1.1.1.1",
+        "field": "positive_test",
+        "reference": {
+          "path": "backend/tests/unit/trading/test_logic_registry.py",
+          "test": "test_type_zero_uses_exact_lower_bb_registry_and_safe_termination"
+        },
+        "existed_at_baseline": true,
+        "error": "entries[33].positive_test.test was not found in backend/tests/unit/trading/test_logic_registry.py"
+      },
+      {
+        "case": "CASE_1",
+        "message_id": "8.1.1.3",
+        "field": "positive_test",
+        "reference": {
+          "path": "backend/tests/unit/trading/test_stm.py",
+          "test": "test_g_07_position_uses_force_sell_then_g_06f_completion"
+        },
+        "existed_at_baseline": true,
+        "error": "entries[48].positive_test.test was not found in backend/tests/unit/trading/test_stm.py"
+      },
+      {
+        "case": "CASE_1",
+        "message_id": "8.1.1.3",
+        "field": "negative_test",
+        "reference": {
+          "path": "backend/tests/unit/trading/test_stm.py",
+          "test": "test_g_07_force_sell_failure_uses_g_06r_retry_policy"
+        },
+        "existed_at_baseline": true,
+        "error": "entries[48].negative_test.test was not found in backend/tests/unit/trading/test_stm.py"
+      }
+    ]
+  },
+  "not_exercised": [
+    "Real Binance orders",
+    "Full backend test suite",
+    "Native desktop packaging and physical application shutdown"
+  ]
+}

@@ -1,7 +1,6 @@
-import { assign, fromPromise, setup } from 'xstate';
+import { assign, setup } from 'xstate';
 import type { BackendTradingStatus, UiCommandFailure } from '../../../shared/contracts';
 import { to_ui_command_failure } from '../../../shared/errors';
-import type { UiCommandPort } from '../../../shared/ports';
 
 export interface AppExitMachineContext {
     readonly had_open_position: boolean;
@@ -29,7 +28,7 @@ export type AppExitMachineEvent =
 
 /**
  * 함수 이름: has_failure_code()
- * 기능: invoked command의 unknown 오류에서 공개 가능한 typed failure code 하나만 비교한다.
+ * 기능: 명령 결과의 unknown 오류에서 공개 가능한 typed failure code 하나만 비교한다.
  * 인자: error -> XState onError가 전달한 unknown 오류, expected_code -> 비교할 오류 code
  * 반환값: exact code가 일치하면 true
  * 작성 날짜: 2026/08/24
@@ -44,20 +43,15 @@ function has_failure_code(error: unknown, expected_code: string): boolean {
 /**
  * 함수 이름: create_app_exit_machine()
  * 기능: OS 종료 요청을 Position 청산, authoritative terminal 확인과 안전 종료로 조정한다.
- * 인자: command_port -> 강제 매도와 애플리케이션 종료 명령 port
+ * 인자: 없음
  * 반환값: app-exit feature의 XState machine
  * 작성 날짜: 2026/08/12
  */
-export function create_app_exit_machine(command_port: UiCommandPort) {
+export function create_app_exit_machine() {
     return setup({
         types: {
             context: {} as AppExitMachineContext,
             events: {} as AppExitMachineEvent,
-        },
-        actors: {
-            shutdown_application: fromPromise<void, boolean>(async ({ input }) => {
-                await command_port.shutdown_application(input);
-            }),
         },
         guards: {
             shutdown_needs_liquidation_confirmation: ({ event }) => 'error' in event
@@ -160,42 +154,43 @@ export function create_app_exit_machine(command_port: UiCommandPort) {
                 meta: {
                     spec_ids: ['ES3-06', 'ES3-09'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'shutdown_application_command',
-                    src: 'shutdown_application',
-                    input: ({ context }) => context.had_open_position,
-                    onDone: {
-                        target: 'ui_final_state',
+                    command: {
+                        id: 'shutdown_application_command',
+                        src: 'shutdown_application',
+                        input: ({ context }: { context: AppExitMachineContext }) => context.had_open_position,
+                        onDone: {
+                            target: 'ui_final_state',
+                        },
+                        onError: [
+                            {
+                                guard: 'shutdown_needs_liquidation_confirmation',
+                                target: 'force_sell_exit_confirmation',
+                                actions: ['require_liquidation_confirmation', 'remember_shutdown_failure'],
+                            },
+                            {
+                                guard: 'sidecar_exit_wait_timed_out',
+                                target: 'shutdown_exit_recovery',
+                                actions: 'remember_shutdown_failure',
+                            },
+                            {
+                                guard: 'sidecar_exit_failed',
+                                target: 'sidecar_exit_failure',
+                                actions: 'remember_shutdown_failure',
+                            },
+                            {
+                                guard: 'shutdown_outcome_is_ambiguous',
+                                target: 'shutdown_outcome_recovery',
+                                actions: 'remember_shutdown_failure',
+                            },
+                            {
+                                // 202 이전 실패는 일반 종료 확인에서 안전 조건을 다시 평가한다.
+                                target: 'exit_confirmation',
+                                actions: 'remember_shutdown_failure',
+                            },
+                        ],
                     },
-                    onError: [
-                        {
-                            guard: 'shutdown_needs_liquidation_confirmation',
-                            target: 'force_sell_exit_confirmation',
-                            actions: ['require_liquidation_confirmation', 'remember_shutdown_failure'],
-                        },
-                        {
-                            guard: 'sidecar_exit_wait_timed_out',
-                            target: 'shutdown_exit_recovery',
-                            actions: 'remember_shutdown_failure',
-                        },
-                        {
-                            guard: 'sidecar_exit_failed',
-                            target: 'sidecar_exit_failure',
-                            actions: 'remember_shutdown_failure',
-                        },
-                        {
-                            guard: 'shutdown_outcome_is_ambiguous',
-                            target: 'shutdown_outcome_recovery',
-                            actions: 'remember_shutdown_failure',
-                        },
-                        {
-                            // 202 이전 실패는 일반 종료 확인에서 안전 조건을 다시 평가한다.
-                            target: 'exit_confirmation',
-                            actions: 'remember_shutdown_failure',
-                        },
-                    ],
                 },
+
                 on: {
                     SIDECAR_EXITED: {
                         target: 'ui_final_state',

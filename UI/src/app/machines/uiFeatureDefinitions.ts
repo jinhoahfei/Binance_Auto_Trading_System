@@ -1,28 +1,25 @@
-import { create_account_summary_machine } from '../../features/account-summary';
-import { create_app_exit_machine } from '../../features/app-exit';
-import { create_connection_machine } from '../../features/connection-status';
-import { create_csv_export_machine } from '../../features/csv-export';
-import { create_chart_machine } from '../../features/price-chart';
-import { create_recent_orders_machine } from '../../features/recent-orders';
-import { create_regime_machine } from '../../features/regime-selection';
-import { create_split_order_machine } from '../../features/split-order';
-import {
-    create_trade_history_machine,
-    create_trade_history_summary_machine,
-} from '../../features/trade-history';
-import { create_trading_command_machine } from '../../features/trading-control';
-import type { UiCommandPort } from '../../shared/ports';
+import { create_account_summary_machine } from '../../features/account-summary/machines/accountSummaryMachine';
+import { create_app_exit_machine } from '../../features/app-exit/machines/appExitMachine';
+import { create_connection_machine } from '../../features/connection-status/machines/connectionMachine';
+import { create_csv_export_machine } from '../../features/csv-export/machines/csvExportMachine';
+import { create_chart_machine } from '../../features/price-chart/machines/chartMachine';
+import { create_recent_orders_machine } from '../../features/recent-orders/machines/recentOrdersMachine';
+import { create_regime_machine } from '../../features/regime-selection/machines/regimeMachine';
+import { create_split_order_machine } from '../../features/split-order/machines/splitOrderMachine';
+import { create_trade_history_machine } from '../../features/trade-history/machines/tradeHistoryMachine';
+import { create_trade_history_summary_machine } from '../../features/trade-history/machines/tradeHistorySummaryMachine';
+import { create_trading_command_machine } from '../../features/trading-control/machines/tradingCommandMachine';
 import type { UiApplicationFacadeOptions } from '../control/uiApplicationContracts';
 
 
 /**
  * 함수 이름: create_feature_definitions()
- * 기능: 명령 port와 초기 옵션으로 기능별 상태·가드·Action 정의를 준비한다.
- * 인자: command_port -> 기능이 사용할 비동기 명령 계약, options -> 초기 UI 데이터
+ * 기능: 순수 초기 데이터로 기능별 상태·가드·Action 요청 정의를 준비한다.
+ * 인자: options -> 외부 함수가 없는 초기 UI 데이터
  * 반환값: 루트 조립에 사용할 기능별 machine 정의
  * 작성 날짜: 2026/09/16
  */
-export function create_feature_definitions(command_port: UiCommandPort, options: UiApplicationFacadeOptions) {
+export function create_feature_definitions(options: Omit<UiApplicationFacadeOptions, 'get_current_kst_date'> & { initial_monotonic_ms?: number }) {
     const definitions = {
         account_summary: create_account_summary_machine({
             ...(options.account_strategy === undefined ? {} : {
@@ -32,15 +29,12 @@ export function create_feature_definitions(command_port: UiCommandPort, options:
                 asset: options.account_asset,
             }),
         }),
-        app_exit: create_app_exit_machine(command_port),
+        app_exit: create_app_exit_machine(),
         connection: create_connection_machine(),
-        csv_export: create_csv_export_machine(command_port, {
+        csv_export: create_csv_export_machine({
             today: options.today,
             ...(options.csv_default_file_name === undefined ? {} : {
                 default_file_name: options.csv_default_file_name,
-            }),
-            ...(options.get_current_kst_date === undefined ? {} : {
-                get_current_kst_date: options.get_current_kst_date,
             }),
         }),
         chart: create_chart_machine({
@@ -56,12 +50,13 @@ export function create_feature_definitions(command_port: UiCommandPort, options:
             }),
         }),
         recent_orders: create_recent_orders_machine({
+            initial_monotonic_ms: options.initial_monotonic_ms ?? 0,
             ...(options.recent_trades === undefined ? {} : {
                 trades: options.recent_trades,
             }),
             strategy_indicators: options.strategy_indicators ?? null,
         }),
-        regime: create_regime_machine(command_port, {
+        regime: create_regime_machine({
             ...(options.recommended_regime === undefined ? {} : {
                 recommended_regime: options.recommended_regime,
             }),
@@ -72,7 +67,7 @@ export function create_feature_definitions(command_port: UiCommandPort, options:
                 metrics: options.regime_metrics,
             }),
         }),
-        split_order: create_split_order_machine(command_port, {
+        split_order: create_split_order_machine({
             ...(options.scale_in_percentage === undefined ? {} : {
                 scale_in_percentage: options.scale_in_percentage,
             }),
@@ -80,7 +75,7 @@ export function create_feature_definitions(command_port: UiCommandPort, options:
                 scale_out_percentage: options.scale_out_percentage,
             }),
         }),
-        trade_history: create_trade_history_machine(command_port, {
+        trade_history: create_trade_history_machine({
             symbol: options.trading_symbol ?? 'ETH/KRW',
             ...(options.history_records === undefined ? {} : {
                 records: options.history_records,
@@ -89,7 +84,7 @@ export function create_feature_definitions(command_port: UiCommandPort, options:
         trade_history_summary: create_trade_history_summary_machine(options.trade_history_summary === undefined ? {} : {
             summary: options.trade_history_summary,
         }),
-        trading: create_trading_command_machine(command_port, {
+        trading: create_trading_command_machine({
             ...(options.logic_coverage === undefined ? {} : {
                 logic_coverage: options.logic_coverage,
             }),

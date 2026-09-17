@@ -1,5 +1,7 @@
 # UI STM 계층 복원 구현·검증 및 문서 충돌 기록
 
+> **2026-09-17 구조 변경:** 이 문서의 본문은 9월 16일의 actor 소유 실행 구조를 기록한다. 현재 구현은 `UISTM`이 순수 전이와 Action 요청을 반환하고 `UIStateController`가 외부 작업을 실행한다. 최신 구조와 검증 결과는 [UI STM–Controller 책임 분리 설명서](UI_STM_Controller_Separation_2026-09-17.md)를 참조한다. 당시 PDF도 이전 구조의 기록이다.
+
 기준: 2026-09-16 착수 시 작업 폴더, commit `c5bce4b`. 착수 시 미저장 변경은 없었으며, 이미 반영된 계좌 잔여 자산·평단가·risk 상태와 최신 종료 동작을 그대로 기준으로 삼았다. 구조 기준은 `UI_Event_Action_Table.md`, REGIME 조작 기준은 `UI_Rule.md` CR-03이다.
 
 ## 1. 구현 결과와 코드 읽기 경로

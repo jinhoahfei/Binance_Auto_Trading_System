@@ -1,8 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { createActor } from 'xstate';
+import { UIStateController } from '../control/UIStateController';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { create_ui_application_machine } from './uiApplicationMachine';
 import {
     select_app_view_model,
     type UiApplicationFacadeOptions,
@@ -62,10 +61,16 @@ function register_behavior_scenario(spec_ids: string[], label: string, run_scena
  * 작성 날짜: 2026/09/16
  */
 function create_root_test_application(options: Partial<UiApplicationFacadeOptions> = {}, command_adapter = new FakeUiCommandAdapter()) {
-    const actor = createActor(create_ui_application_machine(command_adapter, {
+    const controller = new UIStateController(command_adapter, {
         today: '2026-09-16',
         ...options,
-    }));
+    });
+    const actor = {
+        start: () => controller.start(),
+        stop: () => controller.stop(),
+        send: controller.handle_event.bind(controller),
+        getSnapshot: () => controller.get_snapshot(),
+    };
 
     actors.push(actor);
     actor.start();

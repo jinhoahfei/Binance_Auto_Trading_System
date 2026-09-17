@@ -383,8 +383,8 @@ transport 계층에서만 수행하고 private `LOWER_BB` key와 transition ID�
 | 체크 | Communication 클래스 | 현재 상태와 근거 | 남은 일 |
 |---|---|---|---|
 | [x] | `AppShellUI` | React `App`, `AppHeader`, modal host와 live snapshot/loading/typed failure Boundary를 구현 | 없음 |
-| [x] | `UIStateController` | `UiApplicationFacade`가 snapshot/event bridge, Phase 7 command, Phase 10 Trade History와 Phase 11 native picker/export lifecycle을 조정 | 없음 |
-| [x] | `UISTM` | root/feature XState actor와 Phase 5 snapshot 전체 동기화/reconnect를 구현 | 후속 command ack E2E 추가 |
+| [x] | `UIStateController` | `UIStateController`가 순수 `UISTM`의 전이 결과를 받아 snapshot/event bridge, command, Trade History, native picker/export, 타이머 lifecycle을 조정 (`UiApplicationFacade`는 호환 이름) | 없음 |
+| [x] | `UISTM` | 단일 순수 XState 루트의 상태·전이·Action 요청과 Phase 5 snapshot 전체 동기화/reconnect를 구현 | 후속 command ack E2E 추가 |
 | [x] | `TradingController` | account, strict selection, session start/stop, queue/scheduler, Phase 8 Order/Position/history/force-sell 실행, Phase 9 pending journal·reconciliation, public market evaluation→Case 2 local trace와 production Spot REST memory-HTTP E2E를 구현·검증 | Phase 13 actual Testnet order trace는 별도 미완료 |
 | [x] | `TradingSTM` | exact 109개 lower-BB transition·queue, 5-row immutable coverage, typed unsupported/no-fallback, G-07 안전 종료와 session `run` 연결을 구현 | 없음 |
 | [x] | `TradingContext` | mutable/versioned owner, `initialize`, ordered runtime patch 적용, typed mutation·split ratio·Position/pending Order publication을 구현 | 없음 |
@@ -499,8 +499,8 @@ readiness·live 위험 한도가 남아 있기 때문이다.
 ```mermaid
 flowchart LR
     User["User"] --> UI["AppShellUI / RecentOrderUI / TradeHistoryUI / PopupUI"]
-    UI --> USC["UIStateController = UiApplicationFacade"]
-    USC --> UISTM["UISTM = XState actors"]
+    UI --> USC["UIStateController (UiApplicationFacade compatibility)"]
+    USC --> UISTM["UISTM = pure XState transitions"]
     USC --> Adapter["BackendUiAdapter"]
     Adapter <-->|"loopback HTTP + WebSocket"| Transport["Python transport functions"]
     Transport --> MDC["MarketDataController"]
@@ -780,8 +780,8 @@ UI `<<boundary>>` classifier는 ES class 하나가 아니라 component/module �
 | Communication 클래스 | 최종 authoritative 파일/모듈 |
 |---|---|
 | `AppShellUI` | `UI/src/app/App.tsx`, `UI/src/features/trading-control/components/AppHeader.tsx`, `UI/src/app/components/AppModalHost.tsx` |
-| `UIStateController` | `UI/src/app/control/UiApplicationFacade.ts`, live wiring은 `createLiveUiApplication.ts` |
-| `UISTM` | `UI/src/app/machines/uiShellMachine.ts`와 `UI/src/features/*/machines/*Machine.ts` |
+| `UIStateController` | `UI/src/app/control/UIStateController.ts`, 기존 Facade는 호환 재수출, live wiring은 `createLiveUiApplication.ts` |
+| `UISTM` | `UI/src/app/machines/UISTM.ts`의 순수 평가와 `uiApplicationMachine.ts`의 단일 계층형 정의; `UI/src/features/*/machines/*Machine.ts`는 루트에 조립할 기능별 정의 |
 | `TradingController` | `backend/src/binance_auto_trader/application/trading_controller.py` |
 | `TradingSTM` | `backend/src/binance_auto_trader/domain/trading/stm.py`, `logic_registry.py`와 `transitions/` |
 | `TradingContext` | `backend/src/binance_auto_trader/domain/trading/context.py` |

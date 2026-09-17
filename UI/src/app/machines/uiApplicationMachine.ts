@@ -1,10 +1,9 @@
 import { assign, enqueueActions, setup } from 'xstate';
+import type { UIActionRequest } from './uiActions';
 
-import type { UiCommandPort } from '../../shared/ports';
 import type { UiApplicationFacadeOptions } from '../control/uiApplicationContracts';
 import { create_feature_definitions } from './uiFeatureDefinitions';
 import { UiRegionComposition } from './uiRegionComposition';
-import { ui_command_executor } from './uiCommandExecutor';
 import { csv_export_regions } from '../../features/csv-export/machines/csvExportRegions';
 import { split_order_regions } from '../../features/split-order/machines/splitOrderRegions';
 import { trading_regions } from '../../features/trading-control/machines/tradingRegions';
@@ -15,13 +14,13 @@ import type { FeatureContexts, UiApplicationContext, UiDomainEvent } from './uiA
 
 /**
  * 함수 이름: create_ui_application_machine()
- * 기능: 상단·화면·종료 Region과 명령 수명을 하나의 XState 루트로 구성한다.
- * 인자: command_port -> 비동기 명령 계약, options -> 기능별 초기 데이터와 설정
+ * 기능: 상단·화면·종료 Region과 실행 요청 규칙을 하나의 순수 XState 루트로 구성한다.
+ * 인자: options -> 외부 함수가 없는 기능별 초기 데이터와 설정
  * 반환값: 전체 UI 상태 계층을 실행하는 machine 정의
  * 작성 날짜: 2026/09/16
  */
-export function create_ui_application_machine(command_port: UiCommandPort, options: UiApplicationFacadeOptions) {
-    const definitions = create_feature_definitions(command_port, options);
+export function create_ui_application_machine(options: Omit<UiApplicationFacadeOptions, 'get_current_kst_date'> & { initial_monotonic_ms?: number }) {
+    const definitions = create_feature_definitions(options);
     const composition = new UiRegionComposition(definitions);
     const trading = trading_regions(definitions.trading);
     const chart = composition.compile('chart', definitions.chart.config);
@@ -46,17 +45,20 @@ export function create_ui_application_machine(command_port: UiCommandPort, optio
     }
 
     return setup({
+        actions: {
+            'ui.request': (_args, _request: UIActionRequest) => {
+                throw new Error('UI actions must be consumed by UIStateController');
+            },
+        },
         types: {
             context: {} as UiApplicationContext,
             events: {} as UiDomainEvent,
-        },
-        actors: {
-            ui_commands: ui_command_executor,
         },
     }).createMachine({
         id: 'uiApplicationMachine',
         initial: 'ETIRE_UI_SYSTEM',
         context: () => ({
+            evaluation: { now_epoch_ms: 0, today: options.today },
             server_snapshot: null,
             features: composition.initial as FeatureContexts,
             requests: {},
@@ -69,12 +71,14 @@ export function create_ui_application_machine(command_port: UiCommandPort, optio
         states: {
             ETIRE_UI_SYSTEM: {
                 type: 'parallel',
-                invoke: {
-                    id: 'ui_commands',
-                    src: 'ui_commands',
-                },
                 on: {
                     ...composition.fallback,
+                    'ui.evaluate': {
+                        actions: enqueueActions(({ event, enqueue }) => {
+                            enqueue.assign({ evaluation: event.evaluation! });
+                            for (const item of event.events ?? []) enqueue.raise(item);
+                        }),
+                    },
                     'ui.batch': {
                         actions: enqueueActions(({ event, enqueue }) => {
                             // 서버 snapshot을 공통 데이터에 먼저 반영한다.
@@ -132,7 +136,7 @@ export function create_ui_application_machine(command_port: UiCommandPort, optio
                                     });
                                 }),
                                 exit: assign({
-                                    retained: ({ self }) => self.getSnapshot().value,
+                                    retained: ({ context }) => context.evaluation.previous_value,
                                 }),
                                 on: {
                                     'shell.SHOW_ALL_TRADING_DETAILS': {
@@ -182,7 +186,7 @@ export function create_ui_application_machine(command_port: UiCommandPort, optio
                                     });
                                 }),
                                 exit: assign({
-                                    retained_details: ({ self }) => self.getSnapshot().value,
+                                    retained_details: ({ context }) => context.evaluation.previous_value,
                                 }),
                                 on: {
                                     'shell.BACK_TO_MAIN_SCREEN': {
@@ -215,10 +219,10 @@ export function create_ui_application_machine(command_port: UiCommandPort, optio
             UI_FINAL_STATE: {
                 id: 'UI_FINAL_STATE',
                 type: 'final',
-                entry: assign({
-                    requests: {},
-                    deferred: [],
-                }),
+                entry: [
+                    assign({ requests: {}, deferred: [] }),
+                    { type: 'ui.request', params: { type: 'stop_all' } },
+                ],
                 meta: {
                     spec_ids: ['UI_FINAL_STATE'],
                 },

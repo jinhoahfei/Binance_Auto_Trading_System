@@ -1,4 +1,4 @@
-import { createActor } from 'xstate';
+import { create_feature_test_actor } from '../../../shared/testing/createFeatureTestController';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BackendAdapterError } from '../../../shared/api';
@@ -21,7 +21,7 @@ async function wait_for_exit_actor_settlement(): Promise<void> {
 describe('appExitMachine Phase 12 lifecycle', () => {
     it('포지션이 없어도 확인 뒤 adapter 안전 종료를 거쳐야 final이 된다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_app_exit_machine(command_adapter));
+        const actor = create_feature_test_actor(create_app_exit_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'EXIT_CLICKED', has_open_position: false });
@@ -37,7 +37,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
 
     it('native와 renderer의 중복 close intent는 확인과 shutdown command를 한 번만 만든다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_app_exit_machine(command_adapter));
+        const actor = create_feature_test_actor(create_app_exit_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'EXIT_CLICKED', has_open_position: false });
@@ -56,7 +56,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
         const commands = new FakeUiCommandAdapter();
         let finish!: () => void;
         const shutdown = vi.spyOn(commands, 'shutdown_application').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
-        const actor = createActor(create_app_exit_machine(commands)); actor.start();
+        const actor = create_feature_test_actor(create_app_exit_machine, commands); actor.start();
         actor.send({ type: 'EXIT_CLICKED', has_open_position: true, is_trading });
         expect(shutdown).not.toHaveBeenCalled();
         actor.send({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
@@ -75,7 +75,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
         const commands = new FakeUiCommandAdapter();
         commands.queue_failure('shutdown_application', new BackendAdapterError('SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED', '청산 동의 필요', false));
         const shutdown = vi.spyOn(commands, 'shutdown_application');
-        const actor = createActor(create_app_exit_machine(commands)); actor.start();
+        const actor = create_feature_test_actor(create_app_exit_machine, commands); actor.start();
         actor.send({ type: 'EXIT_CLICKED', has_open_position: false });
         actor.send({ type: 'EXIT_CONFIRMED' }); await wait_for_exit_actor_settlement();
         expect(shutdown).toHaveBeenCalledExactlyOnceWith(false);
@@ -96,7 +96,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
                 'shutdown_application',
                 new Error('열린 포지션과 주문 상태를 확인해 주세요.'),
             );
-            const actor = createActor(create_app_exit_machine(command_adapter));
+            const actor = create_feature_test_actor(create_app_exit_machine, command_adapter);
 
             actor.start();
             actor.send({ type: 'EXIT_CLICKED', has_open_position });
@@ -123,7 +123,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
                 true,
             ),
         );
-        const actor = createActor(create_app_exit_machine(command_adapter));
+        const actor = create_feature_test_actor(create_app_exit_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'EXIT_CLICKED', has_open_position: false });
@@ -156,7 +156,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
                 true,
             ),
         );
-        const actor = createActor(create_app_exit_machine(command_adapter));
+        const actor = create_feature_test_actor(create_app_exit_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'EXIT_CLICKED', has_open_position: false });
@@ -188,7 +188,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
                 true,
             ),
         );
-        const actor = createActor(create_app_exit_machine(command_adapter));
+        const actor = create_feature_test_actor(create_app_exit_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'EXIT_CLICKED', has_open_position: false });
@@ -206,7 +206,7 @@ describe('appExitMachine Phase 12 lifecycle', () => {
 
     it('sidecar crash는 backend command 없이 offline recovery 확인 뒤 final로 간다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_app_exit_machine(command_adapter));
+        const actor = create_feature_test_actor(create_app_exit_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'SIDECAR_EXITED_ABNORMALLY' });

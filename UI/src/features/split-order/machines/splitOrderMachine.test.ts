@@ -1,4 +1,4 @@
-import { createActor } from 'xstate';
+import { create_feature_test_actor } from '../../../shared/testing/createFeatureTestController';
 import { describe, expect, it } from 'vitest';
 import { FakeUiCommandAdapter } from '../../../shared/testing';
 import { create_split_order_machine } from './splitOrderMachine';
@@ -19,10 +19,10 @@ async function wait_for_actor_settlement(): Promise<void> {
 describe('splitOrderMachine', () => {
     it('SI-02/SO-02: 저장 중에도 연속 slider 입력의 최신 비율을 즉시 표시하고 저장한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_split_order_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_split_order_machine, command_adapter, {
             scale_in_percentage: 40,
             scale_out_percentage: 40,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'SCALE_IN_LEVEL_CHANGED', percentage: 50 });

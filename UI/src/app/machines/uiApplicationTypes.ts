@@ -4,7 +4,9 @@
  * 외부 입력·화면 모델 계약은 uiApplicationContracts.ts에 정의한다.
  */
 
-import type { SnapshotFrom, StateValue, AnyActorLogic } from 'xstate';
+import type { SnapshotFrom, StateValue } from 'xstate';
+
+import type { UIEvaluationInput } from './uiActions';
 
 import type { create_feature_definitions } from './uiFeatureDefinitions';
 import type { UiServerOwnedSnapshot } from '../control/uiApplicationContracts';
@@ -30,6 +32,7 @@ export interface UiDomainEvent {
     readonly owner?: FeatureKey;
     readonly resume_key?: string;
     readonly server_snapshot?: UiServerOwnedSnapshot;
+    readonly evaluation?: UIEvaluationInput & { readonly previous_value: StateValue };
 }
 
 /** 명령 key별 최신 요청 식별자와 처리 상태로, 명령 결과의 유효성을 판단하는 데 사용한다. */
@@ -40,6 +43,7 @@ export interface UiRequest {
 
 /** 모든 Region이 공유하는 서버 데이터·기능별 데이터·작업 및 화면 복귀 정보이다. */
 export interface UiApplicationContext {
+    readonly evaluation: UIEvaluationInput & { readonly previous_value?: StateValue };
     readonly server_snapshot: UiServerOwnedSnapshot | null;
     readonly features: FeatureContexts;
     readonly requests: Readonly<Record<string, UiRequest>>;
@@ -60,15 +64,3 @@ export interface UiApplicationSnapshot {
     readonly status: 'active' | 'done' | 'error' | 'stopped';
     matches(value: StateValue): boolean;
 }
-
-/** 루트가 명령 실행부에 전달하는 작업 시작 또는 취소 요청이다. key로 작업을 찾고 token으로 결과를 식별한다. */
-export type CommandMessage = {
-    type: 'run';
-    key: string;
-    token: number;
-    logic: AnyActorLogic;
-    input: unknown;
-} | {
-    type: 'cancel';
-    key: string;
-};

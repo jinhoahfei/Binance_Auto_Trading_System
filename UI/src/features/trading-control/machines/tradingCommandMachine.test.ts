@@ -1,4 +1,4 @@
-import { createActor } from 'xstate';
+import { create_feature_test_actor } from '../../../shared/testing/createFeatureTestController';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TRADING_LOGIC_COVERAGE } from '../../../shared/contracts';
 import { FakeUiCommandAdapter } from '../../../shared/testing';
@@ -24,7 +24,7 @@ describe('tradingCommandMachine', () => {
         const completion = new Promise<void>((resolve) => { complete = resolve; });
         const stop = port.stop_trading.bind(port);
         port.stop_trading = async () => { await completion; return stop(); };
-        const actor = createActor(create_trading_command_machine(port, { is_trading: true, lifecycle_status }));
+        const actor = create_feature_test_actor(create_trading_command_machine, port, { is_trading: true, lifecycle_status });
         actor.start();
         const snapshot = { type: 'TRADING_SNAPSHOT_SYNCHRONIZED' as const, lifecycle_status,
             is_trading: true, has_open_position: false, selected_regime: 'type0' as const,
@@ -44,7 +44,7 @@ describe('tradingCommandMachine', () => {
     });
 
     it('종료·재연결 snapshot에도 잔여 자산과 미실현 원가를 보존한다', () => {
-        const actor = createActor(create_trading_command_machine(new FakeUiCommandAdapter()));
+        const actor = create_feature_test_actor(create_trading_command_machine, new FakeUiCommandAdapter());
         actor.start();
         // 재연결은 거래 명령 없이 별도 장부의 원본 Decimal 상태를 복원한다.
         actor.send({
@@ -61,7 +61,7 @@ describe('tradingCommandMachine', () => {
 
     it('U3-03/VR-01: REGIME 미선택 시작은 명령 없이 안내 상태로 전이한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: null, is_online: true });
@@ -73,9 +73,9 @@ describe('tradingCommandMachine', () => {
 
     it('U3-05: 확인된 온라인 시작은 한 번만 호출하고 실행 상태가 된다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
@@ -92,9 +92,9 @@ describe('tradingCommandMachine', () => {
 
     it('Phase 6: 미지원 REGIME은 선택을 보존하고 시작 명령을 보내지 않는다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type3', is_online: true });
@@ -108,7 +108,7 @@ describe('tradingCommandMachine', () => {
 
     it('Phase 6: 지원 REGIME도 command가 비활성화되면 시작 명령을 보내지 않는다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
@@ -121,9 +121,9 @@ describe('tradingCommandMachine', () => {
 
     it('Phase 6: 시작 확인 중 resync로 command가 닫히면 stale 확인을 차단한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
@@ -148,7 +148,7 @@ describe('tradingCommandMachine', () => {
     });
 
     it('Phase 13: configured-unbounded 정책 값을 문자열·null 그대로 actor context에 보존한다', () => {
-        const actor = createActor(create_trading_command_machine(new FakeUiCommandAdapter()));
+        const actor = create_feature_test_actor(create_trading_command_machine, new FakeUiCommandAdapter());
 
         actor.start();
 
@@ -248,10 +248,10 @@ describe('tradingCommandMachine', () => {
 
     it('Phase 9: 정지 상태의 복구 Position은 새 자동매매 시작을 차단한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
             has_open_position: true,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
@@ -264,9 +264,9 @@ describe('tradingCommandMachine', () => {
 
     it('Phase 9: 복구 Position 확인은 recovery 전용 Operation만 호출한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             has_open_position: true,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
@@ -288,9 +288,9 @@ describe('tradingCommandMachine', () => {
 
     it('Phase 9: 복구 Position 청산 취소는 Position을 보존하고 명령을 보내지 않는다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             has_open_position: true,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
@@ -311,9 +311,9 @@ describe('tradingCommandMachine', () => {
                 session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
                 version: 3,
             };
-            const actor = createActor(create_trading_command_machine(command_adapter, {
+            const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
                 has_open_position: true,
-            }));
+            });
 
             actor.start();
             actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
@@ -382,7 +382,7 @@ describe('tradingCommandMachine', () => {
     it('U2-03/U2-09: 강제 매도 실패는 확인 상태로 돌아가고 실행 상태를 유지한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.queue_failure('force_sell_and_stop', new Error('test sell failure'));
-        const actor = createActor(create_trading_command_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'BACKEND_TRADING_STARTED' });
@@ -399,7 +399,7 @@ describe('tradingCommandMachine', () => {
 
     it('U2-03/U2-10: 강제 매도 중지 취소 후에도 backend 포지션 snapshot을 보존한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'BACKEND_TRADING_STARTED' });
@@ -414,7 +414,7 @@ describe('tradingCommandMachine', () => {
 
     it('U2-08: 강제 매도 후 중지가 성공한 경우에만 포지션 snapshot을 비운다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_trading_command_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'BACKEND_TRADING_STARTED' });
@@ -437,7 +437,7 @@ describe('tradingCommandMachine', () => {
                 session_id: '62c511b2-ea5c-43ac-bc36-e96eb39c85aa',
                 version: 3,
             };
-            const actor = createActor(create_trading_command_machine(command_adapter));
+            const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
             actor.start();
             actor.send({ type: 'BACKEND_TRADING_STARTED' });

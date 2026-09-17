@@ -576,8 +576,8 @@
       "receiver": "UISTM",
       "operation": "run(initialEvent : UIEvent = APP_STARTED) : UITransitionResult",
       "production_owner": {
-        "path": "UI/src/app/machines/uiShellMachine.ts",
-        "symbol": "create_ui_shell_machine"
+        "path": "UI/src/app/machines/UISTM.ts",
+        "symbol": "run(input"
       },
       "positive_test": {
         "path": "UI/src/app/bootstrap/createLiveUiApplication.process.test.mjs",
@@ -639,7 +639,7 @@
       "receiver": "UIStateController",
       "operation": "selectRegime(regimeType : RegimeType) : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -744,7 +744,7 @@
       "receiver": "UIStateController",
       "operation": "startTrading() : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -849,7 +849,7 @@
       "receiver": "UIStateController",
       "operation": "stopTrading() : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -1059,7 +1059,7 @@
       "receiver": "UIStateController",
       "operation": "liquidateRecoveredPosition() : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -1668,7 +1668,7 @@
       "receiver": "UIStateController",
       "operation": "showAllTradingDetails() : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -1689,8 +1689,8 @@
       "receiver": "UISTM",
       "operation": "handle(event : UIEvent = SHOW_ALL_TRADING_DETAILS) : UITransitionResult",
       "production_owner": {
-        "path": "UI/src/app/machines/uiShellMachine.ts",
-        "symbol": "create_ui_shell_machine"
+        "path": "UI/src/app/machines/UISTM.ts",
+        "symbol": "handle(event"
       },
       "positive_test": {
         "path": "UI/src/app/control/UiApplicationFacade.test.ts",
@@ -1857,7 +1857,7 @@
       "receiver": "UIStateController",
       "operation": "tradeHistoryFilterChanged(period : HistoryPeriod, side : TradeSide) : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -2004,7 +2004,7 @@
       "receiver": "UIStateController",
       "operation": "openCSVExport() : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -2109,7 +2109,7 @@
       "receiver": "UIStateController",
       "operation": "saveLocationSelectionRequested() : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -2256,7 +2256,7 @@
       "receiver": "UIStateController",
       "operation": "csvOptionChanged(period : CSVPeriod, startDate : LocalDate?, endDate : LocalDate?, fileName : String) : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {
@@ -2361,7 +2361,7 @@
       "receiver": "UIStateController",
       "operation": "exportCSV() : void",
       "production_owner": {
-        "path": "UI/src/app/control/UiApplicationFacade.ts",
+        "path": "UI/src/app/control/UIStateController.ts",
         "symbol": "dispatch(intent"
       },
       "positive_test": {

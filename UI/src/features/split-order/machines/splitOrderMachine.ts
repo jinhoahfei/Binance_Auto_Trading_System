@@ -1,7 +1,6 @@
-import { assign, fromPromise, setup } from 'xstate';
+import { assign, setup } from 'xstate';
 import type { UiCommandFailure } from '../../../shared/contracts';
 import { to_ui_command_failure } from '../../../shared/errors';
-import type { UiCommandPort } from '../../../shared/ports';
 
 export interface SplitOrderMachineContext {
     readonly scale_in_percentage: number;
@@ -27,11 +26,6 @@ export type SplitOrderMachineEvent =
     | { readonly type: 'RETRY_SPLIT_ORDER_CHANGE' }
     | { readonly type: 'DISMISS_SPLIT_ORDER_ERROR' };
 
-interface SplitOrderCommandInput {
-    readonly order_side: 'scale_in' | 'scale_out';
-    readonly percentage: number;
-}
-
 /**
  * 함수 이름: clamp_percentage()
  * 기능: slider에서 전달된 비율을 0부터 100 사이의 정수로 정규화한다.
@@ -46,23 +40,17 @@ function clamp_percentage(percentage: number): number {
 /**
  * 함수 이름: create_split_order_machine()
  * 기능: 분할 매수·매도 비율 변경을 adapter 승인 전후 상태로 분리하고 중복 변경을 방지한다.
- * 인자: command_port -> 분할 주문 변경 명령 port, options -> 초기 매수·매도 비율
+ * 인자: options -> 초기 매수·매도 비율
  * 반환값: split-order feature의 XState machine
  * 작성 날짜: 2026/08/12
  */
 export function create_split_order_machine(
-    command_port: UiCommandPort,
     options: SplitOrderMachineOptions = {},
 ) {
     return setup({
         types: {
             context: {} as SplitOrderMachineContext,
             events: {} as SplitOrderMachineEvent,
-        },
-        actors: {
-            update_split_order: fromPromise<void, SplitOrderCommandInput>(async ({ input }) => {
-                await command_port.update_split_order(input.order_side, input.percentage);
-            }),
         },
         actions: {
             synchronize_split_order: assign({
@@ -168,23 +156,24 @@ export function create_split_order_machine(
                 meta: {
                     spec_ids: ['SI-02', 'SO-02'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'update_split_order_command',
-                    src: 'update_split_order',
-                    input: ({ context }) => ({
-                        order_side: context.pending_side as 'scale_in' | 'scale_out',
-                        percentage: context.pending_percentage as number,
-                    }),
-                    onDone: {
-                        target: 'ready',
-                        actions: 'apply_pending_percentage',
+                    command: {
+                        id: 'update_split_order_command',
+                        src: 'update_split_order',
+                        input: ({ context }: { context: SplitOrderMachineContext }) => ({
+                            order_side: context.pending_side as 'scale_in' | 'scale_out',
+                            percentage: context.pending_percentage as number,
+                        }),
+                        onDone: {
+                            target: 'ready',
+                            actions: 'apply_pending_percentage',
+                        },
+                        onError: {
+                            target: 'failed',
+                            actions: 'remember_failure',
+                        },
                     },
-                    onError: {
-                        target: 'failed',
-                        actions: 'remember_failure',
-                    },
                 },
+
                 on: {
                     SCALE_IN_LEVEL_CHANGED: {
                         target: 'saving',

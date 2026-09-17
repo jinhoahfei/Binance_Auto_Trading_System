@@ -2,11 +2,13 @@ import {
     and,
     assign,
     enqueueActions,
-    fromPromise,
     not,
     stateIn,
     type AnyStateMachine,
 } from 'xstate';
+
+import { UI_COMMAND_NAMES, type UICommandName, type UIActionRequest } from './uiActions';
+import { milliseconds_until_next_kst_midnight } from '../../features/trade-history/machines/tradeHistoryMachine';
 
 import type { FeatureKey, UiApplicationContext, UiDomainEvent } from './uiApplicationTypes';
 
@@ -16,12 +18,10 @@ export type RegionNode = AnyStateMachine['config'];
 type RootActionArguments = {
     context: UiApplicationContext;
     event: UiDomainEvent;
-    self?: any;
 };
 type FeatureActionArguments = {
     context: any;
     event: any;
-    self: any;
 };
 type Transition = any;
 
@@ -84,10 +84,14 @@ export class UiRegionComposition {
      */
     scope_args(feature: FeatureKey, action_arguments: RootActionArguments): FeatureActionArguments {
         return {
-            ...action_arguments,
             requests: action_arguments.context.requests,
+            evaluation: action_arguments.context.evaluation,
             context: action_arguments.context.features[feature],
-            event: action_arguments.event.source ?? action_arguments.event,
+            event: feature === 'recent_orders' && action_arguments.event.source?.type === 'STRATEGY_INDICATORS_SYNCHRONIZED'
+                ? { ...action_arguments.event.source, received_at: action_arguments.context.evaluation.monotonic_ms ?? 0 }
+                : feature === 'csv_export' && action_arguments.event.source?.type === 'CSV_EXPORT_CLICKED'
+                ? { ...action_arguments.event.source, today: action_arguments.context.evaluation.today }
+                : action_arguments.event.source ?? action_arguments.event,
         } as FeatureActionArguments;
     }
 
@@ -125,7 +129,27 @@ export class UiRegionComposition {
      * 작성 날짜: 2026/09/16
      */
     actions(feature: FeatureKey, original: any): any[] {
-        return as_array(original).map(action => {
+        return as_array(original).flatMap(action => {
+            if (feature === 'trade_history' && action === 'ui_publish_summary') {
+                return assign(({ context, event }: RootActionArguments) => {
+                    const output = event.source?.output as any;
+
+                    if (!output?.publish_summary || output.request_summary_revision !== context.summary_revision) {
+                        return {};
+                    }
+
+                    return {
+                        features: {
+                            ...context.features,
+                            trade_history_summary: {
+                                ...context.features.trade_history_summary,
+                                summary: output.summary,
+                            },
+                        },
+                    };
+                });
+            }
+
             const implementation = typeof action === 'string' ? this.definitions[feature].implementations.actions[action] : action;
 
             if (!implementation) {
@@ -134,7 +158,7 @@ export class UiRegionComposition {
 
             // 기능의 assign 정의를 루트 context 갱신으로 연결한다.
             if (implementation.type === 'xstate.assign') {
-                return assign((action_arguments: RootActionArguments) => {
+                const update = assign((action_arguments: RootActionArguments) => {
                     const feature_arguments = this.scope_args(feature, action_arguments);
                     const assignment = implementation.assignment;
                     const patch = typeof assignment === 'function'
@@ -158,26 +182,9 @@ export class UiRegionComposition {
                         },
                     };
                 });
-            }
-
-            if (feature === 'trade_history' && action === 'publish_summary') {
-                return assign(({ context, event }: RootActionArguments) => {
-                    const output = event.source?.output as any;
-
-                    if (!output?.publish_summary || output.request_summary_revision !== context.summary_revision) {
-                        return {};
-                    }
-
-                    return {
-                        features: {
-                            ...context.features,
-                            trade_history_summary: {
-                                ...context.features.trade_history_summary,
-                                summary: output.summary,
-                            },
-                        },
-                    };
-                });
+                return feature === 'csv_export' && action === 'reset_draft'
+                    ? [{ type: 'ui.read_current_date' }, update]
+                    : [update];
             }
 
             if (implementation.type?.startsWith('xstate.')) {
@@ -322,10 +329,7 @@ export class UiRegionComposition {
 
             for (const key of Object.keys(requests).filter(key => key.startsWith(`${feature}.`))) {
                 delete requests[key];
-                enqueue.sendTo('ui_commands', {
-                    type: 'cancel',
-                    key,
-                });
+                enqueue({ type: 'ui.request', params: { type: key.includes('.timer_') ? 'cancel_timer' : 'cancel_command', key } });
             }
 
             enqueue.assign({
@@ -344,9 +348,7 @@ export class UiRegionComposition {
      */
     command(feature: FeatureKey, path: string, invocation: any) {
         const key = `${feature}.${invocation.id ?? path}`;
-        const logic = this.definitions[feature].implementations.actors[invocation.src];
-
-        if (!logic) {
+        if (!invocation.timer && !UI_COMMAND_NAMES.includes(invocation.src as UICommandName)) {
             throw new Error(`Unknown command ${feature}.${invocation.src}`);
         }
 
@@ -382,13 +384,10 @@ export class UiRegionComposition {
                     },
                 },
             });
-            enqueue.sendTo('ui_commands', {
-                type: 'run',
-                key,
-                token,
-                logic,
-                input,
-            });
+            const request = invocation.timer
+                ? { type: 'start_timer', key, token, due_at_ms: context.evaluation.now_epoch_ms + input }
+                : { type: 'run_command', key, token, operation: invocation.src, input };
+            enqueue({ type: 'ui.request', params: request as UIActionRequest });
         });
         const cancel = enqueueActions(({ context, event, enqueue }: RootActionArguments & {
             enqueue: any;
@@ -405,10 +404,7 @@ export class UiRegionComposition {
             enqueue.assign({
                 requests,
             });
-            enqueue.sendTo('ui_commands', {
-                type: 'cancel',
-                key,
-            });
+            enqueue({ type: 'ui.request', params: { type: invocation.timer ? 'cancel_timer' : 'cancel_command', key } });
         });
         const on: Record<string, any> = {};
 
@@ -462,8 +458,7 @@ export class UiRegionComposition {
     compile(feature: FeatureKey, definition: RegionNode, path = feature as string): any {
         const {
             context: _context,
-            invoke,
-            after,
+            meta,
             id: _id,
             ...node
         } = definition as any;
@@ -472,8 +467,10 @@ export class UiRegionComposition {
             this.initial[feature] = this.definitions[feature].config.context;
         }
 
+        const { command: invocation_definition, timers, ...public_meta } = meta ?? {};
         const result: any = {
             ...node,
+            meta: public_meta,
             id: path,
             entry: this.actions(feature, node.entry),
             exit: this.actions(feature, node.exit),
@@ -512,7 +509,7 @@ export class UiRegionComposition {
             );
         }
 
-        for (const invocation of as_array<any>(invoke)) {
+        for (const invocation of as_array<any>(invocation_definition)) {
             const command = this.command(feature, path, invocation);
 
             this.command_starts.set(`#${path}`, [...(this.command_starts.get(`#${path}`) ?? []), command.start]);
@@ -523,34 +520,16 @@ export class UiRegionComposition {
             };
         }
 
-        for (const [delay, transition] of Object.entries(after ?? {})) {
+        for (const [delay, transition] of Object.entries(timers ?? {})) {
             const key = `timer_${path}_${delay}`;
-            const delay_definition = this.definitions[feature].implementations.delays?.[delay];
-            const logic = fromPromise(async ({ input, signal }: {
-                input: number;
-                signal: AbortSignal;
-            }) => {
-                await new Promise<void>((resolve, reject) => {
-                    const timer = setTimeout(resolve, input);
-
-                    signal.addEventListener('abort', () => {
-                        clearTimeout(timer);
-                        reject(new Error('Timer canceled'));
-                    }, {
-                        once: true,
-                    });
-                });
-            });
-
-            this.definitions[feature].implementations.actors[key] = logic;
-
             const command = this.command(feature, path, {
                 id: key,
                 src: key,
-                input: (action_arguments: any) => (
-                    typeof delay_definition === 'function'
-                        ? delay_definition(action_arguments, undefined)
-                        : delay_definition ?? Number(delay)
+                timer: true,
+                input: ({ evaluation }: { evaluation: { now_epoch_ms: number } }) => (
+                    delay === 'refresh_at_next_kst_midnight'
+                        ? milliseconds_until_next_kst_midnight(evaluation.now_epoch_ms)
+                        : Number(delay)
                 ),
                 onDone: transition,
             });

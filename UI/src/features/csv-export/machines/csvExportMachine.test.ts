@@ -1,4 +1,4 @@
-import { createActor } from 'xstate';
+import { create_feature_test_actor } from '../../../shared/testing/createFeatureTestController';
 import { describe, expect, it } from 'vitest';
 import { FakeUiCommandAdapter } from '../../../shared/testing';
 import { create_csv_export_machine } from './csvExportMachine';
@@ -20,10 +20,10 @@ describe('csvExportMachine', () => {
     it('dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
         let current_kst_date = '2026-08-12';
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: current_kst_date,
             get_current_kst_date: () => current_kst_date,
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -61,9 +61,9 @@ describe('csvExportMachine', () => {
 
     it('test_csv_export_clicked_while_editing_is_ignored: 열린 dialog를 중복 초기화하지 않는다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -78,9 +78,9 @@ describe('csvExportMachine', () => {
 
     it('TD4-05/VR-07: 저장 위치가 없으면 export 명령을 차단하고 필드를 표시한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -95,9 +95,9 @@ describe('csvExportMachine', () => {
     it('빈 문자열 경로는 폴더 선택 결과로 수락하지 않는다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.selected_directory = '   ';
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -114,9 +114,9 @@ describe('csvExportMachine', () => {
     it('CR1-03/CR-12: picker 취소는 기존 선택 경로를 유지하고 export를 시작하지 않는다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.selected_directory = '/Users/demo/FirstExport';
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -135,9 +135,9 @@ describe('csvExportMachine', () => {
 
     it('ER-16: 달력 외부 클릭은 CSV dialog를 유지하고 calendar만 닫는다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -152,9 +152,9 @@ describe('csvExportMachine', () => {
 
     it('CR2-02/CR2-04/CR2-14: 기간 preset과 사용자 지정 달력 상태를 명시적으로 전이한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -172,9 +172,9 @@ describe('csvExportMachine', () => {
 
     it('CR2-16/CR2-18: 날짜 선택은 달력을 유지하고 외부 클릭에서만 닫는다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -197,9 +197,9 @@ describe('csvExportMachine', () => {
 
     it('CR2-14/CR2-15: 열린 달력에서 반대 날짜 필드를 누르면 대상 달력으로 교체한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -222,9 +222,9 @@ describe('csvExportMachine', () => {
 
     it('CR1-02~04: 폴더 picker가 열려도 기간과 파일명 region을 보존한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -253,9 +253,9 @@ describe('csvExportMachine', () => {
 
     it('TD4-04/TD4-06: 유효한 draft는 한 번 내보내고 완료 receipt를 저장한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });
@@ -277,9 +277,9 @@ describe('csvExportMachine', () => {
     it('TD4-07/TD4-08: export 실패는 실제 오류와 option을 유지해 수정 후 재시도하게 한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.queue_failure('export_csv', new Error('Disk write failed safely.'));
-        const actor = createActor(create_csv_export_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
             today: '2026-08-12',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'CSV_EXPORT_CLICKED' });

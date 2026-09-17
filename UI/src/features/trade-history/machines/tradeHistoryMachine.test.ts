@@ -1,4 +1,4 @@
-import { createActor } from 'xstate';
+import { create_feature_test_actor } from '../../../shared/testing/createFeatureTestController';
 import type {
     HistoryPeriod,
     TradeHistoryDetails,
@@ -126,12 +126,12 @@ describe('tradeHistoryMachine', () => {
     it('test_show_trade_details_initial_query: fixture와 기존 filter가 있어도 첫 SHOW는 today/all live query를 실행한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         const summaries: Array<TradeHistoryDetails['summary']> = [];
-        const actor = createActor(create_trade_history_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter, {
             period: 'all',
             side: 'sell',
             records: TRADE_RECORD_FIXTURES,
             on_details_loaded: (summary) => summaries.push(summary),
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -152,7 +152,7 @@ describe('tradeHistoryMachine', () => {
         'test_trade_history_filter_combination: $label을 항상 한 query payload로 보낸다',
         async ({ period, period_event, side, side_event }) => {
             const command_adapter = new FakeUiCommandAdapter();
-            const actor = createActor(create_trade_history_machine(command_adapter));
+            const actor = create_feature_test_actor(create_trade_history_machine, command_adapter);
 
             actor.start();
             actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -173,9 +173,9 @@ describe('tradeHistoryMachine', () => {
     it('Case 3 2.1.2: filter 응답은 행만 교체하고 기존 summary를 다시 적용하지 않는다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         const summaries: Array<TradeHistoryDetails['summary']> = [];
-        const actor = createActor(create_trade_history_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter, {
             on_details_loaded: (summary) => summaries.push(summary),
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -198,9 +198,9 @@ describe('tradeHistoryMachine', () => {
     it('KST 자정 뒤 일반 refresh는 revision-safe 최신 daily summary를 다시 적용한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         const summaries: Array<TradeHistoryDetails['summary']> = [];
-        const actor = createActor(create_trade_history_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter, {
             on_details_loaded: (summary) => summaries.push(summary),
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -229,10 +229,10 @@ describe('tradeHistoryMachine', () => {
         try {
             const command_adapter = new FakeUiCommandAdapter();
             const summaries: Array<TradeHistoryDetails['summary']> = [];
-            const actor = createActor(create_trade_history_machine(command_adapter, {
-                get_kst_midnight_delay_ms: () => 1_000,
+            vi.setSystemTime(new Date('2026-09-17T14:59:59.000Z'));
+            const actor = create_feature_test_actor(create_trade_history_machine, command_adapter, {
                 on_details_loaded: (summary) => summaries.push(summary),
-            }));
+            });
 
             actor.start();
             actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -270,7 +270,7 @@ describe('tradeHistoryMachine', () => {
     it('VR-10: 조회 결과가 없으면 loading 이후 empty 상태를 표시한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.trade_history = [];
-        const actor = createActor(create_trade_history_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -285,7 +285,7 @@ describe('tradeHistoryMachine', () => {
     it('TD2/TD3 오류 분기: repository 실패를 failed로 표시하고 refresh retry로 복구한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.queue_failure('load_trade_history', new Error('history unavailable'));
-        const actor = createActor(create_trade_history_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -306,7 +306,7 @@ describe('tradeHistoryMachine', () => {
     it('page-size 또는 query 실패 뒤 filter를 좁혀 새로운 결합 query로 복구한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.queue_failure('load_trade_history', new Error('too many rows'));
-        const actor = createActor(create_trade_history_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -328,9 +328,9 @@ describe('tradeHistoryMachine', () => {
     it('조회 중 ORDER_EXECUTED가 오면 첫 결과를 버리고 현재 query를 후속 refresh한다', async () => {
         const command_adapter = new DeferredTradeHistoryAdapter();
         const summaries: Array<TradeHistoryDetails['summary']> = [];
-        const actor = createActor(create_trade_history_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter, {
             on_details_loaded: (summary) => summaries.push(summary),
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -364,7 +364,7 @@ describe('tradeHistoryMachine', () => {
 
     it('조회 중 full resync는 오래된 invoke를 취소하고 같은 current query를 즉시 다시 읽는다', async () => {
         const command_adapter = new DeferredTradeHistoryAdapter();
-        const actor = createActor(create_trade_history_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });
@@ -396,7 +396,7 @@ describe('tradeHistoryMachine', () => {
 
     it('loading 중 LEAVE는 invoke를 abort하고 재진입 결과와 오래된 요청이 경쟁하지 않게 한다', async () => {
         const command_adapter = new DeferredTradeHistoryAdapter();
-        const actor = createActor(create_trade_history_machine(command_adapter));
+        const actor = create_feature_test_actor(create_trade_history_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'ENTER_TRADE_HISTORY' });

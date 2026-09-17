@@ -1,4 +1,4 @@
-import { assign, fromPromise, setup } from 'xstate';
+import { assign, setup } from 'xstate';
 import type {
     CsvExportOptions,
     CsvExportReceipt,
@@ -6,7 +6,6 @@ import type {
     LocalDateString,
     UiCommandFailure,
 } from '../../../shared/contracts';
-import type { UiCommandPort } from '../../../shared/ports';
 import { to_ui_command_failure } from '../../../shared/errors';
 
 export interface CsvValidationErrors {
@@ -33,12 +32,10 @@ export interface CsvExportMachineContext {
 export interface CsvExportMachineOptions {
     readonly today: LocalDateString;
     readonly default_file_name?: string;
-    // 생략하면 초기 today를 고정 source로 사용해 demo와 test의 결정성을 보존한다.
-    readonly get_current_kst_date?: () => LocalDateString;
 }
 
 export type CsvExportMachineEvent =
-    | { readonly type: 'CSV_EXPORT_CLICKED' }
+    | { readonly type: 'CSV_EXPORT_CLICKED'; readonly today?: LocalDateString }
     | { readonly type: 'CLOSE_CSV_EXPORT_POPUP' }
     | { readonly type: 'CSV_DIALOG_OUTSIDE_CLICKED' }
     | { readonly type: 'SAVE_LOCATION_SELECT_CLICKED' }
@@ -129,15 +126,13 @@ function validate_csv_context(context: CsvExportMachineContext): CsvValidationEr
 /**
  * 함수 이름: create_csv_export_machine()
  * 기능: CSV dialog draft, 폴더 picker, 기간·달력·파일명 검증과 비동기 내보내기 상태를 생성한다.
- * 인자: command_port -> 폴더 선택과 CSV 생성 port, options -> 기준 날짜와 기본 파일명
+ * 인자: options -> 기준 날짜와 기본 파일명
  * 반환값: csv-export feature의 XState machine
  * 작성 날짜: 2026/08/12
  */
 export function create_csv_export_machine(
-    command_port: UiCommandPort,
     options: CsvExportMachineOptions,
 ) {
-    const get_current_kst_date = options.get_current_kst_date ?? (() => options.today);
     const initial_default_file_name = options.default_file_name
         ?? `binance_trades_${options.today}.csv`;
     const empty_validation_errors: CsvValidationErrors = {
@@ -150,14 +145,6 @@ export function create_csv_export_machine(
         types: {
             context: {} as CsvExportMachineContext,
             events: {} as CsvExportMachineEvent,
-        },
-        actors: {
-            pick_directory: fromPromise<string | null>(async () => {
-                return command_port.pick_csv_directory();
-            }),
-            export_csv: fromPromise<CsvExportReceipt, CsvExportOptions>(async ({ input }) => {
-                return command_port.export_csv(input);
-            }),
         },
         guards: {
             is_csv_draft_valid: ({ context }) => {
@@ -184,9 +171,9 @@ export function create_csv_export_machine(
             },
         },
         actions: {
-            reset_draft: assign(() => {
+            reset_draft: assign(({ event }) => {
                 // 한 dialog open 경계에서 날짜를 한 번만 읽어 자정 전후 필드 drift를 막는다.
-                const current_today = get_current_kst_date();
+                const current_today = event.type === 'CSV_EXPORT_CLICKED' ? event.today ?? options.today : options.today;
                 const current_default_file_name = options.default_file_name
                     ?? `binance_trades_${current_today}.csv`;
 
@@ -385,21 +372,21 @@ export function create_csv_export_machine(
                                 meta: {
                                     spec_ids: ['CR1-02', 'CR1-03', 'CR1-04', 'CR-12'],
                                     pending: true,
-                                },
-                                invoke: {
-                                    id: 'pick_directory_command',
-                                    src: 'pick_directory',
-                                    onDone: [
-                                        {
-                                            guard: 'has_selected_directory',
+                                    command: {
+                                        id: 'pick_directory_command',
+                                        src: 'pick_directory',
+                                        onDone: [
+                                            {
+                                                guard: 'has_selected_directory',
+                                                target: 'closed',
+                                                actions: 'store_directory',
+                                            },
+                                            { target: 'closed' },
+                                        ],
+                                        onError: {
                                             target: 'closed',
-                                            actions: 'store_directory',
+                                            actions: 'remember_picker_failure',
                                         },
-                                        { target: 'closed' },
-                                    ],
-                                    onError: {
-                                        target: 'closed',
-                                        actions: 'remember_picker_failure',
                                     },
                                 },
                             },
@@ -546,25 +533,25 @@ export function create_csv_export_machine(
                 meta: {
                     spec_ids: ['TD4-04', 'TD4-06', 'TD4-07', 'VR-07'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'export_csv_command',
-                    src: 'export_csv',
-                    input: ({ context }) => ({
-                        directory: context.directory as string,
-                        file_name: normalize_file_name(context.file_name_draft),
-                        period: context.period,
-                        start_date: context.start_date as string,
-                        end_date: context.end_date as string,
-                        timezone: 'Asia/Seoul',
-                    }),
-                    onDone: {
-                        target: 'complete',
-                        actions: 'store_receipt',
-                    },
-                    onError: {
-                        target: 'error',
-                        actions: 'remember_export_failure',
+                    command: {
+                        id: 'export_csv_command',
+                        src: 'export_csv',
+                        input: ({ context }: { context: CsvExportMachineContext }) => ({
+                            directory: context.directory as string,
+                            file_name: normalize_file_name(context.file_name_draft),
+                            period: context.period,
+                            start_date: context.start_date as string,
+                            end_date: context.end_date as string,
+                            timezone: 'Asia/Seoul',
+                        }),
+                        onDone: {
+                            target: 'complete',
+                            actions: 'store_receipt',
+                        },
+                        onError: {
+                            target: 'error',
+                            actions: 'remember_export_failure',
+                        },
                     },
                 },
             },

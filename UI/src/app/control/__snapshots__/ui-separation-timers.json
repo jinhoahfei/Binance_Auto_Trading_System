@@ -1,0 +1,3619 @@
+[
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "type_selection",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": []
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "type_selection",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": []
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "select_regime_notice"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "type_selection",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": "select_regime_notice",
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": []
+  },
+  {
+    "intent": {
+      "type": "START_TRADING_CLICKED"
+    },
+    "accepted": true
+  },
+  {
+    "label": "after input",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "select_regime_notice"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "type_selection",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": "select_regime_notice",
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": []
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "highlighting",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": []
+  },
+  {
+    "intent": {
+      "type": "SELECT_REGIME_NOTICE_CONFIRMED"
+    },
+    "accepted": true
+  },
+  {
+    "label": "after input",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "highlighting",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": []
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "loading"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "loading",
+        "is_loading": true,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "intent": {
+      "type": "SHOW_TRADE_HISTORY"
+    },
+    "accepted": true
+  },
+  {
+    "label": "after input",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "loading"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "loading",
+        "is_loading": true,
+        "records": [],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "-",
+            "totalRealizedPnl": "-",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "₩ 0",
+            "totalExecutedAmount": "₩ 0",
+            "averageSlippage": "0.00%"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "ready"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "ready",
+        "is_loading": false,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "loading"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "loading",
+        "is_loading": true,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      },
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "ready"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "ready",
+        "is_loading": false,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      },
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "label": "after midnight",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "ready"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": true,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "ready",
+        "is_loading": false,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      },
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "ready"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "ready",
+        "is_loading": false,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      },
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "label": "after highlight",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "TRADING_DETAILS": {
+            "ACCOUNT_DETAILS": {
+              "profit_rate": "displayed",
+              "sell_performance": "displayed",
+              "eth_holdings": "displayed",
+              "daily_trading_fee": "displayed"
+            },
+            "PERIOD": {
+              "selection": "today",
+              "query": "ready"
+            },
+            "SIDE": "all",
+            "CSV_EXPORT": "closed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "trade_history",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "ready",
+        "is_loading": false,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      },
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "label": "publication",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "type_selection",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      },
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  },
+  {
+    "intent": {
+      "type": "BACK_TO_DASHBOARD"
+    },
+    "accepted": true
+  },
+  {
+    "label": "after input",
+    "value": {
+      "ETIRE_UI_SYSTEM": {
+        "UPPER_STATUS_BAR": {
+          "API_DISPLAY": "api_offline",
+          "STOP_BUTTON": "idle",
+          "START_BUTTON": "stopped"
+        },
+        "SCREEN": {
+          "MAIN_SCREEN_WRAPPER": {
+            "REGIME_PANEL": {
+              "recommendation": "RECOMMENDED_TYPE_DISPLAYED",
+              "selection": "type_selection",
+              "indicators": "DISPLAY_TYPE_INDICATOR"
+            },
+            "DISPLAY_CHART": {
+              "interval": "30m",
+              "indicator_settings": "closed",
+              "active_state": "displayed",
+              "viewport": "normal",
+              "drawing": "deactivated",
+              "line_selection": "awaiting_selection"
+            },
+            "DISPLAY_ACCOUNT_INFO": {
+              "trading_logic_status": "displayed",
+              "asset_summary": "displayed",
+              "SPLIT_ORDER": {
+                "scale_in": {
+                  "SCALE_IN_ORDER": "ready"
+                },
+                "scale_out": {
+                  "SCALE_OUT_ORDER": "ready"
+                }
+              }
+            },
+            "TRADER_PANEL": "trade_history_displayed"
+          }
+        },
+        "EXIT": "awaiting_exit"
+      }
+    },
+    "status": "active",
+    "view": {
+      "route": "dashboard",
+      "active_modal": null,
+      "connection": {
+        "status": "offline",
+        "is_online": false,
+        "is_pending": false,
+        "reconnect_attempt": 0,
+        "error": null,
+        "recovery": null
+      },
+      "trading": {
+        "command_enabled": false,
+        "lifecycle_status": "not_started",
+        "is_trading": false,
+        "is_pending": false,
+        "is_recovery_liquidation": false,
+        "has_open_position": false,
+        "position_average_entry_price": null,
+        "residual_quantity": "0",
+        "residual_cost_basis": "0",
+        "balance_reconciliation": null,
+        "unavailable_reason": null,
+        "error": null
+      },
+      "regime": {
+        "recommended": null,
+        "applied": null,
+        "candidate": null,
+        "is_highlighted": false,
+        "is_pending": false,
+        "metrics": [],
+        "logic_coverage": [
+          {
+            "regime_type": "type0",
+            "support_status": "supported",
+            "start_guard": "READY"
+          },
+          {
+            "regime_type": "type1",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type2",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type3",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          },
+          {
+            "regime_type": "type4",
+            "support_status": "unsupported",
+            "start_guard": "UNSUPPORTED_TRADING_LOGIC"
+          }
+        ],
+        "error": null
+      },
+      "chart": {
+        "interval": "30m",
+        "indicators": {
+          "bollinger_bands": true,
+          "ema9": true,
+          "volume": true
+        },
+        "is_indicator_settings_open": false,
+        "is_fullscreen": false,
+        "drawing_mode": "deactivated",
+        "active_trading_logic_state": "WAITING",
+        "selected_line_id": null,
+        "context_menu_position": null,
+        "line_selection_state": "awaiting_selection",
+        "drawings": []
+      },
+      "trader_panel": {
+        "active_tab": "recent_orders",
+        "trades": [],
+        "realtime_indicators": [],
+        "strategy_indicators": null,
+        "strategy_indicators_received_at": null
+      },
+      "split_order": {
+        "scale_in_percentage": 50,
+        "scale_out_percentage": 50,
+        "is_pending": false,
+        "error": null
+      },
+      "account_summary": {
+        "strategy": {
+          "appliedState": "WAITING",
+          "profitAmount": "+ ₩ 0",
+          "profitRate": "0.00%",
+          "status": "대기 중",
+          "statusTone": "neutral"
+        },
+        "asset": {
+          "ethAmount": "0",
+          "ethValue": "₩ 0",
+          "krwValue": "₩ 0",
+          "profitLoss": "₩ 0",
+          "totalValue": "₩ 0"
+        }
+      },
+      "trade_history": {
+        "symbol": "ETH/KRW",
+        "period": "today",
+        "side": "all",
+        "status": "idle",
+        "is_loading": false,
+        "records": [
+          {
+            "id": "trade-20260812-003",
+            "occurred_at": "2026-08-12T05:24:00.000Z",
+            "side": "sell",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3421.18",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3420.80",
+            "quantity": "0.18000000",
+            "total": "615.8124",
+            "fee": "0.6158124",
+            "profit_rate": "2.38",
+            "realized_pnl": "14.3154",
+            "exit_reason": "strategy_exit"
+          },
+          {
+            "id": "trade-20260812-002",
+            "occurred_at": "2026-08-12T03:10:00.000Z",
+            "side": "buy",
+            "regime": "type0",
+            "strategy": "Basic Iterative",
+            "price": "3341.65",
+            "entry_price": "3341.65",
+            "market_price_at_decision": "3340.90",
+            "quantity": "0.18000000",
+            "total": "601.4970",
+            "fee": "0.6014970",
+            "profit_rate": null,
+            "realized_pnl": null,
+            "exit_reason": null
+          }
+        ],
+        "error": null,
+        "summary": {
+          "dailyReturn": {
+            "value": "0.00%",
+            "tone": "neutral"
+          },
+          "sellPerformance": {
+            "winRate": "--%",
+            "completedCount": "0 / 0",
+            "averageRealizedReturn": "0.00%",
+            "totalRealizedPnl": "0 USDT",
+            "tone": "neutral"
+          },
+          "position": {
+            "quantity": "0 ETH"
+          },
+          "fees": {
+            "amount": "0 USDT",
+            "totalExecutedAmount": "-",
+            "averageSlippage": "-"
+          }
+        }
+      },
+      "csv_export": {
+        "status": "closed",
+        "is_open": false,
+        "is_pending": false,
+        "directory": null,
+        "period": "today",
+        "start_date": "2026-09-17",
+        "end_date": "2026-09-17",
+        "file_name": "binance_trades_2026-09-17.csv",
+        "file_name_draft": "binance_trades_2026-09-17.csv",
+        "calendar_target": null,
+        "validation_errors": {
+          "directory": null,
+          "file_name": null,
+          "date_range": null
+        },
+        "command_error": null,
+        "receipt_path": null
+      },
+      "app_exit": {
+        "status": "awaiting_exit",
+        "is_pending": false,
+        "is_final": false,
+        "error": null
+      }
+    },
+    "commands": [
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      },
+      {
+        "name": "load_trade_history",
+        "payload": {
+          "period": "today",
+          "side": "all"
+        }
+      }
+    ]
+  }
+]

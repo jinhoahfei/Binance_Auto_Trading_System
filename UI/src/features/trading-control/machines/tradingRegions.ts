@@ -138,7 +138,7 @@ export function trading_regions(definition: AnyStateMachine): {
         }),
     ];
 
-    const disconnected = stop.states.disconnect_stopping.invoke;
+    const disconnected = stop.states.disconnect_stopping.meta.command;
     const notify = raise({
         type: 'trading.DISCONNECT_HANDLED',
     });

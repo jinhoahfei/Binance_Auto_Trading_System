@@ -1,5 +1,5 @@
 import type { BackendBalanceReconciliation } from '../../../shared/contracts';
-import { assign, fromPromise, setup } from 'xstate';
+import { assign, setup } from 'xstate';
 import {
     DEFAULT_TRADING_LOGIC_COVERAGE,
     type BackendDailyLossScope,
@@ -14,7 +14,7 @@ import {
     type UiCommandFailure,
 } from '../../../shared/contracts';
 import { to_ui_command_failure } from '../../../shared/errors';
-import type { TradingCommandReceipt, UiCommandPort } from '../../../shared/ports';
+import type { TradingCommandReceipt } from '../../../shared/ports';
 
 export interface TradingCommandContext {
     readonly selected_regime: RegimeType | null;
@@ -221,33 +221,17 @@ export function resolve_trading_start_unavailable_reason(
 /**
  * 함수 이름: create_trading_command_machine()
  * 기능: 자동매매 시작, 일반 중지, 강제 매도와 복구 Position 청산 전이를 생성한다.
- * 인자: command_port -> backend 명령을 수행할 UI port
+ * 인자: options -> backend에서 확정한 초기 표시값
  * 반환값: trading-control feature의 XState machine
  * 작성 날짜: 2026/08/12
  */
 export function create_trading_command_machine(
-    command_port: UiCommandPort,
     options: TradingCommandMachineOptions = {},
 ) {
     return setup({
         types: {
             context: {} as TradingCommandContext,
             events: {} as TradingCommandEvent,
-        },
-        actors: {
-            start_trading: fromPromise<TradingCommandReceipt, RegimeType>(async ({ input }) => {
-                return command_port.start_trading(input);
-            }),
-            stop_trading: fromPromise<TradingCommandReceipt>(async () => {
-                return command_port.stop_trading();
-            }),
-            force_sell_and_stop: fromPromise<TradingCommandReceipt>(async () => {
-                return command_port.force_sell_and_stop();
-            }),
-            // startup 복구 Position은 정상 session stop과 분리된 공개 Operation으로만 청산한다.
-            liquidate_recovered_position: fromPromise<TradingCommandReceipt>(async () => {
-                return command_port.liquidate_recovered_position();
-            }),
         },
         guards: {
             snapshot_preserves_local_command: ({ context, event }) => {
@@ -818,20 +802,21 @@ export function create_trading_command_machine(
                 meta: {
                     spec_ids: ['U3-05'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'start_command',
-                    src: 'start_trading',
-                    input: ({ context }) => context.selected_regime as RegimeType,
-                    onDone: {
-                        target: 'running',
-                        actions: 'mark_trading_started',
+                    command: {
+                        id: 'start_command',
+                        src: 'start_trading',
+                        input: ({ context }: { context: TradingCommandContext }) => context.selected_regime as RegimeType,
+                        onDone: {
+                            target: 'running',
+                            actions: 'mark_trading_started',
+                        },
+                        onError: {
+                            target: 'start_confirmation',
+                            actions: 'remember_failure',
+                        },
                     },
-                    onError: {
-                        target: 'start_confirmation',
-                        actions: 'remember_failure',
-                    },
                 },
+
                 on: {
                     TRADING_SNAPSHOT_SYNCHRONIZED: {
                         guard: 'snapshot_preserves_local_command',
@@ -887,26 +872,27 @@ export function create_trading_command_machine(
                 meta: {
                     spec_ids: ['U2-05'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'stop_command',
-                    src: 'stop_trading',
-                    onDone: [
-                        {
-                            guard: 'stop_result_is_terminal',
-                            target: 'stopped',
-                            actions: 'mark_trading_stopped',
+                    command: {
+                        id: 'stop_command',
+                        src: 'stop_trading',
+                        onDone: [
+                            {
+                                guard: 'stop_result_is_terminal',
+                                target: 'stopped',
+                                actions: 'mark_trading_stopped',
+                            },
+                            {
+                                target: 'awaiting_stop_completion',
+                                actions: 'mark_stop_accepted',
+                            },
+                        ],
+                        onError: {
+                            target: 'stop_confirmation',
+                            actions: 'remember_failure',
                         },
-                        {
-                            target: 'awaiting_stop_completion',
-                            actions: 'mark_stop_accepted',
-                        },
-                    ],
-                    onError: {
-                        target: 'stop_confirmation',
-                        actions: 'remember_failure',
                     },
                 },
+
                 on: {
                     TRADING_SNAPSHOT_SYNCHRONIZED: {
                         guard: 'snapshot_preserves_local_command',
@@ -939,26 +925,27 @@ export function create_trading_command_machine(
                 meta: {
                     spec_ids: ['U2-07', 'U2-08', 'U2-09'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'force_sell_command',
-                    src: 'force_sell_and_stop',
-                    onDone: [
-                        {
-                            guard: 'stop_result_is_terminal',
-                            target: 'stopped',
-                            actions: ['clear_open_position', 'mark_trading_stopped'],
+                    command: {
+                        id: 'force_sell_command',
+                        src: 'force_sell_and_stop',
+                        onDone: [
+                            {
+                                guard: 'stop_result_is_terminal',
+                                target: 'stopped',
+                                actions: ['clear_open_position', 'mark_trading_stopped'],
+                            },
+                            {
+                                target: 'awaiting_stop_completion',
+                                actions: 'mark_stop_accepted',
+                            },
+                        ],
+                        onError: {
+                            target: 'force_sell_confirmation',
+                            actions: 'remember_failure',
                         },
-                        {
-                            target: 'awaiting_stop_completion',
-                            actions: 'mark_stop_accepted',
-                        },
-                    ],
-                    onError: {
-                        target: 'force_sell_confirmation',
-                        actions: 'remember_failure',
                     },
                 },
+
                 on: {
                     TRADING_SNAPSHOT_SYNCHRONIZED: {
                         guard: 'snapshot_preserves_local_command',
@@ -994,27 +981,27 @@ export function create_trading_command_machine(
                 meta: {
                     spec_ids: ['PHASE9-RECOVERED-POSITION-LIQUIDATION'],
                     pending: true,
-                },
-                entry: 'mark_recovery_liquidation_pending',
-                invoke: {
-                    id: 'recovered_position_liquidation_command',
-                    src: 'liquidate_recovered_position',
-                    onDone: [
-                        {
-                            guard: 'stop_result_is_terminal',
-                            target: 'stopped',
-                            actions: ['clear_open_position', 'mark_trading_stopped'],
+                    command: {
+                        id: 'recovered_position_liquidation_command',
+                        src: 'liquidate_recovered_position',
+                        onDone: [
+                            {
+                                guard: 'stop_result_is_terminal',
+                                target: 'stopped',
+                                actions: ['clear_open_position', 'mark_trading_stopped'],
+                            },
+                            {
+                                target: 'awaiting_recovered_position_liquidation_completion',
+                                actions: 'mark_recovery_liquidation_pending',
+                            },
+                        ],
+                        onError: {
+                            target: 'recovered_position_liquidation_confirmation',
+                            actions: 'remember_failure',
                         },
-                        {
-                            target: 'awaiting_recovered_position_liquidation_completion',
-                            actions: 'mark_recovery_liquidation_pending',
-                        },
-                    ],
-                    onError: {
-                        target: 'recovered_position_liquidation_confirmation',
-                        actions: 'remember_failure',
                     },
                 },
+                entry: 'mark_recovery_liquidation_pending',
             },
             // Recovery liquidation은 terminal snapshot 전까지 자동매매 실행 상태로 승격하지 않는다.
             awaiting_recovered_position_liquidation_completion: {
@@ -1034,16 +1021,16 @@ export function create_trading_command_machine(
                 meta: {
                     spec_ids: ['U3-12'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'disconnect_stop_command',
-                    src: 'stop_trading',
-                    onDone: {
-                        target: 'api_connection_required',
-                    },
-                    onError: {
-                        target: 'api_connection_required',
-                        actions: 'remember_failure',
+                    command: {
+                        id: 'disconnect_stop_command',
+                        src: 'stop_trading',
+                        onDone: {
+                            target: 'api_connection_required',
+                        },
+                        onError: {
+                            target: 'api_connection_required',
+                            actions: 'remember_failure',
+                        },
                     },
                 },
             },

@@ -1,14 +1,10 @@
-import { assign, fromPromise, setup } from 'xstate';
+import { assign, setup } from 'xstate';
 import type {
     HistoryPeriod,
-    TradeHistoryDetails,
-    TradeHistoryQuery,
-    TradeHistorySummary,
     TradeRecord,
     TradeSideFilter,
     UiCommandFailure,
 } from '../../../shared/contracts';
-import type { UiCommandPort } from '../../../shared/ports';
 import { to_ui_command_failure } from '../../../shared/errors';
 
 const KST_UTC_OFFSET_MILLISECONDS = 9 * 60 * 60 * 1_000;
@@ -30,29 +26,6 @@ export interface TradeHistoryMachineOptions {
     readonly period?: HistoryPeriod;
     readonly side?: TradeSideFilter;
     readonly records?: ReadonlyArray<TradeRecord>;
-    readonly get_summary_revision?: () => number;
-    readonly get_kst_midnight_delay_ms?: () => number;
-    readonly on_details_loaded?: (
-        summary: TradeHistorySummary,
-        request_summary_revision: number,
-    ) => void;
-}
-
-/**
- * 상세 query와 시작 시점의 summary revision을 한 invoke input으로 고정한다.
- */
-interface TradeHistoryRequest {
-    readonly query: TradeHistoryQuery;
-    readonly summary_revision: number;
-    readonly publish_summary: boolean;
-}
-
-/**
- * HTTP 결과가 어느 summary revision에서 시작됐는지 actor action까지 보존한다.
- */
-interface VersionedTradeHistoryDetails extends TradeHistoryDetails {
-    readonly request_summary_revision: number;
-    readonly publish_summary: boolean;
 }
 
 export type TradeHistoryMachineEvent =
@@ -79,7 +52,7 @@ export type TradeHistoryMachineEvent =
  * 작성 날짜: 2026/08/23
  */
 export function milliseconds_until_next_kst_midnight(
-    now_epoch_ms: number = Date.now(),
+    now_epoch_ms: number,
 ): number {
     if (!Number.isFinite(now_epoch_ms)) {
         throw new TypeError('now_epoch_ms must be finite');
@@ -100,43 +73,17 @@ export function milliseconds_until_next_kst_midnight(
 /**
  * 함수 이름: create_trade_history_machine()
  * 기능: 거래 내역의 결합 filter query와 조회 중 체결·resync 경쟁을 포함한 실제 조회 상태를 관리한다.
- * 인자: command_port -> 거래 상세 조회 port, options -> 초기 표시값과 검증 완료 summary callback
+ * 인자: options -> 초기 표시값
  * 반환값: trade-history feature의 XState machine
  * 작성 날짜: 2026/08/23
  */
 export function create_trade_history_machine(
-    command_port: UiCommandPort,
     options: TradeHistoryMachineOptions = {},
 ) {
     return setup({
         types: {
             context: {} as TradeHistoryMachineContext,
             events: {} as TradeHistoryMachineEvent,
-        },
-        actors: {
-            load_trade_history: fromPromise<VersionedTradeHistoryDetails, TradeHistoryRequest>(
-                async ({ input, signal }) => {
-                    // Invoke가 leave/reenter로 폐기되면 같은 신호로 실제 HTTP read까지 즉시 중단한다.
-                    const details = await command_port.load_trade_history(input.query, signal);
-
-                    return {
-                        ...details,
-                        request_summary_revision: input.summary_revision,
-                        publish_summary: input.publish_summary,
-                    };
-                },
-            ),
-        },
-        delays: {
-            refresh_at_next_kst_midnight: () => {
-                const delay = options.get_kst_midnight_delay_ms?.()
-                    ?? milliseconds_until_next_kst_midnight();
-                if (!Number.isFinite(delay) || delay <= 0) {
-                    throw new RangeError('KST midnight delay must be positive');
-                }
-
-                return delay; // Actor가 ready/empty에 머무는 동안에만 이 timer가 유효하다.
-            },
         },
         guards: {
             is_first_entry: ({ context }) => !context.has_entered,
@@ -151,6 +98,8 @@ export function create_trade_history_machine(
             },
         },
         actions: {
+            // 루트 조립기가 이 내부 Action을 요약 Region의 순수 데이터 갱신으로 연결한다.
+            ui_publish_summary: assign({}),
             // 최초 상세 진입만 명세의 TODAY + ALL로 초기화하고 이후 재진입은 current query를 유지한다.
             prepare_initial_query: assign({
                 period: 'today',
@@ -251,22 +200,6 @@ export function create_trade_history_machine(
                 should_publish_summary: false,
                 error: null,
             }),
-            publish_summary: ({ event }) => {
-                if ('output' in event
-                    && event.output !== null
-                    && typeof event.output === 'object'
-                    && 'summary' in event.output
-                    && 'request_summary_revision' in event.output
-                    && 'publish_summary' in event.output
-                    && event.output.publish_summary === true
-                    && typeof event.output.request_summary_revision === 'number') {
-                    // Adapter validation을 통과한 D-12 summary만 별도 summary actor에 공개한다.
-                    options.on_details_loaded?.(
-                        event.output.summary as TradeHistorySummary,
-                        event.output.request_summary_revision,
-                    );
-                }
-            },
             remember_failure: assign({
                 refresh_pending: false,
                 should_publish_summary: false,
@@ -328,65 +261,66 @@ export function create_trade_history_machine(
                 meta: {
                     spec_ids: ['1.1.2', '2.1.2', 'ER-11', 'TD2-01', 'TD3-01'],
                     pending: true,
+                    command: {
+                        id: 'load_trade_history_command',
+                        src: 'load_trade_history',
+                        input: ({ context }: { context: TradeHistoryMachineContext }) => ({
+                            query: {
+                                period: context.period,
+                                side: context.side,
+                            },
+                            summary_revision: 0,
+                            publish_summary: context.should_publish_summary,
+                        }),
+                        onDone: [
+                            {
+                                guard: 'needs_follow_up_refresh',
+                                target: 'loading',
+                                reenter: true,
+                                // 진행 중 체결 뒤 첫 응답은 적용하지 않고 같은 query를 한 번 더 읽는다.
+                                actions: 'clear_follow_up_refresh',
+                            },
+                            {
+                                guard: 'has_records',
+                                target: 'ready',
+                                actions: ['store_records', 'ui_publish_summary'],
+                            },
+                            {
+                                target: 'empty',
+                                actions: ['store_records', 'ui_publish_summary'],
+                            },
+                        ],
+                        onError: [
+                            {
+                                guard: 'needs_follow_up_refresh',
+                                target: 'loading',
+                                reenter: true,
+                                actions: 'clear_follow_up_refresh',
+                            },
+                            {
+                                target: 'failed',
+                                actions: 'remember_failure',
+                            },
+                        ],
+                    },
                 },
                 on: {
                     ORDER_EXECUTION_RECEIVED: {
                         actions: 'queue_follow_up_refresh',
                     },
                 },
-                invoke: {
-                    id: 'load_trade_history_command',
-                    src: 'load_trade_history',
-                    input: ({ context }) => ({
-                        query: {
-                            period: context.period,
-                            side: context.side,
-                        },
-                        summary_revision: options.get_summary_revision?.() ?? 0,
-                        publish_summary: context.should_publish_summary,
-                    }),
-                    onDone: [
-                        {
-                            guard: 'needs_follow_up_refresh',
-                            target: 'loading',
-                            reenter: true,
-                            // 진행 중 체결 뒤 첫 응답은 적용하지 않고 같은 query를 한 번 더 읽는다.
-                            actions: 'clear_follow_up_refresh',
-                        },
-                        {
-                            guard: 'has_records',
-                            target: 'ready',
-                            actions: ['store_records', 'publish_summary'],
-                        },
-                        {
-                            target: 'empty',
-                            actions: ['store_records', 'publish_summary'],
-                        },
-                    ],
-                    onError: [
-                        {
-                            guard: 'needs_follow_up_refresh',
-                            target: 'loading',
-                            reenter: true,
-                            actions: 'clear_follow_up_refresh',
-                        },
-                        {
-                            target: 'failed',
-                            actions: 'remember_failure',
-                        },
-                    ],
-                },
             },
             ready: {
                 meta: {
                     spec_ids: ['1.1.3', '2.1.3', 'TD2-01', 'TD2-02', 'TD2-03', 'TD2-04', 'TD2-05', 'TD2-06', 'TD2-07', 'TD2-08', 'TD2-09', 'TD2-10', 'TD2-11', 'TD2-12', 'TD2-13', 'TD3-01', 'TD3-02', 'TD3-03', 'TD3-04', 'TD3-05', 'TD3-06', 'TD3-07', 'CR-10'],
-                },
-                after: {
-                    refresh_at_next_kst_midnight: {
-                        target: 'loading',
-                        actions: 'mark_refresh',
+                    timers: {
+                        refresh_at_next_kst_midnight: {
+                            target: 'loading',
+                            actions: 'mark_refresh',
+                        },
                     },
                 },
+
                 on: {
                     ORDER_EXECUTION_RECEIVED: {
                         target: 'loading',
@@ -429,13 +363,14 @@ export function create_trade_history_machine(
             empty: {
                 meta: {
                     spec_ids: ['1.1.3', '2.1.3', 'VR-10'],
-                },
-                after: {
-                    refresh_at_next_kst_midnight: {
-                        target: 'loading',
-                        actions: 'mark_refresh',
+                    timers: {
+                        refresh_at_next_kst_midnight: {
+                            target: 'loading',
+                            actions: 'mark_refresh',
+                        },
                     },
                 },
+
                 on: {
                     ORDER_EXECUTION_RECEIVED: {
                         target: 'loading',

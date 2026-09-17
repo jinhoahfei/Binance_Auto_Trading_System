@@ -1,11 +1,10 @@
-import { assign, fromPromise, setup } from 'xstate';
+import { assign, setup } from 'xstate';
 import type {
     RegimeMetric,
     RegimeType,
     UiCommandFailure,
 } from '../../../shared/contracts';
 import { to_ui_command_failure } from '../../../shared/errors';
-import type { UiCommandPort } from '../../../shared/ports';
 
 export interface RegimeMachineContext {
     readonly recommended_regime: RegimeType | null;
@@ -62,23 +61,17 @@ function to_regime_failure(error: unknown): UiCommandFailure {
 /**
  * 함수 이름: create_regime_machine()
  * 기능: 추천 REGIME, 확인 전 후보, 적용 REGIME, 패널 점멸과 비동기 적용 상태를 관리한다.
- * 인자: command_port -> REGIME 적용 명령 port, options -> 초기 추천·적용 REGIME과 지표 값
+ * 인자: options -> 초기 추천·적용 REGIME과 지표 값
  * 반환값: regime-selection feature의 XState machine
  * 작성 날짜: 2026/08/12
  */
 export function create_regime_machine(
-    command_port: UiCommandPort,
     options: RegimeMachineOptions = {},
 ) {
     return setup({
         types: {
             context: {} as RegimeMachineContext,
             events: {} as RegimeMachineEvent,
-        },
-        actors: {
-            apply_regime: fromPromise<void, RegimeType>(async ({ input }) => {
-                await command_port.apply_regime(input);
-            }),
         },
         actions: {
             synchronize_regime_snapshot: assign({
@@ -220,13 +213,14 @@ export function create_regime_machine(
             highlighting: {
                 meta: {
                     spec_ids: ['CR-19', 'ER-06C'],
-                },
-                after: {
-                    4000: {
-                        target: 'type_selection',
-                        actions: 'disable_highlight',
+                    timers: {
+                        4000: {
+                            target: 'type_selection',
+                            actions: 'disable_highlight',
+                        },
                     },
                 },
+
                 on: {
                     TYPE_CLICKED: {
                         target: 'type_change_confirmation',
@@ -256,18 +250,18 @@ export function create_regime_machine(
                 meta: {
                     spec_ids: ['R2-04', 'ER-10B'],
                     pending: true,
-                },
-                invoke: {
-                    id: 'apply_regime_command',
-                    src: 'apply_regime',
-                    input: ({ context }) => context.candidate_regime as RegimeType,
-                    onDone: {
-                        target: 'type_selection',
-                        actions: 'apply_candidate',
-                    },
-                    onError: {
-                        target: 'type_change_confirmation',
-                        actions: 'remember_failure',
+                    command: {
+                        id: 'apply_regime_command',
+                        src: 'apply_regime',
+                        input: ({ context }: { context: RegimeMachineContext }) => context.candidate_regime as RegimeType,
+                        onDone: {
+                            target: 'type_selection',
+                            actions: 'apply_candidate',
+                        },
+                        onError: {
+                            target: 'type_change_confirmation',
+                            actions: 'remember_failure',
+                        },
                     },
                 },
             },

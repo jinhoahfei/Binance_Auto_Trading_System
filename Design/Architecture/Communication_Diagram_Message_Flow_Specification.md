@@ -489,9 +489,12 @@ Operation
 - `exportCSV() : void`
 
 `UIStateController`의 위 Operation은 사용자 event를 받는 논리 façade이므로 `void`로
-표현한다. Phase 7 구현에서는 `UiApplicationFacade`와 `BackendUiAdapter`가 이 event에
-stable command ID와 최신 expected Context version을 결합한 뒤 메시지 `6.1.1`,
-`7.1.1`, `8.1.1`, `8R.1.1`의 concrete typed application Operation을 호출한다.
+표현한다. 2026-09-17 구현에서 실제 클래스도 `UIStateController`이며 기존
+`UiApplicationFacade`는 같은 클래스의 호환 재수출이다. Controller가 `UISTM`의
+`UITransitionResult`에 담긴 ordered `UIActionRequest`를 소비하고 소유 실행부를 통해
+`UiCommandPort`를 호출한다. 완료·실패·타이머 이벤트도 Controller의 동일 직렬 큐를 거친다.
+`BackendUiAdapter`의 stable command ID·expected Context version·transport 계약은 유지하며,
+메시지 `6.1.1`, `7.1.1`, `8.1.1`, `8R.1.1`의 concrete typed application Operation에 연결한다.
 
 ### 8.3 UISTM
 
@@ -505,6 +508,13 @@ Operation
 
 - `run(initialEvent : UIEvent = APP_STARTED) : UITransitionResult`
 - `handle(event : UIEvent) : UITransitionResult`
+
+구체 구현은 `UISTM.ts`와 순수 XState 정의인 `uiApplicationMachine.ts`이다.
+`initialTransition`·`transition`으로 단일 계층형 상태를 계산하며 외부 작업을 실행하는 actor는 없다.
+`UITransitionResult`는 snapshot과 순서 있는 작업 요청 데이터를 반환한다. Port·Promise·함수·actor
+참조는 요청에 포함하지 않는다. 현재 시각·단조 시각·CSV 기준일은 Controller가 입력하고,
+요청 token·중복 방지·오래된 결과 거부·화면 history 규칙은 STM이 판단한다.
+`run`·`handle`의 구체 TypeScript 인자는 이 평가 입력을 추가로 받는다.
 
 ### 8.4 TradingController
 

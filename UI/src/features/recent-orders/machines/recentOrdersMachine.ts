@@ -9,13 +9,14 @@ export interface RecentOrdersMachineContext {
 }
 
 export interface RecentOrdersMachineOptions {
+    readonly initial_monotonic_ms?: number;
     readonly trades?: ReadonlyArray<TradeRecord>;
     readonly strategy_indicators?: BackendTradingIndicatorSnapshot | null;
     readonly realtime_indicators?: ReadonlyArray<RegimeMetric>;
 }
 
 export type RecentOrdersMachineEvent =
-    | { readonly type: 'STRATEGY_INDICATORS_SYNCHRONIZED'; readonly indicators: BackendTradingIndicatorSnapshot | null }
+    | { readonly type: 'STRATEGY_INDICATORS_SYNCHRONIZED'; readonly received_at?: number; readonly indicators: BackendTradingIndicatorSnapshot | null }
     | {
         readonly type: 'RECENT_ORDERS_SNAPSHOT_SYNCHRONIZED';
         readonly trades: ReadonlyArray<TradeRecord>;
@@ -55,7 +56,7 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
                 const duplicate = JSON.stringify(context.strategy_indicators) === JSON.stringify(event.indicators);
                 return {
                     strategy_indicators: event.indicators,
-                    strategy_indicators_received_at: duplicate ? context.strategy_indicators_received_at : performance.now(),
+                    strategy_indicators_received_at: duplicate ? context.strategy_indicators_received_at : event.received_at ?? 0,
                 };  // 이 시각은 화면 전용이며 서버의 전략 상태나 경과 시간에 전달하지 않는다.
             }),
             synchronize_recent_orders: assign({
@@ -93,7 +94,7 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
         context: {
             trades: options.trades ?? [],
             strategy_indicators: options.strategy_indicators ?? null,  // 구버전 연결은 예시값 대신 대기한다.
-            strategy_indicators_received_at: options.strategy_indicators ? performance.now() : null,
+            strategy_indicators_received_at: options.strategy_indicators ? options.initial_monotonic_ms ?? 0 : null,
             realtime_indicators: options.realtime_indicators ?? [],
         },
         on: {

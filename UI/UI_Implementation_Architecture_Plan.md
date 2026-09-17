@@ -1,5 +1,7 @@
 # Binance Auto Trader UI 구현 아키텍처 제안서
 
+> 2026-09-17 구현 갱신: UI 상태 정의는 단일 순수 XState 루트이며, `UISTM`의 전이 결과와 Action 요청을 `UIStateController`가 실행한다. 이전 기능 actor 기반 설명은 최초 계획의 기록이다. [최신 책임 분리 설명](../Design/UI/UI_STM_Controller_Separation_2026-09-17.md)을 따른다.
+
 | 항목 | 내용 |
 |---|---|
 | 문서 상태 | Proposed — 구현 전 검토용 |
@@ -565,8 +567,8 @@ WebSocket event의 공통 envelope 예시는 다음과 같다.
 | `RecentOrderUI` | `RecentOrdersPanel` | main trader panel의 history tab |
 | `TradeHistoryUI` | `TradeHistoryPage` | 기존 alias는 새 코드에 사용하지 않음 |
 | `PopupUI` | `CSVExportDialog`와 공통 modal primitive | 분석 모델 이름은 유지하되 구현은 구체화 |
-| `UIStateController` | `UiApplicationFacade` | feature actor와 API port 조정 |
-| `UISTM` | root XState machine + feature actors | Event-Action ID를 transition metadata로 보존 가능 |
+| `UIStateController` | `UIStateController` (`UiApplicationFacade` 호환 재수출) | 순수 UISTM 평가, ordered Action 실행, API·타이머·구독 수명 조정 |
+| `UISTM` | `UISTM` + 단일 루트에 조립된 기능별 XState 정의 | 순수 전이 평가; 182개 Event-Action ID와 상태 계층·deep history 유지 |
 | `TradingController` | Python application service | renderer에 두지 않음 |
 | `TradeHistoryController` | Python application service | UI의 history controller와 이름 충돌 방지 |
 | `CSVExportOptions` | TS draft DTO + Python validated value object | 최종 검증은 Python |

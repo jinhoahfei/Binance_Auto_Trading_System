@@ -1,4 +1,4 @@
-import { createActor } from 'xstate';
+import { create_feature_test_actor } from '../../../shared/testing/createFeatureTestController';
 import { describe, expect, it } from 'vitest';
 import { FakeUiCommandAdapter } from '../../../shared/testing';
 import { create_regime_machine } from './regimeMachine';
@@ -19,9 +19,9 @@ async function wait_for_actor_settlement(): Promise<void> {
 describe('regimeMachine', () => {
     it('CR-03/VR-14: type 클릭만으로 적용하지 않고 취소하면 기존 type을 보존한다', () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_regime_machine(command_adapter, {
+        const actor = create_feature_test_actor(create_regime_machine, command_adapter, {
             applied_regime: 'type1',
-        }));
+        });
 
         actor.start();
         actor.send({ type: 'TYPE_CLICKED', regime: 'type4' });
@@ -39,7 +39,7 @@ describe('regimeMachine', () => {
 
     it('R2-04/ER-10B: 실행 확인 후 adapter 성공 시 후보 type을 적용한다', async () => {
         const command_adapter = new FakeUiCommandAdapter();
-        const actor = createActor(create_regime_machine(command_adapter));
+        const actor = create_feature_test_actor(create_regime_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'TYPE_CLICKED', regime: 'type3' });
@@ -61,7 +61,7 @@ describe('regimeMachine', () => {
             { code: 'FEATURE_NOT_AVAILABLE' },
         );
         command_adapter.queue_failure('apply_regime', unavailable_error);
-        const actor = createActor(create_regime_machine(command_adapter));
+        const actor = create_feature_test_actor(create_regime_machine, command_adapter);
 
         actor.start();
         actor.send({ type: 'TYPE_CLICKED', regime: 'type2' });
