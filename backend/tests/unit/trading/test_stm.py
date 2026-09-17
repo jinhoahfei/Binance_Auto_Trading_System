@@ -394,10 +394,10 @@ class GlobalTransitionTests(unittest.TestCase):
         )  # 실제 양수 수량이 force-sell branch를 선택한다.
 
 
-class UpperBandSafeTerminationTests(unittest.TestCase):
+class UpperBandContinuationAndStopTests(unittest.TestCase):
     """
-    클래스 이름: UpperBandSafeTerminationTests
-    기능: G-07의 경계와 노출 상태별 안전 종료 및 후속 전이를 검증한다.
+    클래스 이름: UpperBandContinuationAndStopTests
+    기능: G-07 하단 감시 복귀와 기존 사용자 STOP 후속 전이를 검증한다.
     작성 날짜: 2026/08/21
     """
 
@@ -442,114 +442,68 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         self.assertEqual((), result.transition_ids)
         self.assertEqual(RootState.TRADE_MANAGEMENT, result.state_after.root_state)
 
-    def test_g_07_boundary_without_exposure_terminates_immediately(self) -> None:
+    def test_g_07_boundary_without_exposure_returns_to_lower_watch(self) -> None:
         """
-        함수 이름: test_g_07_boundary_without_exposure_terminates_immediately()
-        기능: 상단 BB와 같은 가격에서 주문·포지션이 없으면 즉시 종료하는지 검증한다.
+        함수 이름: test_g_07_boundary_without_exposure_returns_to_lower_watch()
+        기능: 상단과 같은 가격에서 세션 종료 없이 하단 감시로 복귀하는지 검증한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/08/21
+        작성 날짜: 2026/09/17
         """
-        # Stale owner가 남아도 수량 0인 upper-band 경계 state를 준비한다.
         stm = TradingSTM(RegimeType.TYPE_0)
         stm._state = TradingStateConfiguration.create_trade_management_initial_state()
-        market = MarketEvaluationSnapshot(
-            realtime_price=Decimal("120"),
-            upper_band=Decimal("120"),
-        )
-        runtime = TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B)
-
-        # 가격이 upper band와 같은 inclusive 경계에서 G-07을 실행한다.
-        result = stm.handle(
-            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
-            create_test_context(market=market, runtime=runtime),
-        )
-
-        # 즉시 종료 Action과 ForceSellAll 부재를 authoritative 수량 기준으로 확인한다.
-        close_action = next(
-            action
-            for action in result.action_requests
-            if isinstance(action, CloseLowerEvent)
-        )
-        stop_action = next(
-            action
-            for action in result.action_requests
-            if isinstance(action, StopTradingRuntime)
-        )
-        self.assertEqual(("G-07",), result.transition_ids)
-        self.assertEqual(RootState.LOGIC_TERMINATED, result.state_after.root_state)
-        self.assertEqual("UPPER_BAND_SAFE_TERMINATION", close_action.reason)
-        self.assertEqual("UPPER_BAND_SAFE_TERMINATION", stop_action.reason)
-        self.assertFalse(
-            any(
-                isinstance(action, ForceSellAll)
-                for action in result.action_requests
-            )
-        )  # stale owner가 있어도 authoritative 수량 0은 SELL을 만들지 않는다.
-
-    def test_g_07_pending_order_takes_precedence_over_position(self) -> None:
-        """
-        함수 이름: test_g_07_pending_order_takes_precedence_over_position()
-        기능: pending 주문과 포지션이 함께 있으면 취소·재조정이 매도보다 우선하는지 검증한다.
-        인자: 없음
-        반환값: 없음
-        작성 날짜: 2026/08/21
-        """
-        # Pending BUY와 양수 Position이 함께 있는 upper-band 초과 state를 준비한다.
-        stm = TradingSTM(RegimeType.TYPE_0)
-        stm._state = TradingStateConfiguration.create_trade_management_initial_state()
-        runtime = TradingRuntimeSnapshot(
-            position_owner=StrategyType.CASE_B,
-            pending_strategy=StrategyType.CASE_B,
-            pending_order_side=OrderSide.BUY,
-            pending_order_id="order-g07",
-            pending_order_attempt_kind=OrderAttemptKind.INITIAL,
-        )
-        market = MarketEvaluationSnapshot(
-            realtime_price=Decimal("121"),
-            upper_band=Decimal("120"),
-        )
-
-        # G-07에서 pending reconciliation branch가 force-sell보다 먼저 선택되는지 판정한다.
         result = stm.handle(
             create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
             create_test_context(
-                market=market,
-                runtime=runtime,
-                position=PositionSnapshot(
-                    quantity=Decimal("1"),
-                    entry_price=Decimal("100"),
-                ),
+                market=MarketEvaluationSnapshot(realtime_price=Decimal("120"), upper_band=Decimal("120")),
+                runtime=TradingRuntimeSnapshot(position_owner=StrategyType.CASE_B),
             ),
         )
-
-        # 취소·reconciliation Action을 찾고 direct ForceSellAll 부재를 확인한다.
-        cancel_action = next(
-            action
-            for action in result.action_requests
-            if isinstance(action, CancelPendingOrder)
-        )
-        reconcile_action = next(
-            action
-            for action in result.action_requests
-            if isinstance(action, ReconcileOrder)
-        )
         self.assertEqual(("G-07",), result.transition_ids)
-        self.assertEqual(RootState.STOPPING, result.state_after.root_state)
-        self.assertEqual("order-g07", cancel_action.order_id)
-        self.assertEqual("UPPER_BAND_SAFE_TERMINATION", cancel_action.reason)
-        self.assertTrue(reconcile_action.stop_after_reconciliation)
-        self.assertFalse(
-            any(
-                isinstance(action, ForceSellAll)
-                for action in result.action_requests
-            )
-        )
+        self.assertEqual(RootState.LOWER_TOUCH_WATCH, result.state_after.root_state)
+        close_action = next(action for action in result.action_requests if isinstance(action, CloseLowerEvent))
+        self.assertEqual("UPPER_BAND_RETURN_TO_LOWER_WATCH", close_action.reason)
+        self.assertEqual(["lower-event"], [action.scope for action in result.action_requests
+                                         if isinstance(action, CancelScheduledEvaluation)])
+        self.assertFalse(any(isinstance(action, (StopTradingRuntime, ForceSellAll, CancelPendingOrder, ReconcileOrder, SubmitOrder))
+                             for action in result.action_requests))
 
-    def test_g_07_position_uses_force_sell_then_g_06f_completion(self) -> None:
+    def test_g_07_preserves_positions_orders_and_preparation_intents(self) -> None:
         """
-        함수 이름: test_g_07_position_uses_force_sell_then_g_06f_completion()
-        기능: 확정 포지션이 G-07 전량 매도와 G-06F 완료 경로로 종료되는지 검증한다.
+        함수 이름: test_g_07_preserves_positions_orders_and_preparation_intents()
+        기능: B/C 보유·미결 주문·제출 전 의도에서 상단 이벤트가 아무 액션도 만들지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/17
+        """
+        for strategy in (StrategyType.CASE_B, StrategyType.CASE_C):
+            for quantity, order_id, intent_id in (("1", None, None), ("0", "order-g07", None),
+                                                 ("1", "order-g07", None), ("0", None, "preparing-g07")):
+                with self.subTest(strategy=strategy, quantity=quantity, order_id=order_id, intent_id=intent_id):
+                    stm = TradingSTM(RegimeType.TYPE_0)
+                    before = TradingStateConfiguration.create_trade_management_initial_state()
+                    stm._state = before
+                    context = create_test_context(
+                        market=MarketEvaluationSnapshot(realtime_price=Decimal("121"), upper_band=Decimal("120")),
+                        runtime=TradingRuntimeSnapshot(
+                            position_owner=strategy if quantity == "1" else None,
+                            pending_strategy=strategy if order_id or intent_id else None,
+                            pending_order_side=OrderSide.BUY if order_id or intent_id else None,
+                            pending_order_id=order_id, pending_intent_id=intent_id,
+                            pending_order_attempt_kind=OrderAttemptKind.INITIAL if order_id or intent_id else None,
+                        ),
+                        position=PositionSnapshot(quantity=Decimal(quantity),
+                                                  entry_price=Decimal("100") if quantity == "1" else None),
+                    )
+                    result = stm.handle(create_test_event(TradingEventType.UPPER_BAND_TOUCHED), context)
+                    self.assertEqual(("G-07",), result.transition_ids)
+                    self.assertEqual(before, result.state_after)
+                    self.assertEqual((), result.action_requests)
+
+    def test_user_stop_uses_force_sell_then_g_06f_completion(self) -> None:
+        """
+        함수 이름: test_user_stop_uses_force_sell_then_g_06f_completion()
+        기능: 확정 포지션이 G-06 전량 매도와 G-06F 완료 경로로 종료되는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -563,9 +517,9 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
             upper_band=Decimal("120"),
         )
 
-        # G-07 안전 종료 요청으로 schedule 취소와 최초 전량매도 Action을 생성한다.
+        # G-06 안전 종료 요청으로 schedule 취소와 최초 전량매도 Action을 생성한다.
         safe_termination = stm.handle(
-            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
+            create_test_event(TradingEventType.STOP_CONFIRMED),
             create_test_context(
                 market=market,
                 runtime=runtime,
@@ -576,8 +530,8 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
             ),
         )
 
-        # 최초 G-07 결과가 STOPPING과 non-retry ForceSellAll을 포함하는지 확인한다.
-        self.assertEqual(("G-07",), safe_termination.transition_ids)
+        # 최초 G-06 결과가 STOPPING과 non-retry ForceSellAll을 포함하는지 확인한다.
+        self.assertEqual(("G-06",), safe_termination.transition_ids)
         self.assertEqual(RootState.STOPPING, safe_termination.state_after.root_state)
         self.assertTrue(
             any(
@@ -621,10 +575,10 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
         self.assertEqual(("G-06F",), completion.transition_ids)
         self.assertEqual(RootState.LOGIC_TERMINATED, completion.state_after.root_state)
 
-    def test_g_07_force_sell_failure_uses_g_06r_retry_policy(self) -> None:
+    def test_user_stop_force_sell_failure_uses_g_06r_retry_policy(self) -> None:
         """
-        함수 이름: test_g_07_force_sell_failure_uses_g_06r_retry_policy()
-        기능: 안전 종료 전량 매도의 terminal 미체결이 기존 G-06R 재시도를 사용하는지 검증한다.
+        함수 이름: test_user_stop_force_sell_failure_uses_g_06r_retry_policy()
+        기능: 사용자 중지 전량 매도의 terminal 미체결이 기존 G-06R 재시도를 사용하는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -637,9 +591,9 @@ class UpperBandSafeTerminationTests(unittest.TestCase):
             realtime_price=Decimal("120"),
             upper_band=Decimal("120"),
         )
-        # 최초 G-07 전량매도 요청을 발생시켜 STOPPING state로 진입한다.
+        # 최초 G-06 전량매도 요청을 발생시켜 STOPPING state로 진입한다.
         stm.handle(
-            create_test_event(TradingEventType.UPPER_BAND_TOUCHED),
+            create_test_event(TradingEventType.STOP_CONFIRMED),
             create_test_context(
                 market=market,
                 runtime=runtime,

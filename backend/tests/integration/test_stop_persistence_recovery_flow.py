@@ -937,12 +937,12 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(3, storage_path.read_bytes().count(b"\n"))
 
-    def test_upper_band_stop_pre_query_terminal_continues_force_sell(
+    def test_user_stop_pre_query_terminal_continues_force_sell(
         self,
     ) -> None:
         """
-        함수 이름: test_upper_band_stop_pre_query_terminal_continues_force_sell()
-        기능: G-07의 첫 pending query가 terminal일 때 일반 CASE 결과 없이 잔량 매도를 완료한다.
+        함수 이름: test_user_stop_pre_query_terminal_continues_force_sell()
+        기능: G-06P의 첫 pending query가 terminal일 때 일반 CASE 결과 없이 잔량 매도를 완료한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/22
@@ -959,7 +959,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                 account_snapshot_callback=account.apply_stream_snapshot,
             )
             position = Position()
-            storage_path = Path(temporary_directory) / "upper-band-trades.jsonl"
+            storage_path = Path(temporary_directory) / "user-stop-trades.jsonl"
             history_controller = TradeHistoryController(
                 TradeHistoryRepository(storage_path, clock=clock),
                 clock=clock,
@@ -978,7 +978,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                 clock=clock,
             )
 
-            # TYPE_0 session을 열고 BUY fill을 반영해 G-07이 정리할 실제 노출을 만든다.
+            # TYPE_0 session을 열고 BUY fill을 반영해 G-06P가 정리할 실제 노출을 만든다.
             controller.load_account()
             selection = RegimeController(
                 RegimeSTM(),
@@ -986,17 +986,17 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                 controller,
             ).set_regime_type(
                 RegimeType.TYPE_0,
-                command_id="select-upper-pre-query-terminal",
+                command_id="select-stop-pre-query-terminal",
                 expected_version=0,
             )
             split_result = controller.update_split_ratios(
-                command_id="split-upper-pre-query-terminal",
+                command_id="split-stop-pre-query-terminal",
                 expected_version=selection.version,
                 scale_in=Decimal("1"),
                 scale_out=Decimal("1"),
             )
             controller.start_trading(
-                command_id="start-upper-pre-query-terminal",
+                command_id="start-stop-pre-query-terminal",
                 expected_version=split_result.version,
             )
 
@@ -1005,7 +1005,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
                 TradingEvent(
                     TradingEventType.LOWER_BAND_TOUCHED,
                     clock(),
-                    event_id="lower-touch-before-upper-stop",
+                    event_id="lower-touch-before-user-stop",
                 )
             )
             self.assertIsNotNone(accepted_lower_event)
@@ -1037,7 +1037,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
             asyncio.run(controller.drain_events())
             self.assertGreater(position.quantity, Decimal("0"))
 
-            # 일반 SELL은 NEW로 남겨 G-07 CancelPendingOrder의 pre-query 대상으로 고정한다.
+            # 일반 SELL은 NEW로 남겨 사용자 STOP의 ReconcileOrder 조회 대상으로 고정한다.
             clock.advance(1)
             sell_event = TradingEvent(
                 TradingEventType.MARKET_DATA_UPDATED,
@@ -1058,22 +1058,17 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
             self.assertEqual((), sell_outcomes)
             self.assertIsNotNone(controller.context.pending_order)
 
-            # 상단 band event의 첫 query terminal partial이 취소 없이 잔량 force SELL로 직결되게 한다.
+            # 사용자 STOP event의 첫 query terminal partial이 취소 없이 잔량 force SELL로 직결되게 한다.
             clock.advance(1)
-            accepted_event = controller.enqueue_event(
-                TradingEvent(
-                    TradingEventType.UPPER_BAND_TOUCHED,
-                    clock(),
-                    sequence_number=3,
-                    event_id="upper-band-pre-query-terminal",
-                )
+            stop_result = controller.stop_trading(
+                command_id="stop-pre-query-terminal",
+                expected_version=controller.context.version,
             )
-            self.assertIsNotNone(accepted_event)
-            results = asyncio.run(controller.drain_events())
+            results = (stop_result, *asyncio.run(controller.drain_events()))
 
-            # G-07은 일반 CASE sell outcome으로 멈추지 않고 G-06F 종료까지 소비한다.
+            # G-06P는 일반 CASE sell outcome으로 멈추지 않고 G-06F 종료까지 소비한다.
             self.assertIn(
-                "G-07",
+                "G-06P",
                 tuple(
                     transition_id
                     for result in results

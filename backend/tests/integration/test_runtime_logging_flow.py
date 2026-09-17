@@ -415,10 +415,10 @@ class RuntimeLoggingFlowTests(unittest.TestCase):
             finally:
                 fixture.controller.close_session_resources()
 
-    def test_upper_band_termination_and_failed_event_keep_their_inputs(self) -> None:
+    def test_upper_band_return_and_failed_event_keep_their_inputs(self) -> None:
         """
-        함수 이름: test_upper_band_termination_and_failed_event_keep_their_inputs()
-        기능: 상단 안전 종료와 예외 중단의 원본 시장 입력을 구분해 기록하는지 확인한다.
+        함수 이름: test_upper_band_return_and_failed_event_keep_their_inputs()
+        기능: 상단 접촉 후 하단 복귀와 예외 중단의 원본 시장 입력을 구분해 기록하는지 확인한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/09/09
@@ -445,7 +445,7 @@ class RuntimeLoggingFlowTests(unittest.TestCase):
                         self.assertNotIn("private-event-marker", writer.path.read_text())
                     else:
                         self.assertTrue(any("G-07" in record["details"].get("transition_ids", []) for record in records))
-                        self.assertIn("UPPER_BAND_SAFE_TERMINATION", writer.path.read_text())
+                        self.assertIn("UPPER_BAND_RETURN_TO_LOWER_WATCH", writer.path.read_text())
                 finally:
                     fixture.controller.close_session_resources()
 

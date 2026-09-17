@@ -52,7 +52,7 @@
 
 | REGIME | Trading registry | 지원 상태 | Registry start Guard | 상단 BB 정책 | 근거 |
 |---|---|---|---|---|---|
-| `TYPE_0` | `LOWER_BB` 정확히 109개 transition | `SUPPORTED` | `READY` | `SAFE_TERMINATION` | `regime_design.md` §9의 “기존 30m 횡보 로직”, `UI_Behavior.md` §3의 “Basic Iterative 횡보장 조건”, 현재 유일한 30m 구현인 하단 BB registry |
+| `TYPE_0` | `LOWER_BB` 정확히 109개 transition | `SUPPORTED` | `READY` | `RESUME_LOWER_WATCH` | `regime_design.md` §9의 “기존 30m 횡보 로직”, `UI_Behavior.md` §3의 “Basic Iterative 횡보장 조건”, 현재 유일한 30m 구현인 하단 BB registry |
 | `TYPE_1` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 약상승 30m Event-Action Table/registry 없음 |
 | `TYPE_2` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 상위 gate 설명만 있고 강상승 30m Event-Action Table/registry 없음 |
 | `TYPE_3` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 약하락 30m Event-Action Table/registry 없음 |
@@ -62,25 +62,21 @@
 위 세 근거를 함께 적용해 Phase 0에서 확정한 architecture decision이다. 향후 근거가
 달라지면 이 ADR을 대체하고 Communication 명세와 Event-Action Table을 먼저 변경한다.
 
-Phase 6에서 lower-BB registry의 `G-07`은 미구현 상단 전략으로 인계하지 않고
-`UpperBandPolicy.SAFE_TERMINATION`을 적용하도록 확정했다. `realtime_price >=
-upper_band`인 경우 다음 세 branch는 배타적이며 pending 주문을 가장 먼저
-처리한다.
+2026-09-17 사용자 결정으로 lower-BB registry의 `G-07` 정책을
+`UpperBandPolicy.RESUME_LOWER_WATCH`로 변경했다. 이는 기존 상단 접촉 안전 종료
+정책을 대체하며 상단 전략 자체는 매매 동작 없는 no-op으로 유지한다.
 
-1. `pending_order_id != None`이면 `STOPPING`으로 전이하고 reason
-   `UPPER_BAND_SAFE_TERMINATION`으로 취소를 요청한 뒤, 같은 주문 ID를
-   `stop_after_reconciliation = True`로 조정한다. 이 branch에서는
-   `ForceSellAll`을 즉시 요청하지 않는다.
-2. pending 주문이 없고 authoritative `context.position.quantity > 0`이면 `STOPPING`으로 전이하고
-   전략 평가를 취소한 뒤 `ForceSellAll`을 요청한다. 후속 완료·실패는
-   기존 `G-06F`/`G-06R`로 처리한다.
-3. 둘 다 없으면 `LOGIC_TERMINATED`로 즉시 전이하고 lower event와 Case
-   Context를 정리한 뒤 `trading_phase = TERMINATED`, session 평가 취소,
-   runtime 종료를 순서대로 요청한다.
+1. authoritative 포지션, pending 주문 또는 제출 전 pending intent가 있으면 상단
+   접촉 자체는 상태·주문·타이머를 변경하지 않는다. 시장 입력은 기존 Case의
+   포지션 조건 검사·주문 처리로 계속 전달한다.
+2. 모두 없으면 lower event와 Case Context, 이전 이벤트의 타이머를 정리하고
+   `trading_phase = IDLE`, `LOWER_TOUCH_WATCH`로 돌아간다. 세션·구독은 유지하며
+   다음 하단 접촉은 같은 30분봉 안에서도 새 G-02 이벤트로 처리한다.
+3. 새 하단 이벤트의 B/C 활성화와 조건 판단은 기존 계약을 유지한다. B의 BBW
+   제한도 그대로 적용한다. 사용자 STOP·안전 종료 경로는 변경하지 않는다.
 
-이 계약은 상단 BB 매매 전략을 추가한 것이 아니라 기존 STOP 처리를 재사용해
-하단 BB session을 안전하게 종료하는 정책이다. 따라서 `TYPE_0`의 registry
-coverage와 start Guard는 `READY`이며, 조용한 no-op이나 인계 fallback은 없다.
+상단에서 새로운 매매 전략을 시작하거나 주문·강제매도·취소·세션 종료를 요청하지
+않는다. `TYPE_0`의 registry coverage와 start Guard는 기존 `READY`를 유지한다.
 
 미지원 타입도 추천·표시·선택할 수는 있다. 다만 UI는 지원 상태를 함께 표시하고,
 `TradingController.fetchSelectedTradingLogic(...)`은 `TYPE_1`~`TYPE_4`에 인스턴스를
@@ -172,12 +168,12 @@ event를 전달한다. 인자 없는 호출이나 pending Context로 성공·실
 ## 4. 구현 및 검증 의무
 
 - [x] 다섯 domain/wire 값의 일대일 표가 확정되었다.
-- [x] `TYPE_0`은 `SUPPORTED/LOWER_BB/READY/SAFE_TERMINATION`, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`/registry 없음/`UNSUPPORTED_TRADING_LOGIC`으로 고정되었다.
+- [x] `TYPE_0`은 `SUPPORTED/LOWER_BB/READY/RESUME_LOWER_WATCH`, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`/registry 없음/`UNSUPPORTED_TRADING_LOGIC`으로 고정되었다.
 - [x] lower-BB registry의 소속과 근거가 기록되었다.
 - [x] 두 STM의 canonical signature가 실제 구현과 일치한다.
 - [x] active session의 REGIME 변경 거부가 확정되었다.
 - [x] Phase 1에서 중복 Python `RegimeType`을 `domain/common/enums.py` 한 enum으로 통합했다.
-- [x] Phase 6에서 TYPE_0 상단 BB gap을 안전 종료 정책으로 닫고 mapping/fallback gate를 코드·테스트로 고정했다.
+- [x] TYPE_0 상단 정책은 2026-09-17 하단 감시 복귀로 변경했다. mapping/fallback gate는 유지한다.
 - [x] UI snapshot과 선택 화면에 다섯 REGIME 지원 상태를 반영하고 미지원 start를 차단했다.
 - [x] Phase 7에서 versioned selection/start/stop application Operation, session 시작 orchestration과 active 변경의 `TRADING_ACTIVE` 오류를 완성했다.
 

@@ -5,7 +5,7 @@ import type { RealtimeIndicatorGroupViewModel } from './types';
 // 표시 문구만 UI가 소유하며 임계값과 조건 판정은 backend 결과를 그대로 사용한다.
 const CONDITION_LABELS: Readonly<Record<string, string>> = {
     lower_price: '현재가 하단 밴드 접촉',
-    upper_safe_exit: '상단 밴드 안전 종료', b_touch_bbw: '터치 순간 30분봉 BBW',
+    upper_safe_exit: '상단 밴드 접촉', b_touch_bbw: '터치 순간 30분봉 BBW',
     b_signal_slope: '확정 30분봉 EMA9 기울기', b_signal_pct_b: '확정 30분봉 종가 %B',
     b_signal_low: '신호봉 저가 · 직전 3봉 최저가', b_pullback: '눌림 진입 %B', b_signal_age: '신호 유효시간',
     b_profit_zone: '익절권 %B', b_take_profit_slope: '일반 익절 EMA9 기울기', b_trend_slope: '추세 유지 EMA9 기울기',

@@ -3843,11 +3843,16 @@ class TradingController:
         반환값: upper, 최초·신규 lower 또는 일반 market update 유형
         작성 날짜: 2026/08/24
         """
-        # 상단 접촉은 미구현 상단 전략 진입 대신 기존 안전 종료 전이를 가장 먼저 선택한다.
+        # 포지션·주문 관리 중에는 상단 위에서도 기존 Case의 조건 검사를 계속 전달한다.
+        runtime = self._context.runtime
         if (
             market.upper_band > Decimal("0")
             and market.realtime_price >= market.upper_band
         ):
+            if (self._context.position.is_open
+                    or runtime.pending_order_id is not None
+                    or runtime.pending_intent_id is not None):
+                return TradingEventType.MARKET_DATA_UPDATED
             return TradingEventType.UPPER_BAND_TOUCHED
 
         # 봉 확정을 기다리지 않고 현재가와 동일 평가의 실시간 30분봉 하단 Band를 비교한다.
@@ -3859,7 +3864,6 @@ class TradingController:
             return TradingEventType.MARKET_DATA_UPDATED
 
         # 새 scope를 열 수 있을 때만 G-03으로 분류하고, 보유·잠금 중 확정봉 판단은 계속 전달한다.
-        runtime = self._context.runtime
         if runtime.lower_event_id is None:
             return TradingEventType.LOWER_BAND_TOUCHED
         if (
@@ -8508,7 +8512,7 @@ class TradingController:
                 message_id="8",
             )
             return ()
-        # 사용자 STOP과 상단 밴드 안전 종료는 모두 terminal 확인 뒤 잔량 force-sell로 이어진다.
+        # 사용자 STOP은 terminal 확인 뒤 잔량을 정리한다. 구버전 종료 사유도 호환 처리한다.
         state.stop_after_reconciliation = action.reason in (
             "STOP_CONFIRMED",
             "UPPER_BAND_SAFE_TERMINATION",

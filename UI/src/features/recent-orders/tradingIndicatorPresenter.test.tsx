@@ -90,7 +90,7 @@ describe('현재 단계 실시간 지표 표시', () => {
         expect(case_b).not.toHaveTextContent('터치 순간 30분봉 BBW');
         expect(case_c).toHaveTextContent('SETUP · 반등 회복 대기');
         expect(case_c).not.toHaveTextContent('일시정지');
-        expect(screen.getAllByText('상단 밴드 안전 종료')).toHaveLength(1);
+        expect(screen.getAllByText('상단 밴드 접촉')).toHaveLength(1);
     });
 
     it('지표가 없는 주문·종료 단계도 backend 상태 그대로 표시한다', () => {

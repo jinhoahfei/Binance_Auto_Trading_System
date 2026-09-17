@@ -1,0 +1,32 @@
+{
+  "files": [
+    {
+      "path": "/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py",
+      "sha256": "431a9db1a020f6fc8cd592fbe43a6d4ed8d9ddff7737f2edc8a1038e9f1c1cf9"
+    },
+    {
+      "path": "/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py",
+      "sha256": "94b9003bafca4c41db7e496c0744c563d28bce7dd15702dc32cc1d327a242324"
+    },
+    {
+      "path": "/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/logic_registry.py",
+      "sha256": "4f75a2e36c734a186eb3602f74418813385c05173afe4719b6001a15acb3ac65"
+    },
+    {
+      "path": "/Users/oscar/Desktop/Binance_Auto/UI/src/features/recent-orders/tradingIndicatorPresenter.ts",
+      "sha256": "c8cb0cb3e014bfbcaa66106b9e475041a2902ff69d0ef0998a2feab80619119b"
+    },
+    {
+      "path": "/Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/target/debug/bundle/macos/Binance Auto Trader.app/Contents/MacOS/binance-auto-sidecar",
+      "sha256": "e955b11928674a9c5708a23df07a08312140190a26c97257e1a36caee8f2eae7"
+    },
+    {
+      "path": "/Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/target/debug/bundle/macos/Binance Auto Trader.app/Contents/MacOS/binance-auto-trader",
+      "sha256": "391a5821f0ecbb8f0214727a91a9a7006eae9aa3b9ad0bc48f467c1f9b78dcc5"
+    }
+  ],
+  "codesign_verification": "passed: --deep --strict",
+  "installed_app_replaced": false,
+  "app_launched": false,
+  "real_orders": 0
+}

@@ -50,7 +50,7 @@ class UpperBandPolicy(str, Enum):
     작성 날짜: 2026/08/21
     """
 
-    SAFE_TERMINATION = "SAFE_TERMINATION"
+    RESUME_LOWER_WATCH = "RESUME_LOWER_WATCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +158,7 @@ TRADING_LOGIC_CONFIGURATIONS: Final[tuple[TradingLogicConfiguration, ...]] = (
         transition_source=TradingRegistrySource.LOWER_BB,
         transition_ids=TRANSITION_IDS,
         start_guard=TradingLogicStartGuard.READY,
-        upper_band_policy=UpperBandPolicy.SAFE_TERMINATION,
+        upper_band_policy=UpperBandPolicy.RESUME_LOWER_WATCH,
     ),
     *(
         TradingLogicConfiguration(

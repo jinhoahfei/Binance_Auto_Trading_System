@@ -156,7 +156,7 @@ def select_indicator_slots(
                 notice = "entry_paused"
             elif any(phase in ("B_POSITION_OPEN_SIGNALLED", "C_POSITION_OPEN_SIGNALLED") for _, phase in phases):
                 notice = "order_pending"  # B 재시도는 신호 유효시간만, C 재시도는 시장 조건 없이 대기한다.
-        phases.append((None, "UPPER_SAFE_EXIT"))  # 공통 안전 종료 조건은 한 번만 둔다.
+        phases.append((None, "UPPER_SAFE_EXIT"))  # 기존 전송 ID를 유지하며 공통 상단 접촉 조건을 한 번만 둔다.
     else:
         notice = "stopping" if state.root_state is RootState.STOPPING else "inactive"
 

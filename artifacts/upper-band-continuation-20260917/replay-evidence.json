@@ -1,0 +1,165 @@
+{
+  "mode": "offline_production_controller_and_stm",
+  "external_network": "blocked",
+  "real_orders": 0,
+  "observed_market_replay_then_synthetic_followup": true,
+  "steps": [
+    {
+      "stage": "실제 로그 수치: 최초 하단 접촉",
+      "price": "2378.06",
+      "lower_band": "2379.255257312860646591250699812834",
+      "upper_band": "2417.962742687139353408749300187166",
+      "transitions": [
+        "G-02",
+        "O-01",
+        "C-01",
+        "B-01",
+        "C-02",
+        "B-03"
+      ],
+      "status": "running",
+      "session_id": "c4b30a81-10cc-49b5-99ab-4f3a49bcb7d8",
+      "root_state": "TRADE_MANAGEMENT",
+      "case_b_signal_state": "B_WAIT_SIGNAL",
+      "case_c_signal_state": "C_WAIT_SETUP",
+      "lower_event_id": "lower:ETHUSDT:30m:2026-09-16T17:30:00Z:1",
+      "active_strategies": [
+        "CASE_B",
+        "CASE_C"
+      ],
+      "indicator_ids": [
+        "b_signal_slope",
+        "b_signal_pct_b",
+        "b_signal_low",
+        "c_setup_pct_b",
+        "c_setup_cci",
+        "upper_safe_exit"
+      ],
+      "submitted_fake_orders": 0
+    },
+    {
+      "stage": "실제 로그 수치: 상단 접촉",
+      "price": "2419.61",
+      "lower_band": "2382.013651422941852421671688544776",
+      "upper_band": "2419.557348577058147578328311455224",
+      "transitions": [
+        "G-07"
+      ],
+      "status": "running",
+      "session_id": "c4b30a81-10cc-49b5-99ab-4f3a49bcb7d8",
+      "root_state": "LOWER_TOUCH_WATCH",
+      "case_b_signal_state": null,
+      "case_c_signal_state": null,
+      "lower_event_id": null,
+      "active_strategies": [],
+      "indicator_ids": [
+        "lower_price"
+      ],
+      "submitted_fake_orders": 0
+    },
+    {
+      "stage": "상단 위 가격 반복 수신",
+      "price": "2419.61",
+      "lower_band": "2382.013651422941852421671688544776",
+      "upper_band": "2419.557348577058147578328311455224",
+      "transitions": [],
+      "status": "running",
+      "session_id": "c4b30a81-10cc-49b5-99ab-4f3a49bcb7d8",
+      "root_state": "LOWER_TOUCH_WATCH",
+      "case_b_signal_state": null,
+      "case_c_signal_state": null,
+      "lower_event_id": null,
+      "active_strategies": [],
+      "indicator_ids": [
+        "lower_price"
+      ],
+      "submitted_fake_orders": 0
+    },
+    {
+      "stage": "후속 검증 입력: 같은 봉 하단 재접촉",
+      "price": "2378.06",
+      "lower_band": "2379.255257312860646591250699812834",
+      "upper_band": "2417.962742687139353408749300187166",
+      "transitions": [
+        "G-02",
+        "O-01",
+        "C-01",
+        "B-01",
+        "C-02",
+        "B-03"
+      ],
+      "status": "running",
+      "session_id": "c4b30a81-10cc-49b5-99ab-4f3a49bcb7d8",
+      "root_state": "TRADE_MANAGEMENT",
+      "case_b_signal_state": "B_WAIT_SIGNAL",
+      "case_c_signal_state": "C_WAIT_SETUP",
+      "lower_event_id": "lower:ETHUSDT:30m:2026-09-16T17:30:00Z:5",
+      "active_strategies": [
+        "CASE_B",
+        "CASE_C"
+      ],
+      "indicator_ids": [
+        "b_signal_slope",
+        "b_signal_pct_b",
+        "b_signal_low",
+        "c_setup_pct_b",
+        "c_setup_cci",
+        "upper_safe_exit"
+      ],
+      "submitted_fake_orders": 0
+    },
+    {
+      "stage": "상단 재접촉",
+      "price": "2419.61",
+      "lower_band": "2382.013651422941852421671688544776",
+      "upper_band": "2419.557348577058147578328311455224",
+      "transitions": [
+        "G-07"
+      ],
+      "status": "running",
+      "session_id": "c4b30a81-10cc-49b5-99ab-4f3a49bcb7d8",
+      "root_state": "LOWER_TOUCH_WATCH",
+      "case_b_signal_state": null,
+      "case_c_signal_state": null,
+      "lower_event_id": null,
+      "active_strategies": [],
+      "indicator_ids": [
+        "lower_price"
+      ],
+      "submitted_fake_orders": 0
+    },
+    {
+      "stage": "후속 검증 입력: 다음 봉 하단 재접촉",
+      "price": "2378.06",
+      "lower_band": "2379.255257312860646591250699812834",
+      "upper_band": "2417.962742687139353408749300187166",
+      "transitions": [
+        "G-02",
+        "O-01",
+        "C-01",
+        "B-01",
+        "C-02",
+        "B-03"
+      ],
+      "status": "running",
+      "session_id": "c4b30a81-10cc-49b5-99ab-4f3a49bcb7d8",
+      "root_state": "TRADE_MANAGEMENT",
+      "case_b_signal_state": "B_WAIT_SIGNAL",
+      "case_c_signal_state": "C_WAIT_SETUP",
+      "lower_event_id": "lower:next-30m-candle:8",
+      "active_strategies": [
+        "CASE_B",
+        "CASE_C"
+      ],
+      "indicator_ids": [
+        "b_signal_slope",
+        "b_signal_pct_b",
+        "b_signal_low",
+        "c_setup_pct_b",
+        "c_setup_cci",
+        "upper_safe_exit"
+      ],
+      "submitted_fake_orders": 0
+    }
+  ]
+}

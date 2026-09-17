@@ -62,10 +62,10 @@ class TradingLogicRegistryTests(unittest.TestCase):
             len({id(configuration) for configuration in configurations}),
         )
 
-    def test_type_zero_uses_exact_lower_bb_registry_and_safe_termination(self) -> None:
+    def test_type_zero_uses_exact_lower_bb_registry_and_resume_lower_watch(self) -> None:
         """
-        함수 이름: test_type_zero_uses_exact_lower_bb_registry_and_safe_termination()
-        기능: TYPE_0이 109개 lower-BB ID와 확정된 상단 안전 종료 정책을 사용하는지 검증한다.
+        함수 이름: test_type_zero_uses_exact_lower_bb_registry_and_resume_lower_watch()
+        기능: TYPE_0이 109개 lower-BB ID와 상단 접촉 후 하단 감시 복귀 정책을 사용하는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -82,7 +82,7 @@ class TradingLogicRegistryTests(unittest.TestCase):
         self.assertEqual(TRANSITION_IDS, configuration.transition_ids)
         self.assertIs(TradingLogicStartGuard.READY, configuration.start_guard)
         self.assertIs(
-            UpperBandPolicy.SAFE_TERMINATION,
+            UpperBandPolicy.RESUME_LOWER_WATCH,
             configuration.upper_band_policy,
         )
 

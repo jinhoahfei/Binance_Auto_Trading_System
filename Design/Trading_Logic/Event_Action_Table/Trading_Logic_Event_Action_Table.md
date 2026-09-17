@@ -177,22 +177,23 @@ Context와 STM 상태가 잠시 어긋나는 것을 막기 위해 `CASE_*_POSITI
 | G-06P | LOGIC_ENABLED의 임의 상태 | 매매 중지[pending 주문 존재] | `pending_order_id != None` | 1) 신규 전략 Action을 차단하고 `trading_phase = STOPPING`으로 변경한다. 2) pending 진입 주문은 취소·조회하고, pending 청산 주문은 terminal 결과까지 조회·조정한다. 3) 실제 fill을 Position·이력에 먼저 반영한다. 4) reconciliation 후 잔여 포지션이 있으면 전량 매도하고, 없으면 FORCE_SELL_FINISHED EVENT를 queue에 넣는다. | STOPPING |
 | G-06F | STOPPING | FORCE_SELL_FINISHED | `position_owner == None` && `pending_order_id == None` && 강제 매도 체결·저장 완료 | 1) pending 및 event-local Context를 정리한다. 2) timer·구독·신규 event 수신을 종료한다. 3) `trading_phase = TERMINATED`로 변경한다. | LOGIC_TERMINATED |
 | G-06R | STOPPING | FORCE_SELL_FAILED | `position_owner` in `{CASE_B, CASE_C}` && 전량 매도가 terminal 미체결로 확정됨 | retry/backoff 정책에 따라 동일 포지션의 전량 매도를 재시도한다. 상태 불명 또는 실제 fill 존재 시 신규 주문을 만들지 않고 reconciliation을 먼저 수행한다. | STOPPING |
-| G-07 | TRADE_MANAGEMENT의 임의 상태 | UPPER_BAND_TOUCHED | `realtime_price >= upper_band` | `UpperBandPolicy.SAFE_TERMINATION`을 적용한다. 1) `pending_order_id != None`이면 `trading_phase = STOPPING`, `CancelPendingOrder(reason = UPPER_BAND_SAFE_TERMINATION)`, 같은 ID의 `ReconcileOrder(stop_after_reconciliation = True)`를 순서대로 요청하고 `ForceSellAll`은 요청하지 않는다. 2) pending이 없고 `position_owner` in `{CASE_B, CASE_C}`이면 `trading_phase = STOPPING`, 전략 평가 취소, `ForceSellAll`을 순서대로 요청하고 후속 결과를 G-06F/G-06R로 처리한다. 3) 둘 다 없으면 lower event와 Case B/C Context, pending 필드를 정리하고 `trading_phase = TERMINATED`, session 평가 취소, `StopTradingRuntime(reason = UPPER_BAND_SAFE_TERMINATION)`를 순서대로 요청한다. | branch 1·2: STOPPING, branch 3: LOGIC_TERMINATED |
+| G-07 | TRADE_MANAGEMENT의 임의 상태 | UPPER_BAND_TOUCHED | `realtime_price >= upper_band` | `UpperBandPolicy.RESUME_LOWER_WATCH`를 적용한다. 1) authoritative 포지션, pending 주문 또는 제출 전 pending intent가 있으면 상태·주문·타이머를 변경하지 않는다(no-op). 기존 Case 조건 검사와 주문 처리를 계속한다. 2) 모두 없으면 lower event와 Case B/C Context 및 pending 필드를 정리하고 `trading_phase = IDLE`, `CancelScheduledEvaluation(scope = lower-event)`를 적용한다. 세션·구독은 유지하고 주문·강제매도·취소·종료를 요청하지 않는다. | branch 1: 현재 상태 유지, branch 2: LOWER_TOUCH_WATCH |
 
+#### G-07 상단 접촉 후 하단 감시 연결 계약
 
+2026-09-17 변경: 상단 전략은 별도 매매 동작을 하지 않는 no-op이다. 기존
+`SAFE_TERMINATION` 정책을 대체하며 `running` 세션을 종료하지 않는다.
 
-#### G-07 상단 BB 안전 종료 계약
-
-G-07의 세 branch는 배타적이며 pending 주문 branch가 포지션 branch보다
-우선한다. 따라서 pending 주문과 `position_owner`가 동시에 있어도 즉시
-전량 매도하지 않고 취소·reconciliation으로 실제 fill과 잔여 수량을 먼저
-확정한다. `stop_after_reconciliation = True`는 조정 결과에 잔여 포지션이
-있으면 기존 STOP 계약의 전량 매도로 이어지고, 없으면 종료 후속 event를
-만든다는 뜻이다.
-
-이 정책은 상단 BB에서 새로운 매매 전략을 시작하지 않는다. 미구현
-상단 상태 머신으로의 인계나 no-op 대신, 이 표에 이미 정의된 STOPPING,
-reconciliation, runtime 종료 계약을 재사용한다.
+- 포지션·pending 주문·제출 전 주문 의도가 없으면 이전 lower event의 신호와
+  타이머를 정리하고 하단 대기로 복귀한다. 다음 접촉은 같은 30분봉 안에서도
+  G-02로 새 lower event를 만들고 Case B/C를 다시 활성화한다. B는 새 접촉의
+  `touch_candle_bbw < 0.02` 조건을 그대로 적용하고 C도 기존 진입 조건을 유지한다.
+- 포지션·주문 관리 중 상단 가격 입력은 일반 시장 갱신으로 전달하여 기존 Case의
+  익절·손절·추적·주문 결과 처리를 계속한다. 직접 전달된 UPPER_BAND_TOUCHED는
+  G-07의 상태·액션 변경 없는 결과를 반환한다. 상단 접촉 자체로 매도·취소하지 않는다.
+- 사용자 STOP의 G-05/G-06/G-06P/G-06F/G-06R은 변경하지 않는다.
+- 기존 지표 전송 ID `upper_safe_exit`/`UPPER_SAFE_EXIT`는 호환성을 위해 유지하지만
+  화면에는 ‘상단 밴드 접촉’으로 표시한다.
 
 
 ### 2.2 병렬 진입·포지션 소유권 Event-Action Table(Region 1)
@@ -252,7 +253,7 @@ reconciliation, runtime 종료 계약을 재사용한다.
 3. `realtime_pct_b >= 0.60` 5초 유지 시 `realtime_ema_slope > 0.08`의 5초 유지 여부로 Trend Hold/일반 익절 분기
 4. 일반 익절
 5. 시간 청산
-6. 공통 G-07의 `realtime_price >= upper_band` 상단 BB 안전 종료
+6. 상단 접촉 시 G-07의 세션 유지 정책 적용. 포지션 관리 중에는 위 Case C 조건 검사를 계속하고, 무포지션·미결 주문 없음 상태에서는 하단 감시로 복귀
 
 `realtime_ema_slope`는 현재가를 임시 30분봉 close로 넣어 계산한다. 동일 평가 주기에 여러 조건이 참이면 위 순서대로 하나의 EVENT만 발생시킨다.
 

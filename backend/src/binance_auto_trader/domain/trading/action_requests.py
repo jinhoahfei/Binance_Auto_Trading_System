@@ -236,7 +236,7 @@ class CancelPendingOrder:
 class ForceSellAll:
     """
     클래스 이름: ForceSellAll
-    기능: STOP 또는 상단 BB 안전 종료 절차에서 남은 포지션 전량 매도를 요청한다.
+    기능: STOP 절차에서 남은 포지션 전량 매도를 요청한다.
     작성 날짜: 2026/08/14
     """
 
