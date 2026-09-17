@@ -50,9 +50,9 @@
 
 현재 구현과 근거 문서를 기준으로 다음 불변 매핑을 잠근다.
 
-| REGIME | Trading registry | 지원 상태 | Registry start Guard | 상단 BB 정책 | 근거 |
+| REGIME | Trading registry | 지원 상태 | Registry start Guard | G-07 동작 요약(설정 필드 아님) | 근거 |
 |---|---|---|---|---|---|
-| `TYPE_0` | `LOWER_BB` 정확히 109개 transition | `SUPPORTED` | `READY` | `RESUME_LOWER_WATCH` | `regime_design.md` §9의 “기존 30m 횡보 로직”, `UI_Behavior.md` §3의 “Basic Iterative 횡보장 조건”, 현재 유일한 30m 구현인 하단 BB registry |
+| `TYPE_0` | `LOWER_BB` 정확히 109개 transition | `SUPPORTED` | `READY` | 노출 없으면 하단 감시 복귀, 주문·포지션 관리는 계속 | `regime_design.md` §9의 “기존 30m 횡보 로직”, `UI_Behavior.md` §3의 “Basic Iterative 횡보장 조건”, 현재 유일한 30m 구현인 하단 BB registry |
 | `TYPE_1` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 약상승 30m Event-Action Table/registry 없음 |
 | `TYPE_2` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 상위 gate 설명만 있고 강상승 30m Event-Action Table/registry 없음 |
 | `TYPE_3` | 없음 | `UNSUPPORTED` | `UNSUPPORTED_TRADING_LOGIC` | 없음 | 약하락 30m Event-Action Table/registry 없음 |
@@ -63,7 +63,7 @@
 달라지면 이 ADR을 대체하고 Communication 명세와 Event-Action Table을 먼저 변경한다.
 
 2026-09-17 사용자 결정으로 lower-BB registry의 `G-07` 정책을
-`UpperBandPolicy.RESUME_LOWER_WATCH`로 변경했다. 이는 기존 상단 접촉 안전 종료
+하단 감시 복귀로 변경했다. 이는 기존 상단 접촉 안전 종료
 정책을 대체하며 상단 전략 자체는 매매 동작 없는 no-op으로 유지한다.
 
 1. authoritative 포지션, pending 주문 또는 제출 전 pending intent가 있으면 상단
@@ -77,6 +77,11 @@
 
 상단에서 새로운 매매 전략을 시작하거나 주문·강제매도·취소·세션 종료를 요청하지
 않는다. `TYPE_0`의 registry coverage와 start Guard는 기존 `READY`를 유지한다.
+
+시장 접촉의 판단과 액션은 `global_transitions`의 G-02/G-03/G-07에 모은다.
+Controller는 원본 시장 평가를 전달하고 처리 시점의 Context를 준비하며 결과 액션을
+실행한다. 실행에 사용되지 않던 상단 정책 enum·configuration 필드는 제거했다.
+레지스트리는 지원 여부·시작 Guard·전이 목록만 표현하며 동작을 중복 설정하지 않는다.
 
 미지원 타입도 추천·표시·선택할 수는 있다. 다만 UI는 지원 상태를 함께 표시하고,
 `TradingController.fetchSelectedTradingLogic(...)`은 `TYPE_1`~`TYPE_4`에 인스턴스를
@@ -168,7 +173,7 @@ event를 전달한다. 인자 없는 호출이나 pending Context로 성공·실
 ## 4. 구현 및 검증 의무
 
 - [x] 다섯 domain/wire 값의 일대일 표가 확정되었다.
-- [x] `TYPE_0`은 `SUPPORTED/LOWER_BB/READY/RESUME_LOWER_WATCH`, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`/registry 없음/`UNSUPPORTED_TRADING_LOGIC`으로 고정되었다.
+- [x] `TYPE_0`은 `SUPPORTED/LOWER_BB/READY`, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`/registry 없음/`UNSUPPORTED_TRADING_LOGIC`으로 고정되었다. 상단 동작은 G-07에서 정의한다.
 - [x] lower-BB registry의 소속과 근거가 기록되었다.
 - [x] 두 STM의 canonical signature가 실제 구현과 일치한다.
 - [x] active session의 REGIME 변경 거부가 확정되었다.

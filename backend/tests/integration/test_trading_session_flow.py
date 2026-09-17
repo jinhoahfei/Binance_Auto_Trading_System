@@ -361,7 +361,7 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
 
         # 같은 source 재전달은 dedup되고 첫 event만 G-02를 거쳐 lower scope를 연다.
         self.assertIsNotNone(enqueued)
-        self.assertIs(enqueued.event_type, TradingEventType.LOWER_BAND_TOUCHED)
+        self.assertIs(enqueued.event_type, TradingEventType.MARKET_DATA_UPDATED)
         self.assertEqual(market, enqueued.market_evaluation)
         self.assertNotEqual(
             market,
@@ -378,7 +378,7 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
     ) -> None:
         """
         함수 이름: test_back_to_back_market_observations_preserve_queue_provenance()
-        기능: 처리 전 연속 시장 평가가 각 source version의 Context와 분류를 보존하는지 검증한다.
+        기능: 처리 전 연속 시장 평가가 각 source version의 Context와 STM 판단을 보존하는지 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/29
@@ -417,7 +417,7 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
 
         event_processor._event_processing_observer = record_processing_event
 
-        # 첫 version은 밴드 내부, 둘째 version은 하단 접촉으로 서로 다른 분류를 만든다.
+        # 첫 version은 밴드 내부, 둘째 version은 하단 접촉으로 서로 다른 STM 판단을 만든다.
         first_market = MarketEvaluationSnapshot(
             realtime_price=Decimal("110"),
             lower_band=Decimal("100"),
@@ -481,14 +481,14 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
             processed_events[0].market_version,
         )
 
-        # 둘째 process는 둘째 평가로 Context를 전진하고 하단 접촉을 실제 분류한다.
+        # 둘째 process도 원본 시장 관측을 전달하고 STM이 하단 전이를 결정한다.
         second_result = asyncio.run(controller.process_next_event())
         self.assertIsNotNone(second_result)
         self.assertEqual(second_market, controller.context.market)
         self.assertEqual(2, len(processed_events))
         self.assertIs(
             processed_events[1].event_type,
-            TradingEventType.LOWER_BAND_TOUCHED,
+            TradingEventType.MARKET_DATA_UPDATED,
         )
         self.assertEqual(second_market, processed_events[1].market_evaluation)
         self.assertEqual(
@@ -501,7 +501,7 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
         )
         self.assertIsNone(
             controller.context.pending_order
-        )  # 공개 시장 분류 검증은 어떤 주문 제출도 생성하지 않는다.
+        )  # 공개 시장 관측 검증은 어떤 주문 제출도 생성하지 않는다.
 
     def test_market_resync_does_not_auto_resume_after_pending_order_finishes(
         self,

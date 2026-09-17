@@ -103,6 +103,20 @@ def create_test_event(
     )
 
 
+def create_market_observation(market: MarketEvaluationSnapshot) -> TradingEvent:
+    """Controller가 처리 준비를 마친 시장 관측을 순수 STM 테스트에 제공한다."""
+    return TradingEvent(
+        event_type=TradingEventType.MARKET_DATA_UPDATED,
+        occurred_at=TEST_EVALUATION_TIME,
+        sequence_number=1,
+        priority=EventPriority.MARKET,
+        event_id="market:1:policy-test",
+        candle_id=market.current_30m_candle_id,
+        market_evaluation=market,
+        market_version=1,
+    )
+
+
 class StateConfigurationTests(unittest.TestCase):
     """
     클래스 이름: StateConfigurationTests

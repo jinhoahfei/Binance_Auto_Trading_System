@@ -1,0 +1,96 @@
+{
+  "baseline_commit": "3bc5f5541b915b1019ec198fb924aab5b866fea0",
+  "scenarios": 7,
+  "steps": 35,
+  "identical": true,
+  "captured_fields": [
+    "STM result (state, transitions, ordered actions, decision ID, context version)",
+    "full context",
+    "scheduled evaluations",
+    "scheduled order queries",
+    "fake submitted orders",
+    "UI transport snapshot"
+  ],
+  "normalization": "Session UUID fixed to 00000000-0000-0000-0000-000000000001; typed values serialized; input event type is tested separately.",
+  "baseline_sha256": "25478fde3c88dc1a6a782aee8da2f000c10a8992fd8f0f380733fc3164ab6d78",
+  "final_sha256": "25478fde3c88dc1a6a782aee8da2f000c10a8992fd8f0f380733fc3164ab6d78",
+  "scenario_results": [
+    {
+      "test": "test_case_b_conditions_continue_above_upper_band",
+      "stages": [
+        "entry-lower",
+        "b-signal",
+        "entry",
+        "upper-b-trend",
+        "final"
+      ],
+      "identical": true
+    },
+    {
+      "test": "test_case_c_conditions_continue_above_upper_band",
+      "stages": [
+        "entry-lower",
+        "entry",
+        "upper-c-trail",
+        "final"
+      ],
+      "identical": true
+    },
+    {
+      "test": "test_incident_upper_touch_then_repeated_lower_touches_keep_both_cases_running",
+      "stages": [
+        "incident-lower",
+        "incident-upper-0",
+        "repeated-upper-0",
+        "next-lower-0",
+        "incident-upper-1",
+        "repeated-upper-1",
+        "next-lower-1",
+        "final"
+      ],
+      "identical": true
+    },
+    {
+      "test": "test_upper_touch_clears_setup_timers_and_next_touch_rechecks_bandwidth",
+      "stages": [
+        "c-flush",
+        "upper-after-flush",
+        "wide-next-touch",
+        "final"
+      ],
+      "identical": true
+    },
+    {
+      "test": "test_upper_touch_discards_old_b_signal_before_next_lower_entry_watch",
+      "stages": [
+        "b-old-lower",
+        "b-old-signal",
+        "upper-after-b-signal",
+        "b-new-lower",
+        "pullback-without-new-signal",
+        "final"
+      ],
+      "identical": true
+    },
+    {
+      "test": "test_upper_touch_preserves_pending_buy_and_order_completion",
+      "stages": [
+        "entry-lower",
+        "b-signal",
+        "entry",
+        "upper-pending",
+        "final"
+      ],
+      "identical": true
+    },
+    {
+      "test": "test_user_stop_still_terminates_after_upper_return",
+      "stages": [
+        "lower-before-stop",
+        "upper-before-stop",
+        "final"
+      ],
+      "identical": true
+    }
+  ]
+}

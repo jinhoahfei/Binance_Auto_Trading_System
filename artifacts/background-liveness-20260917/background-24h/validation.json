@@ -1,0 +1,28 @@
+{
+  "status": "failed_or_incomplete",
+  "issues": [
+    "duration_incomplete"
+  ],
+  "phase": "hidden",
+  "elapsed_seconds": 0,
+  "continuous_24h_complete": false,
+  "formal_24h_complete": false,
+  "formal_20m_complete": false,
+  "occluded_samples": 1544,
+  "minimized_samples": 0,
+  "sample_count": 1545,
+  "max_heartbeat_age_ms": 5998,
+  "last_summary": {
+    "received_events": 23555,
+    "recoveries": 0,
+    "errors": 0,
+    "chart_live": true
+  },
+  "native_resources": {
+    "cpu_total_ms": 198030,
+    "peak_rss_bytes": 122322944,
+    "scope": "native_process_only"
+  },
+  "total_log_bytes": 9587663,
+  "classification": []
+}

@@ -43,16 +43,6 @@ class TradingRegistrySource(str, Enum):
     LOWER_BB = "LOWER_BB"
 
 
-class UpperBandPolicy(str, Enum):
-    """
-    클래스 이름: UpperBandPolicy
-    기능: 상단 BB 접촉 시 구현된 포지션 처리 정책을 정의한다.
-    작성 날짜: 2026/08/21
-    """
-
-    RESUME_LOWER_WATCH = "RESUME_LOWER_WATCH"
-
-
 @dataclass(frozen=True, slots=True)
 class TradingLogicConfiguration:
     """
@@ -66,7 +56,6 @@ class TradingLogicConfiguration:
     transition_source: TradingRegistrySource | None
     transition_ids: tuple[str, ...]
     start_guard: TradingLogicStartGuard
-    upper_band_policy: UpperBandPolicy | None
 
     def __post_init__(self) -> None:
         """
@@ -88,11 +77,6 @@ class TradingLogicConfiguration:
             TradingRegistrySource,
         ):
             raise TypeError("transition_source must be a TradingRegistrySource or None")
-        if self.upper_band_policy is not None and not isinstance(
-            self.upper_band_policy,
-            UpperBandPolicy,
-        ):
-            raise TypeError("upper_band_policy must be an UpperBandPolicy or None")
 
         # frozen configuration 내부에도 mutable list가 들어가지 않도록 tuple만 허용한다.
         if not isinstance(self.transition_ids, tuple) or any(
@@ -121,10 +105,6 @@ class TradingLogicConfiguration:
         if self.start_guard is not TradingLogicStartGuard.UNSUPPORTED_TRADING_LOGIC:
             raise ValueError(
                 "Unsupported trading logic requires the UNSUPPORTED_TRADING_LOGIC guard"
-            )
-        if self.upper_band_policy is not None:
-            raise ValueError(
-                "Unsupported trading logic cannot expose an upper-band policy"
             )
 
 
@@ -158,7 +138,6 @@ TRADING_LOGIC_CONFIGURATIONS: Final[tuple[TradingLogicConfiguration, ...]] = (
         transition_source=TradingRegistrySource.LOWER_BB,
         transition_ids=TRANSITION_IDS,
         start_guard=TradingLogicStartGuard.READY,
-        upper_band_policy=UpperBandPolicy.RESUME_LOWER_WATCH,
     ),
     *(
         TradingLogicConfiguration(
@@ -167,7 +146,6 @@ TRADING_LOGIC_CONFIGURATIONS: Final[tuple[TradingLogicConfiguration, ...]] = (
             transition_source=None,
             transition_ids=(),
             start_guard=TradingLogicStartGuard.UNSUPPORTED_TRADING_LOGIC,
-            upper_band_policy=None,
         )
         for regime_type in (
             RegimeType.TYPE_1,

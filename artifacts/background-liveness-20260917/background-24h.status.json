@@ -1,9 +1,39 @@
 {
-  "status": "running",
+  "status": "failed_or_incomplete",
   "started_at": "2026-09-16T15:29:13.112713+00:00",
   "target_seconds": 86400,
   "phase": "hidden",
   "output": "/Users/oscar/Desktop/Binance_Auto/artifacts/background-liveness-20260917/background-24h",
   "orders_enabled": false,
-  "process_id": 38134
+  "process_id": 38134,
+  "exit_code": 0,
+  "validation": {
+    "status": "failed_or_incomplete",
+    "issues": [
+      "duration_incomplete"
+    ],
+    "phase": "hidden",
+    "elapsed_seconds": 0,
+    "continuous_24h_complete": false,
+    "formal_24h_complete": false,
+    "formal_20m_complete": false,
+    "occluded_samples": 1544,
+    "minimized_samples": 0,
+    "sample_count": 1545,
+    "max_heartbeat_age_ms": 5998,
+    "last_summary": {
+      "received_events": 23555,
+      "recoveries": 0,
+      "errors": 0,
+      "chart_live": true
+    },
+    "native_resources": {
+      "cpu_total_ms": 198030,
+      "peak_rss_bytes": 122322944,
+      "scope": "native_process_only"
+    },
+    "total_log_bytes": 9587663,
+    "classification": []
+  },
+  "finished_at": "2026-09-17T04:37:31.699075+00:00"
 }

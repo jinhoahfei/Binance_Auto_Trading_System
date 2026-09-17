@@ -446,6 +446,10 @@ class RuntimeLoggingFlowTests(unittest.TestCase):
                     else:
                         self.assertTrue(any("G-07" in record["details"].get("transition_ids", []) for record in records))
                         self.assertIn("UPPER_BAND_RETURN_TO_LOWER_WATCH", writer.path.read_text())
+                        market_inputs = [record for record in records if record["event"] == "evaluation_started"
+                                         and (record["details"].get("event_id") or "").startswith("market:")]
+                        self.assertEqual(2, len(market_inputs))
+                        self.assertEqual({"MARKET_DATA_UPDATED"}, {record["details"]["event_type"] for record in market_inputs})
                 finally:
                     fixture.controller.close_session_resources()
 

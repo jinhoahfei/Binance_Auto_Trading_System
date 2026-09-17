@@ -3680,9 +3680,8 @@ class TradingController:
 
             # Queue 대기 중 다른 Kline이 도착해도 source 평가를 잃지 않도록 event 자체에 보존한다.
             evaluation_time = self._clock()
-            event_type = self._select_market_event_type(market)
             event = TradingEvent(
-                event_type=event_type,
+                event_type=TradingEventType.MARKET_DATA_UPDATED,
                 occurred_at=evaluation_time,
                 priority=EventPriority.MARKET,
                 event_id=f"market:{market_version}:{source_event_id}",
@@ -3699,9 +3698,9 @@ class TradingController:
     ) -> TradingEvent:
         """
         함수 이름: _prepare_market_event_context()
-        기능: claimed market event의 원본 평가를 Context에 적용하고 처리 시점 runtime으로 재분류한다.
+        기능: claimed market event의 원본 평가와 처리 시점 runtime의 경과시간을 Context에 적용한다.
         인자: event -> 직렬 queue가 꺼낸 immutable TradingEvent
-        반환값: same-source Context와 일치하도록 분류·scope provenance를 갱신한 event
+        반환값: same-source Context와 일치하도록 scope provenance를 갱신한 시장 관측 event
         작성 날짜: 2026/08/29
         """
         if (self._preparation_retry_intent is not None
@@ -3739,10 +3738,9 @@ class TradingController:
             event.market_evaluation,
             event.occurred_at,
         )
-        event_type = self._select_market_event_type(enriched_market)
         prepared_event = replace(
             event,
-            event_type=event_type,
+            event_type=TradingEventType.MARKET_DATA_UPDATED,
             lower_event_id=self._context.runtime.lower_event_id,
             candle_id=enriched_market.current_30m_candle_id,
             market_evaluation=enriched_market,
@@ -3831,51 +3829,6 @@ class TradingController:
             )
 
         return elapsed
-
-    def _select_market_event_type(
-        self,
-        market: MarketEvaluationSnapshot,
-    ) -> TradingEventType:
-        """
-        함수 이름: _select_market_event_type()
-        기능: 현재 session scope와 밴드 사실에서 우선순위가 가장 높은 공개 시장 event를 선택한다.
-        인자: market -> 이미 Context에 적용한 same-version 시장 평가 snapshot
-        반환값: upper, 최초·신규 lower 또는 일반 market update 유형
-        작성 날짜: 2026/08/24
-        """
-        # 포지션·주문 관리 중에는 상단 위에서도 기존 Case의 조건 검사를 계속 전달한다.
-        runtime = self._context.runtime
-        if (
-            market.upper_band > Decimal("0")
-            and market.realtime_price >= market.upper_band
-        ):
-            if (self._context.position.is_open
-                    or runtime.pending_order_id is not None
-                    or runtime.pending_intent_id is not None):
-                return TradingEventType.MARKET_DATA_UPDATED
-            return TradingEventType.UPPER_BAND_TOUCHED
-
-        # 봉 확정을 기다리지 않고 현재가와 동일 평가의 실시간 30분봉 하단 Band를 비교한다.
-        lower_touched = (
-            market.lower_band > Decimal("0")
-            and market.realtime_price <= market.lower_band
-        )
-        if not lower_touched:
-            return TradingEventType.MARKET_DATA_UPDATED
-
-        # 새 scope를 열 수 있을 때만 G-03으로 분류하고, 보유·잠금 중 확정봉 판단은 계속 전달한다.
-        if runtime.lower_event_id is None:
-            return TradingEventType.LOWER_BAND_TOUCHED
-        if (
-            runtime.position_owner is None
-            and runtime.pending_order_id is None
-            and (not runtime.case_c_consumed_for_event or runtime.case_c_recovery_confirmed)
-            and market.current_30m_candle_id is not None
-            and market.current_30m_candle_id != runtime.touch_candle_id
-        ):
-            return TradingEventType.NEW_30M_LOWER_BAND_TOUCHED
-
-        return TradingEventType.MARKET_DATA_UPDATED  # 같은 lower scope의 반복 tick은 새 event를 열지 않는다.
 
     async def process_next_event(self) -> TradingSTMResult | None:
         """

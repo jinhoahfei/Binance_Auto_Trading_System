@@ -23,7 +23,6 @@ from binance_auto_trader.domain.trading.logic_registry import (
     TradingLogicSupportStatus,
     TradingRegistrySource,
     UnsupportedTradingLogicError,
-    UpperBandPolicy,
     get_trading_logic_configuration,
     list_trading_logic_configurations,
 )
@@ -62,10 +61,10 @@ class TradingLogicRegistryTests(unittest.TestCase):
             len({id(configuration) for configuration in configurations}),
         )
 
-    def test_type_zero_uses_exact_lower_bb_registry_and_resume_lower_watch(self) -> None:
+    def test_type_zero_uses_exact_lower_bb_registry(self) -> None:
         """
-        함수 이름: test_type_zero_uses_exact_lower_bb_registry_and_resume_lower_watch()
-        기능: TYPE_0이 109개 lower-BB ID와 상단 접촉 후 하단 감시 복귀 정책을 사용하는지 검증한다.
+        함수 이름: test_type_zero_uses_exact_lower_bb_registry()
+        기능: TYPE_0의 109개 lower-BB ID와 시작 허용 계약을 검증한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/21
@@ -81,10 +80,6 @@ class TradingLogicRegistryTests(unittest.TestCase):
         self.assertEqual(109, len(configuration.transition_ids))
         self.assertEqual(TRANSITION_IDS, configuration.transition_ids)
         self.assertIs(TradingLogicStartGuard.READY, configuration.start_guard)
-        self.assertIs(
-            UpperBandPolicy.RESUME_LOWER_WATCH,
-            configuration.upper_band_policy,
-        )
 
     def test_unsupported_regimes_expose_no_registry_or_fallback(self) -> None:
         """
@@ -108,7 +103,6 @@ class TradingLogicRegistryTests(unittest.TestCase):
                     TradingLogicStartGuard.UNSUPPORTED_TRADING_LOGIC,
                     configuration.start_guard,
                 )
-                self.assertIsNone(configuration.upper_band_policy)
 
                 with self.assertRaises(UnsupportedTradingLogicError) as raised:
                     TradingSTM.get_stm_instance(regime_type)
@@ -136,9 +130,9 @@ class TradingLogicRegistryTests(unittest.TestCase):
                 TradingLogicStartGuard.UNSUPPORTED_TRADING_LOGIC
             )
 
-    def test_same_snapshot_replays_to_same_safe_termination_result(self) -> None:
+    def test_same_snapshot_replays_to_same_upper_return_result(self) -> None:
         """
-        함수 이름: test_same_snapshot_replays_to_same_safe_termination_result()
+        함수 이름: test_same_snapshot_replays_to_same_upper_return_result()
         기능: 동일한 TYPE_0 상태·이벤트·Context가 결정론적으로 같은 G-07 결과를 내는지 검증한다.
         인자: 없음
         반환값: 없음

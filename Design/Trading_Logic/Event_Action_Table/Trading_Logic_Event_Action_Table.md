@@ -15,6 +15,15 @@
 
 상태 전이 자체는 STM의 책임이므로 Action 열에 반복해서 적지 않는다. `None` 또는 `없음`은 Controller가 수행할 Action이 없다는 뜻이다.
 
+2026-09-17 시장 관측 경계: Controller는 원본 평가·시장 version·발생 시각을 보존한
+`MARKET_DATA_UPDATED`만 적재한다. 처리 직전에 원본 평가와 최신 실행 상태의 경과시간,
+현재 lower scope를 연결하고, 접촉 정책은 STM의 `global_transitions`에서 결정한다.
+이곳에서 양수 밴드·현재가 접촉, G-02의 최초 scope, G-03의 새 봉·소유권·pending·C 복구
+조건과 G-07의 포지션·주문 보호를 한 번만 판단한다. 적용할 전역 전이가 없으면 기존
+Case 평가로 이어진다. 스냅샷 없는 timer·retry는 새로운 접촉으로 해석하지 않으며,
+명시적 접촉 EVENT의 기존 Guard·동작은 같은 전이 생성 코드를 통해 유지한다.
+입력 로그는 `MARKET_DATA_UPDATED`, 판단 추적은 기존 transition ID를 사용한다.
+
 ### 0.2 Action 요청 표기
 
 | Action 요청 | TradingController의 수행 책임 |
@@ -177,7 +186,7 @@ Context와 STM 상태가 잠시 어긋나는 것을 막기 위해 `CASE_*_POSITI
 | G-06P | LOGIC_ENABLED의 임의 상태 | 매매 중지[pending 주문 존재] | `pending_order_id != None` | 1) 신규 전략 Action을 차단하고 `trading_phase = STOPPING`으로 변경한다. 2) pending 진입 주문은 취소·조회하고, pending 청산 주문은 terminal 결과까지 조회·조정한다. 3) 실제 fill을 Position·이력에 먼저 반영한다. 4) reconciliation 후 잔여 포지션이 있으면 전량 매도하고, 없으면 FORCE_SELL_FINISHED EVENT를 queue에 넣는다. | STOPPING |
 | G-06F | STOPPING | FORCE_SELL_FINISHED | `position_owner == None` && `pending_order_id == None` && 강제 매도 체결·저장 완료 | 1) pending 및 event-local Context를 정리한다. 2) timer·구독·신규 event 수신을 종료한다. 3) `trading_phase = TERMINATED`로 변경한다. | LOGIC_TERMINATED |
 | G-06R | STOPPING | FORCE_SELL_FAILED | `position_owner` in `{CASE_B, CASE_C}` && 전량 매도가 terminal 미체결로 확정됨 | retry/backoff 정책에 따라 동일 포지션의 전량 매도를 재시도한다. 상태 불명 또는 실제 fill 존재 시 신규 주문을 만들지 않고 reconciliation을 먼저 수행한다. | STOPPING |
-| G-07 | TRADE_MANAGEMENT의 임의 상태 | UPPER_BAND_TOUCHED | `realtime_price >= upper_band` | `UpperBandPolicy.RESUME_LOWER_WATCH`를 적용한다. 1) authoritative 포지션, pending 주문 또는 제출 전 pending intent가 있으면 상태·주문·타이머를 변경하지 않는다(no-op). 기존 Case 조건 검사와 주문 처리를 계속한다. 2) 모두 없으면 lower event와 Case B/C Context 및 pending 필드를 정리하고 `trading_phase = IDLE`, `CancelScheduledEvaluation(scope = lower-event)`를 적용한다. 세션·구독은 유지하고 주문·강제매도·취소·종료를 요청하지 않는다. | branch 1: 현재 상태 유지, branch 2: LOWER_TOUCH_WATCH |
+| G-07 | TRADE_MANAGEMENT의 임의 상태 | 상단 접촉 시장 관측 또는 UPPER_BAND_TOUCHED | `realtime_price >= upper_band` | 1) authoritative 포지션, pending 주문 또는 제출 전 pending intent가 있으면 실제 시장 관측은 G-07을 적용하지 않고 기존 Case 평가를 계속한다. 명시적 상단 EVENT는 상태·액션 변경 없는 G-07을 반환한다. 2) 모두 없으면 lower event와 Case B/C Context 및 pending 필드를 정리하고 `trading_phase = IDLE`, `CancelScheduledEvaluation(scope = lower-event)`를 적용한다. 세션·구독은 유지하고 주문·강제매도·취소·종료를 요청하지 않는다. | branch 1: 기존 Case 처리 계속, branch 2: LOWER_TOUCH_WATCH |
 
 #### G-07 상단 접촉 후 하단 감시 연결 계약
 
@@ -188,7 +197,7 @@ Context와 STM 상태가 잠시 어긋나는 것을 막기 위해 `CASE_*_POSITI
   타이머를 정리하고 하단 대기로 복귀한다. 다음 접촉은 같은 30분봉 안에서도
   G-02로 새 lower event를 만들고 Case B/C를 다시 활성화한다. B는 새 접촉의
   `touch_candle_bbw < 0.02` 조건을 그대로 적용하고 C도 기존 진입 조건을 유지한다.
-- 포지션·주문 관리 중 상단 가격 입력은 일반 시장 갱신으로 전달하여 기존 Case의
+- 포지션·주문 관리 중 상단 가격 입력은 STM이 G-07을 건너뛰어 기존 Case의
   익절·손절·추적·주문 결과 처리를 계속한다. 직접 전달된 UPPER_BAND_TOUCHED는
   G-07의 상태·액션 변경 없는 결과를 반환한다. 상단 접촉 자체로 매도·취소하지 않는다.
 - 사용자 STOP의 G-05/G-06/G-06P/G-06F/G-06R은 변경하지 않는다.

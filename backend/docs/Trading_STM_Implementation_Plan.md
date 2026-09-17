@@ -76,7 +76,7 @@ Communication Diagram 8.5의 “자동매매 상태 및 수행 action을 결정�
 | Binance REST/WebSocket 호출 | X | O |
 | 주문 생성·조회·재조정 | X | O |
 | 체결을 Position과 거래 이력에 반영 | X | O |
-| 상단 BB 안전 종료 Action 수행 | 종료 branch와 요청 결정 | O |
+| 상단 BB 접촉 후 하단 감시 복귀 Action 수행 | 포지션·주문 보호와 복귀 요청 결정 | O |
 | transition/action 실행 trace 기록 | 결과 데이터 제공 | O |
 | 기술 오류, timeout, rate limit 처리 | 결과 이벤트에 대한 정책 전이 | O |
 
@@ -270,7 +270,7 @@ STM은 서로 다른 수신 시점의 값을 개별 조회하지 않는다. 그�
 | `CancelScheduledEvaluation` | state exit 시 더 이상 유효하지 않은 timer를 취소한다. |
 | `SubmitOrder` | 전략, side, 청산 사유, 수량 정책을 가진 주문 의도를 실행한다. |
 | `CancelPendingOrder` | 경쟁 전략, 중지 또는 안전 종료로 무효가 된 미제출·취소 가능 주문을 취소한다. |
-| `ForceSellAll` | 사용자 중지 또는 상단 BB 안전 종료의 확정 포지션 전량 매도 흐름을 실행한다. |
+| `ForceSellAll` | 사용자 중지의 확정 포지션 전량 매도 흐름을 실행한다. 상단 접촉은 요청하지 않는다. |
 | `StopTradingRuntime` | 구독·timer·신규 이벤트 수신을 안전하게 종료한다. |
 | `ReconcileOrder` | 상태 불명·부분 체결·중지 중 pending 주문을 같은 order ID로 조회하고 실제 fill과 잔여 수량을 일치시킨다. |
 
@@ -363,7 +363,7 @@ Event-Action Table은 본 계획에 맞춰 수정되었으며 각 행은 이미 
 | `G-05` | 무포지션·무주문 중지 전이 | timer/구독 정리와 runtime 종료 |
 | `G-06`, `G-06P` | 포지션 보유 또는 pending 주문 존재 시 `STOPPING` 전이 | pending 주문 reconciliation, 잔여 포지션 전량 매도 |
 | `G-06F`, `G-06R` | 강제 매도 완료/실패 피드백 전이 | 완료 시 runtime 종료, 실패 시 idempotent retry/reconciliation |
-| `G-07` | `realtime_price >= upper_band`의 `SAFE_TERMINATION` branch 선택 | pending이면 취소·같은 ID reconciliation을 요청하고 `STOPPING`을 유지하며 즉시 전량 매도를 금지, pending 없이 포지션이면 전략 평가 취소·전량 매도, 둘 다 없으면 lower/Case Context 정리·runtime 즉시 종료 |
+| `G-07` | 상단 접촉 시 주문·포지션 관리 보존 또는 하단 감시 복귀 결정 | 노출이 없을 때만 lower/Case Context와 lower-event timer를 정리하고 `IDLE` 적용, session 유지 |
 | `O-01` | ownership 초기 상태 선택 | owner 초기값 적용 |
 | `O-02`, `O-06` | 매수 체결 피드백과 포지션 관리 전이 | 포지션 조건 검사 event 등록 |
 | `O-03`, `O-05`, `O-07`, `O-09` | 최초/재시도 매수 실패 피드백 | retry/backoff에 따른 재매수 event 예약 |
@@ -466,27 +466,28 @@ sequenceDiagram
 - pending 주문이 있는 중지는 G-06P에서 pending 주문을 먼저 취소·조회·reconciliation한 뒤 잔여 포지션을 전량 매도한다.
 - `FORCE_SELL_FINISHED`는 G-06F에서만 `LOGIC_TERMINATED`로 전이한다. G-06R은 terminal 미체결의 retry/reconciliation을 담당한다.
 
-### 9.4 G-07 상단 BB 안전 종료 흐름
+### 9.4 시장 관측과 상단 접촉 후 하단 감시 복귀
 
-`TRADE_MANAGEMENT`에서 `UPPER_BAND_TOUCHED`가 도착하고 `realtime_price >=
-upper_band`이면 G-07이 다음 세 branch 중 하나만 선택한다.
+2026-09-17 현재 계약은 상단 접촉 안전 종료 정책을 대체한다.
+Controller는 시장 평가를 `MARKET_DATA_UPDATED`로 적재하고 큐에서 꺼낼 때
+원본 스냅샷·발생 시각·시장 version을 보존한 채 최신 실행 상태의 경과시간과
+lower scope를 연결한다. 분류 함수를 두지 않고, STM의 `global_transitions`가
+G-02/G-03/G-07의 접촉 조건·우선순위·후속 액션을 함께 결정한다.
 
-1. pending 주문이 있으면 포지션 유무와 관계없이 가장 먼저 `STOPPING`으로
-   전이한다. `trading_phase = STOPPING`을 적용하고 reason
-   `UPPER_BAND_SAFE_TERMINATION`으로 취소한 뒤, 같은 주문 ID를
-   `stop_after_reconciliation = True`로 조정한다. 취소·조정 전에
-   `ForceSellAll`을 요청하지 않는다.
-2. pending 주문이 없고 확정 `position_owner`가 있으면 `STOPPING`으로
-   전이한다. 전략 범위의 예약 평가를 취소하고 `ForceSellAll`을
-   요청하며, 후속 완료·실패는 기존 G-06F/G-06R을 재사용한다.
-3. pending 주문과 포지션이 모두 없으면 `LOGIC_TERMINATED`로 즉시
-   전이한다. lower event와 Case B/C Context, pending 필드를 정리하고
-   `trading_phase = TERMINATED`를 적용한 뒤 session 평가와 runtime을
-   종료한다.
+1. 실제 시장 관측은 양수 밴드와 현재가를 비교한다. 상단 접촉이 우선하며,
+   `TRADE_MANAGEMENT`에서 실제 포지션·pending 주문·제출 전 intent가 모두
+   없으면 G-07이 lower event·Case Context·lower-event timer를 정리하고
+   `LOWER_TOUCH_WATCH`, `trading_phase = IDLE`로 복귀한다. 세션은 유지한다.
+2. 주문·포지션 관리 중인 상단 관측은 G-07이 소비하지 않고 기존 Case 평가로
+   이어진다. 직접 전달된 `UPPER_BAND_TOUCHED`는 기존 무액션 G-07을 유지한다.
+3. 첫 하단 접촉은 G-02, 기존 scope의 새 봉 접촉은 봉 식별자·소유권·pending·C
+   복구 조건을 통과한 경우에만 G-03으로 처리한다. 전이가 없으면 Case 평가를 계속한다.
+4. 스냅샷 없는 timer·retry는 새 시장 접촉으로 해석하지 않는다. 명시적 접촉
+   event의 기존 Guard와 액션은 같은 전이 생성 코드를 재사용한다.
 
-이 흐름은 새로운 상단 매매 전략이 아니다. 기존 STOPPING,
-reconciliation, force-sell, runtime cleanup 계약을 재사용하는
-`UpperBandPolicy.SAFE_TERMINATION`이다.
+입력 로그 유형은 `MARKET_DATA_UPDATED`, 판단 근거는 기존 transition ID로
+남긴다. 미사용 상단 정책 enum·configuration 필드는 제거하며 UI/API·저장 형식과
+사용자 STOP의 청산·종료 계약은 유지한다.
 
 ### 9.5 주문 불변식
 
@@ -505,7 +506,7 @@ Communication Diagram 8.5의 operation은 다음과 같이 구체화한다.
 
 | 기존 Operation | 구현 방침 |
 |---|---|
-| `getSTMInstance(regimeType)` | 불변 REGIME coverage registry를 조회한다. `TYPE_0`만 정확히 109개 lower-BB transition과 `SAFE_TERMINATION`을 선택한 session 전용 STM을 생성하고, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. 인자 생략이나 fallback은 금지한다. |
+| `getSTMInstance(regimeType)` | 불변 REGIME coverage registry를 조회한다. `TYPE_0`만 정확히 109개 lower-BB transition을 사용하는 session 전용 STM을 생성하고, `TYPE_1`~`TYPE_4`는 `UNSUPPORTED_TRADING_LOGIC`으로 거부한다. 인자 생략이나 fallback은 금지한다. |
 | `run(context)` | 초기 이벤트를 한 번 처리하는 얇은 진입점이다. event loop나 장기 실행 loop를 STM 내부에서 시작하지 않는다. |
 | `handle(event)` | hidden mutable Context를 사용하게 되므로 core API로 사용하지 않는다. 호환 wrapper가 필요하면 Controller가 명시적 Context view를 붙여 canonical method를 호출한다. |
 | `handle(event, context)` | 유일한 canonical decision API로 구현한다. 실제 매개변수는 불변 `TradingContextView`이다. |
@@ -558,7 +559,7 @@ Event-Action Table은 현재가를 진행 중인 30분봉의 임시 close로 넣
 
 우선순위는 transition 등록 순서에 우연히 의존하지 않고 명시적인 정수 또는 ordered tuple로 정의한다.
 
-- Case B: 비상 손절 → 일반 손절 → Trend Hold 분기 → 일반 익절 → 시간 청산 → 상단 BB 안전 종료
+- Case B: 비상 손절 → 일반 손절 → Trend Hold 분기 → 일반 익절 → 시간 청산. 상단 접촉 중에도 이 포지션 조건 평가를 유지한다.
 - Case C 익절권 전: 익절권 진입 → slope 손절 → 시간 청산
 - Case C 익절권 후: TP fallback → 1분봉 EMA 비교 → 시간 청산
 - Case C setup: `%B >= 0.25` 종료 → flush 갱신 → timer 재시작 → 회복 매수/비매수 → 감시 재시도
@@ -794,8 +795,8 @@ Fake Gateway, fake clock, in-memory repository를 사용해 다음을 검증한�
 |---|---|
 | 주문 retry 정책 | ADR-002에서 같은 주문 조회 4회 `1/2/4/8초 ±20%`, 일반 terminal zero-fill 신규 제출 최대 4회, force-sell 고정 3초 최대 4회로 확정했다. |
 | 부분 체결 잔여 수량 | fill delta를 먼저 반영한다. terminal partial BUY는 자동 top-up하지 않고 실제 수량으로 진입을 확정하며, SELL/force-sell은 이전 주문 terminal 확인 뒤 잔여 Position만 같은 exit intent로 정리한다. |
-| REGIME coverage registry | `TYPE_0`은 `SUPPORTED`, `LOWER_BB` 정확히 109개 transition, start Guard `READY`, `UpperBandPolicy.SAFE_TERMINATION`으로 고정한다. `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`, registry 없음, `UNSUPPORTED_TRADING_LOGIC`이다. |
-| G-07 상단 BB 계약 | pending 주문 취소·조정, 확정 포지션 전량 매도, 무주문·무포지션 즉시 종료의 세 branch로 완결한다. 새 상단 전략이나 fallback은 없다. |
+| REGIME coverage registry | `TYPE_0`은 `SUPPORTED`, `LOWER_BB` 정확히 109개 transition, start Guard `READY`이다. 상단 정책 설정은 두지 않는다. `TYPE_1`~`TYPE_4`는 `UNSUPPORTED`, registry 없음, `UNSUPPORTED_TRADING_LOGIC`이다. |
+| G-07 상단 BB 계약 | 무포지션·무주문·무intent이면 기존 lower event를 정리하고 하단 감시로 복귀한다. 주문·포지션 관리는 계속하며 상단 접촉으로 세션을 종료하지 않는다. |
 | UI/start 경계 | 미지원 REGIME의 추천·표시·선택은 허용하고 start만 차단한다. `READY`는 domain registry Guard이며 Phase 7에서는 `fake` mode만 `command_enabled = true`, `disabled`·`testnet`·`live`는 fail closed다. |
 | versioned application Operation | selection/start/stop/split은 `command_id`와 `expected_version`을 받고 각각 `TradingLogicSelectionResult`, `TradingSessionResult`, `SplitRatioResult`를 반환한다. 같은 ID·payload는 최초 성공 결과를 재사용하고 다른 payload의 ID 재사용은 거부한다. |
 | stop 재호출 | `RUNNING` 세션의 최초 stop만 `STOP_CONFIRMED`를 먼저 전달한다. 이미 `STOPPING`, `RECONCILIATION_REQUIRED`, `TERMINATED`이면 새 STM Action 없는 성공 no-op을 반환한다. |
@@ -821,7 +822,7 @@ G-07 안전 종료 계약으로 닫혔다. 이 결정은 `TradingController`와
 
 - 완료: Event-Action Table의 Action 책임 분리, 주문 2단계 EVENT, STOPPING과 109개 transition ID를 반영했다.
 - 완료: ADR-002에서 retry, 부분 체결 잔여 수량, cancel과 restart 복구 정책을 확정했다.
-- 완료: Phase 0에서 상단 BB gap을 명시적 gate로 분리했고, 통합 roadmap Phase 6에서 G-07 `SAFE_TERMINATION`과 REGIME coverage registry로 해소했다.
+- 완료: Phase 6에서 G-07과 REGIME coverage registry를 구현했다. G-07은 2026-09-17 하단 감시 복귀로 변경했으며, 접촉 판단은 STM으로 통합했다.
 - 완료: 109개 transition ID를 `transitions/catalog.py`의 machine-readable source 목록으로 고정했다.
 - 완료: Event, Context field, Action request catalog와 enum 이름을 현재 source와 test로 고정했다.
 - 완료: Communication Case 2 메시지 `14`와 클래스 8.5의 concrete outcome signature를 동기화했다.
@@ -869,7 +870,7 @@ G-07 안전 종료 계약으로 닫혔다. 이 결정은 `TradingController`와
 
 ### Phase 7 — 중지·상단 안전 종료 Action·복구
 
-- STOP과 G-07이 반환한 상단 BB 안전 종료 Action 실행, process restart 후 open order reconciliation을 구현한다.
+- STOP의 청산·종료와 G-07의 하단 감시 복귀 Action 실행, process restart 후 open order reconciliation을 구현한다.
 - timer와 구독 cleanup, 중복 event 억제를 검증한다.
 
 ### Phase 8 — 전체 추적성과 simulation
@@ -888,7 +889,7 @@ G-07 안전 종료 계약으로 닫혔다. 이 결정은 `TradingController`와
 - 모든 retry는 event queue와 scheduler를 통하며 재귀·busy loop가 없다.
 - 같은 event trace를 재생하면 같은 transition과 Action 요청이 나온다.
 - 주문 상태 불명, 부분 체결, 저장 실패 후 재시작에서도 중복 주문 없이 reconciliation할 수 있다.
-- 중지 및 상단 BB 안전 종료 중 신규 하단 BB 진입이 발생하지 않는다.
+- 사용자 중지 중 신규 하단 BB 진입이 발생하지 않는다. 상단 접촉 뒤에는 세션을 유지하고 다음 하단 접촉을 감시한다.
 - 다섯 REGIME configuration이 canonical 순서로 고정되고 `TYPE_0`만 109개 transition을 선택하며 미지원 타입의 fallback이 없다.
 - transition trace만으로 어떤 문서 ID, 상태, Guard, Action, 주문 결과가 사용되었는지 역추적할 수 있다.
 

@@ -1,6 +1,18 @@
 # 두 Event-action table의 구현과 Region 실행 구조 설명
 
-2026-09-11 작업 폴더의 실제 소스 기준으로 작성했습니다. 설명을 위해 기존 코드를 읽고 관련 테스트를 실행했으며, 매매 구현은 수정하지 않았습니다. 아래 설명은 교수님께 프로젝트 구조를 발표하는 말투로 구성했습니다. 마지막에는 두 표의 **122개 ID 전체에 대한 소스 위치 색인**을 붙였습니다.
+최초 작성 기준은 2026-09-11이며, **2026-09-17 현재 작업 폴더의 코드로 내용·발췌·소스 위치를 재검토하여 갱신했습니다.** 파일명은 기존 참조를 유지하기 위해 그대로 둡니다. 아래 설명은 교수님께 프로젝트 구조를 발표하는 말투로 구성했습니다. 마지막에는 두 표의 **122개 ID 전체에 대한 소스 위치 색인**을 붙였습니다.
+
+이번 갱신에서 바로잡은 차이는 다음과 같습니다.
+
+| 이전 코드·설명 | 현재 구현 |
+|---|---|
+| 상단 BB 접촉을 안전 종료로 설명 | 포지션·주문·준비 중 의도가 없으면 하단 감시로 복귀하고 세션을 유지합니다. 주문·포지션 관리 중이면 기존 Case 평가를 계속합니다. |
+| Controller가 접촉 이벤트를 선택하고 큐 처리 때 재분류 | Controller는 원본 시장 관측을 `MARKET_DATA_UPDATED`로 전달하고 Context를 준비합니다. G-02/G-03/G-07의 접촉 판단은 STM 전역 전이 구현에 있습니다. |
+| 상단 정책을 레지스트리 설정으로도 표현 | 실행에 사용되지 않던 상단 정책 enum·필드는 제거했습니다. 레지스트리는 지원 여부·시작 Guard·전이 목록을 유지합니다. |
+| 주문 실패 설명이 거래소 제출 이후에 집중 | 제출 전 준비 재시도와 `ORDER_PREPARATION_EXPIRED`의 O-03/O-07 복귀 경로도 설명합니다. 이 경로는 이번 접촉 판단 리팩터링에서 새로 만든 기능은 아닙니다. |
+| 작성 당시 함수·전이 줄 번호 | 현재 함수 선언과 전이 ID 리터럴 위치를 다시 대조했습니다. |
+
+문제점·수정 사항·장점과 상단→하단 실행 사례는 별도 [시장 이벤트 판단 리팩터링 설명](/Users/oscar/Desktop/Binance_Auto/Design/Trading_Logic/Event_Action_Table/STM_Market_Event_Policy_Refactoring_Explanation_2026-09-17.md)에 자세히 정리했습니다. 이 문서는 두 STM과 Region 구조 전체를 설명하는 역할을 유지합니다.
 
 교수님, 이 프로젝트는 **4시간봉으로 시장 유형을 추천하는 STM**과 **선택된 유형에 따라 진입·보유·청산을 판단하는 TradingSTM**을 분리했습니다. 두 STM 모두 “무엇을 해야 하는가”를 결정하고, Controller가 실제 데이터 변경과 주문을 수행하도록 구성했습니다. TradingSTM 안에서는 포지션 관리, Case B 신호, Case C 신호를 세 Region으로 나누었습니다. 세 영역은 상태를 동시에 유지하면서 같은 이벤트에 반응하지만, 실제 판단과 실행 순서는 하나의 직렬 처리 흐름으로 제어합니다.
 
@@ -66,7 +78,7 @@
 
 | 표 ID 묶음 | 파일 | 담당하는 판단 |
 |---|---|---|
-| G-01~07 및 G-06P/F/R | [global_transitions.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:1) | 시작, 하단 터치, 새 터치로 재초기화, 완료, 중지, 상단 BB 안전 종료 |
+| G-01~07 및 G-06P/F/R | [global_transitions.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:1) | 시작, 시장 관측의 접촉 판단, 하단 이벤트 생성·재초기화, 완료, 중지, 상단 접촉 후 하단 감시 복귀 |
 | O-01~09 | [ownership_transitions.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:1) | 체결 후 소유권 확정, B/C 매수 실패와 재시도 |
 | PB-01~24 및 PB-23F | [case_b_position_transitions.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:1) | B 보유, 손절·익절·시간 청산, TREND_HOLD, 매도 실패·완료 |
 | PC-01~28 및 PC-23F | [case_c_position_transitions.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_position_transitions.py:1) | C 보유, TP_TRAILING, 청산, 회복 확인과 B 인계 |
@@ -111,7 +123,7 @@ B/C 포지션 필드가 따로 있어도 독립적인 Region이 다섯 개라는
 
 실제 실행 순서는 [_handle_locked](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/stm.py:214)에서 확인할 수 있습니다.
 
-1. 전역 전이를 먼저 확인합니다. STOP, 상단 안전 종료, 복합 상태 재진입 같은 전역 전이가 선택되면 그 결과를 확정합니다.
+1. 전역 전이를 먼저 확인합니다. STOP, 노출 없는 상단 접촉의 하단 감시 복귀, 하단 접촉의 복합 상태 진입·재진입이 선택되면 그 결과를 확정합니다. 주문·포지션 관리 중인 실제 상단 관측은 G-07이 소비하지 않으므로 아래 Region 평가가 계속됩니다.
 2. Region 1을 평가합니다. B 포지션이 활성화되어 있으면 B 포지션 함수, C이면 C 포지션 함수, 둘 다 아니면 소유권 함수를 호출합니다.
 3. Region 3, 즉 C 신호를 평가합니다.
 4. Region 2, 즉 B 신호를 평가합니다.
@@ -123,7 +135,7 @@ B/C 포지션 필드가 따로 있어도 독립적인 Region이 다섯 개라는
 
 [SerialEventQueue](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/event_queue.py:74)는 우선순위와 FIFO 순서를 사용합니다. `QueueEvent`로 만든 내부 후속 이벤트와 Controller의 주문 결과 이벤트는 내부 우선순위로 넣어, 이미 대기 중인 시장 이벤트보다 먼저 처리합니다. STM을 재귀 호출해서 즉시 다른 Region을 실행하는 방식은 쓰지 않습니다.
 
-실제 백그라운드 실행은 [_TradingEventRuntimeWorker](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/bootstrap/application.py:718)가 담당합니다. 이 작업자는 하나의 스레드에서 Controller의 `run_event_runtime_cycle()`을 구동합니다. 기본 확인 주기는 0.25초이고 새 처리 요청으로 깨울 수도 있습니다. `asyncio.run()`으로 비동기 형태의 처리 함수를 실행하더라도 내부 Region 처리는 앞서 설명한 순차 호출입니다. **이 주기는 전략이 0.25초마다 새 주문을 내거나 Region마다 타이머 스레드를 만든다는 뜻이 아닙니다.**
+실제 백그라운드 실행은 [_TradingEventRuntimeWorker](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/bootstrap/application.py:721)가 담당합니다. 이 작업자는 하나의 스레드에서 Controller의 `run_event_runtime_cycle()`을 구동합니다. 기본 확인 주기는 0.25초이고 새 처리 요청으로 깨울 수도 있습니다. `asyncio.run()`으로 비동기 형태의 처리 함수를 실행하더라도 내부 Region 처리는 앞서 설명한 순차 호출입니다. **이 주기는 전략이 0.25초마다 새 주문을 내거나 Region마다 타이머 스레드를 만든다는 뜻이 아닙니다.**
 
 이 구조는 동시에 진행되는 B/C 감시를 표현하면서 주문 충돌을 통제하고 동일 입력의 결과를 재현하기에 적합합니다. 대신 긴 Action 실행은 후속 이벤트 처리를 지연시킬 수 있으며, Region별 CPU 병렬 처리 성능을 얻는 구조는 아닙니다. 의도하신 병렬성이 “B 신호를 기억하면서 C를 관리한다”라면 현재 구현에 반영되어 있습니다. “각 Region을 별도 스레드·태스크에서 동시에 실행한다”는 의미였다면 그 부분은 현재 구현되어 있지 않습니다.
 
@@ -183,13 +195,13 @@ Case C 신호부는 %B ≤ -0.15와 CCI ≤ -140일 때 setup을 열고, %B ≤ 
 
 C의 trailing 비교에 쓰는 값은 **1분봉 EMA의 기울기 자체가 아닙니다.** [ThirtyMinuteMarketEvaluationBuilder](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/market_evaluation_builder.py:213)에서 확정 1분봉 close를 진행 30분봉의 후보 close로 사용해 30분 EMA slope를 계산합니다. TP 기준가격에 대한 slope도 미리 준비합니다. PC-10은 그 기준값을 `previous_trail_ema_slope`로 저장하고, PC-15는 slope 증가를 확인했을 때 비교 기준을 갱신합니다. TP_TRAILING 상태에서는 보유 초기의 C 손절 조건을 다시 적용하지 않습니다.
 
-연속 5초·3분 같은 유지 조건은 STM 내부의 대기나 sleep으로 구현하지 않았습니다. [market_condition_timers.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/market_condition_timers.py:1) 및 [trading_indicator_timers.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_indicator_timers.py:1)와 시장 평가 builder가 유지 상태를 계산하고, STM은 전달된 평가값을 읽습니다. B의 3시간과 C의 회복 경과 시간은 [_enrich_market_evaluation_elapsed](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3678)에서도 기준 시각으로부터 계산합니다.
+연속 5초·3분 같은 유지 조건은 STM 내부의 대기나 sleep으로 구현하지 않았습니다. [market_condition_timers.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/market_condition_timers.py:1) 및 [trading_indicator_timers.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_indicator_timers.py:1)와 시장 평가 builder가 유지 상태를 계산하고, STM은 전달된 평가값을 읽습니다. B의 3시간과 C의 회복 경과 시간은 [_enrich_market_evaluation_elapsed](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3755)에서도 기준 시각으로부터 계산합니다.
 
-표에 ‘RETRY 이벤트 재발생’이라고 적힌 대기 행은 주로 `ScheduleReevaluation`으로 구현했습니다. [_EventDrivenScheduler](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:856)가 시장 변화, 봉 마감, 기한 또는 재시도 backoff에 따라 예약을 해제합니다. 반면 다음 판단을 즉시 이어야 하는 인계·초기 검사 등은 `QueueEvent`를 사용합니다. 이 차이로 의미 있는 입력 변화 없이 무한 재평가하는 것을 피합니다.
+표에 ‘RETRY 이벤트 재발생’이라고 적힌 대기 행은 주로 `ScheduleReevaluation`으로 구현했습니다. [_EventDrivenScheduler](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:882)가 시장 변화, 봉 마감, 기한 또는 재시도 backoff에 따라 예약을 해제합니다. 반면 다음 판단을 즉시 이어야 하는 인계·초기 검사 등은 `QueueEvent`를 사용합니다. 이 차이로 의미 있는 입력 변화 없이 무한 재평가하는 것을 피합니다.
 
 **9. Action 열은 실제로 어디까지 실행되는가**
 
-Action의 자료형은 [action_requests.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/action_requests.py:1)에 있고, 분배 지점은 [_execute_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6260)입니다.
+Action의 자료형은 [action_requests.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/action_requests.py:1)에 있고, 분배 지점은 [_execute_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6303)입니다.
 
 | STM의 요청 | Controller의 실제 수행 |
 |---|---|
@@ -200,12 +212,12 @@ Action의 자료형은 [action_requests.py](/Users/oscar/Desktop/Binance_Auto/ba
 | `QueueEvent` | 실행 요청을 기록하고, event processor가 전체 Action 묶음 이후 큐에 삽입 |
 | `SubmitOrder` | `_submit_order_action()`으로 주문 의도, 수량·위험 검사, 제출과 결과 조정 |
 | `CancelPendingOrder` / `ReconcileOrder` | pending 주문 취소, 동일 ID 조회, 실제 체결 반영 |
-| `ForceSellAll` | 중지·안전 종료의 잔여 포지션 청산 조정 |
+| `ForceSellAll` | 사용자 중지 등 명시적 청산 요청의 잔여 포지션 조정. 상단 접촉은 이 요청을 만들지 않음 |
 | `StopTradingRuntime` | 세션 타이머·구독 등 실행 자원 정리 |
 
-주문 요청은 [_submit_order_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6544)에서 실행 경로로 이어지고, 거래소 경계는 [api_gateway.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/binance/api_gateway.py:1)와 [spot_rest_client.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py:1)가 담당합니다. 실제 Position 처리는 [position.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/position.py:1), 이력 조정은 [trade_history_controller.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trade_history_controller.py:1), 저장은 [trade_history_repository.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py:1)에 연결됩니다.
+주문 요청은 [_submit_order_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6591)에서 실행 경로로 이어지고, 거래소 경계는 [api_gateway.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/binance/api_gateway.py:1)와 [spot_rest_client.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/binance/spot_rest_client.py:1)가 담당합니다. 실제 Position 처리는 [position.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/position.py:1), 이력 조정은 [trade_history_controller.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trade_history_controller.py:1), 저장은 [trade_history_repository.py](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py:1)에 연결됩니다.
 
-Controller의 [_handle_order_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:7210), `_apply_unapplied_fills()`, `_finalize_terminal_execution()`, `_complete_terminal_after_history()`와 `_create_order_outcome_event()`가 제출 이후 결과를 조정합니다. 정상 체결을 실제 Position과 저장에 반영한 다음 STM에 결과 이벤트를 전달합니다. 주문을 요청했다는 이유만으로 보유 또는 청산 완료 상태를 확정하지 않습니다.
+Controller의 [_handle_order_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:7314), `_apply_unapplied_fills()`, `_finalize_terminal_execution()`, `_complete_terminal_after_history()`와 `_create_order_outcome_event()`가 제출 이후 결과를 조정합니다. 정상 체결을 실제 Position과 저장에 반영한 다음 STM에 결과 이벤트를 전달합니다. 주문을 요청했다는 이유만으로 보유 또는 청산 완료 상태를 확정하지 않습니다.
 
 예를 들어 B 매수는 `B-06/B-09 → SubmitOrder → 실제 체결·이력 반영 → CASE_B_POSITION_OPENED → O-02/PB-01/B-18`로 이어집니다. C 신호가 활성 상태이면 같은 체결 이벤트에 C-06/C-15/C-17도 반응할 수 있습니다. B 매도는 해당 매도 요청 전이 이후 `CASE_B_SELL_FILLED → PB-23F → CASE_B_SELL_FINISHED → PB-23 또는 PB-24`를 거칩니다.
 
@@ -213,17 +225,25 @@ Controller의 [_handle_order_result](/Users/oscar/Desktop/Binance_Auto/backend/s
 
 실제 외부 주문 효과는 `_order_pipeline_enabled` 등 실행 조건도 통과해야 합니다. 따라서 STM이 `SubmitOrder`를 반환했다는 사실만으로 실제 거래소 주문까지 발생했다고 단정할 수는 없습니다. 실행 경로를 비활성화한 테스트 구성에서는 요청을 보존하고 결과 이벤트를 수동 공급할 수 있습니다.
 
+현재 주문 준비 단계에는 아직 거래소 주문 ID가 없는 `pending_intent_id`도 있습니다. 일시적인 준비 실패는 의도와 재시도 시각을 보존할 수 있고, 재시도 전에 신호가 만료되면 Controller가 `ORDER_PREPARATION_EXPIRED`를 만듭니다. 소유권 전이는 O-03/O-07로 pending 의도를 정리하고 B 눌림 감시 또는 C setup 감시로 돌려보냅니다. 따라서 “주문 ID가 없다”만으로 아직 진행 중인 주문 의도가 없다고 판단할 수 없습니다. G-07은 이 준비 중 의도도 보호합니다.
+
 **10. Region 전체의 완료와 중지는 어떻게 합치는가**
 
 [trade_management_is_complete](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/states.py:270)는 Region 1이 `NO_POSITION`이고 B·C 신호 Region이 모두 Final인지 확인합니다. 마지막 미완료 영역까지 완료되면 TradingSTM이 `TRADE_MANAGEMENT_COMPLETED`를 요청하고, G-04에서 하단 터치 감시로 돌아갑니다. C 신호가 먼저 Final이 되었다는 이유만으로 C 보유 관리까지 끝내지 않습니다.
 
-새로운 하단 터치 G-03은 허용 조건을 확인한 뒤 기존 이벤트를 닫고 세 Region을 초기 구성으로 다시 엽니다. 이전 터치 범위의 늦은 재평가 이벤트는 `lower_event_id` 검사로 배제합니다. B 손절 후 즉시 재진입할 수 있는 PB-23도 세 영역의 초기 상태를 다시 만들고 활성화 이벤트를 보냅니다.
+새로운 하단 터치 G-03은 기존 lower scope, 새 30분봉 식별자, 소유권·pending 주문·C 소비와 복구 조건을 확인한 뒤 기존 이벤트를 닫고 세 Region을 초기 구성으로 다시 엽니다. 현재 scope와 지연된 이벤트의 `lower_event_id`가 모두 있고 서로 다르면 그 재평가 이벤트를 배제합니다. 실제 시장 관측은 큐에서 꺼낸 시점의 scope에 연결하지만, 이전 timer의 scope를 새 값으로 바꾸지는 않습니다. B 손절 후 즉시 재진입할 수 있는 PB-23도 세 영역의 초기 상태를 다시 만들고 활성화 이벤트를 보냅니다.
 
-STOP과 상단 BB 안전 종료는 모든 Region보다 우선하는 전역 판단입니다. pending 주문이 있으면 취소·조회·조정을 먼저 하고, 포지션이 있으면 청산 결과를 기다리는 `STOPPING`으로 이동합니다. 이때 모든 신호 영역이 먼저 자연스럽게 Final에 도달할 필요는 없습니다. 상태 구성은 `TRADE_MANAGEMENT` 밖에서 하위 Region이 활성화되어 있는 조합을 거부합니다.
+사용자 STOP은 모든 Region보다 먼저 평가합니다. pending BUY는 취소·조회·조정하고 pending SELL은 terminal 결과를 조회·조정합니다. pending 주문 없이 실제 포지션이 있으면 G-06으로 `STOPPING`에 들어가 청산 결과를 기다리고, 둘 다 없으면 G-05로 종료합니다. 모든 신호 영역이 먼저 자연스럽게 Final에 도달할 필요는 없습니다.
+
+**상단 접촉의 G-07은 현재 STOP과 다른 동작입니다.** `TRADE_MANAGEMENT`에서 실제 포지션, pending 주문 ID, 제출 전 pending intent가 모두 없으면 이전 하단 이벤트와 B/C 신호·timer를 정리하고 `LOWER_TOUCH_WATCH`로 돌아갑니다. 세션은 `RUNNING`, 거래 단계는 `IDLE`이며 다음 하단 접촉을 같은 30분봉 안에서도 받을 수 있습니다. 어느 하나라도 남아 있으면 실제 시장 관측에서 G-07을 적용하지 않고 기존 Case의 조건 검사와 주문 관리를 계속합니다. 같은 노출 보유 상황에서 직접 전달된 `UPPER_BAND_TOUCHED`는 기존 호환 경로대로 상태·Action 변경 없는 G-07을 반환합니다. 상단 접촉 자체로 강제매도·취소·종료를 요청하지 않습니다.
+
+상태 구성은 `TRADE_MANAGEMENT` 밖에서 하위 Region이 활성화되어 있는 조합을 거부합니다. 하단 감시 복귀 시 하위 상태 필드가 비활성으로 바뀌는 것과 프로그램 전체가 종료되는 것은 별개의 상태 변화입니다.
 
 **11. 확인한 범위와 구현 해석 시 주의점**
 
-교수님, 이번 설명은 설계 문서와 현재 함수 본문을 대조하고, 핵심 실행 계약을 확인하는 기존 테스트를 실행한 결과입니다. 추천부의 STM·Guard·Controller, 거래 STM·이벤트 큐, 백그라운드 worker, 두 실행 흐름의 통합 테스트를 합쳐 **72개가 통과**했습니다. 특히 세 영역 초기 진입, 체결 이벤트의 세 영역 전달, 동일 snapshot의 C 매수 우선, 내부 이벤트 우선 처리, 재귀 호출 차단, Context version 불일치 시 Action 차단을 검사하는 테스트가 포함되어 있습니다.
+교수님, 최초 문서 작성 때에는 추천부의 STM·Guard·Controller, 거래 STM·이벤트 큐, 백그라운드 worker와 실행 흐름의 통합 테스트 **72개가 통과**했습니다. 이는 당시의 검증 기록입니다. 2026-09-17 접촉 판단 리팩터링의 검증 기록은 **전체 백엔드 1,233개 중 1,223개 통과·실제 거래소 opt-in 10개 제외**, 관련 UI 54개와 타입 검사 통과입니다. 기존 상단 연속성 7개 시나리오·35개 관측 지점의 상태·액션·주문·timer·표시 데이터도 변경 전후 동일했습니다. 자세한 근거는 [변경·검증 보고서](/Users/oscar/Desktop/Binance_Auto/artifacts/market-policy-refactor-20260917/report.md)에 있습니다. 문서 갱신에서는 이 기록과 현재 함수 본문을 대조합니다.
+
+검사에는 세 영역 초기 진입, 체결 이벤트의 세 영역 전달, 같은 snapshot의 C 매수 우선, 내부 이벤트 우선 처리, 재귀 호출 차단, Context version 불일치 시 Action 차단, 상단 이후 하단 재진입과 주문 준비 의도 보호가 포함됩니다.
 
 이는 122개 행의 모든 조합을 완전 탐색하거나 실거래를 검증했다는 의미는 아닙니다. 이번에는 네트워크 주문을 실행하지 않았으며, 부록의 ID 대조도 실행 효과의 전체 증명은 아닙니다.
 
@@ -234,7 +254,8 @@ STOP과 상단 BB 안전 종료는 모든 Region보다 우선하는 전역 판�
 - 도식의 `LOGIC_ENABLED`는 별도의 중첩 객체로 구현하지 않고 `RootState`와 전역 전이로 표현합니다. 실제 열거형에는 시작 전 `NOT_STARTED`도 있습니다.
 - 표의 ID와 함수가 항상 일대일인 것은 아닙니다. 초기 전이는 상위 전이에 함께 기록하고, 공통 주문·조건·재시도는 helper와 Controller에 모았습니다.
 - Context version 충돌 시 외부 Action 실행 전에 STM 결과를 되돌리는 장치가 있습니다. 이것을 이미 실행된 거래소 주문까지 되돌릴 수 있는 데이터베이스 트랜잭션으로 해석해서는 안 됩니다.
-- 코드에는 표를 보완하는 실행 경로도 있습니다. 예를 들어 `BUY_RISK_BLOCKED`는 소유권 전이 파일에서 O-03/O-07 ID를 사용해 신호 상태를 돌려놓습니다. ID가 같다고 이벤트 종류까지 표의 한 행과 언제나 동일한 것은 아닙니다.
+- 코드에는 표를 보완하는 실행 경로도 있습니다. `BUY_RISK_BLOCKED`와 `ORDER_PREPARATION_EXPIRED`는 소유권 전이 파일에서 O-03/O-07 ID를 사용해 신호 상태를 돌려놓습니다. ID가 같다고 이벤트 종류까지 표의 한 행과 언제나 동일한 것은 아닙니다.
+- 이번 통합은 시장 접촉 정책의 책임을 모은 것입니다. Controller에는 주문 준비 신호 유효성 검사·위험 검사·실행 복구 등이 여전히 있습니다. 모든 전략 관련 조건이 Controller에서 사라졌다고 설명하지 않습니다.
 
 발표에서는 “세 Region이 각각 자신의 진행 상태를 기억하고 같은 사건에 함께 반응하도록 구성했습니다. 실제 계산과 주문은 정해진 순서로 처리하여 C 우선권과 단일 포지션을 지킵니다”라고 설명하겠습니다.
 
@@ -250,7 +271,7 @@ STOP과 상단 BB 안전 종료는 모든 Region보다 우선하는 전역 판�
 
 | 사건의 종류 | 내부 이벤트 생성·해석 주체 | STM에 도달하는 경로 |
 |---|---|---|
-| 가격·봉 데이터 갱신 | MarketDataController가 지표 평가를 준비하고, TradingController의 `observe_market_evaluation()`이 `TradingEvent`를 만듭니다. | `enqueue_event()` → 직렬 큐 → event processor → `TradingSTM.handle()` |
+| 가격·봉 데이터 갱신 | MarketDataController가 지표 평가를 준비하고, TradingController의 `observe_market_evaluation()`이 원본 평가가 포함된 `MARKET_DATA_UPDATED`를 만듭니다. | `enqueue_event()` → 직렬 큐 → Context 준비 → `TradingSTM.handle()` → 전역 접촉 판단 |
 | 현재 Region의 조건 재검사 | STM의 `_resolve_*_region_event()`가 시장 갱신 이벤트를 해당 Region의 검사 이벤트로 바꿔 해석합니다. | 같은 `handle()` 호출 안에서 각 전이 함수에 전달합니다. 새 큐 항목을 추가하는 동작은 아닙니다. |
 | 즉시 이어야 할 내부 사건 | STM은 `QueueEvent` 요청을 반환합니다. event processor가 실제 `TradingEvent`를 만들어 넣습니다. | 현재 Action 묶음 종료 → 내부 큐 → 다음 microstep의 `handle()` |
 | 시간이 지나거나 시장·봉 조건이 바뀐 뒤 재평가 | STM은 `ScheduleReevaluation`을 요청하고, Controller가 등록합니다. `_EventDrivenScheduler.release()`가 전달받은 trigger와 due 시각을 검사해 이벤트 객체를 만듭니다. | Controller의 `trigger_scheduled_evaluations()` → 큐 → `handle()` |
@@ -258,17 +279,19 @@ STOP과 상단 BB 안전 종료는 모든 Region보다 우선하는 전역 판�
 | 사용자 시작 명령 | `start_trading()`이 STM의 `run()`을 호출하고, `run()` 내부에서 `LOGIC_STARTED`를 만듭니다. | `run(context)` → `handle()` → Controller의 `_apply_stm_result()` |
 | 사용자 중지 명령 | `stop_trading()`이 `STOP_CONFIRMED`를 만듭니다. | 세션 잠금 안에서 `handle(event, context)` 직접 호출 → `_apply_stm_result()` |
 
-시장 평가의 연결은 [_publish_market_evaluation](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/market_data_controller.py:1534), 실제 이벤트 생성은 [observe_market_evaluation](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3556)에서 확인할 수 있습니다. 여기에서 `event_id`, 발생 시각, 시장 version, 원본 평가 snapshot을 함께 보존합니다. 큐에서 기다리는 동안 더 새로운 가격이 도착하더라도 어떤 입력에서 생긴 사건인지를 잃지 않기 위해서입니다.
+시장 평가의 연결은 [_publish_market_evaluation](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/market_data_controller.py:1534), 실제 이벤트 생성은 [observe_market_evaluation](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3627)에서 확인할 수 있습니다. 여기에서 `event_id`, 발생 시각, 시장 version, 원본 평가 snapshot을 함께 보존합니다. 큐에서 기다리는 동안 더 새로운 가격이 도착하더라도 어떤 입력에서 생긴 사건인지를 잃지 않기 위해서입니다.
 
 `observe_market_evaluation()`이 반환하는 값은 **큐에 수락된 이벤트**입니다. 이 함수가 바로 STM 판단이나 거래소 주문 성공을 반환하는 것은 아닙니다. STM 응답은 이후 event processor가 해당 이벤트를 꺼내 처리할 때 만들어집니다.
 
-시작·중지는 일반 시장 이벤트와 다른 직접 호출 경로를 가집니다. 따라서 “모든 메시지는 반드시 큐를 통과한다”라고 설명하면 현재 코드와 다릅니다. 직접 호출도 세션 잠금으로 처리 순서를 보호하고, Action 실행에서 생긴 주문 결과는 큐로 넘겨 다음 microstep에서 처리합니다. 구체적인 경계는 [start_trading](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:2696), [stop_trading](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3165), [_apply_stm_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6175)입니다.
+상단·하단 접촉도 여기에서는 같은 `MARKET_DATA_UPDATED`로 전달합니다. `_prepare_market_event_context()`는 version·경과시간·scope를 준비하고, `global_transitions._handle_band_touch()`가 준비된 Context와 STM 상태를 함께 읽어 G-02/G-03/G-07 또는 기존 Case 평가의 계속을 결정합니다. Controller에 별도의 접촉 분류 함수는 없습니다. 입력 로그의 event 유형과 실제 선택된 transition ID를 구분해 읽어야 합니다.
+
+시작·중지는 일반 시장 이벤트와 다른 직접 호출 경로를 가집니다. 따라서 “모든 메시지는 반드시 큐를 통과한다”라고 설명하면 현재 코드와 다릅니다. 직접 호출도 세션 잠금으로 처리 순서를 보호하고, Action 실행에서 생긴 주문 결과는 큐로 넘겨 다음 microstep에서 처리합니다. 구체적인 경계는 [start_trading](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:2760), [stop_trading](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3229), [_apply_stm_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6218)입니다.
 
 **12.2 Controller가 STM을 호출하도록 연결하는 방법**
 
 교수님, 일반 이벤트 경로에서는 Controller가 **`RunToCompletionEventProcessor`라는 전달 담당 객체**를 구성합니다. 이 객체에 STM, Context 제공 함수, Action 실행 함수를 넣어 줍니다.
 
-출처: [Controller가 전달·실행 담당을 연결하는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:2790)
+출처: [Controller가 전달·실행 담당을 연결하는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:2854)
 
 ```python
 self._event_queue = SerialEventQueue()
@@ -289,13 +312,13 @@ self._event_processor = RunToCompletionEventProcessor(
 
 - `stm=selected_stm`: 판단을 요청할 TradingSTM 인스턴스입니다.
 - `context_provider=self._context.snapshot`: 판단 시점에 읽기 전용 Context를 얻는 함수입니다.
-- `event_context_preparer=self._prepare_market_event_context`: 큐에서 꺼낸 원본 시장 평가와 현재 runtime을 맞춰 준비하는 함수입니다.
+- `event_context_preparer=self._prepare_market_event_context`: 큐에서 꺼낸 원본 시장 평가에 최신 runtime의 경과시간과 scope를 연결하는 함수입니다. 접촉 이벤트를 다시 분류하지 않습니다.
 - `action_executor=self._execute_action`: STM 응답에 있는 Action을 실제 수행할 **Controller의 함수**입니다.
 - `event_queue=self._event_queue`: 이벤트를 한 개씩 꺼낼 세션 전용 큐입니다.
 
 따라서 “Controller가 STM에 메시지를 보내고 응답대로 행동한다”는 책임은 유지됩니다. 호출과 응답 반복을 event processor에 맡기고, 실제 행동은 Controller의 callback으로 돌려받는 구성입니다. STM은 이 callback을 직접 호출하지 않으며 Controller 참조를 알 필요도 없습니다.
 
-큐에 새 일이 들어오면 [enqueue_event](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3289)가 실행 작업자에게 처리를 요청합니다. [_TradingEventRuntimeWorker](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/bootstrap/application.py:718)가 Controller의 `run_event_runtime_cycle()`을 구동하고, 이 함수는 예약된 재시도를 해제한 뒤 `drain_events()`를 통해 큐를 처리합니다. 일반 실행에서 매번 UI가 “다음 이벤트를 처리하라”고 호출할 필요는 없습니다.
+큐에 새 일이 들어오면 [enqueue_event](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3356)가 실행 작업자에게 처리를 요청합니다. [_TradingEventRuntimeWorker](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/bootstrap/application.py:721)가 Controller의 `run_event_runtime_cycle()`을 구동하고, 이 함수는 예약된 재시도를 해제한 뒤 `drain_events()`를 통해 큐를 처리합니다. 일반 실행에서 매번 UI가 “다음 이벤트를 처리하라”고 호출할 필요는 없습니다.
 
 **12.3 전달하는 메시지와 돌려받는 응답의 의미**
 
@@ -338,7 +361,7 @@ STM은 여러 Region을 평가하고 다음 내용을 가진 [TradingSTMResult](
 
 event processor는 `result.action_requests`를 앞에서부터 순회하면서 연결해 둔 `self._action_executor(action)`을 호출합니다. 이 호출의 실제 대상이 `TradingController._execute_action()`입니다. Controller는 ID 문자열을 보고 표를 다시 검색하는 대신, **Action 객체의 자료형과 payload**를 보고 수행할 함수를 선택합니다.
 
-예를 들어 `PatchRuntimeContext`는 Context 변경으로, `SubmitOrder`는 주문 실행 경로로, `ScheduleReevaluation`은 scheduler 등록으로 분배합니다. `QueueEvent`는 Controller에서 실행 요청을 기록하고 processor가 실제 큐 삽입을 맡습니다. 공통 실행 분기는 [_execute_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6260)에서 볼 수 있습니다.
+예를 들어 `PatchRuntimeContext`는 Context 변경으로, `SubmitOrder`는 주문 실행 경로로, `ScheduleReevaluation`은 scheduler 등록으로 분배합니다. `QueueEvent`는 Controller에서 실행 요청을 기록하고 processor가 실제 큐 삽입을 맡습니다. 공통 실행 분기는 [_execute_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6303)에서 볼 수 있습니다.
 
 Action 전에 Context version도 확인합니다. STM이 판단한 뒤 입력이 바뀌었다면 processor는 아직 외부 효과를 실행하지 않은 STM 결과를 되돌리고, 이벤트를 큐에 복원합니다. 일치할 때만 요청들을 실행합니다. 이는 [process_next](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/event_queue.py:364)의 `context_version` 비교 부분입니다.
 
@@ -359,27 +382,28 @@ Action 전에 Context version도 확인합니다. STM이 판단한 뒤 입력이
 
 **12.5 주문 응답이 나중에 도착하는 경우**
 
-거래소가 최초 응답에서 체결을 확정할 수도 있고, 이후 WebSocket이나 동일 주문 조회에서 결과가 확인될 수도 있습니다. 초기 제출 응답은 [_submit_order_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6544)에서 `_handle_order_result()`로 전달합니다. 뒤늦은 주문 스트림 결과는 [apply_order_stream_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/bootstrap/application.py:1514)가 [observe_order_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:4097)로 전달하고, 같은 주문 상태를 찾아 같은 결과 처리 경로에 합류시킵니다.
+거래소가 최초 응답에서 체결을 확정할 수도 있고, 이후 WebSocket이나 동일 주문 조회에서 결과가 확인될 수도 있습니다. 초기 제출 응답은 [_submit_order_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6591)에서 `_handle_order_result()`로 전달합니다. 뒤늦은 주문 스트림 결과는 [apply_order_stream_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/bootstrap/application.py:1522)가 [observe_order_result](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:4133)로 전달하고, 같은 주문 상태를 찾아 같은 결과 처리 경로에 합류시킵니다.
 
 `OrderResult`는 거래소 주문의 관찰 결과이고, `CASE_C_POSITION_OPENED`는 그 결과를 실제 포지션과 이력에 반영한 뒤 전략 판단에 알려 주는 사건입니다. 따라서 거래소에서 `FILLED`를 받았다는 사실만 보고 STM의 보유 상태를 먼저 바꾸지 않습니다.
 
 상태 불명·부분 체결은 같은 주문 ID의 조회·조정 경로를 거칩니다. 체결 수량이 없는 terminal 실패라면 실패 이벤트를 만들고, STM이 재시도를 요청하면 Controller가 backoff를 적용해 예약합니다. 이와 관련된 함수는 `_handle_order_result()`, `_finalize_terminal_execution()`, `_complete_terminal_after_history()`, `_enqueue_order_outcomes()`입니다.
 
+이와 별도로, 제출 전 준비가 일시적으로 실패한 경우에는 아직 거래소 주문이 없습니다. `_submit_order_action()`이 준비 재시도를 예약하고, `_prepare_market_event_context()` 및 제출 경계에서 `_preparation_signal_valid()`를 확인합니다. 만료되면 `_expire_order_preparation()`이 `ORDER_PREPARATION_EXPIRED`를 반환합니다. 이는 이미 제출한 주문을 취소했다는 뜻이 아니며, 표준 매수 실패와 같은 O-03/O-07 ID를 사용하더라도 신호 감시 복귀라는 별도 경로입니다.
+
 **12.6 실제 코드로 따라가는 예시: C 매수 요청부터 세 Region의 체결 처리까지**
 
 이제 6·7장에서 설명한 C 매수 사례를 실제 코드와 연결하겠습니다. **아래 Python 블록은 현재 소스의 발췌**이며, 들여쓰기만 읽기 편하게 정리했습니다. 전체 함수 중 설명 대상 분기를 보여 주므로 독립 실행용 예제는 아닙니다. 생략한 검증·예외 경로는 각 출처 링크에서 확인할 수 있습니다.
 
-설명 입력은 B가 `B_WAIT_PULLBACK`, C가 `C_SETUP`, 실제 포지션과 pending 주문은 없는 상태입니다. 이전 flush 가격은 89, 현재가는 90, 현재 %B와 C 진입선은 -0.18, C 회복 경과는 2분, B 신호 경과는 1시간이라고 하겠습니다. 같은 봉·같은 하단 이벤트 안에 있으며 상단 종료나 새 터치 재초기화는 발생하지 않는 상황입니다. 실제 주문 부분은 주문 실행·위험 검사·저장이 모두 허용되고 성공하는 경우를 가정합니다. 이 설명을 위해 실거래를 실행한 것은 아닙니다.
+설명 입력은 B가 `B_WAIT_PULLBACK`, C가 `C_SETUP`, 실제 포지션과 pending 주문은 없는 상태입니다. 이전 flush 가격은 89, 현재가는 90, 현재 %B와 C 진입선은 -0.18, C 회복 경과는 2분, B 신호 경과는 1시간이라고 하겠습니다. 같은 봉·같은 하단 이벤트 안에 있으며 상단 접촉 복귀나 새 터치 재초기화는 발생하지 않는 상황입니다. 실제 주문 부분은 주문 실행·위험 검사·저장이 모두 허용되고 성공하는 경우를 가정합니다. 이 설명을 위해 실거래를 실행한 것은 아닙니다.
 
 **예시 ① TradingController가 시장 이벤트 객체를 만듭니다.**
 
-출처: [시장 평가를 TradingEvent로 만드는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3609)
+출처: [시장 평가를 TradingEvent로 만드는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:3682)
 
 ```python
 evaluation_time = self._clock()
-event_type = self._select_market_event_type(market)
 event = TradingEvent(
-    event_type=event_type,
+    event_type=TradingEventType.MARKET_DATA_UPDATED,
     occurred_at=evaluation_time,
     priority=EventPriority.MARKET,
     event_id=f"market:{market_version}:{source_event_id}",
@@ -391,7 +415,9 @@ event = TradingEvent(
 return self.enqueue_event(event)  # Context mutation은 FIFO claim 직후 준비 단계에서만 수행한다.
 ```
 
-여기서 `market_evaluation=market`이 원본 평가 입력을 이벤트 안에 붙입니다. 예시 상황은 현재 하단 이벤트 안의 일반 가격 갱신이므로 `MARKET_DATA_UPDATED`로 처리됩니다. `enqueue_event()`는 큐에 넣고 작업자를 깨웁니다. 큐에서 꺼낼 때 `_prepare_market_event_context()`가 처리 시점 runtime을 반영해 이벤트 종류를 다시 분류하고 Context를 준비합니다.
+여기서 `market_evaluation=market`이 원본 평가 입력을 이벤트 안에 붙입니다. 실제 시장 관측은 접촉 여부와 관계없이 `MARKET_DATA_UPDATED`로 전달됩니다. `enqueue_event()`는 큐에 넣고 작업자를 깨웁니다. 큐에서 꺼낼 때 `_prepare_market_event_context()`가 원본 시장값에 처리 시점 runtime의 경과시간·scope를 연결하고 Context를 준비합니다. 가격을 나중에 도착한 다른 시장 snapshot의 값으로 바꾸거나 전략 이벤트로 재분류하지 않습니다.
+
+이어 `TradingSTM._handle_locked()`가 `handle_global_transition()`을 호출합니다. 이 예시는 같은 하단 scope·같은 봉 안의 갱신이므로 G-03 재초기화가 없고 상단 접촉도 없습니다. 전역 결과가 없어서 아래의 C/B Region 평가로 이어집니다.
 
 **예시 ② STM이 같은 시장 이벤트를 C setup 검사로 해석합니다.**
 
@@ -523,7 +549,7 @@ if action_result is not None:
 
 processor가 요청 목록을 순회하면서 호출하는 대상은 앞서 연결한 `self._execute_action`입니다. Context 변경 요청은 다음 분기로 들어갑니다.
 
-출처: [Context 변경 Action 실행](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6279)
+출처: [Context 변경 Action 실행](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6322)
 
 ```python
 if isinstance(action, PatchRuntimeContext):
@@ -535,20 +561,20 @@ if isinstance(action, PatchRuntimeContext):
 
 먼저 %B와 pending 관련 값들이 실제 Context에 적용됩니다. 이어서 `SubmitOrder`는 아래 분기로 들어갑니다.
 
-출처: [SubmitOrder 실행 분기](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6329)
+출처: [SubmitOrder 실행 분기](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6373)
 
 ```python
 if isinstance(action, SubmitOrder):
     return self._submit_order_action(action)
 ```
 
-`_submit_order_action()`은 주문 실행 조건, 수량·위험 검사, 주문 식별자와 복구 기록을 준비하고, Gateway 호출 전에 pending 주문 ID를 게시합니다. 정상적인 일반 주문의 외부 호출은 `self._api_gateway.submit_order(order)`이고, 결과는 `_handle_order_result(state, result, initial=True)`로 전달합니다. 실제 제출 지점은 [_submit_order_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6544)에서 확인할 수 있습니다. STM은 이 Gateway를 호출하지 않습니다.
+`_submit_order_action()`은 주문 실행 조건, 수량·위험 검사, 주문 식별자와 복구 기록을 준비하고, Gateway 호출 전에 pending 주문 ID를 게시합니다. 정상적인 일반 주문의 외부 호출은 `self._api_gateway.submit_order(order)`이고, 결과는 `_handle_order_result(state, result, initial=True)`로 전달합니다. 실제 제출 지점은 [_submit_order_action](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:6591)에서 확인할 수 있습니다. STM은 이 Gateway를 호출하지 않습니다.
 
 **예시 ⑥ 실제 체결을 반영한 뒤 새로운 전략 이벤트를 만듭니다.**
 
-체결을 Position에 반영한 뒤 [_publish_position_to_context](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:7608)가 실제 수량과 owner를 Context에 적용합니다. 저장과 terminal 정리가 끝나면 `_complete_terminal_after_history()`가 `_create_order_outcome_event()`를 호출합니다. 성공한 C 매수에 사용할 이벤트 이름은 다음 코드에서 선택합니다.
+체결을 Position에 반영한 뒤 [_publish_position_to_context](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:7712)가 실제 수량과 owner를 Context에 적용합니다. 저장과 terminal 정리가 끝나면 `_complete_terminal_after_history()`가 `_create_order_outcome_event()`를 호출합니다. 성공한 C 매수에 사용할 이벤트 이름은 다음 코드에서 선택합니다.
 
-출처: [체결 결과를 전략 이벤트 이름으로 바꾸는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:8139)
+출처: [체결 결과를 전략 이벤트 이름으로 바꾸는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:8243)
 
 ```python
 if strategy is StrategyType.CASE_B:
@@ -581,7 +607,7 @@ for returned_event in returned_events:
 
 다음 큐 처리에서 processor는 이 이벤트를 `stm.order_finished(event, context)`에 전달합니다. 이 시점의 Context에는 실제 포지션과 C 소유자, pending 정리가 반영되어 있습니다. Region 1의 소유권 코드는 이를 확인합니다.
 
-출처: [C 체결 후 Region 1을 여는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:160)
+출처: [C 체결 후 Region 1을 여는 부분](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:171)
 
 ```python
 if (
@@ -606,9 +632,9 @@ if (
 
 여기에서 `O-06`과 `PC-01`이 함께 기록되고 Region 1은 `CASE_C_HOLDING`을 활성화합니다. 동시에 `patch(case_b_entry_paused=True)`와 `START_CASE_C_CONDITION_CHECK`의 후속 요청을 만듭니다. 같은 원래 체결 이벤트는 이어서 C 신호 Region의 C-16과 B 신호 Region의 B-13에도 전달됩니다.
 
-이 동작은 기존 [test_position_open_feedback_is_broadcast_to_three_regions](/Users/oscar/Desktop/Binance_Auto/backend/tests/unit/trading/test_stm.py:745) 테스트가 다음처럼 확인합니다.
+이 동작은 기존 [test_position_open_feedback_is_broadcast_to_three_regions](/Users/oscar/Desktop/Binance_Auto/backend/tests/unit/trading/test_stm.py:713) 테스트가 다음처럼 확인합니다.
 
-출처: [여러 Region에 대한 실제 테스트 assertion](/Users/oscar/Desktop/Binance_Auto/backend/tests/unit/trading/test_stm.py:773)
+출처: [여러 Region에 대한 실제 테스트 assertion](/Users/oscar/Desktop/Binance_Auto/backend/tests/unit/trading/test_stm.py:741)
 
 ```python
 self.assertEqual(("O-06", "PC-01", "C-16", "B-13"), result.transition_ids)
@@ -620,7 +646,7 @@ self.assertEqual(("O-06", "PC-01", "C-16", "B-13"), result.transition_ids)
 
 **부록. 두 표의 모든 ID와 실제 코드 위치**
 
-아래 링크는 ID가 **실제 분기·전이 선언·초기 전이 묶음에 쓰인 위치**를 가리킵니다. Trading의 단순 ID catalog는 제외했습니다. 한 행에 링크가 여러 개 있으면 초기 진입을 여러 경로에서 재사용하거나 같은 ID를 보완 경로에서도 사용한 경우입니다. 상수 매핑에 있는 ID는 그 매핑을 사용하는 같은 파일의 처리 함수까지 함께 읽으면 됩니다. 이벤트 열은 원본 표의 표현을 유지했습니다. 줄 번호는 작성 시점 기준입니다.
+아래 링크는 ID가 **실제 분기·전이 선언·초기 전이 묶음에 쓰인 위치**를 가리킵니다. Trading의 단순 ID catalog는 제외했습니다. 한 행에 링크가 여러 개 있으면 초기 진입을 여러 경로에서 재사용하거나 같은 ID를 보완 경로에서도 사용한 경우입니다. 상수 매핑에 있는 ID는 그 매핑을 사용하는 같은 파일의 처리 함수까지 함께 읽으면 됩니다. 이벤트 열은 표의 대표 표현이며, 실제 시장 관측은 `MARKET_DATA_UPDATED`로 들어와 접촉 조건에 따라 G-02/G-03/G-07을 선택합니다. O-03/O-07에는 `BUY_RISK_BLOCKED`·`ORDER_PREPARATION_EXPIRED` 경로도 있습니다. **줄 번호는 2026-09-17 재검토 시점 기준입니다.**
 
 
 **4H_REGIME_Event_Action_Table.md — 13개**
@@ -645,26 +671,26 @@ self.assertEqual(("O-06", "PC-01", "C-16", "B-13"), result.transition_ids)
 
 | ID | 표의 이벤트 | 실제 소스 위치 |
 |---|---|---|
-| G-01 | 로직 시작 | [global_transitions.py:248](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:248) |
-| G-02 | 하단 BB 접촉 | [global_transitions.py:275](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:275) |
-| G-03 | 새 30분봉 하단 BB 접촉 | [global_transitions.py:303](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:303) |
-| G-04 | TRADE_MANAGEMENT 완료 | [global_transitions.py:325](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:325) |
-| G-05 | 매매 중지 | [global_transitions.py:169](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:169) |
-| G-06 | 매매 중지[포지션 보유] | [global_transitions.py:159](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:159) |
-| G-06P | 매매 중지[pending 주문 존재] | [global_transitions.py:150](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:150) |
-| G-06F | FORCE_SELL_FINISHED | [global_transitions.py:197](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:197) |
-| G-06R | FORCE_SELL_FAILED | [global_transitions.py:228](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:228) |
-| G-07 | UPPER_BAND_TOUCHED | [global_transitions.py:59](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:59) · [global_transitions.py:76](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:76) · [global_transitions.py:86](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:86) |
-| O-01 | 초기 진입 | [case_b_position_transitions.py:129](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:129) · [global_transitions.py:284](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:284) · [global_transitions.py:313](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:313) |
-| O-02 | CASE_B_POSITION_OPENED | [ownership_transitions.py:105](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:105) |
-| O-03 | CASE_B_BUY_FAILED | [ownership_transitions.py:70](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:70) · [ownership_transitions.py:118](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:118) |
-| O-04 | CASE_B_BUY_RETRY | [ownership_transitions.py:142](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:142) |
-| O-05 | CASE_B_BUY_FAILED | [ownership_transitions.py:150](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:150) |
-| O-06 | CASE_C_POSITION_OPENED | [ownership_transitions.py:172](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:172) |
-| O-07 | CASE_C_BUY_FAILED | [ownership_transitions.py:83](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:83) · [ownership_transitions.py:186](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:186) |
-| O-08 | CASE_C_BUY_RETRY | [ownership_transitions.py:209](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:209) |
-| O-09 | CASE_C_BUY_FAILED | [ownership_transitions.py:217](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:217) |
-| PB-01 | 초기 진입 | [ownership_transitions.py:108](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:108) |
+| G-01 | 로직 시작 | [global_transitions.py:322](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:322) |
+| G-02 | 하단 BB 접촉 | [global_transitions.py:143](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:143) |
+| G-03 | 새 30분봉 하단 BB 접촉 | [global_transitions.py:170](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:170) |
+| G-04 | TRADE_MANAGEMENT 완료 | [global_transitions.py:349](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:349) |
+| G-05 | 매매 중지 | [global_transitions.py:246](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:246) |
+| G-06 | 매매 중지[포지션 보유] | [global_transitions.py:236](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:236) |
+| G-06P | 매매 중지[pending 주문 존재] | [global_transitions.py:227](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:227) |
+| G-06F | FORCE_SELL_FINISHED | [global_transitions.py:274](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:274) |
+| G-06R | FORCE_SELL_FAILED | [global_transitions.py:305](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:305) |
+| G-07 | 상단 접촉 시장 관측 / UPPER_BAND_TOUCHED | [global_transitions.py:66](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:66) · [global_transitions.py:70](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:70) |
+| O-01 | 초기 진입 | [case_b_position_transitions.py:129](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:129) · [global_transitions.py:152](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:152) · [global_transitions.py:180](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:180) |
+| O-02 | CASE_B_POSITION_OPENED | [ownership_transitions.py:116](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:116) |
+| O-03 | CASE_B_BUY_FAILED | [ownership_transitions.py:71](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:71) · [ownership_transitions.py:129](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:129) |
+| O-04 | CASE_B_BUY_RETRY | [ownership_transitions.py:153](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:153) |
+| O-05 | CASE_B_BUY_FAILED | [ownership_transitions.py:161](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:161) |
+| O-06 | CASE_C_POSITION_OPENED | [ownership_transitions.py:183](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:183) |
+| O-07 | CASE_C_BUY_FAILED | [ownership_transitions.py:89](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:89) · [ownership_transitions.py:197](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:197) |
+| O-08 | CASE_C_BUY_RETRY | [ownership_transitions.py:220](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:220) |
+| O-09 | CASE_C_BUY_FAILED | [ownership_transitions.py:228](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:228) |
+| PB-01 | 초기 진입 | [ownership_transitions.py:119](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:119) |
 | PB-02 | START_CASE_B_CONDITION_CHECK | [case_b_position_transitions.py:190](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:190) |
 | PB-03 | START_CASE_B_CONDITION_CHECK | [case_b_position_transitions.py:199](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:199) |
 | PB-04 | RETRY_CASE_B_CONDITION_CHECK | [case_b_position_transitions.py:190](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:190) |
@@ -689,7 +715,7 @@ self.assertEqual(("O-06", "PC-01", "C-16", "B-13"), result.transition_ids)
 | PB-23F | CASE_B_SELL_FILLED | [case_b_position_transitions.py:97](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:97) |
 | PB-23 | CASE_B_SELL_FINISHED | [case_b_position_transitions.py:117](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:117) |
 | PB-24 | CASE_B_SELL_FINISHED | [case_b_position_transitions.py:133](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:133) |
-| PC-01 | 초기 진입 | [ownership_transitions.py:176](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:176) |
+| PC-01 | 초기 진입 | [ownership_transitions.py:187](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/ownership_transitions.py:187) |
 | PC-02 | START_CASE_C_CONDITION_CHECK | [case_c_position_transitions.py:185](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_position_transitions.py:185) |
 | PC-03 | START_CASE_C_CONDITION_CHECK | [case_c_position_transitions.py:194](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_position_transitions.py:194) |
 | PC-04 | RETRY_CASE_C_CONDITION_CHECK | [case_c_position_transitions.py:185](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_position_transitions.py:185) |
@@ -718,7 +744,7 @@ self.assertEqual(("O-06", "PC-01", "C-16", "B-13"), result.transition_ids)
 | PC-26 | CHECK_CASE_C_RECOVERY | [case_c_position_transitions.py:99](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_position_transitions.py:99) |
 | PC-27 | CHECK_CASE_B_HANDOFF | [case_c_position_transitions.py:121](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_position_transitions.py:121) |
 | PC-28 | CHECK_CASE_B_HANDOFF | [case_c_position_transitions.py:131](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_position_transitions.py:131) |
-| B-01 | 초기 진입 | [case_b_position_transitions.py:129](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:129) · [global_transitions.py:284](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:284) · [global_transitions.py:313](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:313) |
+| B-01 | 초기 진입 | [case_b_position_transitions.py:129](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:129) · [global_transitions.py:152](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:152) · [global_transitions.py:180](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:180) |
 | B-02 | ACTIVATE_TRADE_MANAGEMENT | [case_b_signal_transitions.py:62](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_signal_transitions.py:62) |
 | B-03 | ACTIVATE_TRADE_MANAGEMENT | [case_b_signal_transitions.py:68](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_signal_transitions.py:68) |
 | B-04 | 30M_CANDLE_CLOSED | [case_b_signal_transitions.py:85](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_signal_transitions.py:85) |
@@ -737,7 +763,7 @@ self.assertEqual(("O-06", "PC-01", "C-16", "B-13"), result.transition_ids)
 | B-17 | CASE_B_WAIT_ONLY | [case_b_signal_transitions.py:204](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_signal_transitions.py:204) |
 | B-18 | CASE_B_POSITION_OPENED | [case_b_signal_transitions.py:214](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_signal_transitions.py:214) |
 | B-19 | CASE_C_POSITION_OPENED | [case_b_signal_transitions.py:222](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_signal_transitions.py:222) |
-| C-01 | 초기 진입 | [case_b_position_transitions.py:129](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:129) · [global_transitions.py:284](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:284) · [global_transitions.py:313](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:313) |
+| C-01 | 초기 진입 | [case_b_position_transitions.py:129](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_b_position_transitions.py:129) · [global_transitions.py:152](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:152) · [global_transitions.py:180](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/global_transitions.py:180) |
 | C-02 | ACTIVATE_TRADE_MANAGEMENT | [case_c_signal_transitions.py:63](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_signal_transitions.py:63) |
 | C-03 | ACTIVATE_TRADE_MANAGEMENT | [case_c_signal_transitions.py:72](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_signal_transitions.py:72) |
 | C-04 | RETRY_C_WAIT_SETUP | [case_c_signal_transitions.py:63](/Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/domain/trading/transitions/case_c_signal_transitions.py:63) |
@@ -765,3 +791,7 @@ self.assertEqual(("O-06", "PC-01", "C-16", "B-13"), result.transition_ids)
 - [unit/bootstrap/test_trading_event_runtime_worker.py](/Users/oscar/Desktop/Binance_Auto/backend/tests/unit/bootstrap/test_trading_event_runtime_worker.py)
 - [integration/test_regime_evaluation_flow.py](/Users/oscar/Desktop/Binance_Auto/backend/tests/integration/test_regime_evaluation_flow.py)
 - [integration/test_trading_event_runtime_flow.py](/Users/oscar/Desktop/Binance_Auto/backend/tests/integration/test_trading_event_runtime_flow.py)
+- [unit/trading/test_market_observation_policy.py](/Users/oscar/Desktop/Binance_Auto/backend/tests/unit/trading/test_market_observation_policy.py)
+- [integration/test_upper_band_continuation.py](/Users/oscar/Desktop/Binance_Auto/backend/tests/integration/test_upper_band_continuation.py)
+- [integration/test_post_buy_indicators.py](/Users/oscar/Desktop/Binance_Auto/backend/tests/integration/test_post_buy_indicators.py)
+- [integration/test_runtime_logging_flow.py](/Users/oscar/Desktop/Binance_Auto/backend/tests/integration/test_runtime_logging_flow.py)

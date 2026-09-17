@@ -13,8 +13,9 @@ from binance_auto_trader.domain.trading.action_requests import (
     CancelPendingOrder, ForceSellAll, ReconcileOrder, ReevaluationTrigger, StopTradingRuntime,
 )
 from binance_auto_trader.domain.trading.context import MarketEvaluationSnapshot
+from binance_auto_trader.domain.trading.events import EventPriority, TradingEvent, TradingEventType
 from binance_auto_trader.domain.trading.states import (
-    CaseBPositionState, CaseBSignalState, CaseCPositionState, CaseCSignalState, TradingPhase,
+    CaseBPositionState, CaseBSignalState, CaseCPositionState, CaseCSignalState, OrderSide, TradingPhase,
 )
 from binance_auto_trader.transport import BackendEventStream, create_trading_session_update_observer
 from binance_auto_trader.transport.contracts import map_trading_snapshot
@@ -170,11 +171,11 @@ class UpperBandContinuationTests(unittest.TestCase):
         self._assert_both_watching()
         self.assertEqual([], self.fixture.rest_client.submitted_orders)
 
-    def _enter_case(self, strategy: str) -> MarketEvaluationSnapshot:
+    def _enter_case(self, strategy: str, *, expected_submissions: int = 1) -> MarketEvaluationSnapshot:
         """
         함수 이름: _enter_case()
         기능: 실제 B 회복 신호·눌림 또는 C flush·반등으로 가짜 BUY 미결 주문을 만든다.
-        인자: strategy -> CASE_B 또는 CASE_C
+        인자: strategy -> CASE_B 또는 CASE_C, expected_submissions -> 준비 실패 포함 예상 제출 횟수
         반환값: 매수 조건의 시장 평가
         작성 날짜: 2026/09/17
         """
@@ -191,8 +192,114 @@ class UpperBandContinuationTests(unittest.TestCase):
         entry = replace(market, realtime_price=Decimal("4380") if strategy == "CASE_B" else Decimal("4327"),
                         realtime_pct_b=Decimal("0.2") if strategy == "CASE_B" else Decimal("-0.24"), confirmed_30m_close=False)
         self._observe(entry, "entry")
-        self.assertEqual(1, len(self.fixture.rest_client.submitted_orders))
+        self.assertEqual(expected_submissions, len(self.fixture.rest_client.submitted_orders))
         return entry
+
+    def _enqueue_market(self, market: MarketEvaluationSnapshot, name: str) -> TradingEvent:
+        """판단을 진행하지 않고 원본 관측을 실제 queue에 보존한다."""
+        self.fixture.clock.advance(timedelta(seconds=1))
+        snapshot = self.controller._market_snapshot
+        snapshot.update(snapshot.klines_by_interval)
+        for message_id, event_type in (("1L.1", "KLINE_OBSERVED"), ("1L.2", "MARKET_EVALUATED")):
+            self.controller.observe_public_market_boundary(
+                message_id=message_id, event_type=event_type, source_event_id=name, market_version=snapshot.version,
+            )
+        event = self.controller.observe_market_evaluation(market, source_event_id=name, market_version=snapshot.version)
+        self.assertIsNotNone(event)
+        self.assertIs(event.event_type, TradingEventType.MARKET_DATA_UPDATED)
+        return event
+
+    def test_queued_upper_and_lower_use_the_scope_at_processing_time(self) -> None:
+        """동시에 적재된 접촉도 앞 전이가 닫거나 연 lower scope를 반영하고 원본 시세를 유지한다."""
+        self._observe(self.lower, "old-lower")
+        old_scope = self.controller.context.runtime.lower_event_id
+        upper_event = self._enqueue_market(self.upper, "queued-upper")
+        lower_event = self._enqueue_market(self.lower, "queued-lower")
+        self.assertEqual(old_scope, lower_event.lower_event_id)
+        processor = self.controller._event_processor
+        original_observer = processor._event_processing_observer
+        observed = []
+
+        def record(event):
+            if event is not None and event.market_evaluation is not None:
+                observed.append(event)
+            original_observer(event)
+
+        with patch.object(processor, "_event_processing_observer", record):
+            results = asyncio.run(self.controller.drain_events())
+        self.assertEqual(["G-07", "G-02"], [tid for result in results for tid in result.transition_ids if tid.startswith("G-")])
+        self.assertEqual([upper_event.event_id, lower_event.event_id], [event.event_id for event in observed])
+        self.assertEqual([upper_event.market_version, lower_event.market_version], [event.market_version for event in observed])
+        self.assertEqual([upper_event.occurred_at, lower_event.occurred_at], [event.occurred_at for event in observed])
+        self.assertEqual([self.upper.realtime_price, self.lower.realtime_price],
+                         [event.market_evaluation.realtime_price for event in observed])
+        self.assertIsNone(observed[1].lower_event_id)
+        self.assertNotEqual(old_scope, self.controller.context.runtime.lower_event_id)
+        self._assert_both_watching()
+
+        # 새 scope 이후 도착한 이전 timer는 최신 scope로 재연결하지 않고 버린다.
+        before = self.controller.context
+        self.controller._event_queue.enqueue(TradingEvent(
+            event_type=TradingEventType.RETRY_C_WAIT_SETUP, occurred_at=self.fixture.clock(),
+            priority=EventPriority.INTERNAL, event_id="stale-c-timer", lower_event_id=old_scope,
+        ))
+        self.assertIsNone(asyncio.run(self.controller.process_next_event()))
+        self.assertEqual(before.runtime, self.controller.context.runtime)
+        self.assertEqual([], self.fixture.rest_client.submitted_orders)
+
+    def test_queued_upper_observation_sees_order_created_by_previous_market(self) -> None:
+        """상단 관측 적재 당시 주문이 없어도 앞선 시장 입력의 BUY를 보호한다."""
+        self._observe(replace(self.lower, realtime_pct_b=Decimal("-0.3")), "queued-buy-flush")
+        recovery = replace(self.lower, realtime_price=Decimal("2385"), realtime_pct_b=Decimal("-0.24"))
+        self._enqueue_market(recovery, "queued-buy")
+        self._enqueue_market(self.upper, "queued-upper-after-buy")
+        self.assertIsNone(self.controller.context.runtime.pending_intent_id)
+        results = asyncio.run(self.controller.drain_events())
+        self.assertIsNotNone(self.controller.context.runtime.pending_order_id)
+        self.assertNotIn("G-07", [tid for result in results for tid in result.transition_ids])
+        self.assertEqual(1, len(self.fixture.rest_client.submitted_orders))
+        self.assertIs(self.controller.status, TradingSessionStatus.RUNNING)
+
+    def test_upper_touch_preserves_preparation_retry_without_order_id(self) -> None:
+        """실제 준비 단계 일시 실패 뒤 상단 접촉이 의도와 재시도 timer를 지우지 않는다."""
+        with patch.object(self.controller._api_gateway, "prepare_order", side_effect=TimeoutError("fixture timeout")):
+            entry = self._enter_case("CASE_B", expected_submissions=0)
+        runtime = self.controller.context.runtime
+        scheduled = tuple(item for item in self.controller._scheduler._scheduled
+                          if item.action.event_type is TradingEventType.CASE_B_BUY_RETRY)
+        self.assertIsNone(runtime.pending_order_id)
+        self.assertIsNotNone(runtime.pending_intent_id)
+        self.assertTrue(scheduled)
+        self.assertEqual(runtime.pending_intent_id, self.controller._preparation_retry_intent)
+        results = self._observe(replace(entry, realtime_price=Decimal("4501"), realtime_pct_b=Decimal("1.01")), "upper-preparing")
+        self.assertNotIn("G-07", [tid for result in results for tid in result.transition_ids])
+        self.assertEqual(runtime.pending_intent_id, self.controller.context.runtime.pending_intent_id)
+        self.assertEqual(runtime.lower_event_id, self.controller.context.runtime.lower_event_id)
+        self.assertEqual(scheduled, tuple(item for item in self.controller._scheduler._scheduled
+                                         if item.action.event_type is TradingEventType.CASE_B_BUY_RETRY))
+        self.assertEqual([], self.fixture.rest_client.submitted_orders)
+
+    def test_upper_touch_preserves_pending_sell(self) -> None:
+        """기존 Case가 만든 청산 주문도 상단 접촉으로 변경하지 않는다."""
+        entry = self._enter_case("CASE_B")
+        self.fixture.clock.advance(timedelta(seconds=1))
+        self.controller.trigger_order_reconciliation(occurred_at=self.fixture.clock())
+        asyncio.run(self.controller.drain_events())
+        submit = self.fixture.rest_client.submit_order
+
+        def submit_sell(*, order):
+            # 단일 BUY용 fixture의 고정 exchange ID를 SELL이 재사용하지 않게 한다.
+            return replace(submit(order=order), exchange_order_id="2002")
+
+        with patch.object(self.fixture.rest_client, "submit_order", side_effect=submit_sell):
+            self._observe(replace(entry, realtime_price=Decimal("4290")), "case-b-stop")
+        pending = self.controller.context.pending_order
+        self.assertIsNotNone(pending)
+        self.assertIs(self.controller.context.runtime.pending_order_side, OrderSide.SELL)
+        results = self._observe(replace(entry, realtime_price=Decimal("4501"), realtime_pct_b=Decimal("1.01")), "upper-selling")
+        self.assertNotIn("G-07", [tid for result in results for tid in result.transition_ids])
+        self.assertEqual(pending, self.controller.context.pending_order)
+        self.assertEqual(2, len(self.fixture.rest_client.submitted_orders))
 
     def test_upper_touch_preserves_pending_buy_and_order_completion(self) -> None:
         """

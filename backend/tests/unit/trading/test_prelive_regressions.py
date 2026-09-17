@@ -3,10 +3,8 @@
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 import unittest
 
-from binance_auto_trader.application.trading_controller import TradingController
 from binance_auto_trader.domain.trading.action_requests import (
     CancelPendingOrder, PatchRuntimeContext, QueueEvent, ReconcileOrder, SubmitOrder,
     ResetCaseCContext, OpenLowerEvent, CloseLowerEvent, ResetCaseBContext, patch,
@@ -22,7 +20,7 @@ from binance_auto_trader.domain.trading.states import (
 )
 from binance_auto_trader.domain.trading.stm import TradingSTM
 from binance_auto_trader.domain.common import RegimeType
-from tests.unit.trading.test_stm import create_test_context, create_test_event, TEST_EVALUATION_TIME
+from tests.unit.trading.test_stm import create_market_observation, create_test_context, create_test_event, TEST_EVALUATION_TIME
 
 
 def create_holding_stm(position_state=CaseBPositionState.CASE_B_HOLDING):
@@ -70,9 +68,9 @@ class PreliveTradingRegressionTests(unittest.TestCase):
                 result = stm.handle(create_test_event(TradingEventType.ACTIVATE_TRADE_MANAGEMENT), context)
                 self.assertIn("B-03" if enabled else "B-02", result.transition_ids)
 
-    def test_new_candle_touch_uses_current_price_in_classifier_and_guard(self):
+    def test_new_candle_touch_uses_current_price_in_stm(self):
         """
-        함수 이름: test_new_candle_touch_uses_current_price_in_classifier_and_guard()
+        함수 이름: test_new_candle_touch_uses_current_price_in_stm()
         기능: 새 봉에서도 현재가 접촉으로 즉시 재추적하고 과거 저가만으로는 재진입하지 않는다.
         인자: 없음
         반환값: 없음
@@ -83,15 +81,12 @@ class PreliveTradingRegressionTests(unittest.TestCase):
                 runtime = TradingRuntimeSnapshot(lower_event_id="old-event", touch_candle_id="old")
                 market = MarketEvaluationSnapshot(realtime_price=Decimal(price), lower_band=Decimal("100"),
                     upper_band=Decimal("102"), current_30m_low=Decimal("99"), current_30m_candle_id="new")
-                classifier = SimpleNamespace(_context=SimpleNamespace(runtime=runtime))
-                event_type = TradingController._select_market_event_type(classifier, market)
-                self.assertIs(event_type, TradingEventType.NEW_30M_LOWER_BAND_TOUCHED
-                              if touched else TradingEventType.MARKET_DATA_UPDATED)
-                stm = TradingSTM(RegimeType.TYPE_0)
-                stm._state = TradingStateConfiguration.create_trade_management_initial_state()
-                result = stm.handle(create_test_event(TradingEventType.NEW_30M_LOWER_BAND_TOUCHED),
-                                    create_test_context(market=market, runtime=runtime))
-                self.assertEqual("G-03" in result.transition_ids, touched)
+                for event in (create_market_observation(market),
+                              create_test_event(TradingEventType.NEW_30M_LOWER_BAND_TOUCHED)):
+                    stm = TradingSTM(RegimeType.TYPE_0)
+                    stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+                    result = stm.handle(event, create_test_context(market=market, runtime=runtime))
+                    self.assertEqual("G-03" in result.transition_ids, touched)
 
     def test_trend_hold_uses_only_table_weakening_conditions(self):
         """
@@ -134,7 +129,7 @@ class PreliveTradingRegressionTests(unittest.TestCase):
     def test_new_lower_close_is_evaluated_during_owner_or_recovery_lock(self):
         """
         함수 이름: test_new_lower_close_is_evaluated_during_owner_or_recovery_lock()
-        기능: G-03 불가 시 Controller와 직접 STM 경로가 확정봉 손절을 누락하지 않는지 확인한다.
+        기능: 실제 시장 관측·명시적 접촉 모두 G-03 불가 시 확정봉 손절을 누락하지 않는지 확인한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/09/09
@@ -144,18 +139,23 @@ class PreliveTradingRegressionTests(unittest.TestCase):
             current_30m_low=Decimal("99.3"), confirmed_30m_close=True,
             current_30m_candle_id="new", ema_slope_30m_close=Decimal("-0.09"))
         runtime = TradingRuntimeSnapshot(lower_event_id="event", touch_candle_id="old", position_owner=StrategyType.CASE_B)
-        classifier = SimpleNamespace(_context=SimpleNamespace(runtime=runtime))
-        self.assertIs(TradingController._select_market_event_type(classifier, market), TradingEventType.MARKET_DATA_UPDATED)
-        result = create_holding_stm().handle(create_test_event(TradingEventType.NEW_30M_LOWER_BAND_TOUCHED),
-            create_test_context(market=market, runtime=runtime,
-                                position=PositionSnapshot(quantity=Decimal("1"), entry_price=Decimal("100"))))
-        self.assertIn(TradingEventType.CASE_B_STOP, [a.event_type for a in result.action_requests if isinstance(a, QueueEvent)])
+        for price in ("99.5", "99.3"):
+            evaluation = replace(market, realtime_price=Decimal(price))
+            for event in (create_market_observation(evaluation),
+                          create_test_event(TradingEventType.NEW_30M_LOWER_BAND_TOUCHED)):
+                result = create_holding_stm().handle(event,
+                    create_test_context(market=evaluation, runtime=runtime,
+                                        position=PositionSnapshot(quantity=Decimal("1"), entry_price=Decimal("100"))))
+                self.assertNotIn("G-03", result.transition_ids)
+                self.assertIn(TradingEventType.CASE_B_STOP, [a.event_type for a in result.action_requests if isinstance(a, QueueEvent)])
         locked = replace(runtime, position_owner=None, case_c_consumed_for_event=True)
-        classifier._context.runtime = locked
-        self.assertIs(TradingController._select_market_event_type(classifier, market), TradingEventType.MARKET_DATA_UPDATED)
-        classifier._context.runtime = replace(locked, case_c_recovery_confirmed=True)
         live = replace(market, confirmed_30m_close=False, realtime_price=Decimal("99.3"))
-        self.assertIs(TradingController._select_market_event_type(classifier, live), TradingEventType.NEW_30M_LOWER_BAND_TOUCHED)
+        for recovered in (False, True):
+            stm = TradingSTM(RegimeType.TYPE_0)
+            stm._state = TradingStateConfiguration.create_trade_management_initial_state()
+            result = stm.handle(create_market_observation(live), create_test_context(
+                market=live, runtime=replace(locked, case_c_recovery_confirmed=recovered)))
+            self.assertEqual(recovered, "G-03" in result.transition_ids)
 
     def test_stop_cancels_buy_but_only_reconciles_sell(self):
         """

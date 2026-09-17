@@ -44,12 +44,15 @@ def _create_inactive_configuration(
 def _handle_upper_band_touch(
     state: TradingStateConfiguration,
     context: TradingContextView,
-) -> TransitionOutcome:
+    *,
+    is_market_observation: bool,
+) -> TransitionOutcome | None:
     """
     함수 이름: _handle_upper_band_touch()
     기능: 상단 BB에서 노출이 없으면 하단 감시로 복귀하고 주문·포지션 관리는 보존한다.
     인자: state -> 현재 상태 구성, context -> 주문 의도와 실제 포지션을 포함한 컨텍스트
-    반환값: G-07의 하단 대기 복귀 또는 상태·액션 변경 없는 결과
+        is_market_observation -> 기존 Case 평가를 계속해야 하는 실제 시장 관측 여부
+    반환값: G-07 결과 또는 기존 Case 평가를 계속할 때 None
     작성 날짜: 2026/09/17
     """
     runtime = context.runtime
@@ -57,6 +60,9 @@ def _handle_upper_band_touch(
     if (runtime.pending_order_id is not None
             or runtime.pending_intent_id is not None
             or context.position.is_open):
+        # 실제 시장 관측은 보유·주문 관리를 계속하고, 명시적 상단 event는 기존 no-op을 유지한다.
+        if is_market_observation:
+            return None
         return create_transition_outcome("G-07", state, exclusive=True)
 
     # 세션은 유지하고 이전 하단 이벤트의 신호·타이머만 정리한다.
@@ -81,6 +87,100 @@ def _handle_upper_band_touch(
         CancelScheduledEvaluation(scope="lower-event"),
         exclusive=True,
     )
+
+
+def _handle_band_touch(
+    state: TradingStateConfiguration,
+    event: TradingEvent,
+    context: TradingContextView,
+) -> TransitionOutcome | None:
+    """
+    함수 이름: _handle_band_touch()
+    기능: 시장 관측과 명시적 접촉 event의 G-02·G-03·G-07 조건 및 액션을 한 곳에서 결정한다.
+    인자: state -> 현재 상태, event -> 처리할 event, context -> 같은 평가 시점의 불변 컨텍스트
+    반환값: 접촉 전이 또는 기존 Case 평가를 계속할 때 None
+    작성 날짜: 2026/09/17
+    """
+    event_type = event.event_type
+    runtime = context.runtime
+    market = context.market
+    # 스냅샷 없는 내부 재평가는 이전 시장 값으로 새 접촉을 만들지 않는다.
+    is_market_observation = (
+        event_type is TradingEventType.MARKET_DATA_UPDATED
+        and event.market_evaluation is not None
+    )
+
+    # 상단 우선순위와 주문·포지션 보호를 판단하는 유일한 경로다.
+    if (
+        (event_type is TradingEventType.UPPER_BAND_TOUCHED
+         or (is_market_observation and market.upper_band > 0))
+        and condition_met("upper_safe_exit", context)
+    ):
+        if state.root_state is RootState.TRADE_MANAGEMENT:
+            return _handle_upper_band_touch(
+                state, context, is_market_observation=is_market_observation,
+            )
+        return None
+
+    if not is_market_observation and event_type not in (
+        TradingEventType.LOWER_BAND_TOUCHED,
+        TradingEventType.NEW_30M_LOWER_BAND_TOUCHED,
+    ):
+        return None
+    if is_market_observation and market.lower_band <= 0:
+        return None
+    if not is_lower_touch_condition_met(context):
+        return None
+
+    # 첫 하단 접촉에서는 세 Region initial transition을 같은 microstep에 완료한다.
+    if (
+        state.root_state is RootState.LOWER_TOUCH_WATCH
+        and (event_type is TradingEventType.LOWER_BAND_TOUCHED
+             or (is_market_observation and runtime.lower_event_id is None))
+    ):
+        new_lower_event_id = resolve_lower_event_id(event, context)
+        return create_transition_outcome(
+            "G-02",
+            TradingStateConfiguration.create_trade_management_initial_state(),
+            create_open_lower_event_action(event, context),
+            create_lower_event_initialization_patch(context),
+            patch(position_owner=None),
+            QueueEvent(
+                event_type=TradingEventType.ACTIVATE_TRADE_MANAGEMENT,
+                lower_event_id=new_lower_event_id,
+            ),
+            extra_transition_ids=("O-01", "C-01", "B-01"),
+            exclusive=True,
+        )
+
+    # 새 봉 재접촉을 열 수 없어도 시장 관측은 하위 Region의 기존 조건 평가로 이어진다.
+    if (
+        state.root_state is RootState.TRADE_MANAGEMENT
+        and (event_type is TradingEventType.NEW_30M_LOWER_BAND_TOUCHED
+             or (is_market_observation
+                 and runtime.lower_event_id is not None
+                 and market.current_30m_candle_id is not None))
+        and runtime.position_owner is None
+        and runtime.pending_order_id is None
+        and market.current_30m_candle_id != runtime.touch_candle_id
+        and (not runtime.case_c_consumed_for_event or runtime.case_c_recovery_confirmed)
+    ):
+        new_lower_event_id = resolve_lower_event_id(event, context)
+        return create_transition_outcome(
+            "G-03",
+            TradingStateConfiguration.create_trade_management_initial_state(),
+            CloseLowerEvent(reason="NEW_30M_LOWER_TOUCH"),
+            create_open_lower_event_action(event, context),
+            create_lower_event_initialization_patch(context),
+            patch(position_owner=None),
+            QueueEvent(
+                event_type=TradingEventType.ACTIVATE_TRADE_MANAGEMENT,
+                lower_event_id=new_lower_event_id,
+            ),
+            extra_transition_ids=("O-01", "C-01", "B-01"),
+            exclusive=True,
+        )
+    return None
 
 
 def handle_global_transition(
@@ -208,13 +308,10 @@ def handle_global_transition(
             exclusive=True,
         )
 
-    # 상단 전략은 주문을 만들지 않으며, 노출이 없으면 다음 하단 접촉을 기다린다.
-    if (
-        state.root_state is RootState.TRADE_MANAGEMENT
-        and event_type is TradingEventType.UPPER_BAND_TOUCHED
-        and condition_met("upper_safe_exit", context)
-    ):
-        return _handle_upper_band_touch(state, context)
+    # Controller가 준비한 시장 사실을 현재 상태와 함께 해석한다.
+    band_outcome = _handle_band_touch(state, event, context)
+    if band_outcome is not None:
+        return band_outcome
 
     # 세션 시작은 Context 초기화 action과 LOWER_TOUCH_WATCH 진입만 수행한다.
     if (
@@ -238,56 +335,6 @@ def handle_global_transition(
                 pending_return_state=None,
                 trading_phase=TradingPhase.IDLE,
             ),
-            exclusive=True,
-        )
-
-    # 첫 하단 접촉에서는 세 Region initial transition을 같은 microstep에 완료한다.
-    if (
-        state.root_state is RootState.LOWER_TOUCH_WATCH
-        and event_type is TradingEventType.LOWER_BAND_TOUCHED
-        and is_lower_touch_condition_met(context)
-    ):
-        new_lower_event_id = resolve_lower_event_id(event, context)
-        return create_transition_outcome(
-            "G-02",
-            TradingStateConfiguration.create_trade_management_initial_state(),
-            create_open_lower_event_action(event, context),
-            create_lower_event_initialization_patch(context),
-            patch(position_owner=None),
-            QueueEvent(
-                event_type=TradingEventType.ACTIVATE_TRADE_MANAGEMENT,
-                lower_event_id=new_lower_event_id,
-            ),
-            extra_transition_ids=("O-01", "C-01", "B-01"),
-            exclusive=True,
-        )
-
-    # 무포지션 상태의 새 30분봉 접촉은 기존 lower event를 닫고 새 scope로 재진입한다.
-    if (
-        state.root_state is RootState.TRADE_MANAGEMENT
-        and event_type is TradingEventType.NEW_30M_LOWER_BAND_TOUCHED
-        and runtime.position_owner is None
-        and runtime.pending_order_id is None
-        and context.market.current_30m_candle_id != runtime.touch_candle_id
-        and is_lower_touch_condition_met(context)
-        and (
-            not runtime.case_c_consumed_for_event
-            or runtime.case_c_recovery_confirmed
-        )
-    ):
-        new_lower_event_id = resolve_lower_event_id(event, context)
-        return create_transition_outcome(
-            "G-03",
-            TradingStateConfiguration.create_trade_management_initial_state(),
-            CloseLowerEvent(reason="NEW_30M_LOWER_TOUCH"),
-            create_open_lower_event_action(event, context),
-            create_lower_event_initialization_patch(context),
-            patch(position_owner=None),
-            QueueEvent(
-                event_type=TradingEventType.ACTIVATE_TRADE_MANAGEMENT,
-                lower_event_id=new_lower_event_id,
-            ),
-            extra_transition_ids=("O-01", "C-01", "B-01"),
             exclusive=True,
         )
 

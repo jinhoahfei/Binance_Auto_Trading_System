@@ -174,6 +174,22 @@ class PostBuyIndicatorTests(unittest.TestCase):
         self.assertEqual(self.controller.context.market.holding_elapsed, timedelta(milliseconds=100))
         self.assertEqual(len(self.fixture.rest_client.submitted_orders), 1)
 
+    def test_queued_upper_observation_uses_filled_position_and_continues_case_c(self) -> None:
+        """무포지션 때 적재한 상단 관측도 앞선 체결 이후에는 하단 복귀 대신 포지션을 관리한다."""
+        entry = self._prepare_buy(timedelta(milliseconds=100))
+        self._enqueue_market(entry)
+        upper = replace(entry, realtime_price=Decimal("2490"), realtime_pct_b=Decimal("1.01"))
+        self._enqueue_market(upper)
+        self.assertFalse(self.fixture.position.quantity)
+        self.fixture.clock.advance(timedelta(milliseconds=200))
+        results = asyncio.run(self.controller.drain_events())
+        self.assertNotIn("G-07", [tid for result in results for tid in result.transition_ids])
+        self.assertIs(self.controller._active_stm.current_state.case_c_position_state, CaseCPositionState.CASE_C_TP_TRAILING)
+        self.assertIs(self.controller.status, TradingSessionStatus.RUNNING)
+        self.assertEqual(upper.realtime_price, self.controller.context.market.realtime_price)
+        self.assertEqual(1, len(self.fixture.rest_client.submitted_orders))
+        self.assertGreater(self.fixture.position.quantity, Decimal("0"))
+
     def test_time_exit_keeps_exchange_fill_origin_and_exact_boundary(self) -> None:
         """
         함수 이름: test_time_exit_keeps_exchange_fill_origin_and_exact_boundary()
