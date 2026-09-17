@@ -5,6 +5,7 @@ export interface RecentOrdersListProps {
     readonly orders: ReadonlyArray<RecentOrderViewModel>;
 }
 
+
 /**
  * 함수 이름: RecentOrdersList()
  * 기능: 최근 자동매매 체결을 매수·매도 의미와 함께 시간순 목록으로 표시한다.
@@ -13,6 +14,7 @@ export interface RecentOrdersListProps {
  * 작성 날짜: 2026/08/12
  */
 export function RecentOrdersList({ orders }: RecentOrdersListProps) {
+    // 주문이 없을 때의 안내와 주문별 방향·시각·수치를 같은 목록 영역에 표시한다.
     if (orders.length === 0) {
         return <p className={styles.empty}>최근 체결 내역이 없습니다.</p>;
     }

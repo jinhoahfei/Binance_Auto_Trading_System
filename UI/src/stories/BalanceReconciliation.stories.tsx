@@ -1,3 +1,5 @@
+// BalanceReconciliation의 표시 상태를 Storybook 시나리오로 제공한다.
+
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { DashboardPage } from '../routes/dashboard/DashboardPage';
 import { DEFAULT_DASHBOARD_PROPS } from '../routes/dashboard/dashboardFixture';

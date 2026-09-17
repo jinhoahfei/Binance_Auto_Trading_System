@@ -20,6 +20,7 @@ export interface IndicatorSettingsPopoverProps {
     readonly settings: IndicatorSettingsViewModel;
 }
 
+
 /**
  * 함수 이름: IndicatorSettingsPopover()
  * 기능: EMA9, 볼린저밴드와 거래량 표시 여부를 controlled toggle로 변경한다.
@@ -31,6 +32,7 @@ export function IndicatorSettingsPopover({
     onIntent,
     settings,
 }: IndicatorSettingsPopoverProps) {
+    // 설정 행별로 표시 여부와 색을 연결하고 토글 조작을 상위로 전달한다.
     return (
         <section
             aria-label="지표 설정"

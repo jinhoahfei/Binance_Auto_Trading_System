@@ -1,77 +1,84 @@
+/* 모달 뒤 화면을 덮어 현재 입력 영역을 구분한다. */
 .overlay {
-  position: fixed;
-  z-index: 80;
-  inset: 0;
-  background: var(--color-bg-overlay);
-  backdrop-filter: blur(5px);
+    position: fixed;
+    z-index: 80;
+    inset: 0;
+    background: var(--color-bg-overlay);
+    backdrop-filter: blur(5px);
 }
 
+/* 모달 본문을 화면 중앙에 배치한다. */
 .content {
-  position: fixed;
-  z-index: 81;
-  top: 50%;
-  left: 50%;
-  max-height: calc(100vh - 48px);
-  overflow: visible;
-  transform: translate(-50%, -50%);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-surface-raised);
-  box-shadow: var(--shadow-modal);
-  color: var(--color-text-primary);
+    position: fixed;
+    z-index: 81;
+    top: 50%;
+    left: 50%;
+    max-height: calc(100vh - 48px);
+    overflow: visible;
+    transform: translate(-50%, -50%);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-surface-raised);
+    box-shadow: var(--shadow-modal);
+    color: var(--color-text-primary);
 }
 
+/* 작은 모달의 크기와 고정 높이 머리말을 설정한다. */
 .compact {
-  width: 420px;
-  padding: 18px 17px 17px;
+    width: 420px;
+    padding: 18px 17px 17px;
 }
 
 .compact.fixedHeight {
-  display: flex;
-  flex-direction: column;
-  height: 232px;
+    display: flex;
+    flex-direction: column;
+    height: 232px;
 }
 
 .compact.fixedHeight > .headingWithVisual {
-  flex: 0 0 62px;
+    flex: 0 0 62px;
 }
 
 .compact.fixedHeight .description {
-  font-size: 12px;
+    font-size: 12px;
 }
 
+/* 내용이 많은 모달의 폭과 여백을 설정한다. */
 .wide {
-  width: 560px;
-  padding: 26px 28px 28px;
+    width: 560px;
+    padding: 26px 28px 28px;
 }
 
+/* 제목과 아이콘이 있는 머리말의 배치를 구성한다. */
 .title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 24px;
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 24px;
 }
 
 .headingWithVisual {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
 }
 
 .leadingVisual {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  /* Text grid는 유지하고 Figma status icon의 광학 중심만 4px 오른쪽으로 맞춘다. */
-  transform: translateX(4px);
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+
+    /* Text grid는 유지하고 Figma status icon의 광학 중심만 4px 오른쪽으로 맞춘다. */
+    transform: translateX(4px);
 }
 
+/* 모달의 보조 설명을 읽기 쉬운 줄 높이로 표시한다. */
 .description {
-  margin: 2px 0 0;
-  color: var(--color-text-secondary);
-  font-size: 12.5px;
-  line-height: 18px;
-  word-break: keep-all;
+    margin: 2px 0 0;
+    color: var(--color-text-secondary);
+    font-size: 12.5px;
+    line-height: 18px;
+    word-break: keep-all;
 }

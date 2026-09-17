@@ -4,6 +4,7 @@ import { TraderPanel } from './TraderPanel';
 
 describe('TraderPanel', () => {
     it('authoritative risk 입력이 없거나 명시적으로 해제됐으면 운영자 경고를 표시하지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { rerender } = render(
             <TraderPanel
                 activeTab="recent"
@@ -13,6 +14,7 @@ describe('TraderPanel', () => {
             />,
         );
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
         rerender(
@@ -36,6 +38,7 @@ describe('TraderPanel', () => {
     });
 
     it('risk policy unavailable과 session policy version 불일치를 차단 시도 전에도 표시한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { rerender } = render(
             <TraderPanel
                 activeTab="recent"
@@ -48,6 +51,7 @@ describe('TraderPanel', () => {
             />,
         );
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.getByText(/승인된 위험 정책을 확인할 수 없어/u)).toBeInTheDocument();
 
         rerender(
@@ -68,6 +72,7 @@ describe('TraderPanel', () => {
     });
 
     it('configured-unbounded 정책을 unavailable·version mismatch와 다른 운영 상태로 표시한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -86,6 +91,7 @@ describe('TraderPanel', () => {
 
         const notice = screen.getByRole('alert', { name: '운영자 확인 필요' });
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(within(notice).getByText(/세 금액 상한은 명시적으로 무제한/u))
             .toBeInTheDocument();
         expect(within(notice).queryByText(/위험 정책을 확인할 수 없어/u))
@@ -95,6 +101,7 @@ describe('TraderPanel', () => {
     });
 
     it('configured-unbounded에서도 계산된 노출·PnL·source version을 전체 표시한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -136,6 +143,7 @@ describe('TraderPanel', () => {
     });
 
     it('차단 판정만 전달된 불완전 component 입력도 성공으로 오인하지 않는다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -145,6 +153,7 @@ describe('TraderPanel', () => {
             />,
         );
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.getByText('백엔드 위험 보호 장치가 신규 매수를 차단했습니다.'))
             .toBeInTheDocument();
     });
@@ -157,6 +166,7 @@ describe('TraderPanel', () => {
         ['RISK_DAILY_LOSS_EXCEEDED', '오늘의 누적 손실이 승인된 위험 한도에 도달했습니다.'],
         ['RISK_POSITION_NOTIONAL_EXCEEDED', '예상 포지션 금액이 승인된 누적 위험 한도를 초과했습니다.'],
     ])('%s typed risk 차단을 안전한 운영자 문구로 표시한다', (risk_block_reason, summary) => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -168,11 +178,13 @@ describe('TraderPanel', () => {
 
         const notice = screen.getByRole('alert', { name: '운영자 확인 필요' });
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(within(notice).getByText(summary)).toBeInTheDocument();
         expect(within(notice).getByText(/^운영자 조치:/u)).toBeInTheDocument();
     });
 
     it('manual kill과 process ownership 모호성을 하나의 접근 가능한 운영자 surface에 표시한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -198,6 +210,7 @@ describe('TraderPanel', () => {
     });
 
     it('manual kill activation과 cleanup 완료를 분리해 미완료 상태를 추가 경고한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -211,12 +224,14 @@ describe('TraderPanel', () => {
 
         const notice = screen.getByRole('alert', { name: '운영자 확인 필요' });
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(within(notice).getByText(/수동 안전 차단이 활성화/u)).toBeInTheDocument();
         expect(within(notice).getByText(/주문 정리와 보유 수량 청산이 아직 완료되지 않았/u))
             .toBeInTheDocument();
     });
 
     it('policy hot-swap 뒤 활성 epoch에 고정된 cleanup provenance를 별도 경고한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -234,6 +249,7 @@ describe('TraderPanel', () => {
 
         const notice = screen.getByRole('alert', { name: '운영자 확인 필요' });
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(within(notice).getByText(/활성화 당시 정책 v4/u)).toHaveTextContent(
             '주문 취소 및 포지션 청산',
         );
@@ -242,8 +258,10 @@ describe('TraderPanel', () => {
     });
 
     it('allowlist 밖 risk reason에 credential이나 raw payload가 섞여도 원문을 표시하지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const raw_secret = 'RISK_POLICY_UNAVAILABLE apiKey=raw-secret-marker';
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -255,6 +273,7 @@ describe('TraderPanel', () => {
 
         const notice = screen.getByRole('alert', { name: '운영자 확인 필요' });
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(within(notice).getByText('백엔드 위험 보호 장치가 신규 매수를 차단했습니다.'))
             .toBeInTheDocument();
         expect(screen.queryByText(raw_secret)).not.toBeInTheDocument();
@@ -262,6 +281,7 @@ describe('TraderPanel', () => {
     });
 
     it('선택 탭만 tab 순서에 두고 tab과 tabpanel을 양방향으로 연결한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -333,8 +353,10 @@ describe('TraderPanel', () => {
         target_label,
         target_tab,
     }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab={active_tab}
@@ -360,8 +382,10 @@ describe('TraderPanel', () => {
     });
 
     it('CR-06: 실시간 지표 탭 요청을 controlled intent로 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -372,6 +396,8 @@ describe('TraderPanel', () => {
         );
 
         fireEvent.click(screen.getByRole('tab', { name: '실시간 지표' }));
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(handle_intent).toHaveBeenCalledWith({
             type: 'TRADER_TAB_REQUESTED',
             tab: 'realtime',
@@ -379,8 +405,10 @@ describe('TraderPanel', () => {
     });
 
     it('Case 3.1: 전체 보기 intent를 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"
@@ -391,11 +419,12 @@ describe('TraderPanel', () => {
         );
 
         fireEvent.click(screen.getByRole('button', { name: '전체 보기' }));
-        expect(handle_intent).toHaveBeenCalledWith({ type: 'ALL_ORDERS_REQUESTED' });
+        expect(handle_intent).toHaveBeenCalledWith({ type: 'ALL_ORDERS_REQUESTED' });  // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     });
 
     /** Communication Case 3 메시지 1의 optional boundary handler 부재 경계를 검증한다. */
     it('test_all_orders_without_handler_is_safe_no_op: handler가 없으면 전체 보기는 no-op이다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <TraderPanel
                 activeTab="recent"

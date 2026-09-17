@@ -10,6 +10,7 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
 };
 
+
 /// 함수 이름: runtime_process_exists()
 /// 기능: signal이나 kill 없이 native process handle의 signaled 상태만 확인한다.
 /// 인자: runtime_pid -> ownership artifact의 positive PID
@@ -29,6 +30,7 @@ pub(in crate::sidecar) fn runtime_process_exists(runtime_pid: u32) -> bool {
     unsafe { CloseHandle(process_handle) }; // 조회용 handle을 항상 닫고 process 자체는 변경하지 않는다.
     result != WAIT_OBJECT_0
 }
+
 
 /// 함수 이름: disable_process_core_dumps()
 /// 기능: 현재 process와 상속 child에서 자동 Windows Error Reporting invocation을 막는다.

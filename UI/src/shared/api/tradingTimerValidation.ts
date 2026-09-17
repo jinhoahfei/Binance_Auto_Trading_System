@@ -1,5 +1,6 @@
 import type { BackendTradingTimer } from '../contracts';
 
+
 /**
  * 함수 이름: is_timer_timestamp()
  * 기능: 타이머의 서버 시각을 UTC 형식으로 제한해 클라이언트 시간대 추측을 막는다.
@@ -12,6 +13,7 @@ export function is_timer_timestamp(value: unknown): value is string {
         && Number.isFinite(Date.parse(value));  // 화면의 로컬 시각으로 누락된 시간대를 채우지 않는다.
 }
 
+
 /**
  * 함수 이름: is_trading_timer()
  * 기능: 선택적 타이머의 시간 범위·상태·회차·리셋 사유 계약을 검증한다.
@@ -21,6 +23,7 @@ export function is_timer_timestamp(value: unknown): value is string {
  */
 export function is_trading_timer(value: unknown): value is BackendTradingTimer {
     if (value === null || typeof value !== 'object') return false;
+
     const timer = value as Record<string, unknown>;
     if (typeof timer.timer_id !== 'string' || !timer.timer_id.trim()
         || !['window', 'hold', 'time_exit'].includes(String(timer.kind))
@@ -38,5 +41,6 @@ export function is_trading_timer(value: unknown): value is BackendTradingTimer {
     if (duration <= 0 || remaining > duration) return false;
     if (['waiting', 'stopped'].includes(String(timer.state)) && remaining !== duration) return false;
     if (['completed', 'expired'].includes(String(timer.state)) && remaining !== 0) return false;
+
     return true;  // 실행 여부를 지표값에서 다시 추론하지 않는다.
 }

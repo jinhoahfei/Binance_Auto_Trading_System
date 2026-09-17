@@ -1,6 +1,12 @@
 //! 현재 앱 실행에 귀속되는 OS 사건만 정규화한다. 원문 메시지는 파일로 내보내지 않는다.
 use serde_json::{json, Value};
 
+
+/// 함수 이름: collect()
+/// 기능: 지원 OS에서 대상 PID의 공개 로그 증거를 제한된 시간·크기로 수집한다.
+/// 인자: native_pid -> 앱 PID, backend_pid -> 선택적 backend PID
+/// 반환값: 수집·정규화한 증거 또는 실패/지원 불가 상태의 JSON
+/// 작성 날짜: 2026/09/17
 #[cfg(target_os = "macos")]
 pub fn collect(native_pid: u32, backend_pid: Option<u32>) -> Value {
     use std::{
@@ -108,11 +114,23 @@ pub fn collect(native_pid: u32, backend_pid: Option<u32>) -> Value {
     result
 }
 
+
+/// 함수 이름: collect()
+/// 기능: 지원하지 않는 OS에서는 로그 수집을 시도하지 않고 명시적 지원 불가 상태를 반환한다.
+/// 인자: _native_pid -> 사용하지 않는 앱 PID, _backend_pid -> 사용하지 않는 backend PID
+/// 반환값: 수집·정규화한 증거 또는 실패/지원 불가 상태의 JSON
+/// 작성 날짜: 2026/09/17
 #[cfg(not(target_os = "macos"))]
 pub fn collect(_native_pid: u32, _backend_pid: Option<u32>) -> Value {
     json!({"status":"unsupported"})
 }
 
+
+/// 함수 이름: owns_message()
+/// 기능: PID 일부가 아닌 완전한 대상 식별자가 로그 메시지에 있는지 검사한다.
+/// 인자: message -> 로그 메시지, pid -> 대상 프로세스 ID
+/// 반환값: 대상 PID가 명시되어 있으면 true
+/// 작성 날짜: 2026/09/17
 fn owns_message(message: &str, pid: u32) -> bool {
     // PID 일부 일치나 다른 WebContent process를 당해 앱의 증거로 삼지 않는다.
     [
@@ -132,7 +150,14 @@ fn owns_message(message: &str, pid: u32) -> bool {
     })
 }
 
+
+/// 함수 이름: normalize()
+/// 기능: 신뢰한 OS 출처와 정확한 대상 PID의 완료된 중지·제한 이벤트만 증거로 추출한다.
+/// 인자: records -> 공개 로그 행, native_pid -> 앱 PID, backend_pid -> 선택적 backend PID
+/// 반환값: 원문 자유 문자열을 제외한 정규화 증거 JSON
+/// 작성 날짜: 2026/09/17
 pub fn normalize(records: &[Value], native_pid: u32, backend_pid: Option<u32>) -> Value {
+    // 정확한 대상 PID와 신뢰한 OS 출처의 기록만 분류한다.
     let mut events = Vec::new();
     let mut unclassified = 0;
     for row in records {
@@ -155,6 +180,8 @@ pub fn normalize(records: &[Value], native_pid: u32, backend_pid: Option<u32>) -
             unclassified += 1;
             continue;
         }
+
+        // 부정·요청·예정 표현을 걸러 완료된 상태를 직접 증거로 오인하지 않는다.
         let lower = message.to_lowercase();
         let negated = [
             "not ",
@@ -205,6 +232,12 @@ pub fn normalize(records: &[Value], native_pid: u32, backend_pid: Option<u32>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 함수 이름: visibility_and_policy_are_not_suspension_evidence()
+    /// 기능: 창 가시성과 요청 정책만으로 OS 중지를 판정하지 않는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 추측성 증거를 수락하면 테스트 실패
+    /// 작성 날짜: 2026/09/17
     #[test]
     fn visibility_and_policy_are_not_suspension_evidence() {
         let rows = vec![
@@ -214,6 +247,12 @@ mod tests {
         assert_eq!(result["direct_evidence"], false);
         assert!(!result.to_string().contains("SECRET_CANARY"));
     }
+
+    /// 함수 이름: negative_or_application_messages_are_not_direct_os_proof()
+    /// 기능: 부정·예정 표현과 앱 자체 메시지를 직접 OS 증거로 수락하지 않는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 비직접 증거를 수락하면 테스트 실패
+    /// 작성 날짜: 2026/09/17
     #[test]
     fn negative_or_application_messages_are_not_direct_os_proof() {
         for message in [
@@ -233,6 +272,12 @@ mod tests {
         ];
         assert_eq!(normalize(&rows, 42, None)["direct_evidence"], false);
     }
+
+    /// 함수 이름: target_identity_and_direct_event_are_required()
+    /// 기능: PID의 부분 일치를 거부하고 정확한 대상의 직접 이벤트만 수락하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 대상 식별 계약을 어기면 테스트 실패
+    /// 작성 날짜: 2026/09/17
     #[test]
     fn target_identity_and_direct_event_are_required() {
         let rows = vec![

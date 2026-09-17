@@ -175,6 +175,15 @@ export const CONNECTION_VALIDATION_FIELDS = [
     "buy",
     "ema"
 ] as const;
+
+
+/**
+ * 함수 이름: identify_connection_validation_field()
+ * 기능: 검증 오류가 가리키는 허용된 계약 필드 경로만 식별한다.
+ * 인자: message -> 계약 검증 오류 문구
+ * 반환값: 일치하는 필드 경로 또는 undefined
+ * 작성 날짜: 2026/09/17
+ */
 export function identify_connection_validation_field(message: string): string | undefined {
     return CONNECTION_VALIDATION_FIELDS.find((field) => message.startsWith(field + ' ') || message.startsWith(field + '.') || message.startsWith(field + '['));
 }

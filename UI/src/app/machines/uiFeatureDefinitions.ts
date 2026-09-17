@@ -20,6 +20,7 @@ import type { UiApplicationFacadeOptions } from '../control/uiApplicationContrac
  * 작성 날짜: 2026/09/16
  */
 export function create_feature_definitions(options: Omit<UiApplicationFacadeOptions, 'get_current_kst_date'> & { initial_monotonic_ms?: number }) {
+    // 명시한 초기값만 각 기능에 주입하고 생략된 옵션은 기능별 기본값을 유지한다.
     const definitions = {
         account_summary: create_account_summary_machine({
             ...(options.account_strategy === undefined ? {} : {
@@ -151,7 +152,7 @@ export function create_feature_definitions(options: Omit<UiApplicationFacadeOpti
             ...(options.has_open_position === undefined ? {} : {
                 has_open_position: options.has_open_position,
             }),
-            // 초기 backend 평단가를 반올림 없이 trading actor의 표시 상태로 전달한다.
+            // 초기 backend 평단가를 반올림 없이 매매 상태 정의의 표시 데이터로 전달한다.
             position_average_entry_price: options.position_average_entry_price ?? null,
             residual_quantity: options.residual_quantity ?? '0',
             residual_cost_basis: options.residual_cost_basis ?? '0',

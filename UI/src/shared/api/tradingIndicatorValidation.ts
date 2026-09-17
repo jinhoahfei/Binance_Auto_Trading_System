@@ -3,6 +3,7 @@ import { is_timer_timestamp, is_trading_timer } from './tradingTimerValidation';
 
 const DECIMAL_PATTERN = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/u;
 
+
 /**
  * 함수 이름: is_nullable_version()
  * 기능: 미평가 version 또는 음수가 아닌 정확한 정수만 수락한다.
@@ -14,6 +15,7 @@ function is_nullable_version(value: unknown): boolean {
     return value === null || (Number.isSafeInteger(value) && Number(value) >= 0);
 }
 
+
 /**
  * 함수 이름: is_trading_indicator_snapshot()
  * 기능: 초기 snapshot과 event의 선택적 전략 지표 계약을 동일하게 검증한다.
@@ -23,6 +25,7 @@ function is_nullable_version(value: unknown): boolean {
  */
 export function is_trading_indicator_snapshot(value: unknown): value is BackendTradingIndicatorSnapshot {
     if (value === null || typeof value !== 'object') return false;
+
     const snapshot = value as Record<string, unknown>;
     if (snapshot.server_time !== undefined && snapshot.server_time !== null && !is_timer_timestamp(snapshot.server_time)) return false;
     if (typeof snapshot.phase_key !== 'string' || snapshot.phase_key.length === 0
@@ -32,9 +35,11 @@ export function is_trading_indicator_snapshot(value: unknown): value is BackendT
     // 단계는 지표 행이 없는 주문·종료 상태도 전달하며 각 Case를 한 번만 허용한다.
     if (snapshot.phases !== undefined) {
         if (!Array.isArray(snapshot.phases)) return false;
+
         const strategies = new Set<string>();
         for (const candidate of snapshot.phases) {
             if (candidate === null || typeof candidate !== 'object') return false;
+
             const phase = candidate as Record<string, unknown>;
             if ((phase.strategy !== 'CASE_B' && phase.strategy !== 'CASE_C')
                 || typeof phase.phase !== 'string' || !phase.phase
@@ -46,9 +51,12 @@ export function is_trading_indicator_snapshot(value: unknown): value is BackendT
 
     // 중복 행과 불완전한 참·거짓 판정은 정상 전략 수치로 표시하지 않는다.
     const identities = new Set<string>();
+
     return snapshot.conditions.every((candidate: unknown) => {
         if (candidate === null || typeof candidate !== 'object') return false;
+
         const row = candidate as Record<string, unknown>;
+
         // 구버전은 timer 생략을 허용하되 새 타이머에는 서버 기준 시각이 반드시 동반되어야 한다.
         if (row.timer !== undefined && row.timer !== null
             && (!is_trading_timer(row.timer) || !is_timer_timestamp(snapshot.server_time))) return false;
@@ -67,6 +75,7 @@ export function is_trading_indicator_snapshot(value: unknown): value is BackendT
             || !Number.isFinite(Date.parse(row.evaluated_at)))) return false;
         if (row.satisfied !== null && (row.value === null || row.threshold === null
             || row.evaluated_at === null || row.market_version === null || row.context_version === null)) return false;
+
         const identity = `${row.strategy}:${row.phase}:${row.condition_id}`;
         if (identities.has(identity)) return false;
         identities.add(identity);  // 동일 ID라도 다른 Case·단계의 조건은 별도 행이다.

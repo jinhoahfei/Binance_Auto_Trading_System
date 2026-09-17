@@ -1,165 +1,173 @@
+/* 거래 요약 카드를 같은 행의 격자로 배치한다. */
 .grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 24px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 24px;
 }
 
 .card {
-  box-sizing: border-box;
-  height: 110px;
-  overflow: hidden;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 10px;
-  background: var(--color-bg-surface);
-  box-shadow: var(--shadow-control);
-  color: var(--color-text-primary);
+    box-sizing: border-box;
+    height: 110px;
+    overflow: hidden;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 10px;
+    background: var(--color-bg-surface);
+    box-shadow: var(--shadow-control);
+    color: var(--color-text-primary);
 }
 
 .title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 18px;
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 18px;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 18px;
 }
 
+/* 요약 항목별 강조 선의 색을 구분한다. */
 .accent {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 4px;
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
 }
 
 .dailyAccent,
 .sellAccent {
-  background: var(--color-status-positive-strong);
+    background: var(--color-status-positive-strong);
 }
 
 .positionAccent {
-  background: var(--color-bg-control-strong);
+    background: var(--color-bg-control-strong);
 }
 
 .feeAccent {
-  background: var(--color-text-tertiary);
+    background: var(--color-text-tertiary);
 }
 
+/* 요약 수치에 공통 숫자 글꼴과 정렬 규칙을 적용한다. */
 .dailyValue,
 .sellRate,
 .sellCount,
 .positionValue,
 .feeValue,
 .sellDetails strong {
-  font-family: var(--font-numeric);
-  font-variant-numeric: tabular-nums;
+    font-family: var(--font-numeric);
+    font-variant-numeric: tabular-nums;
 }
 
 .dailyValue {
-  margin: -1px 0 0;
-  font-size: 36px;
-  font-weight: 600;
-  line-height: 46px;
-  letter-spacing: -0.36px;
+    margin: -1px 0 0;
+    font-size: 36px;
+    font-weight: 600;
+    line-height: 46px;
+    letter-spacing: -0.36px;
 }
 
+/* 매도 성과의 비율·건수·상세값을 한 카드에 배치한다. */
 .sellCard {
-  padding-inline: 16px;
+    padding-inline: 16px;
 }
 
 .sellHeadline {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  height: 34px;
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    height: 34px;
 }
 
 .sellRate,
 .sellCount {
-  margin: 0;
-  font-weight: 600;
+    margin: 0;
+    font-weight: 600;
 }
 
 .sellRate {
-  font-size: 24px;
-  line-height: 30px;
-  letter-spacing: -0.24px;
+    font-size: 24px;
+    line-height: 30px;
+    letter-spacing: -0.24px;
 }
 
 .sellCount {
-  padding-bottom: 1px;
-  color: var(--color-text-primary);
-  font-size: 20px;
-  line-height: 24px;
-  letter-spacing: -0.2px;
+    padding-bottom: 1px;
+    color: var(--color-text-primary);
+    font-size: 20px;
+    line-height: 24px;
+    letter-spacing: -0.2px;
 }
 
 .sellDetails {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  row-gap: 3px;
-  padding-top: 4px;
-  border-top: 1px solid var(--color-border-strong);
-  color: var(--color-text-secondary);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 16px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    row-gap: 3px;
+    padding-top: 4px;
+    border-top: 1px solid var(--color-border-strong);
+    color: var(--color-text-secondary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 16px;
 }
 
 .sellDetails strong {
-  font-size: 12px;
-  font-weight: 600;
+    font-size: 12px;
+    font-weight: 600;
 }
 
+/* 보유 수량과 수수료의 주값·보조값을 표시한다. */
 .positionValue {
-  margin: 12px 0 0;
-  color: var(--color-text-primary);
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 30px;
-  text-align: center;
-  letter-spacing: -0.24px;
+    margin: 12px 0 0;
+    color: var(--color-text-primary);
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 30px;
+    text-align: center;
+    letter-spacing: -0.24px;
 }
 
 .feeValue {
-  margin: 4px 0 0;
-  color: var(--color-text-secondary);
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 30px;
-  letter-spacing: -0.24px;
+    margin: 4px 0 0;
+    color: var(--color-text-secondary);
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 30px;
+    letter-spacing: -0.24px;
 }
 
 .feeHelper {
-  overflow: hidden;
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    overflow: hidden;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
+/* 성과값의 긍정·부정·중립 표시색을 구분한다. */
 .positive {
-  color: var(--color-text-positive);
+    color: var(--color-text-positive);
 }
 
 .negative {
-  color: var(--color-text-negative);
+    color: var(--color-text-negative);
 }
 
 .neutral {
-  color: var(--color-text-tertiary);
+    color: var(--color-text-tertiary);
 }
 
+/* 화면 조건 (max-width: 1120px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 1120px) {
-  .grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+    /* 거래 요약 카드를 같은 행의 격자로 배치한다. */
+    .grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }

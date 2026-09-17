@@ -1,6 +1,6 @@
 # UI STM 구현 설명서
 
-> **2026-09-17 개정:** STM–Controller 책임 분리 이후의 실제 구현을 본문과 코드 예시에 반영했습니다. 파일명의 날짜는 최초 작성일입니다. 변경 전후 비교와 상세 검증 기록은 [UI STM–Controller 책임 분리 설명서][separation]에서 확인할 수 있습니다.
+> **2026-09-17 개정:** STM–Controller 책임 분리와 UI 전체 주석·공백 보완 이후의 실제 구현을 반영했습니다. 코드 발췌와 소스·행동 테스트 링크를 현재 위치에 맞췄으며, 책임 분리 검증과 이후 코딩 컨벤션 재점검 결과를 14절에서 구분합니다. 파일명의 날짜는 최초 작성일입니다. 상세 기록은 [UI STM–Controller 책임 분리 설명서][separation]와 [UI 전체 코딩 컨벤션 재점검 보고서][conventionsreport]에서 확인할 수 있습니다.
 
 기준: 2026-09-17 작업 폴더의 실제 구현 · XState `5.32.5`
 
@@ -92,6 +92,14 @@ STM은 API·폴더 선택·CSV·타이머·종료를 직접 실행하지 않습�
 
 화면 이동 ES2는 [uiApplicationMachine.ts][root]에 있습니다. 각 기능 폴더의 `components/`와 [App.tsx][app]·[AppModalHost.tsx][modalhost]는 화면 모델을 받아 실제 화면과 입력 callback을 구성합니다.
 
+### 2.3 현재 소스의 주석과 작업 구획 읽기
+
+[코딩 컨벤션][conventions]의 §4는 빈 줄, §5는 함수·클래스·블록·문장 주석을 다룹니다. Python용 문서의 설명 원칙을 TypeScript/JavaScript의 JSDoc·`//`, CSS의 `/* */`, Rust의 `///`·`//` 등 각 언어의 문법으로 적용했습니다.
+
+클래스·함수의 문서 주석은 역할과 인자·반환값을 설명하고, 본문의 블록 주석과 빈 줄은 입력 준비·전이 평가·요청 실행·결과 반영 같은 작업 경계를 구분합니다. 한 문장의 설명은 코드 뒤에 두 칸 이상 띄운 주석으로 표시합니다. 단순 재수출·타입·설정 소스에는 필요한 경우 맨 위에 파일 역할을 설명했습니다. CSS와 테스트도 스타일 영역 또는 준비·입력·검증 단계의 설명을 보완했습니다.
+
+이 보완은 실행 코드·상태 전이·테스트 기대값을 바꾸지 않았습니다. 따라서 아래 책임 분리와 동작 설명은 유지되며, 주석 추가로 이동한 줄 번호와 검증 기록을 갱신했습니다. JSON처럼 주석을 허용하지 않는 형식과 자동 생성 코드·잠금 파일·시각 자산의 처리 근거는 [전체 점검 보고서][conventionsreport]에 있습니다.
+
 ## 3. 실제 XState 상태 계층
 
 다음 트리는 코드의 상태 이름을 사용합니다. `parallel` 아래의 Region들은 부모가 활성화된 동안 함께 활성화됩니다. `SCREEN`처럼 `parallel`이 아닌 복합 상태에서는 자식 중 하나만 활성화됩니다.
@@ -161,6 +169,7 @@ uiApplicationMachine
 
 ```ts
 constructor(private readonly machine: AnyStateMachine) {
+    // 상태와 요청만 계산하며 actor·Port·타이머를 생성하지 않는다.
     const [snapshot, actions] = initialTransition(machine);
     this.snapshot = snapshot;
     this.initial_actions = this.read_actions(actions);
@@ -591,7 +600,7 @@ HTTP 202는 요청 수락이므로 그 응답만으로 창을 닫지 않습니�
 
 ## 12. 실제 코드로 따라가는 자동매매 시작
 
-교수님, 적용 REGIME이 있고 API가 연결됐으며 시작이 허용된 상태라고 가정하겠습니다. 아래 코드는 현재 파일에서 발췌했습니다. 요청 데이터 예시는 실행 코드를 대신하는 것이 아니라 STM과 Controller 사이에서 전달하는 값을 설명합니다.
+교수님, 적용 REGIME이 있고 API가 연결됐으며 시작이 허용된 상태라고 가정하겠습니다. 아래 코드는 현재 파일에서 발췌했으며, 선언 위의 문서 주석과 주변 코드는 일부 생략했습니다. 메서드 본문의 작업별 주석과 빈 줄은 현재 소스에 맞췄습니다. 요청 데이터 예시는 실행 코드를 대신하는 것이 아니라 STM과 Controller 사이에서 전달하는 값을 설명합니다.
 
 ### 12.1 React callback → Store → Controller
 
@@ -607,10 +616,12 @@ Controller는 Router가 수락한 이벤트를 큐 진입점에 전달합니다.
 
 ```ts
 dispatch(intent: UiApplicationIntent): boolean {
+    // 기존 입력 수락 계약을 유지하며 한 intent의 이벤트들은 한 묶음으로 전달한다.
     const router = new UiIntentRouter(this.get_snapshot());
     const accepted = router.dispatch(intent);
     if (accepted && router.events.length) this.handle_event({ type: 'ui.batch', events: router.events,
         ...(intent.type === 'BACKEND_SNAPSHOT_SYNCHRONIZED' ? { server_snapshot: intent.snapshot } : {}) });
+
     return accepted;
 }
 ```
@@ -663,12 +674,17 @@ command: {
 ```ts
 handle(event: UiDomainEvent, input: UIEvaluationInput): UITransitionResult {
     if (this.snapshot.status !== 'active') return this.result([]);
+
+    // 화면 exit Action이 실제 이전 상태를 보관하도록 직전 value를 명시적으로 전달한다.
     const [snapshot, actions] = transition(this.machine, this.snapshot, {
         type: 'ui.evaluate',
         evaluation: { ...input, previous_value: this.snapshot.value },
         events: [event],
     });
+
+    // 외부 실행 전에 완성된 상태를 확정해 Controller가 중간 상태를 발행하지 않게 한다.
     this.snapshot = snapshot;
+
     return this.result(this.read_actions(actions));
 }
 ```
@@ -702,6 +718,7 @@ live 구성의 `port`는 `BackendUiAdapter`입니다. 실제 Port 참조를 가�
 
 ```ts
 private finish(key: string, work: PendingWork, kind: 'done' | 'error', value: unknown): void {
+    // token 판정은 STM의 책임이며 여기서는 실행 수명이 끝난 callback만 거른다.
     if (this.pending.get(key) !== work) return;
     this.pending.delete(key);
     this.deliver({ type: `command.${key}.${kind}`, token: work.token,
@@ -725,8 +742,11 @@ Controller가 완료 이벤트를 큐에서 꺼내 STM을 평가하면, STM은 `
 
 ```ts
 private apply(result: UITransitionResult): void {
+    // STM에는 최종 상태가 이미 반영되어 있으므로 Port 호출 중 조회해도 같은 값을 읽는다.
     this.executor.execute(result.actions);
     if (!this.is_started) return;
+
+    // 실행 중 폐기되지 않았을 때만 완성된 snapshot을 모든 현재 구독자에게 발행한다.
     this.listeners.forEach(listener => {
         try { listener(result.snapshot); }
         catch (error) { queueMicrotask(() => { throw error; }); }
@@ -827,9 +847,9 @@ EXPORT_CSV: [
 
 기능별 기존 테스트는 [createFeatureTestController.ts][featuretest]를 통해 실제 STM–Controller 경계에서 실행합니다. 기대한 상태·표시·결과는 유지하고, actor 실행에 의존하던 테스트 준비만 바꿨습니다. 자정 테스트도 STM에 지연 callback을 주는 대신 고정 시각을 사용합니다.
 
-### 14.1 변경 전후 비교와 최근 검증 결과
+### 14.1 STM–Controller 책임 분리 당시의 변경 전후 비교
 
-기준 commit은 `58727e2901a04a2a0faeb6dd594b94dc51b232d8`입니다. 책임 분리 전에 고정 시간·가짜 Adapter·제어 가능한 Promise로 세 시나리오의 기준 기록을 만들었으며, 변경 뒤 기대 기록을 갱신하지 않고 재생하여 일치하는지 확인했습니다.
+책임 분리 비교의 기준 commit은 `58727e2901a04a2a0faeb6dd594b94dc51b232d8`입니다. 책임 분리 전에 고정 시간·가짜 Adapter·제어 가능한 Promise로 세 시나리오의 기준 기록을 만들었으며, 변경 뒤 기대 기록을 갱신하지 않고 재생하여 일치하는지 확인했습니다. 이후 주석·공백 보완의 비교 기준은 14.2절에서 따로 설명합니다.
 
 | 비교 시나리오 | 보존한 관찰값 |
 |---|---|
@@ -839,13 +859,32 @@ EXPORT_CSV: [
 
 2026-09-17 책임 분리 구현 검증에서 **전체 UI 60개 파일, 660개 테스트가 통과**했습니다. 여기에는 기존 로컬 Python backend 프로세스 연동과 182개 ID 행동 검증이 포함됩니다. 세 기준 기록 모두 일치했고, TypeScript 타입 검사와 Vite production build도 통과했습니다. build에는 503.31 kB chunk가 기본 경고 기준 500 kB를 넘는다는 경고가 남아 있습니다.
 
-세부 명령·기준 기록 SHA-256·결과는 [검증 기록][verification]과 [책임 분리 구현 보고서][separation]에 있습니다. 이 수치는 문서 개정 전에 완료한 구현 검증 결과이며, 문서 수정만을 이유로 전체 실행 테스트를 다시 수행한 것은 아닙니다. 이번 문서 개정에서는 코드 발췌 15개, 파일·줄 링크 441개와 182개 ID 색인을 현재 소스에 대조했습니다. 32개 표의 ID·event·설계 원문 연결은 유지하고 행동 테스트의 등록 위치를 현재 줄 번호로 갱신했습니다.
+세부 명령·기준 기록 SHA-256·결과는 [검증 기록][verification]과 [책임 분리 구현 보고서][separation]에 있습니다. 이 결과는 책임 분리 구현 시점의 기록입니다.
 
-### 14.2 검증 범위와 별도 발견 사항
+### 14.2 UI 전체 주석·공백 보완 이후의 최신 검증
 
-실제 Binance 주문, 전체 backend 테스트군, 네이티브 바이너리 패키징·실기 종료는 이번 검증에 포함하지 않았습니다. 네이티브 종료 완료를 기다리는 UI 계약은 기존 테스트로 확인했습니다. 회귀 시나리오의 일치가 모든 가능한 이벤트 순서에 대한 수학적 증명을 뜻하지는 않습니다.
+2026-09-17 전체 재점검에서는 이전에 변경되지 않았던 파일까지 포함하여 UI의 관리 파일 374개를 점검하고 296개 파일의 주석·공백을 보완했습니다. 비교 기준은 재점검 시작 직전의 작업 폴더로, 앞선 주석 보완의 미커밋 변경도 포함합니다. 기존 작업을 포함한 Git 기준 누적 변경은 298개 파일이며, 앞 절의 책임 분리 기준 commit과는 다른 비교입니다.
 
-추가 Communication 대응표 검사는 UI 관련 참조 132개 모두 유효했지만, 기존 backend 테스트 이름을 가리키는 낡은 참조 3개 때문에 전체 검사는 통과하지 않았습니다. 해당 항목은 [별도 발견 사항][separation]에 기록했고 책임 분리와 함께 수정하지 않았습니다. backend 거래 정책·저장 형식·네이티브 종료 정책·화면 스타일과 원래 Event–Action ID는 이번 구조 변경에서 유지했습니다.
+| 검증 항목 | 최신 결과 |
+|---|---|
+| 전체 UI 테스트 | 변경 전후 모두 60개 파일·660개 통과; 로컬 backend 연동과 182개 ID 검증 포함 |
+| 네이티브 라이브러리 테스트 | 59개 통과 |
+| TypeScript 타입 검사·production build | 통과 |
+| TypeScript/JavaScript 237개 파일 | 주석·위치 정보를 제외한 구문 트리 동일; 테스트 코드 포함 |
+| CSS 37개 파일 | 선택자·속성·값·우선순위·순서 동일 |
+| Rust 23개 파일 | 문서 주석을 제외한 토큰 동일 |
+| HTML·설정·관리 데이터 | 주석 외 HTML 구조·텍스트와 설정값 동일; JSON·잠금 파일·자산·생성 계약은 원본 유지 |
+| Production 산출물 612개 | 601개는 바이트 동일; 나머지 11개도 자동 생성 이름 대응 후 내용 동일 |
+
+CSS 주석과 줄 위치가 바뀌면서 CSS Modules의 자동 생성 클래스명 및 이를 참조하는 산출물 파일명이 달라졌습니다. 333개 클래스명을 일대일 대응시킨 비교에서 CSS 선언과 실행 내용의 추가 차이는 없었습니다. 테스트 조건이나 기대값도 변경하지 않았습니다. 상세 결과와 파일별 해시는 [전체 점검 보고서][conventionsreport]에 있습니다.
+
+이번 설명서 개정에서는 코드 발췌 15개, 파일 링크와 182개 ID 색인을 현재 소스에 대조했습니다. 32개 표의 ID·event·설계 원문 연결은 유지하고 이동한 소스·행동 테스트 줄 번호를 갱신했습니다. 위 테스트 수치는 주석·공백 보완을 마친 뒤 완료한 검증 결과이며, 이번 문서 수정만을 이유로 전체 실행 테스트를 다시 수행한 것은 아닙니다.
+
+### 14.3 검증 범위와 별도 발견 사항
+
+실제 Binance 주문, 전체 backend 테스트군, 네이티브 바이너리 패키징·GUI 수동 조작·실기 종료, 장시간 background soak, Windows 환경 실행은 위 검증에 포함하지 않았습니다. 네이티브 종료 완료를 기다리는 UI 계약은 기존 테스트로 확인했습니다. 회귀 시나리오의 일치가 모든 가능한 이벤트 순서에 대한 수학적 증명을 뜻하지는 않습니다.
+
+책임 분리 당시의 추가 Communication 대응표 검사는 UI 관련 참조 132개 모두 유효했지만, 기존 backend 테스트 이름을 가리키는 낡은 참조 3개 때문에 전체 검사는 통과하지 않았습니다. 해당 항목은 [별도 발견 사항][separation]에 기록했고 이번 문서 개정에서 그 전체 검사를 재실행한 것은 아닙니다. backend 거래 정책·저장 형식·네이티브 종료 정책·화면 스타일과 원래 Event–Action ID는 책임 분리 및 이후 주석 보완에서 유지했습니다.
 
 ## 15. 전체 182개 ID의 구현·행동 검증 색인
 
@@ -864,9 +903,9 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [U1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:302) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:153) |
-| [U1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:303) | `API_CONNECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:153) |
-| [U1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:304) | `API_DISCONNECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:153) |
+| [U1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:302) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:156) |
+| [U1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:303) | `API_CONNECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:156) |
+| [U1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:304) | `API_DISCONNECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:156) |
 
 ### U2 — 매매 중지
 
@@ -876,16 +915,16 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [U2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:309) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:171) |
-| [U2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:310) | `STOP_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:315) |
-| [U2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:311) | `STOP_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:355) |
-| [U2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:312) | `STOP_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:171) |
-| [U2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:313) | `STOP_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:315) |
-| [U2-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:314) | `STOP_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:315) |
-| [U2-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:315) | `FORCE_SELL_AND_STOP_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:355) |
-| [U2-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:316) | `FORCE_SELL_AND_STOP_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:355) |
-| [U2-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:317) | `FORCE_SELL_AND_STOP_FAILED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:355) |
-| [U2-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:318) | `FORCE_SELL_AND_STOP_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:355) |
+| [U2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:309) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:174) |
+| [U2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:310) | `STOP_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:318) |
+| [U2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:311) | `STOP_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:358) |
+| [U2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:312) | `STOP_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:174) |
+| [U2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:313) | `STOP_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:318) |
+| [U2-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:314) | `STOP_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:318) |
+| [U2-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:315) | `FORCE_SELL_AND_STOP_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:358) |
+| [U2-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:316) | `FORCE_SELL_AND_STOP_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:358) |
+| [U2-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:317) | `FORCE_SELL_AND_STOP_FAILED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:358) |
+| [U2-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:318) | `FORCE_SELL_AND_STOP_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:358) |
 
 ### U3 — 자동매매 시작
 
@@ -895,18 +934,18 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [U3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:323) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:171) |
-| [U3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:324) | `START_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:204) |
-| [U3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:325) | `START_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:171) |
-| [U3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:326) | `START_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:259) |
-| [U3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:327) | `START_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:204) |
-| [U3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:328) | `START_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:259) |
-| [U3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:329) | `START_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:204) |
-| [U3-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:330) | `SELECT_REGIME_NOTICE_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:171) |
-| [U3-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:331) | `API_CONNECTION_NOTICE_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:259) |
-| [U3-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:332) | `FORCE_SELL_AND_STOP_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:355) |
-| [U3-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:333) | `STOP_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:315) |
-| [U3-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:334) | `API_DISCONNECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:259) |
+| [U3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:323) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:174) |
+| [U3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:324) | `START_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:207) |
+| [U3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:325) | `START_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:174) |
+| [U3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:326) | `START_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:262) |
+| [U3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:327) | `START_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:207) |
+| [U3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:328) | `START_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:262) |
+| [U3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:329) | `START_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:207) |
+| [U3-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:330) | `SELECT_REGIME_NOTICE_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:174) |
+| [U3-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:331) | `API_CONNECTION_NOTICE_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:262) |
+| [U3-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:332) | `FORCE_SELL_AND_STOP_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:358) |
+| [U3-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:333) | `STOP_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:318) |
+| [U3-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:334) | `API_DISCONNECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:262) |
 
 ### ES2 — 화면 이동
 
@@ -916,9 +955,9 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [ES2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:340) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:411) |
-| [ES2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:341) | `SHOW_ALL_TRADING_DETAILS` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:411) |
-| [ES2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:342) | `BACK_TO_MAIN_SCREEN` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:411) |
+| [ES2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:340) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:414) |
+| [ES2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:341) | `SHOW_ALL_TRADING_DETAILS` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:414) |
+| [ES2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:342) | `BACK_TO_MAIN_SCREEN` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:414) |
 
 ### R1 — REGIME 추천
 
@@ -928,8 +967,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [R1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:350) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:435) |
-| [R1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:351) | `TYPE_RECOMMENDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:435) |
+| [R1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:350) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:438) |
+| [R1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:351) | `TYPE_RECOMMENDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:438) |
 
 ### R2 — REGIME 선택
 
@@ -939,11 +978,11 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [R2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:356) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:466) |
-| [R2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:357) | `TYPE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:466) |
-| [R2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:358) | `TYPE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:466) |
-| [R2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:359) | `CONFIRM_TYPE_CHANGE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:466) |
-| [R2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:360) | `CANCEL_TYPE_CHANGE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:466) |
+| [R2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:356) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:469) |
+| [R2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:357) | `TYPE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:469) |
+| [R2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:358) | `TYPE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:469) |
+| [R2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:359) | `CONFIRM_TYPE_CHANGE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:469) |
+| [R2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:360) | `CANCEL_TYPE_CHANGE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:469) |
 
 ### R3 — REGIME 지표
 
@@ -953,8 +992,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [R3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:365) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:435) |
-| [R3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:366) | `REGIME_INDICATOR_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:435) |
+| [R3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:365) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:438) |
+| [R3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:366) | `REGIME_INDICATOR_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:438) |
 
 ### DC1 — 차트 주기
 
@@ -964,19 +1003,19 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DC1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:373) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:531) |
-| [DC1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:374) | `1_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:375) | `4_H_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:376) | `1_DAY_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:377) | `30_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:378) | `4_H_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:379) | `1_DAY_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:380) | `1_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:381) | `30_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:382) | `1_DAY_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:383) | `1_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:384) | `30_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
-| [DC1-13](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:385) | `4_H_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:542) |
+| [DC1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:373) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:534) |
+| [DC1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:374) | `1_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:375) | `4_H_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:376) | `1_DAY_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:377) | `30_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:378) | `4_H_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:379) | `1_DAY_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:380) | `1_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:381) | `30_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:382) | `1_DAY_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:383) | `1_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:384) | `30_M_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
+| [DC1-13](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:385) | `4_H_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:545) |
 
 ### DC2 — 지표 설정창
 
@@ -986,9 +1025,9 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DC2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:390) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:573) |
-| [DC2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:391) | `INDICATOR_SETTINGS_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:573) |
-| [DC2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:392) | `INDICATOR_POPUP_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:573) |
+| [DC2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:390) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:576) |
+| [DC2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:391) | `INDICATOR_SETTINGS_BUTTON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:576) |
+| [DC2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:392) | `INDICATOR_POPUP_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:576) |
 
 ### IP1 — BB 표시
 
@@ -998,11 +1037,11 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [IP1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:396) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:397) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:398) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP1-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:399) | `BB_DISPLAY_ON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP1-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:400) | `BB_DISPLAY_OFF_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
+| [IP1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:396) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:397) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:398) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP1-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:399) | `BB_DISPLAY_ON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP1-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:400) | `BB_DISPLAY_OFF_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
 
 ### IP2 — EMA 표시
 
@@ -1012,11 +1051,11 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [IP2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:404) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:405) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:406) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:407) | `EMA_DISPLAY_ON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:408) | `EMA_DISPLAY_OFF_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
+| [IP2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:404) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:405) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:406) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:407) | `EMA_DISPLAY_ON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:408) | `EMA_DISPLAY_OFF_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
 
 ### IP3 — 거래량 표시
 
@@ -1026,11 +1065,11 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [IP3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:412) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:413) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:414) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:415) | `VOLUME_DISPLAY_ON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
-| [IP3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:416) | `VOLUME_DISPLAY_OFF_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:592) |
+| [IP3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:412) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:413) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:414) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:415) | `VOLUME_DISPLAY_ON_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
+| [IP3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:416) | `VOLUME_DISPLAY_OFF_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:595) |
 
 ### DC3 — 거래 로직 상태 표시
 
@@ -1040,8 +1079,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DC3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:421) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:624) |
-| [DC3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:422) | `TRADING_LOGIC_STATE_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:624) |
+| [DC3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:421) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:627) |
+| [DC3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:422) | `TRADING_LOGIC_STATE_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:627) |
 
 ### DC4 — 차트 크기
 
@@ -1051,9 +1090,9 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DC4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:427) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:637) |
-| [DC4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:428) | `FULL_SIZE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:637) |
-| [DC4-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:429) | `NORMAL_SIZE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:637) |
+| [DC4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:427) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:640) |
+| [DC4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:428) | `FULL_SIZE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:640) |
+| [DC4-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:429) | `NORMAL_SIZE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:640) |
 
 ### DC5 — 선 그리기
 
@@ -1063,13 +1102,13 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DC5-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:434) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:659) |
-| [DC5-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:435) | `DRAWING_TOOL_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:659) |
-| [DC5-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:436) | `USER_START_DRAWING` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:659) |
-| [DC5-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:437) | `DRAWING_TOOL_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:659) |
-| [DC5-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:438) | `USER_FINISH_DRAWING` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:659) |
-| [DC5-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:439) | `DRAWING_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:659) |
-| [DC5-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:440) | `DRAWING_TOOL_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:659) |
+| [DC5-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:434) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:662) |
+| [DC5-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:435) | `DRAWING_TOOL_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:662) |
+| [DC5-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:436) | `USER_START_DRAWING` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:662) |
+| [DC5-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:437) | `DRAWING_TOOL_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:662) |
+| [DC5-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:438) | `USER_FINISH_DRAWING` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:662) |
+| [DC5-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:439) | `DRAWING_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:662) |
+| [DC5-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:440) | `DRAWING_TOOL_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:662) |
 
 ### DC6 — 선 선택·삭제
 
@@ -1079,12 +1118,12 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DC6-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:445) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:713) |
-| [DC6-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:446) | `CURSOR_HOVER_ENTER` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:713) |
-| [DC6-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:447) | `HIGHLIGHTED_LINE_RIGHT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:713) |
-| [DC6-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:448) | `CURSOR_HOVER_EXIT` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:713) |
-| [DC6-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:449) | `DELETE_LINE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:713) |
-| [DC6-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:450) | `CONTEXT_MENU_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:713) |
+| [DC6-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:445) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:716) |
+| [DC6-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:446) | `CURSOR_HOVER_ENTER` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:716) |
+| [DC6-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:447) | `HIGHLIGHTED_LINE_RIGHT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:716) |
+| [DC6-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:448) | `CURSOR_HOVER_EXIT` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:716) |
+| [DC6-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:449) | `DELETE_LINE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:716) |
+| [DC6-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:450) | `CONTEXT_MENU_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:716) |
 
 ### DI1 — 투자 상태
 
@@ -1094,8 +1133,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DI1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:457) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:797) |
-| [DI1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:458) | `TRADING_STATUS_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:797) |
+| [DI1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:457) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:800) |
+| [DI1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:458) | `TRADING_STATUS_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:800) |
 
 ### DI2 — 자산 요약
 
@@ -1105,8 +1144,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [DI2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:463) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:797) |
-| [DI2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:464) | `ASSET_SUMMARY_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:797) |
+| [DI2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:463) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:800) |
+| [DI2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:464) | `ASSET_SUMMARY_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:800) |
 
 ### SI — 분할 매수
 
@@ -1116,8 +1155,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [SI-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:470) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:836) |
-| [SI-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:471) | `SCALE_IN_LEVEL_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:836) |
+| [SI-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:470) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:839) |
+| [SI-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:471) | `SCALE_IN_LEVEL_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:839) |
 
 ### SO — 분할 매도
 
@@ -1127,8 +1166,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [SO-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:476) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:836) |
-| [SO-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:477) | `SCALE_OUT_LEVEL_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:836) |
+| [SO-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:476) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:839) |
+| [SO-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:477) | `SCALE_OUT_LEVEL_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:839) |
 
 ### M4 — 최근 체결·실시간 지표
 
@@ -1138,15 +1177,15 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [M4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:482) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:483) | `BUY_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:484) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:485) | `REALTIME_INDICATOR_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:486) | `REALTIME_INDICATOR_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:487) | `TRADING_STATUS_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:488) | `BUY_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:489) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
-| [M4-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:490) | `TRADING_HISTORY_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:882) |
+| [M4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:482) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:483) | `BUY_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:484) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:485) | `REALTIME_INDICATOR_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:486) | `REALTIME_INDICATOR_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:487) | `TRADING_STATUS_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:488) | `BUY_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:489) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
+| [M4-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:490) | `TRADING_HISTORY_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:885) |
 
 ### D1 — 수익률
 
@@ -1156,8 +1195,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [D1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:498) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
-| [D1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:499) | `PROFIT_RATE_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
+| [D1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:498) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
+| [D1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:499) | `PROFIT_RATE_UPDATED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
 
 ### D2 — 매도 성과
 
@@ -1167,8 +1206,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [D2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:504) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
-| [D2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:505) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
+| [D2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:504) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
+| [D2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:505) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
 
 ### D3 — ETH 보유량
 
@@ -1178,9 +1217,9 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [D3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:510) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
-| [D3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:511) | `BUY_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
-| [D3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:512) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
+| [D3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:510) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
+| [D3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:511) | `BUY_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
+| [D3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:512) | `SELL_ORDER_EXECUTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
 
 ### D4 — 당일 수수료
 
@@ -1190,8 +1229,8 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [D4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:517) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
-| [D4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:518) | `DAILY_TRADING_FEE_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:938) |
+| [D4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:517) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
+| [D4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:518) | `DAILY_TRADING_FEE_CHANGED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:941) |
 
 ### TD2 — 기간 선택·결합 조회
 
@@ -1201,19 +1240,19 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [TD2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:523) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1015) |
-| [TD2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:524) | `SELECT_DISPLAY_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:525) | `SELECT_DISPLAY_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:526) | `SELECT_DISPLAY_ALL_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:527) | `SELECT_DISPLAY_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:528) | `SELECT_DISPLAY_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:529) | `SELECT_DISPLAY_ALL_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:530) | `SELECT_DISPLAY_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:531) | `SELECT_DISPLAY_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:532) | `SELECT_DISPLAY_ALL_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:533) | `SELECT_DISPLAY_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:534) | `SELECT_DISPLAY_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
-| [TD2-13](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:535) | `SELECT_DISPLAY_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1041) |
+| [TD2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:523) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1018) |
+| [TD2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:524) | `SELECT_DISPLAY_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:525) | `SELECT_DISPLAY_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:526) | `SELECT_DISPLAY_ALL_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:527) | `SELECT_DISPLAY_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:528) | `SELECT_DISPLAY_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:529) | `SELECT_DISPLAY_ALL_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:530) | `SELECT_DISPLAY_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:531) | `SELECT_DISPLAY_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:532) | `SELECT_DISPLAY_ALL_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:533) | `SELECT_DISPLAY_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:534) | `SELECT_DISPLAY_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
+| [TD2-13](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:535) | `SELECT_DISPLAY_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1044) |
 
 ### TD3 — 거래 종류 선택
 
@@ -1223,13 +1262,13 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [TD3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:540) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1015) |
-| [TD3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:541) | `BUY_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1087) |
-| [TD3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:542) | `SELL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1087) |
-| [TD3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:543) | `ALL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1087) |
-| [TD3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:544) | `SELL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1087) |
-| [TD3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:545) | `ALL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1087) |
-| [TD3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:546) | `BUY_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1087) |
+| [TD3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:540) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1018) |
+| [TD3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:541) | `BUY_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1090) |
+| [TD3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:542) | `SELL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1090) |
+| [TD3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:543) | `ALL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1090) |
+| [TD3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:544) | `SELL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1090) |
+| [TD3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:545) | `ALL_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1090) |
+| [TD3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:546) | `BUY_TRADE_HISTORY_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1090) |
 
 ### TD4 — CSV 내보내기
 
@@ -1239,15 +1278,15 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [TD4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:551) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:552) | `CSV_EXPORT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:553) | `CLOSE_CSV_EXPORT_POPUP` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:554) | `EXPORT_CSV` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:555) | `EXPORT_CSV` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:556) | `CSV_EXPORT_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:557) | `CSV_EXPORT_FAILED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:558) | `CSV_EXPORT_ERROR_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
-| [TD4-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:559) | `ACCEPT_CLOSE_ALL_POPUP` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1123) |
+| [TD4-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:551) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:552) | `CSV_EXPORT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:553) | `CLOSE_CSV_EXPORT_POPUP` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:554) | `EXPORT_CSV` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:555) | `EXPORT_CSV` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:556) | `CSV_EXPORT_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:557) | `CSV_EXPORT_FAILED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:558) | `CSV_EXPORT_ERROR_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
+| [TD4-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:559) | `ACCEPT_CLOSE_ALL_POPUP` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1126) |
 
 ### CR1 — CSV 경로
 
@@ -1257,10 +1296,10 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [CR1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:564) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1192) |
-| [CR1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:565) | `SAVE_LOCATION_SELECT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1192) |
-| [CR1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:566) | `SAVE_LOCATION_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1192) |
-| [CR1-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:567) | `SAVE_LOCATION_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1192) |
+| [CR1-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:564) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1195) |
+| [CR1-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:565) | `SAVE_LOCATION_SELECT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1195) |
+| [CR1-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:566) | `SAVE_LOCATION_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1195) |
+| [CR1-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:567) | `SAVE_LOCATION_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1195) |
 
 ### CR2 — CSV 기간·달력
 
@@ -1270,27 +1309,27 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [CR2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:572) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1229) |
-| [CR2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:573) | `SELECT_CSV_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:574) | `SELECT_CSV_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:575) | `SELECT_CSV_DATE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:576) | `SELECT_CSV_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:577) | `SELECT_CSV_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:578) | `SELECT_CSV_DATE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:579) | `SELECT_CSV_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:580) | `SELECT_CSV_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:581) | `SELECT_CSV_DATE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:582) | `SELECT_CSV_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:583) | `SELECT_CSV_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-13](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:584) | `SELECT_CSV_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1241) |
-| [CR2-14](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:585) | `START_CSV_START_DATE_SELECTION` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
-| [CR2-15](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:586) | `START_CSV_FINISH_DATE_SELECTION` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
-| [CR2-16](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:587) | `START_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
-| [CR2-17](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:588) | `START_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
-| [CR2-18](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:589) | `START_DATE_CALENDAR_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
-| [CR2-19](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:590) | `FINISH_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
-| [CR2-20](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:591) | `FINISH_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
-| [CR2-21](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:592) | `FINISH_DATE_CALENDAR_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1262) |
+| [CR2-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:572) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1232) |
+| [CR2-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:573) | `SELECT_CSV_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:574) | `SELECT_CSV_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:575) | `SELECT_CSV_DATE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:576) | `SELECT_CSV_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:577) | `SELECT_CSV_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:578) | `SELECT_CSV_DATE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:579) | `SELECT_CSV_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:580) | `SELECT_CSV_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-10](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:581) | `SELECT_CSV_DATE` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-11](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:582) | `SELECT_CSV_TODAY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-12](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:583) | `SELECT_CSV_WEEKLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-13](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:584) | `SELECT_CSV_MONTHLY_HISTORY` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1244) |
+| [CR2-14](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:585) | `START_CSV_START_DATE_SELECTION` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
+| [CR2-15](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:586) | `START_CSV_FINISH_DATE_SELECTION` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
+| [CR2-16](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:587) | `START_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
+| [CR2-17](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:588) | `START_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
+| [CR2-18](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:589) | `START_DATE_CALENDAR_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
+| [CR2-19](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:590) | `FINISH_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
+| [CR2-20](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:591) | `FINISH_DATE_SELECTED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
+| [CR2-21](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:592) | `FINISH_DATE_CALENDAR_OUTSIDE_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1265) |
 
 ### CR3 — CSV 파일명
 
@@ -1300,13 +1339,13 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [CR3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:597) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1328) |
-| [CR3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:598) | `FILE_NAME_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1328) |
-| [CR3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:599) | `ENTER_KEY_TYPED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1328) |
-| [CR3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:600) | `FILE_NAME_INPUT_FOCUS_LOST` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1328) |
-| [CR3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:601) | `ENTER_KEY_TYPED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1328) |
-| [CR3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:602) | `FILE_NAME_INPUT_FOCUS_LOST` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1328) |
-| [CR3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:603) | `FILE_NAME_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1328) |
+| [CR3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:597) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1331) |
+| [CR3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:598) | `FILE_NAME_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1331) |
+| [CR3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:599) | `ENTER_KEY_TYPED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1331) |
+| [CR3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:600) | `FILE_NAME_INPUT_FOCUS_LOST` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1331) |
+| [CR3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:601) | `ENTER_KEY_TYPED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1331) |
+| [CR3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:602) | `FILE_NAME_INPUT_FOCUS_LOST` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1331) |
+| [CR3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:603) | `FILE_NAME_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1331) |
 
 ### ES3 — 프로그램 종료
 
@@ -1316,90 +1355,92 @@ EXPORT_CSV: [
 
 | 설계 ID | 표의 event | 실행 검증 |
 |---|---|---|
-| [ES3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:608) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:609) | `EXIT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:610) | `EXIT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:611) | `FORCE_SELL_EXIT_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:612) | `FORCE_SELL_EXIT_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:613) | `FORCE_SELL_EXIT_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:614) | `FORCE_SELL_EXIT_FAILED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:615) | `EXIT_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
-| [ES3-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:616) | `EXIT_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1376) |
+| [ES3-01](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:608) | `None` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-02](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:609) | `EXIT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-03](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:610) | `EXIT_CLICKED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-04](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:611) | `FORCE_SELL_EXIT_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-05](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:612) | `FORCE_SELL_EXIT_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-06](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:613) | `FORCE_SELL_EXIT_SUCCEEDED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-07](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:614) | `FORCE_SELL_EXIT_FAILED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-08](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:615) | `EXIT_CANCELED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
+| [ES3-09](/Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:616) | `EXIT_CONFIRMED` | [행동 시나리오](/Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:1379) |
 
-[account]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/account-summary/machines/accountSummaryMachine.ts:55
-[actions]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiActions.ts:43
-[adapter]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:885
-[adaptercsv]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:1434
-[adapterexit]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:1459
-[adapterstart]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:1117
+[account]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/account-summary/machines/accountSummaryMachine.ts:56
+[actions]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiActions.ts:45
+[adapter]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:944
+[adaptercsv]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:1513
+[adapterexit]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:1538
+[adapterstart]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/BackendUiAdapter.ts:1192
 [app]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/App.tsx:1
 [archtest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiArchitecture.test.ts:1
 [behavior]: /Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Behavior.md:1
-[chart]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/price-chart/machines/chartMachine.ts:69
-[chartema]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/price-chart/machines/chartMachine.ts:111
+[chart]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/price-chart/machines/chartMachine.ts:70
+[chartema]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/price-chart/machines/chartMachine.ts:117
 [charthook]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/price-chart/hooks/useRealtimeChartData.ts:1
 [chartpanel]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/price-chart/components/PriceChartPanel.tsx:1
 [chartsurface]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/price-chart/components/LightweightChartSurface.tsx:1
 [composition]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiRegionComposition.ts:63
-[connection]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/connection-status/machines/connectionMachine.ts:27
+[connection]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/connection-status/machines/connectionMachine.ts:28
+[conventions]: /Users/oscar/Desktop/Binance_Auto/CODING_CONVENTIONS.md
+[conventionsreport]: /Users/oscar/Desktop/Binance_Auto/artifacts/ui-coding-conventions-full-20260917/report.md
 [contracts]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/uiApplicationContracts.ts:1
-[controller]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UIStateController.ts:12
+[controller]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UIStateController.ts:17
 [controllertest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UIStateController.test.ts:1
-[coverage]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:152
-[csv]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/csv-export/machines/csvExportMachine.ts:133
+[coverage]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiEventActionCoverage.test.ts:155
+[csv]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/csv-export/machines/csvExportMachine.ts:140
 [csvregions]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/csv-export/machines/csvExportRegions.ts:11
 [csvroute]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/transport/routes/csv_export.py:66
-[csvsubmit]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/csv-export/machines/csvExportMachine.ts:354
+[csvsubmit]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/csv-export/machines/csvExportMachine.ts:370
 [definitions]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiFeatureDefinitions.ts:22
-[executor]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UiCommandExecutor.ts:12
+[executor]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UiCommandExecutor.ts:17
 [executortest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UiCommandExecutor.test.ts:1
-[exit]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/app-exit/machines/appExitMachine.ts:50
-[exitwindow]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/hooks/useDesktopWindowLifecycle.ts:38
+[exit]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/app-exit/machines/appExitMachine.ts:52
+[exitwindow]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/hooks/useDesktopWindowLifecycle.ts:41
 [facade]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UiApplicationFacade.ts:2
 [facadetest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/UiApplicationFacade.test.ts:1
-[featuretest]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/testing/createFeatureTestController.ts:18
+[featuretest]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/testing/createFeatureTestController.ts:25
 [filters]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trade-history/machines/historyFilterRegions.ts:13
-[highlight]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/regime-selection/components/RegimePanel.module.css:19
-[history]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trade-history/machines/tradeHistoryMachine.ts:80
-[historyresult]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trade-history/machines/tradeHistoryMachine.ts:284
+[highlight]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/regime-selection/components/RegimePanel.module.css:21
+[history]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trade-history/machines/tradeHistoryMachine.ts:82
+[historyresult]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trade-history/machines/tradeHistoryMachine.ts:295
 [historyroute]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/transport/routes/trade_history.py:14
-[hook]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/hooks/useUiApplication.ts:55
-[intents]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/uiApplicationIntents.ts:53
-[live]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/bootstrap/createLiveUiApplication.ts:86
+[hook]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/hooks/useUiApplication.ts:60
+[intents]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/uiApplicationIntents.ts:55
+[live]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/bootstrap/createLiveUiApplication.ts:89
 [livetest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/bootstrap/createLiveUiApplication.test.tsx:1
 [mapper]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/api/backendEventMapper.ts:1
-[modalconfirm]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/components/AppModalHost.tsx:50
-[modalhost]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/components/AppModalHost.tsx:33
+[modalconfirm]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/components/AppModalHost.tsx:51
+[modalhost]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/components/AppModalHost.tsx:34
 [modals]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/uiModalPolicy.ts:13
 [persistence]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trade_history_controller.py:1087
-[picker]: /Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/src/dialog.rs:49
-[port]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/ports/UiCommandPort.ts:22
+[picker]: /Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/src/dialog.rs:51
+[port]: /Users/oscar/Desktop/Binance_Auto/UI/src/shared/ports/UiCommandPort.ts:24
 [processtest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/bootstrap/createLiveUiApplication.process.test.mjs:1
 [pythoncsv]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trade_history_controller.py:445
 [pythonstart]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/application/trading_controller.py:2760
-[recent]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/recent-orders/machines/recentOrdersMachine.ts:45
-[regime]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/regime-selection/machines/regimeMachine.ts:68
+[recent]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/recent-orders/machines/recentOrdersMachine.ts:46
+[regime]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/regime-selection/machines/regimeMachine.ts:70
 [regimeregions]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/regime-selection/machines/regimeRegions.ts:13
 [replaytest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/uiSeparationReplay.test.ts:1
 [repository]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/persistence/trade_history_repository.py:1
 [root]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiApplicationMachine.ts:22
-[roottest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiApplicationMachine.test.ts:90
+[roottest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiApplicationMachine.test.ts:93
 [rules]: /Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Rule.md:1
 [selector]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/control/selectAppViewModel.ts:14
 [separation]: /Users/oscar/Desktop/Binance_Auto/Design/UI/UI_STM_Controller_Separation_2026-09-17.md
 [spec]: /Users/oscar/Desktop/Binance_Auto/Design/UI/UI_Event_Action_Table.md:1
-[split]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/split-order/machines/splitOrderMachine.ts:47
+[split]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/split-order/machines/splitOrderMachine.ts:49
 [splitregions]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/split-order/machines/splitOrderRegions.ts:14
-[startbutton]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/App.tsx:83
-[startstate]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trading-control/machines/tradingCommandMachine.ts:801
-[stm]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/UISTM.ts:6
+[startbutton]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/App.tsx:89
+[startstate]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trading-control/machines/tradingCommandMachine.ts:813
+[stm]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/UISTM.ts:11
 [stmtest]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/UISTM.test.ts:1
-[store]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/runtime/UiApplicationStore.ts:26
-[summary]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trade-history/machines/tradeHistorySummaryMachine.ts:73
-[trading]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trading-control/machines/tradingCommandMachine.ts:228
+[store]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/runtime/UiApplicationStore.ts:27
+[summary]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trade-history/machines/tradeHistorySummaryMachine.ts:74
+[trading]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trading-control/machines/tradingCommandMachine.ts:231
 [tradingregions]: /Users/oscar/Desktop/Binance_Auto/UI/src/features/trading-control/machines/tradingRegions.ts:14
 [tradingroute]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/transport/routes/trading.py:48
-[types]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiApplicationTypes.ts:45
+[types]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiApplicationTypes.ts:46
 [verification]: /Users/oscar/Desktop/Binance_Auto/artifacts/ui-stm-controller-separation-20260917/verification.json
-[views]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiApplicationViews.ts:121
+[views]: /Users/oscar/Desktop/Binance_Auto/UI/src/app/machines/uiApplicationViews.ts:125
 [writer]: /Users/oscar/Desktop/Binance_Auto/backend/src/binance_auto_trader/adapters/filesystem/csv_file_gateway.py:431

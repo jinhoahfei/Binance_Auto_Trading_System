@@ -14,6 +14,7 @@ const RESET_REASONS: Readonly<Record<string, string>> = {
     candle_changed: '새 30분봉에서 다시 계산', stream_reset: '시장 재동기화 후 다시 계산',
 };
 
+
 /**
  * 함수 이름: format_timer_seconds()
  * 기능: 남은 초를 올림하고 전체 지속시간 기준으로 고정된 시·분·초 폭을 사용한다.
@@ -26,8 +27,10 @@ export function format_timer_seconds(remaining: number, duration: number): strin
     const minutes = Math.floor(seconds / 60) % 60;
     const parts = [minutes, seconds % 60].map((value) => String(value).padStart(2, '0'));
     if (duration >= 3600) parts.unshift(String(Math.floor(seconds / 3600)).padStart(2, '0'));
+
     return parts.join(':');  // 짧은 잔여시간으로 바뀌어도 열 너비를 바꾸지 않는다.
 }
+
 
 /**
  * 함수 이름: present_indicator_timer()
@@ -55,6 +58,7 @@ export function present_indicator_timer(model: RealtimeIndicatorTimerViewModel, 
         completed: timer.kind === 'hold' ? '유지 완료' : '시간 도달', expired: '기한 만료',
         pending: '판정 대기', unavailable: '확인 대기',
     };
+
     return {
         time: format_timer_seconds(remaining, duration), state, label: labels[state],
         reason: timer.reset_reason === null ? null : RESET_REASONS[timer.reset_reason] ?? null,

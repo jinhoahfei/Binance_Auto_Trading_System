@@ -4,8 +4,10 @@ import { create_trade_history_summary_machine } from './tradeHistorySummaryMachi
 
 describe('tradeHistorySummaryMachine', () => {
     it('D1-02/D2-02/D3-02/D4-02: 상세 요약 region을 서로 독립적으로 갱신한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const actor = createActor(create_trade_history_summary_machine());
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         actor.start();
         actor.send({
             type: 'PROFIT_RATE_UPDATED',
@@ -35,10 +37,13 @@ describe('tradeHistorySummaryMachine', () => {
             },
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(actor.getSnapshot().context.summary.dailyReturn.value).toBe('+2.10%');
         expect(actor.getSnapshot().context.summary.sellPerformance.winRate).toBe('60%');
         expect(actor.getSnapshot().context.summary.position.quantity).toBe('0.35 ETH');
         expect(actor.getSnapshot().context.summary.fees.amount).toBe('₩ 1,500');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 });

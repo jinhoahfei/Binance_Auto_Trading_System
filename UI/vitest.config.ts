@@ -1,3 +1,5 @@
+// UI 단위·컴포넌트 테스트의 DOM 환경과 공통 준비 파일을 설정한다.
+
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 

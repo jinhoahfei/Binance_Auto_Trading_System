@@ -59,6 +59,7 @@ export type ChartMachineEvent =
     | { readonly type: 'DELETE_LINE' }
     | { readonly type: 'CONTEXT_MENU_OUTSIDE_CLICKED' };
 
+
 /**
  * 함수 이름: create_chart_machine()
  * 기능: 차트 주기, 지표 설정, 전체화면, drawing과 선 삭제를 병렬 region으로 관리한다.
@@ -74,10 +75,13 @@ export function create_chart_machine(options: ChartMachineOptions = {}) {
     };
 
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as ChartMachineContext,
             events: {} as ChartMachineEvent,
         },
+
+        // 입력 수락 조건을 순수 가드로 정의한다.
         guards: {
             is_bollinger_bands_visible: ({ context }) => context.indicators.bollinger_bands,
             is_ema9_visible: ({ context }) => context.indicators.ema9,
@@ -85,6 +89,8 @@ export function create_chart_machine(options: ChartMachineOptions = {}) {
             is_line_selection_idle: ({ context }) => context.selected_line_id === null,
             is_not_drawing: ({ context }) => context.drawing_mode !== 'drawing',
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             select_1m_interval: assign({ interval: '1m' }),
             select_30m_interval: assign({ interval: '30m' }),
@@ -192,6 +198,8 @@ export function create_chart_machine(options: ChartMachineOptions = {}) {
     }).createMachine({
         id: 'chartMachine',
         type: 'parallel',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             interval: options.interval ?? '30m',
             indicators: initial_indicators,
@@ -207,6 +215,8 @@ export function create_chart_machine(options: ChartMachineOptions = {}) {
                 '1d': options.drawings?.['1d'] ?? [],
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             interval: {
                 initial: options.interval ?? '30m',

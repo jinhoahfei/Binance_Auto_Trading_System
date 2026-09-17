@@ -11,12 +11,15 @@ import type { RegionNode } from '../../../app/machines/uiRegionComposition';
  * 작성 날짜: 2026/09/16
  */
 export function regime_regions(definition: AnyStateMachine): RegionNode {
+    // 추천·지표 갱신 이벤트를 사용자 선택 이벤트와 분리한다.
     const { context: _context, initial, states, on } = definition.config as any;
     const {
         TYPE_RECOMMENDED: recommendation_transition,
         REGIME_INDICATOR_UPDATED: indicator_transition,
         ...selection_events
     } = on;
+
+    // 선택 상태의 명세 ID를 유지한다.
     const selection_states = {
         ...states,
         type_selection: {
@@ -27,6 +30,7 @@ export function regime_regions(definition: AnyStateMachine): RegionNode {
         },
     };
 
+    // 추천·선택·지표를 서로 독립적인 병렬 Region으로 조립한다.
     return {
         type: 'parallel',
         states: {

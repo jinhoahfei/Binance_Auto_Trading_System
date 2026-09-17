@@ -22,6 +22,7 @@ export interface NativeExitIntentBridgeReceipt {
     readonly armed: true;
 }
 
+
 /**
  * 함수 이름: validate_native_sidecar_exit_payload()
  * 기능: native child monitor event를 exact expected/code 계약으로 제한한다.
@@ -59,6 +60,7 @@ export function validate_native_sidecar_exit_payload(
     return payload as unknown as NativeSidecarExitPayload;
 }
 
+
 /**
  * 함수 이름: is_expected_normal_sidecar_exit()
  * 기능: shutdown 의도뿐 아니라 실제 정상 exit code까지 만족한 event만 정상 종료로 분류한다.
@@ -71,6 +73,7 @@ export function is_expected_normal_sidecar_exit(
 ): boolean {
     return payload.expected && payload.code === 0;
 }
+
 
 /**
  * 함수 이름: validate_native_exit_request_payload()
@@ -105,6 +108,7 @@ export function validate_native_exit_request_payload(
     return payload as unknown as NativeExitRequestPayload;
 }
 
+
 /**
  * 함수 이름: validate_native_exit_intent_bridge_receipt()
  * 기능: native pre-listener latch를 arm한 command 결과를 exact boolean receipt로 검증한다.
@@ -115,6 +119,7 @@ export function validate_native_exit_request_payload(
 export function validate_native_exit_intent_bridge_receipt(
     value: unknown,
 ): NativeExitIntentBridgeReceipt {
+    // 네이티브 수신 확인이 객체인지 먼저 확인한다.
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         throw new BackendContractError(
             'MALFORMED_NATIVE_EXIT_BRIDGE_RECEIPT',
@@ -123,6 +128,8 @@ export function validate_native_exit_intent_bridge_receipt(
     }
 
     const receipt = value as Record<string, unknown>;
+
+    // armed 외의 필드나 미등록 상태를 성공 수신으로 수락하지 않는다.
     if (Object.keys(receipt).length !== 1
         || !Object.hasOwn(receipt, 'armed')
         || receipt.armed !== true) {

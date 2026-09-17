@@ -1,3 +1,4 @@
+/* 분할 주문 비율과 매수·매도별 강조색을 구성한다. */
 .slider {
     --slider-tone: var(--color-status-positive);
     height: 48px;
@@ -7,6 +8,7 @@
     --slider-tone: var(--color-status-negative);
 }
 
+/* 비율 이름과 현재 수치를 같은 행에 배치한다. */
 .heading {
     display: flex;
     align-items: flex-start;
@@ -39,6 +41,7 @@
     line-height: 15px;
 }
 
+/* 감소·증가 조작과 비율 슬라이더를 정렬한다. */
 .controls {
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr) 24px;
@@ -76,6 +79,7 @@
     background: transparent;
 }
 
+/* WebKit 계열에서 비율 트랙과 손잡이의 모양을 맞춘다. */
 .controls input::-webkit-slider-runnable-track {
     height: 6px;
     background: linear-gradient(
@@ -100,6 +104,7 @@
     box-shadow: var(--shadow-control);
 }
 
+/* Firefox 계열에서 트랙·진행 영역·손잡이의 모양을 맞춘다. */
 .controls input::-moz-range-track {
     height: 6px;
     background: var(--color-border-default);

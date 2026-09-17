@@ -23,6 +23,7 @@ export interface AppHeaderProps {
   onStopRequested: () => void;
 }
 
+
 /**
  * 함수 이름: AppHeader()
  * 기능: 브랜드, API 연결 상태와 자동매매 및 복구 Position 청산 제어를 표시한다.
@@ -45,6 +46,7 @@ export function AppHeader({
 }: AppHeaderProps) {
   const connection_tooltip_id = useId();
   const [is_connection_tooltip_open, set_is_connection_tooltip_open] = useState(false);
+
   // 정지 상태의 열린 Position은 재시작으로 복구된 exposure이므로 시작 대신 청산만 허용한다.
   const has_recovered_position = !isTrading && hasOpenPosition;
   const stop_button_label = has_recovered_position ? '복구 포지션 청산' : '매매 중지';

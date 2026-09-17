@@ -17,6 +17,7 @@ export const supported_chart_intervals = [
     '1d',
 ] as const satisfies ReadonlyArray<ChartInterval>;
 
+
 /**
  * 함수 이름: is_record()
  * 기능: runtime 값이 문자열 key로 조회할 수 있는 객체인지 확인한다.
@@ -27,6 +28,7 @@ export const supported_chart_intervals = [
 function is_record(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
 
 /**
  * 함수 이름: normalize_symbol()
@@ -45,6 +47,7 @@ function normalize_symbol(symbol: string): string {
     return normalized_symbol;
 }
 
+
 /**
  * 함수 이름: is_chart_interval()
  * 기능: runtime 값이 UI가 지원하는 Binance kline 주기인지 확인한다.
@@ -56,6 +59,7 @@ function is_chart_interval(value: unknown): value is ChartInterval {
     return typeof value === 'string'
         && supported_chart_intervals.some((interval) => interval === value);
 }
+
 
 /**
  * 함수 이름: read_integer()
@@ -72,6 +76,7 @@ function read_integer(value: unknown, field_name: string): number {
 
     return value;
 }
+
 
 /**
  * 함수 이름: read_decimal_string()
@@ -95,6 +100,7 @@ function read_decimal_string(value: unknown, field_name: string): number {
     return decimal_value;
 }
 
+
 /**
  * 함수 이름: validate_rest_metadata()
  * 기능: REST kline tuple에서 사용하지 않는 공식 metadata 필드도 계약과 일치하는지 검증한다.
@@ -114,6 +120,7 @@ function validate_rest_metadata(row: ReadonlyArray<unknown>, row_index: number):
     }
 }
 
+
 /**
  * 함수 이름: parse_rest_kline_row()
  * 기능: Binance REST kline tuple을 공통 NormalizedKline으로 변환한다.
@@ -132,6 +139,7 @@ function parse_rest_kline_row(
     interval: ChartInterval,
     current_time: number,
 ): NormalizedKline {
+    // 튜플 길이와 봉의 시작·종료 시각 관계를 먼저 검증한다.
     if (!Array.isArray(value) || value.length !== 12) {
         throw new Error(`Binance kline row ${row_index} must be a 12-field tuple.`);
     }
@@ -143,6 +151,7 @@ function parse_rest_kline_row(
         throw new Error(`Binance kline row ${row_index} closes before it opens.`);
     }
 
+    // 메타데이터와 수치 필드를 검증한 뒤 정규화한 봉을 만든다.
     validate_rest_metadata(value, row_index);
 
     return {
@@ -159,6 +168,7 @@ function parse_rest_kline_row(
     };
 }
 
+
 /**
  * 함수 이름: parse_rest_klines()
  * 기능: Binance REST response payload 전체를 검증하고 kline 목록으로 변환한다.
@@ -173,12 +183,14 @@ function parse_rest_klines(
     symbol: string,
     interval: ChartInterval,
 ): ReadonlyArray<NormalizedKline> {
+    // 응답이 배열인지 확인하고 전체 행에 같은 현재 시각을 사용한다.
     if (!Array.isArray(value)) {
         throw new Error(`Binance ${interval} kline payload must be an array.`);
     }
 
     const current_time = Date.now();
 
+    // 행별 필드를 검증하면서 공통 봉 구조로 변환한다.
     return value.map((row, row_index) => parse_rest_kline_row(
         row,
         row_index,
@@ -187,6 +199,7 @@ function parse_rest_klines(
         current_time,
     ));
 }
+
 
 /**
  * 함수 이름: with_chart_request_timeout()
@@ -198,26 +211,49 @@ function parse_rest_klines(
 async function with_chart_request_timeout<T>(
     operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal,
 ): Promise<T> {
+    // 호출자 취소와 deadline이 요청 Promise를 종료시킬 수 있도록 별도 취소 경계를 만든다.
     const controller = new AbortController();
+
+    /**
+     * 함수 이름: reject_cancellation()
+     * 기능: 취소 Promise의 reject 함수가 연결되기 전 사용할 빈 callback을 준비한다.
+     * 인자: 없음; 변수 타입은 이후 취소 사유를 받을 callback 계약
+     * 반환값: undefined
+     * 작성 날짜: 2026/09/17
+     */
     let reject_cancellation: (reason: unknown) => void = () => undefined;
     const cancelled = new Promise<never>((resolve, reject) => { reject_cancellation = reject; });
+
+    /**
+     * 함수 이름: abort()
+     * 기능: 취소 Promise와 실제 HTTP 요청을 같은 취소 경계에서 종료한다.
+     * 인자: 없음
+     * 반환값: 없음
+     * 작성 날짜: 2026/09/17
+     */
     const abort = () => {
         reject_cancellation(new DOMException('Chart request aborted', 'AbortError'));
         controller.abort();
     };
+
+    // 호출자의 취소와 15초 제한을 내부 요청 신호에 연결한다.
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => {
         reject_cancellation(new DOMException('Chart request deadline exceeded', 'TimeoutError'));
         controller.abort();
     }, 15_000);
+
+    // 완료 경로와 무관하게 타이머와 취소 listener를 정리한다.
     try {
         if (signal?.aborted) abort();
+
         return await Promise.race([cancelled, operation(controller.signal)]);
     } finally {
         clearTimeout(timer);
         signal?.removeEventListener('abort', abort);
     }
 }
+
 
 /**
  * 함수 이름: fetch_interval_klines()
@@ -239,6 +275,7 @@ async function fetch_interval_klines(
     fetch_implementation: typeof fetch,
     end_time?: number,
 ): Promise<ReadonlyArray<NormalizedKline>> {
+    // 심볼·주기·개수와 선택적 조회 종료 시각을 REST 인자로 구성한다.
     const request_url = new URL(binance_klines_rest_url);
     request_url.searchParams.set('symbol', symbol);
     request_url.searchParams.set('interval', interval);
@@ -248,6 +285,7 @@ async function fetch_interval_klines(
         request_url.searchParams.set('endTime', String(end_time));
     }
 
+    // 취소·시간 제한 안에서 조회하고 응답을 검증한다.
     return with_chart_request_timeout(async (request_signal) => {
         const response = await fetch_implementation(request_url, { signal: request_signal });
 
@@ -267,6 +305,7 @@ async function fetch_interval_klines(
     }, signal);
 }
 
+
 /**
  * 함수 이름: load_all_klines()
  * 기능: 1m, 30m, 4h, 1d REST kline을 병렬로 조회해 주기별로 반환한다.
@@ -279,6 +318,7 @@ export async function load_all_klines(
     symbol = 'ETHUSDT',
     options: LoadAllKlinesOptions = {},
 ): Promise<KlinesByInterval> {
+    // 심볼·조회 개수와 사용할 fetch 구현을 검증한다.
     const normalized_symbol = normalize_symbol(symbol);
     const limit = options.limit ?? 500;
 
@@ -292,6 +332,7 @@ export async function load_all_klines(
         throw new Error('A fetch implementation is required to load Binance klines.');
     }
 
+    // 지원하는 주기들을 병렬 조회한 뒤 주기별 결과로 묶는다.
     const interval_results = await Promise.all(supported_chart_intervals.map(async (interval) => {
         const started_at = performance.now();
         options.on_request_event?.({ event: 'rest_started', interval, elapsed_ms: 0 });
@@ -300,6 +341,7 @@ export async function load_all_klines(
                 normalized_symbol, interval, limit, options.signal, fetch_implementation,
             );
             options.on_request_event?.({ event: 'rest_completed', interval, elapsed_ms: Math.round(performance.now() - started_at) });
+
             return [interval, klines] as const;
         } catch (error: unknown) {
             if (!((error instanceof Error || error instanceof DOMException) && error.name === 'AbortError')) {
@@ -315,6 +357,7 @@ export async function load_all_klines(
 
     return Object.fromEntries(interval_results) as unknown as KlinesByInterval;
 }
+
 
 /**
  * 함수 이름: load_older_klines()
@@ -332,6 +375,7 @@ export async function load_older_klines(
     before_open_time: number,
     options: LoadOlderKlinesOptions = {},
 ): Promise<ReadonlyArray<NormalizedKline>> {
+    // 심볼·주기·경계 시각·조회 개수와 실행 의존성을 검증한다.
     const normalized_symbol = normalize_symbol(symbol);
     const limit = options.limit ?? 1000;
 
@@ -353,6 +397,7 @@ export async function load_older_klines(
         throw new Error('A fetch implementation is required to load Binance klines.');
     }
 
+    // 현재 가장 오래된 봉 직전까지 조회해 경계 봉의 중복을 피한다.
     return fetch_interval_klines(
         normalized_symbol,
         interval,
@@ -362,6 +407,7 @@ export async function load_older_klines(
         before_open_time - 1,
     );
 }
+
 
 /**
  * 함수 이름: build_combined_kline_stream_url()
@@ -378,6 +424,7 @@ export function build_combined_kline_stream_url(symbol = 'ETHUSDT'): string {
 
     return `${binance_combined_stream_url}?streams=${streams}`;
 }
+
 
 /**
  * 함수 이름: parse_json_payload()
@@ -398,6 +445,7 @@ function parse_json_payload(payload: unknown): unknown {
     }
 }
 
+
 /**
  * 함수 이름: parse_combined_kline_message()
  * 기능: Binance combined WebSocket kline payload를 검증하고 NormalizedKline으로 변환한다.
@@ -406,6 +454,7 @@ function parse_json_payload(payload: unknown): unknown {
  * 작성 날짜: 2026/08/20
  */
 export function parse_combined_kline_message(payload: unknown): NormalizedKline {
+    // combined stream 봉투와 kline 이벤트 종류를 검증한다.
     const parsed_payload = parse_json_payload(payload);
 
     if (!is_record(parsed_payload) || typeof parsed_payload.stream !== 'string') {
@@ -425,6 +474,7 @@ export function parse_combined_kline_message(payload: unknown): NormalizedKline 
         throw new Error('Binance combined WebSocket kline event is missing symbol or kline data.');
     }
 
+    // 이벤트·봉 데이터·stream 이름의 심볼과 주기가 서로 일치하는지 확인한다.
     const kline_symbol = typeof kline_payload.s === 'string'
         ? normalize_symbol(kline_payload.s)
         : null;
@@ -444,6 +494,7 @@ export function parse_combined_kline_message(payload: unknown): NormalizedKline 
         throw new Error('Binance combined WebSocket stream does not match its kline payload.');
     }
 
+    // 봉 마감 여부와 시간 순서를 검증한 뒤 수치 필드를 정규화한다.
     if (typeof kline_payload.x !== 'boolean') {
         throw new Error('Binance combined WebSocket kline field "x" must be boolean.');
     }

@@ -12,6 +12,7 @@ const REGIME_OPTIONS: ReadonlyArray<RegimeOption> = [
     { type: 'type4', label: '강하락' },
 ];
 
+
 /**
  * 함수 이름: get_regime_label()
  * 기능: REGIME 타입을 화면에 표시할 한국어 시장 상태로 변환한다.
@@ -31,6 +32,7 @@ function get_regime_label(regime_type: RegimeType | null): string {
         : `${selected_option.type} · ${selected_option.label}`;
 }
 
+
 /**
  * 함수 이름: RegimePanel()
  * 기능: 추천·적용 REGIME, 수동 선택 버튼과 실시간 판단 지표를 한 패널에 표시한다.
@@ -48,6 +50,7 @@ export function RegimePanel({
     onIntent,
     recommended,
 }: RegimePanelProps) {
+    // 추천·적용·후보를 별도로 표시하고 사용자 선택과 실시간 지표를 같은 패널에 배치한다.
     return (
         <section
             aria-labelledby="regime-panel-title"

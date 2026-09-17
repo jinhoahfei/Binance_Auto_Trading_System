@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /Users/oscar/Desktop/Binance_Auto/UI
+
+
+ Test Files  60 passed (60)
+      Tests  660 passed (660)
+   Start at  22:11:25
+   Duration  9.65s (transform 6.52s, setup 6.62s, import 18.30s, tests 35.33s, environment 34.27s)
+

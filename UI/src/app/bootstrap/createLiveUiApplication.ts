@@ -32,6 +32,7 @@ export interface LiveUiApplication extends UiApplicationRuntime {
     readonly initial_session_id: string;
 }
 
+
 /**
  * 함수 이름: current_kst_date()
  * 기능: CSV/history actor 초기화에 사용할 Asia/Seoul LocalDate를 계산한다.
@@ -47,6 +48,7 @@ function current_kst_date(): LocalDateString {
         day: '2-digit',
     }).format(new Date());
 }
+
 
 /**
  * 함수 이름: create_live_ui_application()
@@ -75,6 +77,7 @@ export async function create_live_ui_application(
     }
 }
 
+
 /**
  * 함수 이름: hydrate_live_ui_application()
  * 기능: READY child의 같은 adapter로 snapshot hydration을 재시도하고 cold facade runtime을 만든다.
@@ -98,6 +101,7 @@ export async function hydrate_live_ui_application(
     }
 
     const fixed_today = options.today;
+
     // Production은 매 dialog open에서 KST 날짜를 다시 읽고, fixture는 주입 날짜를 고정한다.
     const get_current_kst_date = fixed_today === undefined
         ? current_kst_date
@@ -127,6 +131,7 @@ export async function hydrate_live_ui_application(
 
             is_active = true;
             facade.start();
+
             // 같은 coherent snapshot을 한 intent로 publish한 뒤 그 sequence에서 stream을 연다.
             facade.dispatch({
                 type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
@@ -168,6 +173,7 @@ export async function hydrate_live_ui_application(
         deactivate: () => {
             if (!is_active) {
                 command_adapter.stop();
+
                 return;
             }
 
@@ -177,6 +183,7 @@ export async function hydrate_live_ui_application(
         },
     };
 }
+
 
 /**
  * 함수 이름: create_live_ui_application_factory()

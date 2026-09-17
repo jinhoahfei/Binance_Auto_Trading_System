@@ -42,6 +42,7 @@ interface BootstrapStatusProps {
     readonly is_failure?: boolean;
 }
 
+
 /**
  * 함수 이름: BootstrapStatus()
  * 기능: snapshot이 준비되기 전에는 demo/부분 dashboard 대신 loading 또는 failure 상태만 표시한다.
@@ -56,6 +57,7 @@ function BootstrapStatus({
     detail,
     is_failure = false,
 }: BootstrapStatusProps) {
+    // 앱 초기화·복구 상태를 같은 화면 틀에 표시하고 전달된 조작만 제공한다.
     return (
         <main
             aria-busy={!is_failure}
@@ -96,6 +98,7 @@ function BootstrapStatus({
     );
 }
 
+
 /**
  * 함수 이름: is_tauri_runtime()
  * 기능: production descriptor IPC를 호출할 수 있는 Tauri renderer인지 확인한다.
@@ -106,6 +109,7 @@ function BootstrapStatus({
 function is_tauri_runtime(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
+
 
 /**
  * 함수 이름: safe_bootstrap_failure_code()
@@ -131,6 +135,7 @@ function safe_bootstrap_failure_code(error: unknown): string {
 
     return 'LIVE_BOOTSTRAP_FAILED';
 }
+
 
 /**
  * 함수 이름: bootstrap_live_renderer()
@@ -186,6 +191,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
      * 작성 날짜: 2026/08/24
      */
     function render_bootstrap_recovery(): void {
+        // 복구 안내에 사용할 오류 코드·종료 단계·버튼 상태를 선택한다.
         recovery_is_visible = true;
         const failure_code = safe_bootstrap_failure_code(recovery_error);
         const recovery_detail = recovery_is_pending && recovery_shutdown_step
@@ -210,6 +216,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             padding: '9px 14px',
         } as const;
 
+        // 연결 재확인과 안전 종료 조작을 현재 복구 수명에 연결한다.
         root.render(
             <StrictMode>
                 <BootstrapStatus
@@ -287,6 +294,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             }
             expected_backend_session = descriptor.session_id;
             recovery_adapter = new BackendUiAdapter(descriptor);
+
             return recovery_adapter;
         } catch (error) {
             if (safe_bootstrap_failure_code(error) === 'BACKEND_SIDECAR_EXITED') {
@@ -328,15 +336,17 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
     /**
      * 함수 이름: safely_shutdown_recovery_child()
      * 기능: bootstrap failure에서도 별도 종료 상태로 안전 종료하고 정상 sidecar exit 뒤에만 창을 닫는다.
-     * 인자: 없음
+     * 인자: liquidation_confirmed -> 복구 화면에서 사용자가 청산을 확인했는지 여부
      * 반환값: 안전 종료 시도 완료 Promise
      * 작성 날짜: 2026/08/24
      */
     async function safely_shutdown_recovery_child(liquidation_confirmed = false): Promise<void> {
+        // 중복 복구 작업과 이미 종료된 자식에 대한 재요청을 막는다.
         if (recovery_is_pending || recovery_sidecar_has_exited) {
             return;
         }
 
+        // 진행 상태를 먼저 표시한 뒤 복구 adapter의 안전 종료를 기다린다.
         recovery_is_pending = true;
         render_bootstrap_recovery();
         try {
@@ -355,9 +365,16 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         }
     }
 
-    /** 실행 중 치명적 연결 오류는 같은 backend의 연결 정보로 복구·안전 종료할 수 있는 화면에 전달한다. */
+    /**
+     * 함수 이름: show_runtime_connection_failure()
+     * 기능: 실패한 live runtime을 다음 microtask에서 비활성화하고 종료 우선순위를 지켜 복구 화면을 표시한다.
+     * 인자: error -> 치명적 backend 연결 오류
+     * 반환값: 없음
+     * 작성 날짜: 2026/09/17
+     */
     function show_runtime_connection_failure(error: BackendAdapterError): void {
         const failed_application = live_application;
+
         // 상태 machine callback 안에서 React를 unmount하지 않는다. 실제 sidecar exit가 우선한다.
         queueMicrotask(() => {
             if (live_application !== failed_application || recovery_sidecar_has_exited) return;
@@ -418,10 +435,12 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
      * 작성 날짜: 2026/08/24
      */
     async function retry_live_bootstrap(): Promise<void> {
+        // 이미 진행 중이거나 종료된 복구 경로는 다시 시작하지 않는다.
         if (recovery_is_pending || recovery_sidecar_has_exited) {
             return;
         }
 
+        // 진행 상태를 표시하고 새 연결의 초기 snapshot으로 앱을 다시 준비한다.
         recovery_is_pending = true;
         render_bootstrap_recovery();
         try {
@@ -430,6 +449,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             if (recovery_sidecar_has_exited) {
                 application.deactivate();
                 render_bootstrap_recovery();
+
                 return;
             }
             install_live_application(application);
@@ -444,6 +464,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
         if (live_application === null || !application_is_active) {
             if (live_application !== null) {
                 pending_sidecar_exit_payload = exit_payload;
+
                 return;
             }
 
@@ -461,6 +482,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             remove_sidecar_exit_listener?.();
             remove_sidecar_exit_listener = null;
             render_bootstrap_recovery();
+
             return;
         }
 
@@ -504,6 +526,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             if (recovery_is_visible) {
                 render_bootstrap_recovery();
             }
+
             return;
         }
         if (is_invalid) {
@@ -520,6 +543,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
             live_application.facade.dispatch({
                 type: 'BACKEND_SIDECAR_EXITED_ABNORMALLY',
             });
+
             return;
         }
 
@@ -572,6 +596,7 @@ async function bootstrap_live_renderer(root: Root): Promise<void> {
 
                 if (handle_native_exit_request !== null) {
                     handle_native_exit_request(is_invalid);
+
                     return;
                 }
                 if (is_invalid) {
@@ -612,6 +637,7 @@ if (bootstrap_hot_data?.bootstrap_started === true) {
         bootstrap_hot_data.bootstrap_started = true;  // HMR에는 실행 여부만 보관하며 token·adapter는 넣지 않는다.
         import.meta.hot.accept();
     }
+
     const react_root = createRoot(root_element);
     const stop_liveness = start_renderer_liveness();
     window.addEventListener('pagehide', stop_liveness, { once: true });

@@ -20,6 +20,7 @@ struct BootstrapFrame<'a> {
     configuration: &'a SidecarBootstrapConfiguration<'a>,
 }
 
+
 /// 함수 이름: serialize_bootstrap_frame()
 /// 기능: 기존 strict configuration과 native token을 bounded 최초 JSON frame으로 묶는다.
 /// 인자: token -> per-launch token, configuration -> 기존 read-only bootstrap contract
@@ -44,6 +45,7 @@ pub(super) fn serialize_bootstrap_frame(
     Ok(payload) // 직렬화한 credential 사본은 frame publication 직후 Drop으로 지운다.
 }
 
+
 /// 함수 이름: write_frame()
 /// 기능: 크기를 먼저 검증한 뒤 4-byte big-endian 길이와 payload를 같은 writer에 전달한다.
 /// 인자: writer -> parent stdio pipe, payload -> UTF-8 JSON, limit -> 메시지별 상한
@@ -61,6 +63,7 @@ pub(super) fn write_frame(writer: &mut impl Write, payload: &[u8], limit: usize)
     writer.write_all(payload)?;
     writer.flush() // 하나의 완성된 frame만 child가 해석하도록 pipe writer를 flush한다.
 }
+
 
 /// 함수 이름: completed_frame_payload()
 /// 기능: split prefix와 body를 보존하면서 완성된 한 frame의 payload slice만 제공한다.
@@ -129,6 +132,7 @@ mod tests {
         assert!(completed_frame_payload(&[255; 4], MAXIMUM_FRAME_BYTES).is_err());
         assert_eq!(MAXIMUM_BOOTSTRAP_FRAME_BYTES, 16 * 1024);
     }
+
     /// 함수 이름: bootstrap_uses_exact_secret_channel_and_readonly_configuration()
     /// 기능: production Windows serializer가 exact envelope와 기존 false/null order gate를 보존하는지 검증한다.
     /// 인자: 없음

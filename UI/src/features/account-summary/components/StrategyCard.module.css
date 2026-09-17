@@ -1,5 +1,6 @@
+/* 전략 요약 카드의 크기와 표면을 설정한다. */
 .card {
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 162px;
     padding: 14px 20px;
     overflow: hidden;
@@ -9,6 +10,7 @@
     box-shadow: var(--shadow-control);
 }
 
+/* 전략 제목·실행 상태·상태 점을 같은 행에 배치한다. */
 .header {
     display: grid;
     grid-template-columns: 1fr auto 8px;
@@ -30,6 +32,7 @@
     border-radius: 50%;
 }
 
+/* 상태 문구와 상태 점의 긍정·부정·중립 색을 연결한다. */
 .positive {
     color: var(--color-text-positive);
 }
@@ -54,6 +57,7 @@
     background-color: var(--color-text-primary);
 }
 
+/* 전략 지표의 항목명과 값을 행 단위로 정렬한다. */
 .card dl {
     display: flex;
     flex-direction: column;
@@ -89,6 +93,7 @@
     white-space: nowrap;
 }
 
+/* 손익 값과 보조 설명을 오른쪽 기준으로 쌓는다. */
 .card .profit {
     display: flex;
     flex-direction: column;

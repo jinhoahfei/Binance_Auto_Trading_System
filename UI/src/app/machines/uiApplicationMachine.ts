@@ -20,6 +20,7 @@ import type { FeatureContexts, UiApplicationContext, UiDomainEvent } from './uiA
  * 작성 날짜: 2026/09/16
  */
 export function create_ui_application_machine(options: Omit<UiApplicationFacadeOptions, 'get_current_kst_date'> & { initial_monotonic_ms?: number }) {
+    // 기능별 순수 정의를 준비하고 루트에 넣을 Region을 조립한다.
     const definitions = create_feature_definitions(options);
     const composition = new UiRegionComposition(definitions);
     const trading = trading_regions(definitions.trading);
@@ -36,20 +37,25 @@ export function create_ui_application_machine(options: Omit<UiApplicationFacadeO
     const stop = composition.compile('trading', trading.stop, 'trading_stop');
     const exit = composition.compile('app_exit', definitions.app_exit.config);
 
+    // 분할 주문과 CSV의 입력 계층을 각각의 화면 Region에 연결한다.
     account.states.SPLIT_ORDER = split_order_regions(composition);
 
     const csv = composition.compile('csv_export', csv_export_regions(definitions.csv_export));
 
+    // 모든 Region의 요청·완료 이벤트를 같은 실행 요청 계약으로 연결한다.
     for (const region of [chart, regime, account, recent, summary, query, period, side, connection, start, stop, exit, csv]) {
         composition.connect_commands(region);
     }
 
     return setup({
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             'ui.request': (_args, _request: UIActionRequest) => {
                 throw new Error('UI actions must be consumed by UIStateController');
             },
         },
+
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as UiApplicationContext,
             events: {} as UiDomainEvent,
@@ -57,6 +63,8 @@ export function create_ui_application_machine(options: Omit<UiApplicationFacadeO
     }).createMachine({
         id: 'uiApplicationMachine',
         initial: 'ETIRE_UI_SYSTEM',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: () => ({
             evaluation: { now_epoch_ms: 0, today: options.today },
             server_snapshot: null,
@@ -68,6 +76,8 @@ export function create_ui_application_machine(options: Omit<UiApplicationFacadeO
             retained_details: undefined,
             deferred: [],
         }),
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             ETIRE_UI_SYSTEM: {
                 type: 'parallel',
@@ -127,6 +137,7 @@ export function create_ui_application_machine(options: Omit<UiApplicationFacadeO
                                      */
                                     const is_main_screen_event = (event: UiDomainEvent) => ['chart', 'regime', 'account_summary', 'split_order', 'recent_orders'].includes(event.owner ?? '');
 
+                                    // 숨겨진 메인 화면의 완료 이벤트를 복귀 시 한 번 재생한다.
                                     for (const event of context.deferred.filter(is_main_screen_event)) {
                                         enqueue.raise(event);
                                     }
@@ -177,6 +188,7 @@ export function create_ui_application_machine(options: Omit<UiApplicationFacadeO
                                      */
                                     const is_details_screen_event = (event: UiDomainEvent) => ['csv_export', 'trade_history_summary'].includes(event.owner ?? '');
 
+                                    // 숨겨진 상세 화면의 완료 이벤트를 복귀 시 한 번 재생한다.
                                     for (const event of context.deferred.filter(is_details_screen_event)) {
                                         enqueue.raise(event);
                                     }

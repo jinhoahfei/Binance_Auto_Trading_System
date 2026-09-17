@@ -95,6 +95,11 @@ pub struct ChartDiagnosticsState(Mutex<Option<ChartLogWriter>>);
 
 #[cfg(feature = "background-liveness-smoke")]
 impl ChartDiagnosticsState {
+    /// 함수 이름: in_directory()
+    /// 기능: 검증 산출물 디렉터리에 차트 진단 writer를 준비한다.
+    /// 인자: directory -> 검증 산출물 디렉터리
+    /// 반환값: writer를 보유한 ChartDiagnosticsState
+    /// 작성 날짜: 2026/09/17
     pub(crate) fn in_directory(directory: PathBuf) -> Self {
         Self(Mutex::new(Some(ChartLogWriter::new(directory, format!("chart_{}", std::process::id())))))
     }
@@ -108,6 +113,11 @@ pub(crate) struct ChartLogWriter {
 }
 
 impl ChartLogWriter {
+    /// 함수 이름: new()
+    /// 기능: 진단 분할 파일의 첫 part와 누적 크기를 초기화한다.
+    /// 인자: directory -> 저장 디렉터리, run_name -> 실행별 파일명 접두사
+    /// 반환값: 새 ChartLogWriter
+    /// 작성 날짜: 2026/09/17
     pub(crate) fn new(directory: PathBuf, run_name: String) -> Self {
         Self { directory, run_name, part: 1, size: 0 }
     }
@@ -118,6 +128,7 @@ impl ChartLogWriter {
     /// 반환값: 파일 처리 결과
     /// 작성 날짜: 2026/09/11
     pub(crate) fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        // 파일 크기 상한을 넘으면 새 part로 이동해 과거 로그를 보존한다.
         fs::create_dir_all(&self.directory)?;
         if self.size + bytes.len() as u64 > 5 * 1024 * 1024 {
             self.part += 1;
@@ -126,6 +137,8 @@ impl ChartLogWriter {
         let path = self
             .directory
             .join(format!("{}_part{:04}.log", self.run_name, self.part));
+
+        // append 모드와 사용자 전용 파일 권한을 준비한다.
         let mut options = OpenOptions::new();
         options.create(true).append(true);
         #[cfg(unix)]
@@ -199,6 +212,8 @@ mod tests {
             fs::read_to_string(&first_path).unwrap(),
             "{\"sequence\":1}\n{\"sequence\":2}\n"
         );
+
+        // 파일 경계에 도달한 다음 append가 기존 파일을 보존하고 새 part를 만드는지 검증한다.
         writer.size = 5 * 1024 * 1024;
         writer.append(b"{\"sequence\":3}\n").unwrap();
         assert!(first_path.exists());
@@ -209,6 +224,7 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 }
+
 
 /// 함수 이름: record_chart_diagnostics()
 /// 기능: main renderer의 고정 schema 진단만 native 시각·backend session과 함께 파일에 기록한다.
@@ -224,6 +240,7 @@ pub async fn record_chart_diagnostics(
     sidecar: State<'_, crate::sidecar::SidecarProcessState>,
     records: Vec<ChartDiagnostic>,
 ) -> Result<(), &'static str> {
+    // 호출 창과 batch 크기를 확인한 뒤 각 진단 레코드의 범위를 검증한다.
     if window.label() != "main" || records.is_empty() || records.len() > 32 {
         return Err("CHART_DIAGNOSTIC_INVALID_BATCH");
     }

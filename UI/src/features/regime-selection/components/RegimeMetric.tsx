@@ -1,7 +1,10 @@
+// REGIME 판단에 사용되는 실시간 지표의 이름과 값을 표시한다.
+
 import type { RegimeMetricViewModel } from '../types';
 import styles from './RegimeMetric.module.css';
 
 export type RegimeMetricProps = RegimeMetricViewModel;
+
 
 /**
  * 함수 이름: RegimeMetric()

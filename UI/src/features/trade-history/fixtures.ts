@@ -1,3 +1,5 @@
+// 거래 내역에서 재사용할 고정 설정과 테스트 데이터를 제공한다.
+
 import type { TradeHistorySummaryViewModel, TradeRowViewModel } from './components';
 
 export const TRADE_HISTORY_SUMMARY_FIXTURE: TradeHistorySummaryViewModel = {

@@ -173,6 +173,7 @@ export type TradingCommandEvent =
     | { readonly type: 'BACKEND_TRADING_STARTED' }
     | { readonly type: 'BACKEND_TRADING_STOPPED' };
 
+
 /**
  * 함수 이름: to_command_failure()
  * 기능: 알 수 없는 adapter 오류를 화면에 안전하게 표시할 공통 실패 형식으로 변환한다.
@@ -187,6 +188,7 @@ function to_command_failure(error: unknown): UiCommandFailure {
         '요청을 완료하지 못했습니다.',
     );
 }
+
 
 /**
  * 함수 이름: resolve_trading_start_unavailable_reason()
@@ -218,6 +220,7 @@ export function resolve_trading_start_unavailable_reason(
     return null;  // 두 backend 소유 gate가 모두 준비된 경우에만 확인 단계로 진행한다.
 }
 
+
 /**
  * 함수 이름: create_trading_command_machine()
  * 기능: 자동매매 시작, 일반 중지, 강제 매도와 복구 Position 청산 전이를 생성한다.
@@ -229,10 +232,13 @@ export function create_trading_command_machine(
     options: TradingCommandMachineOptions = {},
 ) {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as TradingCommandContext,
             events: {} as TradingCommandEvent,
         },
+
+        // 입력 수락 조건을 순수 가드로 정의한다.
         guards: {
             snapshot_preserves_local_command: ({ context, event }) => {
                 return event.type === 'TRADING_SNAPSHOT_SYNCHRONIZED'
@@ -296,6 +302,8 @@ export function create_trading_command_machine(
                 return !context.is_trading && context.has_open_position;
             },
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             synchronize_trading_snapshot: assign({
                 selected_regime: ({ context, event }) => {
@@ -605,6 +613,8 @@ export function create_trading_command_machine(
     }).createMachine({
         id: 'tradingCommandMachine',
         initial: options.is_trading === true ? 'running' : 'stopped',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             selected_regime: null,
             logic_coverage: options.logic_coverage ?? DEFAULT_TRADING_LOGIC_COVERAGE,
@@ -679,6 +689,8 @@ export function create_trading_command_machine(
                 actions: 'mark_trading_stopped',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             stopped: {
                 meta: {

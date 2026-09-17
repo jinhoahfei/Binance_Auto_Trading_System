@@ -18,6 +18,7 @@ export interface UiApplicationController {
     get_view_model(): AppViewModel;
 }
 
+
 /**
  * 클래스 이름: UiApplicationStore
  * 기능: UiApplicationFacade를 React 외부 store로 감싸고 StrictMode 구독 수명주기를 안전하게 관리한다.
@@ -41,6 +42,7 @@ export class UiApplicationStore implements UiApplicationController {
      * 작성 날짜: 2026/08/12
      */
     constructor(application_factory: UiApplicationFactory) {
+        // function Object() { [native code] }
         this.application_factory = application_factory;
         this.application = this.application_factory();
         this.current_view_model = this.application.facade.get_view_model();
@@ -54,6 +56,7 @@ export class UiApplicationStore implements UiApplicationController {
      * 작성 날짜: 2026/08/12
      */
     subscribe(listener: StoreListener): () => void {
+        // 새 구독은 예약된 비활성화를 무효화하고 필요한 실행 수명을 활성화한다.
         this.deactivation_version += 1;
         this.listeners.add(listener);
 
@@ -63,6 +66,7 @@ export class UiApplicationStore implements UiApplicationController {
             listener();
         }
 
+        // 구독 해제는 listener를 제거하고 남은 구독 수에 따라 폐기를 예약한다.
         return () => {
             this.listeners.delete(listener);
             this.schedule_deactivation();
@@ -111,8 +115,10 @@ export class UiApplicationStore implements UiApplicationController {
      */
     dispatch(intent: UiApplicationIntent): boolean {
         const accepted = this.application?.facade.dispatch(intent) ?? false;
+
         // 사용자 클릭과 native 종료 의도는 즉시 보인다. 수신 event는 facade 구독에서 프레임별로 합친다.
         if (this.cancel_pending_notification !== null) this.publish_notification();
+
         return accepted;
     }
 
@@ -197,8 +203,19 @@ export class UiApplicationStore implements UiApplicationController {
      * 작성 날짜: 2026/08/12
      */
     private notify_listeners(): void {
+        // 이미 발행이 예약되었거나 구독자가 없으면 중복 예약하지 않는다.
         if (this.cancel_pending_notification !== null || this.listeners.size === 0) return;
+
+        /**
+         * 함수 이름: publish()
+         * 기능: 예약한 프레임 또는 timer에서 최신 화면 모델의 변경을 발행한다.
+         * 인자: 없음
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         const publish = () => this.publish_notification();
+
+        // 브라우저 프레임에 발행을 모으고 사용할 수 없으면 타이머 경계를 이용한다.
         if (typeof requestAnimationFrame === 'function') {
             const frame = requestAnimationFrame(publish);
             this.cancel_pending_notification = () => cancelAnimationFrame(frame);
@@ -208,7 +225,13 @@ export class UiApplicationStore implements UiApplicationController {
         }
     }
 
-    /** 한 번의 paint 또는 사용자 동작 경계에서 최신 캐시만 발행하고 실패를 같은 runtime으로 전달한다. */
+    /**
+     * 함수 이름: publish_notification()
+     * 기능: 대기 알림을 정리하고 활성 runtime의 최신 캐시 변경을 listener에 한 번 알린다.
+     * 인자: 없음
+     * 반환값: 없음; 발행 오류는 runtime 실패 처리 경계로 전달
+     * 작성 날짜: 2026/09/17
+     */
     private publish_notification(): void {
         this.cancel_pending_notification?.();
         this.cancel_pending_notification = null;

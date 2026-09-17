@@ -11,6 +11,7 @@ import type { RegionNode } from '../../../app/machines/uiRegionComposition';
  * 작성 날짜: 2026/09/16
  */
 export function history_filter_region(kind: 'period' | 'side'): RegionNode {
+    // 기간 또는 거래 방향에 대응하는 필터 이벤트를 준비한다.
     const values = kind === 'period' ? {
         today: 'SELECT_DISPLAY_TODAY_HISTORY',
         last7days: 'SELECT_DISPLAY_WEEKLY_HISTORY',
@@ -21,8 +22,11 @@ export function history_filter_region(kind: 'period' | 'side'): RegionNode {
         buy: 'BUY_TRADE_HISTORY_SELECTED',
         sell: 'SELL_TRADE_HISTORY_SELECTED',
     };
+
+    // 조회가 끝난 상태에서만 필터 변경을 허용한다.
     const can_select_filter = or(['ready', 'empty', 'failed'].map(state => stateIn(`#trade_history.${state}`)));
 
+    // 현재 context의 필터를 복원하고 선택된 값으로 전이한다.
     return {
         initial: 'restore',
         on: Object.fromEntries(Object.entries(values).map(([value, type]) => [

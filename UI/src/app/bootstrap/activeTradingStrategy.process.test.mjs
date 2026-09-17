@@ -18,6 +18,7 @@ import {
     create_live_ui_application_factory,
 } from './createLiveUiApplication';
 
+
 /**
  * 함수 이름: load_backend_replay()
  * 기능: 별도 Python process의 실제 STM 시나리오에서 생성한 transport event를 읽는다.
@@ -42,8 +43,10 @@ function load_backend_replay() {
         timeout: 10_000,
         maxBuffer: 1_048_576,
     });
+
     return JSON.parse(output);  // UI의 기대 Case로 backend의 실제 event payload를 덮어쓰지 않는다.
 }
+
 
 /**
  * 클래스 이름: ReplayWebSocket
@@ -94,6 +97,7 @@ class ReplayWebSocket {
     }
 }
 
+
 /**
  * 함수 이름: create_replay_snapshot()
  * 기능: UI의 비거래 fixture와 실제 backend 거래 상태를 하나의 초기·재연결 snapshot으로 구성한다.
@@ -104,6 +108,7 @@ class ReplayWebSocket {
 function create_replay_snapshot(event) {
     // 전략 검증과 무관한 계좌·차트 fixture만 재사용하고 거래 DTO는 실제 값을 그대로 전달한다.
     const snapshot = create_backend_snapshot_fixture();
+
     return {
         ...snapshot,
         session_id: event.session_id,
@@ -112,6 +117,7 @@ function create_replay_snapshot(event) {
         trading: event.payload.trading,
     };
 }
+
 
 /**
  * 함수 이름: mount_replay_application()
@@ -127,6 +133,7 @@ async function mount_replay_application(initial_event) {
         snapshot_request_count: 0,
         snapshot_gate: null,
     };
+
     // 포트 번호는 descriptor 형식 검증용이며 fetch와 socket 생성은 모두 메모리 경계로 주입한다.
     const application = await create_live_ui_application({
         port: 42_123,
@@ -141,6 +148,7 @@ async function mount_replay_application(initial_event) {
                 expect(init.method).toBe('GET');
                 transport.snapshot_request_count += 1;
                 if (transport.snapshot_gate !== null) await transport.snapshot_gate;
+
                 return new Response(JSON.stringify({
                     schema_version: BACKEND_SCHEMA_VERSION,
                     request_id: init.headers['X-Request-Id'],
@@ -153,6 +161,7 @@ async function mount_replay_application(initial_event) {
                 const socket = new ReplayWebSocket();
                 transport.sockets.push(socket);
                 queueMicrotask(() => socket.onopen?.(new Event('open')));
+
                 return socket;
             },
         },
@@ -161,8 +170,10 @@ async function mount_replay_application(initial_event) {
         applicationFactory: create_live_ui_application_factory(application),
     }));
     await userEvent.click(await screen.findByRole('tab', { name: '실시간 지표' }));
+
     return { application, rendered, transport };
 }
+
 
 /**
  * 함수 이름: expect_shared_strategy()
@@ -180,6 +191,7 @@ async function expect_shared_strategy(application, step, connected = true) {
         expect(within(account_state).getAllByText(step.expected_label).length, step.stage).toBeGreaterThan(0);
         expect(chart_state).toHaveAttribute('title', step.expected_label);
         expect(application.facade.get_view_model().chart.active_trading_logic_state).toBe(step.expected_label);
+
         // 실제 DTO의 단계와 각 행이 Case별 그룹에서 이전 단계 행 없이 표시되는지 확인한다.
         const panel = screen.getByRole('tabpanel', { name: '실시간 지표' });
         const rows = step.event.payload.trading.active_logic?.indicators?.conditions ?? [];
@@ -209,6 +221,7 @@ const replay_report = load_backend_replay();
 
 describe('실제 Python STM → transport → App ACTIVE STATE', () => {
     it('연결 단절 중 이전 판정을 회색으로 해제하고 전체 snapshot으로 복원한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const scenario = replay_report.scenarios[0];
         const filled = scenario.steps.find((step) => step.event.payload.trading.has_open_position);
         const { application, rendered, transport } = await mount_replay_application(filled.event);
@@ -246,6 +259,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
     });
 
     it.each(replay_report.scenarios)('$strategy 시장·매수·체결·종료 전이가 두 DOM을 자동 갱신한다', async (scenario) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { application, rendered, transport } = await mount_replay_application(scenario.steps[0].event);
         try {
             // Python 단계는 실제 B-09/C-12와 Position owner를 검사하며 주문은 가짜 REST에만 제출한다.
@@ -265,6 +279,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
     });
 
     it.each(replay_report.clock_skew_scenarios)('$strategy 체결 시각이 앞서도 보유 단계의 지표와 타이머가 계속 갱신된다', async (scenario) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { application, rendered, transport } = await mount_replay_application(scenario.steps[0].event);
         const prefix = scenario.strategy === 'CASE_B' ? 'b' : 'c';
         let first_timer_text;
@@ -304,6 +319,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
     });
 
     it('실제 C 회복 타이머가 시작 대기·180초 경계·시간 초과·저점 갱신을 표시한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const steps = replay_report.timer_scenario.steps;
         const { application, rendered, transport } = await mount_replay_application(steps[0].event);
         try {
@@ -317,6 +333,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
                     expect(document.querySelectorAll('[data-timer-state]')).toHaveLength(0);
                     continue;
                 }
+
                 const row = document.querySelector(`[data-condition-id$=":${step.timer_condition_id}"]`);
                 await waitFor(() => expect(within(row).getByRole('timer')).toHaveTextContent(times[index]));
                 const timer = row.querySelector('[data-timer-state]');
@@ -341,6 +358,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
     });
 
     it('C 타이머 리셋 event 유실 뒤 전체 snapshot으로 새 회차를 복원한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const steps = replay_report.timer_scenario.steps;
         const { application, rendered, transport } = await mount_replay_application(steps[0].event);
         try {
@@ -351,6 +369,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
             expect(await screen.findByRole('button', { name: '화면 연결 상태: 복구 중' })).toBeInTheDocument();
             await expect_shared_strategy(application, reset_step, false);
             const row = document.querySelector('[data-condition-id$=":c_recovery_window"]');
+
             // 전체 snapshot만으로 연결 정상 판정을 하지 않는다. 다음 유효 event까지 타이머도 대기한다.
             expect(row.querySelector('[data-timer-state]')).toHaveAttribute('data-timer-state', 'unavailable');
             expect(transport.snapshot_request_count).toBe(2);
@@ -366,6 +385,7 @@ describe('실제 Python STM → transport → App ACTIVE STATE', () => {
     });
 
     it.each(replay_report.scenarios)('$strategy event 유실 후 전체 재동기화로 체결 전략을 복원한다', async (scenario) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { application, rendered, transport } = await mount_replay_application(scenario.steps[0].event);
         try {
             await expect_shared_strategy(application, scenario.steps[0]);

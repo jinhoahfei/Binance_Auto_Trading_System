@@ -24,10 +24,12 @@ import { derive_active_modal } from './uiModalPolicy';
  * 작성 날짜: 2026/09/16
  */
 function is_intent_active(snapshot: UiApplicationSnapshot, intent: UiApplicationIntent): boolean {
+    // 종료된 실행 수명에는 사용자 입력을 전달하지 않는다.
     if (snapshot.status === 'done' || snapshot.status === 'stopped') {
         return false;
     }
 
+    // 입력이 속한 화면을 구분해 현재 비활성 화면의 조작을 차단한다.
     const route = feature_view(snapshot, 'shell').context.route;
     const is_main_screen_intent = /^(CHART_|SCALE_|RECENT_ORDERS_TAB_|REALTIME_INDICATORS_TAB_SELECTED|REGIME_TYPE_CLICKED|REGIME_CHANGE_|SHOW_TRADE_HISTORY)/.test(intent.type)
         && intent.type !== 'CHART_ACTIVE_STATE_UPDATED';
@@ -303,6 +305,7 @@ export class UiIntentRouter {
                             residual_cost_basis: intent.residual_cost_basis ?? '0',
                             balance_reconciliation: intent.balance_reconciliation ?? null,
                         });
+
                         // 종료 Region에도 같은 authoritative lifecycle과 Position 조합을 전달한다.
                         this.send('app_exit', {
                             type: 'TRADING_SESSION_UPDATED',
@@ -799,6 +802,7 @@ export class UiIntentRouter {
                 type: 'TRADE_HISTORY_SUMMARY_SYNCHRONIZED',
                 summary: synchronized_snapshot.trade_history_summary,
             });
+
             // Phase 7의 두 authoritative ratio를 같은 snapshot batch에서 함께 교체한다.
             this.send('split_order', {
                 type: 'SPLIT_ORDER_SNAPSHOT_SYNCHRONIZED',
@@ -837,6 +841,7 @@ export class UiIntentRouter {
                 residual_cost_basis: synchronized_snapshot.residual_cost_basis ?? '0',
                 balance_reconciliation: synchronized_snapshot.balance_reconciliation ?? null,
             });
+
             // Event 유실 뒤 full resync도 app-exit의 동일 terminal·Position barrier를 열 수 있어야 한다.
             this.send('app_exit', {
                 type: 'TRADING_SESSION_UPDATED',
@@ -876,6 +881,7 @@ export class UiIntentRouter {
      * 작성 날짜: 2026/08/12
      */
     private dispatch_chart_interval(interval: ChartInterval): void {
+        // 외부 시간 주기 값을 기존 차트 이벤트 이름에 대응시킨다.
         const event_by_interval = {
             '1m': {
                 type: '1_M_BUTTON_CLICKED',
@@ -902,6 +908,7 @@ export class UiIntentRouter {
      * 작성 날짜: 2026/08/12
      */
     private dispatch_chart_indicator(indicator: 'bollinger_bands' | 'ema9' | 'volume', is_visible: boolean): void {
+        // 표시할 지표 종류에 대응하는 토글 이벤트를 전달한다.
         if (indicator === 'bollinger_bands') {
             this.send('chart', {
                 type: is_visible ? 'BB_DISPLAY_ON_CLICKED' : 'BB_DISPLAY_OFF_CLICKED',
@@ -925,6 +932,7 @@ export class UiIntentRouter {
      * 작성 날짜: 2026/08/12
      */
     private dispatch_history_period(period: HistoryPeriod): void {
+        // 선택한 조회 기간을 거래 내역 필터 이벤트에 대응시킨다.
         const event_by_period = {
             today: {
                 type: 'SELECT_DISPLAY_TODAY_HISTORY',
@@ -951,6 +959,7 @@ export class UiIntentRouter {
      * 작성 날짜: 2026/08/12
      */
     private dispatch_history_side(side: TradeSideFilter): void {
+        // 선택한 거래 방향을 거래 내역 필터 이벤트에 대응시킨다.
         const event_by_side = {
             all: {
                 type: 'ALL_TRADE_HISTORY_SELECTED',
@@ -974,6 +983,7 @@ export class UiIntentRouter {
      * 작성 날짜: 2026/08/12
      */
     private dispatch_csv_period(period: CsvPeriod): void {
+        // 선택한 내보내기 기간을 CSV 편집 이벤트에 대응시킨다.
         const event_by_period = {
             today: {
                 type: 'SELECT_CSV_TODAY_HISTORY',

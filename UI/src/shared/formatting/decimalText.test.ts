@@ -18,7 +18,7 @@ describe('금융 숫자 표시', () => {
         ['-', '-'],
         ['--', '--'],
     ])('%s를 소수점 2자리로 정확하게 반올림한다', (input, expected) => {
-        expect(format_decimal_text(input)).toBe(expected);
+        expect(format_decimal_text(input)).toBe(expected);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it.each([
@@ -32,10 +32,11 @@ describe('금융 숫자 표시', () => {
         ['0', '0.0000'],
         ['-', '-'],
     ])('ETH 수량 %s를 소수점 4자리로 반올림한다', (input, expected) => {
-        expect(format_eth_quantity(input)).toBe(expected);
+        expect(format_eth_quantity(input)).toBe(expected);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it('반올림한 금액의 단위와 부호를 표시하고 0이나 기존 양수 부호를 중복 장식하지 않는다', () => {
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(format_signed_quote_amount('1.005', 'USDT')).toBe('+ 1.01 USDT');
         expect(format_signed_quote_amount('-1.005', 'USDT')).toBe('-1.01 USDT');
         expect(format_signed_quote_amount('+1.005', 'USDT')).toBe('+1.01 USDT');

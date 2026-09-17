@@ -1,5 +1,6 @@
+/* 보유 자산 카드의 고정 높이와 내부 여백을 설정한다. */
 .card {
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 162px;
     padding: 14px 20px;
     overflow: hidden;
@@ -9,6 +10,7 @@
     box-shadow: var(--shadow-control);
 }
 
+/* 자산 제목과 총 평가액의 글자 위계를 구분한다. */
 .title {
     display: block;
     color: var(--color-text-secondary);
@@ -28,6 +30,7 @@
     letter-spacing: -0.2px;
 }
 
+/* 자산 항목명과 수치를 행 단위로 정렬한다. */
 .card dl {
     display: flex;
     flex-direction: column;
@@ -63,10 +66,12 @@
     white-space: nowrap;
 }
 
+/* 손익 수치의 강조색을 적용한다. */
 .card dd.profit {
     color: var(--color-text-positive);
 }
 
+/* 잔고 대조 상세를 열 수 있는 텍스트 버튼을 표시한다. */
 .balanceButton {
     padding: 0;
     border: 0;
@@ -77,9 +82,11 @@
     text-decoration: underline;
     text-underline-offset: 3px;
 }
+
+/* 여러 줄의 잔고 대조 설명을 읽을 수 있도록 줄바꿈을 유지한다. */
 .balanceDetails {
     margin: 20px 0;
-    white-space: pre-line;
+    white-space: pre-line;  /* 안내 문구에 포함된 줄바꿈을 유지한다. */
     overflow-wrap: anywhere;
     font-size: 12px;
     line-height: 1.8;

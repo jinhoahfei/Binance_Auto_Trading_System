@@ -17,6 +17,7 @@ export interface ModalSurfaceProps {
   size?: 'compact' | 'wide';
 }
 
+
 /**
  * 함수 이름: ModalSurface()
  * 기능: 포커스 잠금과 배경 비활성화를 제공하는 공통 모달 표면을 표시한다.
@@ -35,10 +36,12 @@ export function ModalSurface({
   fixedHeight = false,
   size = 'compact',
 }: ModalSurfaceProps) {
+  // 모달 종료 시 이전 초점으로 돌아갈 동작과 선택적인 열림 callback을 준비한다.
   use_dialog_focus_return();
 
   const root_props = onOpenChange ? { onOpenChange } : {};
 
+  // 공통 overlay·제목·본문을 접근성 dialog 경계 안에 배치한다.
   return (
     <Dialog.Root open={open} {...root_props}>
       <Dialog.Portal>

@@ -1,5 +1,6 @@
+/* 분할 주문 설정 카드와 제목을 구성한다. */
 .card {
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 162px;
     padding: 7px 13px 9px;
     overflow: hidden;
@@ -19,6 +20,7 @@
     letter-spacing: -0.22px;
 }
 
+/* 매수·매도 비율 조작 사이에 간격을 둔다. */
 .sliders {
     display: flex;
     flex-direction: column;

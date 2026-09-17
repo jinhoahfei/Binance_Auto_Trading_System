@@ -15,6 +15,7 @@ pub(super) use files::open_locked_runtime_ownership_artifact;
 pub(super) use ipc::{read_ready_descriptor, write_closed_ack};
 pub(super) use process::runtime_process_exists;
 
+
 /// 함수 이름: resolve_app_data_directory()
 /// 기능: 공통 lifecycle에 현재 사용자 LocalAppData 경로를 제공한다.
 /// 인자: _app_handle -> 공통 adapter signature를 유지할 native owner
@@ -26,6 +27,7 @@ pub(super) fn resolve_app_data_directory(
     files::resolve_app_data_directory() // Windows Roaming 기본값을 사용하지 않는다.
 }
 
+
 /// 함수 이름: ensure_private_app_data_directory()
 /// 기능: Windows per-user no-reparse path validation을 공통 lifecycle에 제공한다.
 /// 인자: directory -> 준비할 app-data 경로
@@ -35,6 +37,7 @@ pub(super) fn ensure_private_app_data_directory(directory: &Path) -> Result<(), 
     files::ensure_private_app_data_directory(directory) // ACL은 native known-folder의 per-user 상속을 유지한다.
 }
 
+
 /// 함수 이름: platform_disable_process_core_dumps()
 /// 기능: credential을 조회하기 전에 Windows 자동 crash-report policy를 적용한다.
 /// 인자: 없음
@@ -43,6 +46,7 @@ pub(super) fn ensure_private_app_data_directory(directory: &Path) -> Result<(), 
 pub(super) fn platform_disable_process_core_dumps() -> Result<(), SidecarFailure> {
     process::disable_process_core_dumps() // Parent 설정은 child process에도 상속된다.
 }
+
 
 /// 함수 이름: development_python_executable()
 /// 기능: source checkout의 x64 venv interpreter만 개발 sidecar 실행 대상으로 선택한다.
@@ -66,6 +70,7 @@ fn development_python_executable() -> Result<PathBuf, SidecarFailure> {
     }
     Ok(python_path) // Python -I와 editable install이 source module을 선택한다.
 }
+
 
 /// 함수 이름: platform_prepare_backend_sidecar()
 /// 기능: Windows source interpreter의 stdio에 최초 bootstrap을 전달하고 공통 ready lifecycle로 소유권을 옮긴다.

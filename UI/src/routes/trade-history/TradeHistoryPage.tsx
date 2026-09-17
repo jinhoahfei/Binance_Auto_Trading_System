@@ -30,6 +30,7 @@ export interface TradeHistoryPageProps {
   onStartTrading?: () => void;
 }
 
+
 /**
  * 함수 이름: TradeHistoryPage()
  * 기능: 거래 내역 상세 화면의 제목, D-12 요약, 실제 조회 상태, 필터, 표와 CSV 팝업을 배치한다.
@@ -54,6 +55,7 @@ export function TradeHistoryPage({
   onExportCsv,
   onStartTrading,
 }: TradeHistoryPageProps) {
+  // 요약·필터·표와 CSV 창을 상세 화면의 동일한 조회 상태에 연결한다.
   return (
     <main className={styles.page}>
       <header className={styles.pageHeading}>

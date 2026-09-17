@@ -1,46 +1,49 @@
+/* 현재 REGIME과 변경 후보의 비교 정보를 배치한다. */
 .notice {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  height: 64px;
-  margin: 10px 0 19px;
-  padding: 11px 12px 10px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-control-strong);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    height: 64px;
+    margin: 10px 0 19px;
+    padding: 11px 12px 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-control-strong);
 }
 
 .notice span {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  line-height: 16px;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    line-height: 16px;
 }
 
 .notice strong {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--color-text-primary);
-  font-size: 12.5px;
-  line-height: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-primary);
+    font-size: 12.5px;
+    line-height: 18px;
 }
 
 .notice i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-status-positive);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-status-positive);
 }
 
+/* 적용 실패의 안내 문구를 구분한다. */
 .error {
-  margin: -10px 0 12px;
-  color: var(--color-text-negative);
-  font-size: 12px;
-  line-height: 18px;
+    margin: -10px 0 12px;
+    color: var(--color-text-negative);
+    font-size: 12px;
+    line-height: 18px;
 }
 
+/* 취소와 적용 확인 조작을 같은 행에 배치한다. */
 .actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
 }

@@ -1,12 +1,14 @@
+/* 차트 엔진과 캔들 정보가 공유할 표시 영역을 구성한다. */
 .surface {
     position: absolute;
     z-index: 0;
     inset: 0;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     min-height: 0;
     overflow: hidden;
 }
 
+/* 차트 엔진이 생성하는 내부 화면의 크기를 맞춘다. */
 .chartHost {
     position: absolute;
     inset: 0;
@@ -20,7 +22,7 @@
     right: 46px;
     bottom: auto;
     height: 350px;
-    pointer-events: none;
+    pointer-events: none;  /* 표시 전용 레이어가 포인터 입력을 가로채지 않게 한다. */
     transform: translate(-43px, -12px) scaleY(1.03);
     transform-origin: center;
 }
@@ -31,6 +33,7 @@
     height: 100% !important;
 }
 
+/* 시각·가격·등락 정보를 차트 위에 정렬한다. */
 .candleInformation {
     position: absolute;
     z-index: 3;
@@ -65,6 +68,7 @@
     font-weight: 600;
 }
 
+/* 캔들의 상승·하락 값에 서로 다른 색을 적용한다. */
 .candleInformation .positiveValue {
     color: var(--color-text-positive);
 }

@@ -7,6 +7,7 @@ export interface RealtimeIndicatorsProps {
     readonly visible?: boolean;
 }
 
+
 /**
  * 함수 이름: RealtimeIndicators()
  * 기능: 자동매매 전략의 실시간 지표를 의미 톤과 그룹별로 표시한다.

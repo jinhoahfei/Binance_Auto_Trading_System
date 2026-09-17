@@ -1,3 +1,5 @@
+// 주문 없는 연결 유지 검증 화면과 선택적인 네이티브 검증 앱을 빌드한다.
+
 import { build } from 'vite';
 import { fileURLToPath } from 'node:url';
 await build({ configFile: false, root: fileURLToPath(new URL('./background-soak', import.meta.url)),

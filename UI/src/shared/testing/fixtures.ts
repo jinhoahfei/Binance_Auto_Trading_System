@@ -1,3 +1,5 @@
+// 상태 전이와 화면 테스트에서 재사용할 날짜·지표·거래·드로잉 fixture를 제공한다.
+
 import type {
     ChartDrawing,
     RegimeMetric,

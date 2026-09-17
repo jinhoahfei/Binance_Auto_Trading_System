@@ -79,6 +79,15 @@ export const CONNECTION_ERROR_CODES = [
     "WEBSOCKET_UPGRADE_REQUIRED",
 ] as const;
 const allowed = new Set<string>(CONNECTION_ERROR_CODES);
+
+
+/**
+ * 함수 이름: safe_connection_error_code()
+ * 기능: 진단 허용 목록에 있는 오류 코드만 통과시키고 나머지는 고정 분류값으로 바꾼다.
+ * 인자: code -> 검사할 오류 코드
+ * 반환값: 허용 코드 또는 UNCLASSIFIED_CONNECTION_ERROR
+ * 작성 날짜: 2026/09/17
+ */
 export function safe_connection_error_code(code: string): string {
     return allowed.has(code) ? code : 'UNCLASSIFIED_CONNECTION_ERROR';
 }

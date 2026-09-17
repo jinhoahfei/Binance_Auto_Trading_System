@@ -1,50 +1,66 @@
+/* UI의 색상·간격·글꼴과 효과를 공통 디자인 토큰으로 정의한다. */
 :root {
-  color-scheme: dark;
-  --color-bg-canvas: #0b0e11;
-  --color-bg-header: #090d10;
-  --color-bg-surface: #192633;
-  --color-bg-surface-raised: #263645;
-  --color-bg-control: #253240;
-  --color-bg-control-strong: #141c25;
-  --color-bg-overlay: rgb(2 7 11 / 82%);
-  --color-border-default: #3b4755;
-  --color-border-strong: #596675;
-  --color-text-primary: #f0f1f2;
-  --color-text-secondary: #a7afbb;
-  --color-text-tertiary: #828a96;
-  /* 상태 도형 색과 본문용 전경색을 분리해 작은 글자의 WCAG AA 대비를 보장한다. */
-  --color-text-positive: #0fc17f;
-  --color-text-negative: #ff8797;
-  --color-text-info: #72a9ff;
-  --color-text-on-strong-status: #05080c;
-  --color-status-positive: #0eb77b;
-  --color-status-positive-strong: #0ea66b;
-  --color-status-negative: #f03858;
-  --color-status-negative-strong: #e63752;
-  --color-status-info: #1768d4;
-  --color-status-info-strong: #1454c5;
-  --color-status-warning: #f0b90b;
-  --color-focus: #007aff;
-  --shadow-control: 0 4px 10px -3px rgb(9 14 23 / 24%), inset 0 1px 0 rgb(255 255 255 / 8%);
-  --shadow-modal: 0 20px 52px rgb(0 0 0 / 48%);
-  --radius-xs: 5px;
-  --radius-sm: 7px;
-  --radius-md: 9px;
-  --radius-lg: 12px;
-  --spacing-1: 4px;
-  --spacing-2: 8px;
-  --spacing-3: 12px;
-  --spacing-4: 16px;
-  --spacing-5: 20px;
-  --spacing-6: 24px;
-  --header-height: 72px;
-  --content-padding: 32px;
-  --font-ui: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', sans-serif;
-  --font-numeric: 'Inter', 'IBM Plex Sans KR', sans-serif;
+    /* 어두운 기본 화면과 표면 계층의 색을 정의한다. */
+    color-scheme: dark;
+    --color-bg-canvas: #0b0e11;
+    --color-bg-header: #090d10;
+    --color-bg-surface: #192633;
+    --color-bg-surface-raised: #263645;
+    --color-bg-control: #253240;
+    --color-bg-control-strong: #141c25;
+    --color-bg-overlay: rgb(2 7 11 / 82%);
+
+    /* 경계선과 본문 글자의 기본 명암을 정의한다. */
+    --color-border-default: #3b4755;
+    --color-border-strong: #596675;
+    --color-text-primary: #f0f1f2;
+    --color-text-secondary: #a7afbb;
+    --color-text-tertiary: #828a96;
+
+    /* 상태 도형 색과 본문용 전경색을 분리해 작은 글자의 WCAG AA 대비를 보장한다. */
+    --color-text-positive: #0fc17f;
+    --color-text-negative: #ff8797;
+    --color-text-info: #72a9ff;
+    --color-text-on-strong-status: #05080c;
+
+    /* 상태 도형의 방향별 기본색과 강한 배경색을 정의한다. */
+    --color-status-positive: #0eb77b;
+    --color-status-positive-strong: #0ea66b;
+    --color-status-negative: #f03858;
+    --color-status-negative-strong: #e63752;
+    --color-status-info: #1768d4;
+    --color-status-info-strong: #1454c5;
+    --color-status-warning: #f0b90b;
+
+    /* 키보드 초점과 표면 깊이를 나타낼 공통 효과를 정의한다. */
+    --color-focus: #007aff;
+    --shadow-control: 0 4px 10px -3px rgb(9 14 23 / 24%), inset 0 1px 0 rgb(255 255 255 / 8%);
+    --shadow-modal: 0 20px 52px rgb(0 0 0 / 48%);
+
+    /* 컨트롤 크기별 모서리 반경을 정의한다. */
+    --radius-xs: 5px;
+    --radius-sm: 7px;
+    --radius-md: 9px;
+    --radius-lg: 12px;
+
+    /* 반복되는 여백과 화면 배치의 기준 크기를 정의한다. */
+    --spacing-1: 4px;
+    --spacing-2: 8px;
+    --spacing-3: 12px;
+    --spacing-4: 16px;
+    --spacing-5: 20px;
+    --spacing-6: 24px;
+    --header-height: 72px;
+    --content-padding: 32px;
+
+    /* 본문과 숫자 표시의 글꼴을 분리한다. */
+    --font-ui: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', sans-serif;
+    --font-numeric: 'Inter', 'IBM Plex Sans KR', sans-serif;
 }
 
+/* 화면 조건 (max-width: 1240px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 1240px) {
-  :root {
-    --content-padding: 22px;
-  }
+    :root {
+        --content-padding: 22px;
+    }
 }

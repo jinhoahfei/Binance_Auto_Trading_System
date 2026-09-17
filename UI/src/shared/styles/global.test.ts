@@ -2,11 +2,13 @@ import global_styles from './global.css?inline';
 
 describe('global reduced-motion contract', () => {
   afterEach(() => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     document.querySelector('[data-global-style-contract]')?.remove();
     document.querySelector('[data-reduced-motion-probe]')?.remove();
   });
 
   it('production CSS가 motion과 transition을 단일 저동작 계약으로 제한한다', () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const style_element = document.createElement('style');
 
     style_element.dataset.globalStyleContract = 'true';
@@ -32,6 +34,7 @@ describe('global reduced-motion contract', () => {
         ),
       );
 
+    // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     expect(universal_rule).toBeDefined();
     expect(universal_rule?.style.getPropertyValue('scroll-behavior')).toBe('auto');
     expect(universal_rule?.style.getPropertyPriority('scroll-behavior')).toBe('important');

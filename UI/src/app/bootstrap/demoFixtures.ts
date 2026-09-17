@@ -9,6 +9,7 @@ const REALTIME_METRIC_IDS: ReadonlyArray<RegimeMetric['id']> = [
     'swingHigh',
 ];
 
+
 /**
  * 함수 이름: normalize_decimal_text()
  * 기능: Figma 표시 fixture의 통화·단위 문자열에서 actor 계약용 소수 문자열을 추출한다.
@@ -24,6 +25,7 @@ function normalize_decimal_text(display_value: string): string {
         : normalized_value;
 }
 
+
 /**
  * 함수 이름: convert_history_time_to_iso()
  * 기능: 거래 내역 Figma fixture의 KST 표시 시각을 actor 계약의 ISO 시각으로 변환한다.
@@ -38,6 +40,7 @@ function convert_history_time_to_iso(display_time: string): string {
     return new Date(`20${year}-${month}-${day}T${time_part}+09:00`).toISOString();
 }
 
+
 /**
  * 함수 이름: create_demo_history_record()
  * 기능: 상세 거래 화면 fixture 한 행을 제어 actor가 보관할 정규화 TradeRecord로 변환한다.
@@ -48,6 +51,7 @@ function convert_history_time_to_iso(display_time: string): string {
 function create_demo_history_record(
     row: (typeof TRADE_HISTORY_ROWS_FIXTURE)[number],
 ): TradeRecord {
+    // demo 데이터의 금액·방향·시각을 거래 내역 계약으로 묶는다.
     return {
         id: row.id,
         occurred_at: convert_history_time_to_iso(row.time),
@@ -69,6 +73,7 @@ function create_demo_history_record(
         exit_reason: null,
     };
 }
+
 
 /**
  * 함수 이름: create_demo_realtime_indicators()

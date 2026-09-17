@@ -19,6 +19,7 @@ export interface DemoUiApplication extends UiApplicationRuntime {
     readonly command_adapter: FakeUiCommandAdapter;
 }
 
+
 /**
  * 함수 이름: create_demo_ui_application()
  * 기능: backend 미연결 UI에서 Figma 기본 상태를 제공할 fake adapter와 facade를 생성한다.
@@ -74,6 +75,7 @@ export function create_demo_ui_application(): DemoUiApplication {
         deactivate: () => facade.stop(),
     };
 }
+
 
 /**
  * 함수 이름: initialize_demo_ui_application()

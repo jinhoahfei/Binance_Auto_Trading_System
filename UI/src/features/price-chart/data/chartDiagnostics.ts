@@ -45,6 +45,7 @@ let dropped_records = 0;
 let flush_is_running = false;
 let retry_timer: ReturnType<typeof setTimeout> | null = null;
 
+
 /**
  * 함수 이름: flush_chart_diagnostics()
  * 기능: 제한된 진단 queue를 native 파일 writer에 전달하고 실패 시 다음 시도까지 보존한다.
@@ -68,6 +69,7 @@ async function flush_chart_diagnostics(): Promise<void> {
             const removed = pending_records.splice(0, pending_records.length - 256);
             dropped_records += removed.reduce((count, record) => count + 1 + record.dropped_before, 0);
         }
+
         // 저장 장애가 차트 수신을 막지 않으며 임의 native 오류 원문은 출력하지 않는다.
         console.error('CHART_DIAGNOSTIC_WRITE_FAILED');
         retry_timer = setTimeout(() => {
@@ -80,6 +82,7 @@ async function flush_chart_diagnostics(): Promise<void> {
     }
 }
 
+
 /**
  * 함수 이름: record_chart_diagnostic()
  * 기능: 원본 payload·주소·인증 정보 없이 chart 상태와 수신 사실을 native 로그에 저장한다.
@@ -88,8 +91,11 @@ async function flush_chart_diagnostics(): Promise<void> {
  * 작성 날짜: 2026/09/11
  */
 export function record_chart_diagnostic(diagnostic: ChartDiagnostic): void {
+    // 최신 차트 수신 시각을 renderer 생존 관찰에 반영한다.
     const received = diagnostic.intervals?.map((entry) => entry.received_at_ms ?? 0) ?? [];
     if (received.some((value) => value > 0)) observe_renderer_connection({ last_chart_received_at_ms: Math.max(...received) });
+
+    // 네이티브 환경에서만 제한된 큐에 진단을 보관하고 전송한다.
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
     if (pending_records.length >= 256) {
         const removed = pending_records.shift();

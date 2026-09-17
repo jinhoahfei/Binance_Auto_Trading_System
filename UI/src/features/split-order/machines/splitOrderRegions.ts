@@ -53,6 +53,7 @@ export function split_order_regions(composition: UiRegionComposition) {
          */
         const has_save_failure = ({ context }: any) => context.pending_side === side && context.error !== null;
 
+        // 대기·저장·실패 상태를 해당 입력 Region에 연결한다.
         return {
             initial: id,
             states: {

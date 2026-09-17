@@ -150,6 +150,7 @@ impl NativeExitIntentBridgeState {
     }
 }
 
+
 /// 함수 이름: arm_native_exit_intent_bridge()
 /// 기능: renderer event listener 설치를 publish하고 latched close/quit intent를 순서대로 전달한다.
 /// 인자: app_handle -> event emitter, state -> native intent bridge

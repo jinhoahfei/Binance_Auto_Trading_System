@@ -6,6 +6,7 @@ import {
 } from '../runtime/DesktopWindowLifecycle';
 import type { UiApplicationController } from '../runtime/UiApplicationStore';
 
+
 /**
  * 함수 이름: create_window_lifecycle()
  * 기능: React App mount가 한 번만 소유할 desktop window lifecycle port를 생성한다.
@@ -17,6 +18,7 @@ function create_window_lifecycle(): DesktopWindowLifecycle | null {
     return create_desktop_window_lifecycle();
 }
 
+
 /**
  * 함수 이름: report_window_lifecycle_error()
  * 기능: desktop window IPC 실패를 개발자 console에 남겨 종료 lifecycle 진단 정보를 보존한다.
@@ -27,6 +29,7 @@ function create_window_lifecycle(): DesktopWindowLifecycle | null {
 function report_window_lifecycle_error(operation: string, error: unknown): void {
     console.error(`[desktop-window] ${operation} 작업을 완료하지 못했습니다.`, error);
 }
+
 
 /**
  * 함수 이름: use_desktop_window_lifecycle()
@@ -55,6 +58,7 @@ export function use_desktop_window_lifecycle(
         }).then((remove_listener) => {
             if (is_disposed) {
                 remove_listener();
+
                 return;
             }
 

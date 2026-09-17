@@ -199,6 +199,7 @@ mod current_host_smoke {
     }
 }
 
+
 /// 함수 이름: main()
 /// 기능: macOS 또는 Windows native picker smoke를 실행하고 정확한 process exit code를 반환한다.
 /// 인자: 없음

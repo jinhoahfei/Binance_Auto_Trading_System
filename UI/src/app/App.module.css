@@ -1,14 +1,17 @@
+/* 앱 전체 높이와 배경을 설정한다. */
 .application {
     width: 100%;
     min-height: 100vh;
     background: var(--color-bg-canvas);
 }
 
+/* 대시보드 본문과 상하 경계 사이에 여백을 둔다. */
 .dashboardRoute {
     padding-top: 24px;
     padding-bottom: 32px;
 }
 
+/* 지연 로딩 중에도 안내 영역의 높이와 중앙 정렬을 유지한다. */
 .routeLoading {
     display: grid;
     min-height: 320px;
@@ -17,6 +20,7 @@
     font-size: 13px;
 }
 
+/* 정상 종료 안내와 보조 문구를 화면 중앙에 배치한다. */
 .finalState {
     display: grid;
     min-height: 100vh;
@@ -35,6 +39,7 @@
     font-size: 13px;
 }
 
+/* 연결 복구 안내가 길어지면 다음 줄로 배치한다. */
 .connectionRecovery {
     display: flex;
     flex-wrap: wrap;

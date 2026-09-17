@@ -16,6 +16,11 @@ use tauri::{Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 struct Fixture(Mutex<Child>);
 impl Drop for Fixture {
+    /// 함수 이름: drop()
+    /// 기능: 소유 fixture의 표준 입력을 닫고 제한 시간 안에 끝나지 않으면 해당 자식만 정리한다.
+    /// 인자: self -> 검증용 자식 프로세스 소유자
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/09/17
     fn drop(&mut self) {
         if let Ok(child) = self.0.get_mut() {
             child.stdin.take();
@@ -32,6 +37,12 @@ impl Drop for Fixture {
     }
 }
 
+
+/// 함수 이름: get_background_soak_descriptor()
+/// 기능: 신뢰한 검증 창에 주문 없는 fixture의 연결 정보를 제공한다.
+/// 인자: window -> 호출 창, state -> 연결 정보 상태
+/// 반환값: 검증한 연결 정보 또는 오류
+/// 작성 날짜: 2026/09/17
 #[tauri::command]
 fn get_background_soak_descriptor(
     window: WebviewWindow,
@@ -53,6 +64,13 @@ struct SoakSummary {
     chart_live: bool,
     errors: u64,
 }
+
+
+/// 함수 이름: record_background_soak_summary()
+/// 기능: 신뢰한 main 창의 soak 통계를 주문 비활성 표시와 함께 기록한다.
+/// 인자: window -> 호출 창, state -> 진단 상태, summary -> renderer 통계
+/// 반환값: 기록 수락 또는 고정 오류 코드
+/// 작성 날짜: 2026/09/17
 #[tauri::command]
 fn record_background_soak_summary(
     window: WebviewWindow,
@@ -68,7 +86,14 @@ fn record_background_soak_summary(
     Ok(())
 }
 
+
+/// 함수 이름: run()
+/// 기능: 명시한 새 출력 디렉터리에서 주문 없는 fixture와 실제 WebView 장시간 검증 앱을 실행한다.
+/// 인자: 없음; 명령줄에서 실행 시간·화면 단계·출력 경로를 읽음
+/// 반환값: 앱 이벤트 루프 종료 후 반환
+/// 작성 날짜: 2026/09/17
 pub fn run() {
+    // 검증 시간·화면 단계·장애 주입 옵션을 읽고 허용 범위를 확인한다.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let option = |key: &str| {
         args.windows(2)
@@ -103,6 +128,8 @@ pub fn run() {
         .parse()
         .expect("invalid cycle seconds");
     assert!(cycle_seconds == 0 || (30..=3600).contains(&cycle_seconds));
+
+    // 주문이 비활성화된 로컬 fixture를 독립 자식으로 실행한다.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     let stderr = std::fs::OpenOptions::new()
         .write(true)
@@ -119,6 +146,8 @@ pub fn run() {
         .stderr(stderr)
         .spawn()
         .expect("fixture spawn failed");
+
+    // 별도 reader로 준비 응답을 받고 10초 제한 안에 연결 정보를 확보한다.
     let stdout = child.stdout.take().unwrap();
     let fixture = Fixture(Mutex::new(child));
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -133,6 +162,8 @@ pub fn run() {
         .expect("fixture pipe failed");
     let value: serde_json::Value =
         serde_json::from_str(&line).unwrap_or_else(|_| panic!("invalid fixture descriptor"));
+
+    // fixture 연결 정보를 검증한 뒤 renderer에 전달할 상태로 보관한다.
     let descriptor = BackendConnectionDescriptor::new(
         value["port"].as_u64().unwrap() as u16,
         value["session_id"].as_str().unwrap().into(),
@@ -144,6 +175,8 @@ pub fn run() {
     state
         .stage(descriptor)
         .unwrap_or_else(|_| panic!("fixture state unavailable"));
+
+    // 검증 전용 IPC와 진단 writer를 실제 WebView 앱 수명에 연결한다.
     let output_for_setup = output.clone();
     let app = tauri::Builder::default()
         .manage(fixture).manage(state).manage(sidecar::SidecarProcessState::default())
@@ -172,6 +205,8 @@ pub fn run() {
                     if state.is_stopped() { return; }
                     let elapsed=began.elapsed().as_secs();
                     if elapsed >= seconds { break; }
+
+                    // 요청한 경우에만 renderer 지연을 한 번 주입한다.
                     if freeze>0 && !freeze_issued && elapsed>=10 {
                         freeze_issued=true;
                         state.0.record(json!({"event":"soak_fault_injected","kind":"renderer_busy_loop","seconds":freeze}));
@@ -179,6 +214,8 @@ pub fn run() {
                             let _=window.eval(format!("{{const end=performance.now()+{};while(performance.now()<end){{}}}}",freeze*1000));
                         }
                     }
+
+                    // 지정한 주기에 맞춰 표시·숨김 상태를 반복해 복귀 동작을 관찰한다.
                     if cycle_seconds>0 && elapsed/cycle_seconds>cycle_number {
                         cycle_number=elapsed/cycle_seconds;
                         let hidden=cycle_number%2==0;
@@ -195,6 +232,8 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!("tauri.soak.conf.json")).expect("soak WebView failed");
+
+    // 검증 앱이 끝날 때 독립 감시도 함께 정리한다.
     app.run_return(|handle, event| {
         if let tauri::RunEvent::Exit = event {
             handle

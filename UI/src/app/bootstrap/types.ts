@@ -1,3 +1,5 @@
+// 앱 초기화에서 사용하는 데이터 구조와 입력·표시 타입을 정의한다.
+
 import type { UiApplicationFacade } from '../control';
 import type { BackendBinanceConnectionStatus, BackendRuntimeEnvironment } from '../../shared/contracts';
 

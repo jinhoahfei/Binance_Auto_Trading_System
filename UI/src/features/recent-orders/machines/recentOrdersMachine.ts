@@ -35,6 +35,7 @@ export type RecentOrdersMachineEvent =
         readonly indicators: ReadonlyArray<RegimeMetric>;
     };
 
+
 /**
  * 함수 이름: create_recent_orders_machine()
  * 기능: 최근 체결과 실시간 지표 탭 전환 및 실시간 목록 갱신 상태를 생성한다.
@@ -44,16 +45,21 @@ export type RecentOrdersMachineEvent =
  */
 export function create_recent_orders_machine(options: RecentOrdersMachineOptions = {}) {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as RecentOrdersMachineContext,
             events: {} as RecentOrdersMachineEvent,
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             // REGIME 수치와 독립된 상태를 유지해 거래 단계와 지표를 함께 교체한다.
             synchronize_strategy_indicators: assign(({ context, event }) => {
                 if (event.type !== 'STRATEGY_INDICATORS_SYNCHRONIZED') return {};
+
                 // 동일 payload의 재전송은 최초 수신 기준점을 보존해 남은 시간을 늘리지 않는다.
                 const duplicate = JSON.stringify(context.strategy_indicators) === JSON.stringify(event.indicators);
+
                 return {
                     strategy_indicators: event.indicators,
                     strategy_indicators_received_at: duplicate ? context.strategy_indicators_received_at : event.received_at ?? 0,
@@ -91,6 +97,8 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
     }).createMachine({
         id: 'recentOrdersMachine',
         initial: 'trade_history_displayed',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             trades: options.trades ?? [],
             strategy_indicators: options.strategy_indicators ?? null,  // 구버전 연결은 예시값 대신 대기한다.
@@ -109,6 +117,8 @@ export function create_recent_orders_machine(options: RecentOrdersMachineOptions
                 actions: 'update_realtime_indicators',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             trade_history_displayed: {
                 meta: {

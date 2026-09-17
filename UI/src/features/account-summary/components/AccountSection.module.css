@@ -1,5 +1,6 @@
+/* 자산·전략·분할 주문을 담는 계좌 영역의 크기와 표면을 설정한다. */
 .section {
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 276px;
     padding: 17px 23px 25px;
     overflow: hidden;
@@ -19,6 +20,7 @@
     letter-spacing: -0.24px;
 }
 
+/* 두 요약 카드와 주문 설정을 같은 행의 세 열에 배치한다. */
 .content {
     display: grid;
     grid-template-columns: minmax(0, 274px) minmax(0, 274px) minmax(292px, 1fr);
@@ -28,7 +30,7 @@
 }
 
 .controls {
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
 }
 
 /* Dashboard fixture의 surface 색을 browser JPEG 변환 뒤 Figma 기준에 맞춘다. */
@@ -37,7 +39,9 @@
     background: #20303e;
 }
 
+/* 화면 조건 (max-width: 1280px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 1280px) {
+    /* 두 요약 카드와 주문 설정을 같은 행의 세 열에 배치한다. */
     .content {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(292px, 1.15fr);
         gap: 12px;

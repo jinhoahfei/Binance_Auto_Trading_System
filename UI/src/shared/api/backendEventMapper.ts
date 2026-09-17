@@ -95,6 +95,7 @@ const BACKEND_RISK_BLOCK_REASONS: ReadonlySet<BackendRiskBlockReason> = new Set(
     'RISK_POSITION_NOTIONAL_EXCEEDED',
 ]);
 
+
 /**
  * 클래스 이름: BackendContractError
  * 기능: raw payload나 secret을 포함하지 않는 backend runtime contract 실패를 표현한다.
@@ -113,6 +114,7 @@ export class BackendContractError extends Error {
      * 작성 날짜: 2026/08/21
      */
     constructor(code: string, message: string) {
+        // function Object() { [native code] }
         super(message);
         this.name = 'BackendContractError';
         this.validation_field = identify_connection_validation_field(message);
@@ -135,6 +137,7 @@ export type ParsedBackendWebSocketMessage =
     | { readonly kind: 'event'; readonly event: BackendEventEnvelope }
     | { readonly kind: 'resync_required'; readonly control: BackendResyncRequired };
 
+
 /**
  * 함수 이름: assert_record()
  * 기능: JSON 값이 null이나 배열이 아닌 object인지 검증한다.
@@ -153,6 +156,7 @@ function assert_record(value: unknown, field_name: string): Record<string, unkno
     return value as Record<string, unknown>;
 }
 
+
 /**
  * 함수 이름: assert_string()
  * 기능: JSON field가 비어 있지 않은 문자열인지 검증한다.
@@ -170,6 +174,7 @@ function assert_string(value: unknown, field_name: string): string {
 
     return value;
 }
+
 
 /**
  * 함수 이름: assert_uuid()
@@ -191,6 +196,7 @@ function assert_uuid(value: unknown, field_name: string): string {
     return uuid;
 }
 
+
 /**
  * 함수 이름: assert_boolean()
  * 기능: JSON field가 boolean인지 검증한다.
@@ -208,6 +214,7 @@ function assert_boolean(value: unknown, field_name: string): boolean {
 
     return value;
 }
+
 
 /**
  * 함수 이름: assert_safe_integer()
@@ -231,6 +238,7 @@ function assert_safe_integer(
     return value as number;
 }
 
+
 /**
  * 함수 이름: assert_nullable_safe_integer()
  * 기능: nullable policy version을 null 또는 지정 최솟값 이상의 안전한 정수로 제한한다.
@@ -247,6 +255,7 @@ function assert_nullable_safe_integer(
         ? null
         : assert_safe_integer(value, field_name, minimum);
 }
+
 
 /**
  * 함수 이름: assert_decimal_string()
@@ -268,6 +277,7 @@ function assert_decimal_string(value: unknown, field_name: string): string {
     return decimal_text;
 }
 
+
 /**
  * 함수 이름: assert_nullable_decimal_string()
  * 기능: nullable 금융 wire 값을 plain Decimal 문자열 또는 null로 제한한다.
@@ -283,6 +293,7 @@ function assert_nullable_decimal_string(
         ? null
         : assert_decimal_string(value, field_name);
 }
+
 
 /**
  * 함수 이름: assert_nullable_positive_decimal_string()
@@ -309,6 +320,7 @@ function assert_nullable_positive_decimal_string(
     return decimal_text;
 }
 
+
 /**
  * 함수 이름: assert_non_negative_decimal_string()
  * 기능: 노출·손실 wire 값을 음수가 아닌 plain Decimal 문자열로 제한한다.
@@ -333,6 +345,7 @@ function assert_non_negative_decimal_string(
     return decimal_text;
 }
 
+
 /**
  * 함수 이름: decimal_text_to_scaled_integer()
  * 기능: 음수가 아닌 Decimal 문자열을 정확한 공통 scale의 BigInt로 변환한다.
@@ -349,6 +362,7 @@ function decimal_text_to_scaled_integer(
 
     return BigInt(scaled_digits);  // JS number로 변환하지 않고 exact Decimal 합계를 검증한다.
 }
+
 
 /**
  * 함수 이름: validate_risk_budget_snapshot()
@@ -485,6 +499,7 @@ function validate_risk_budget_snapshot(
     };
 }
 
+
 /**
  * 함수 이름: assert_nullable_string()
  * 기능: JSON field를 non-empty 문자열 또는 null로 제한한다.
@@ -497,6 +512,7 @@ function assert_nullable_string(value: unknown, field_name: string): string | nu
         ? null
         : assert_string(value, field_name);
 }
+
 
 /**
  * 함수 이름: assert_unit_interval_ratio()
@@ -518,6 +534,7 @@ function assert_unit_interval_ratio(value: unknown, field_name: string): string 
     return ratio;
 }
 
+
 /**
  * 함수 이름: map_trading_status_presentation()
  * 기능: backend lifecycle status를 StrategyCard의 설명과 tone으로 변환한다.
@@ -529,6 +546,7 @@ function map_trading_status_presentation(status: BackendTradingStatus): {
     readonly label: string;
     readonly tone: 'positive' | 'neutral';
 } {
+    // backend lifecycle을 화면에 표시할 매매 상태와 대응시킨다.
     switch (status) {
         case 'running':
             return { label: '자동매매 실행 중', tone: 'positive' };
@@ -542,6 +560,7 @@ function map_trading_status_presentation(status: BackendTradingStatus): {
             return { label: '매매 시작 전', tone: 'neutral' };
     }
 }
+
 
 /**
  * 함수 이름: assert_utc_timestamp()
@@ -563,6 +582,7 @@ function assert_utc_timestamp(value: unknown, field_name: string): string {
     return timestamp;
 }
 
+
 /**
  * 함수 이름: assert_schema_version()
  * 기능: backend major schema가 renderer와 같은 version인지 fail closed로 검증한다.
@@ -578,6 +598,7 @@ function assert_schema_version(value: unknown): void {
         );
     }
 }
+
 
 /**
  * 함수 이름: validate_trading_logic_coverage()
@@ -637,6 +658,7 @@ function validate_trading_logic_coverage(
     });
 }
 
+
 /**
  * 함수 이름: validate_trading_snapshot()
  * 기능: snapshot과 TRADING_SESSION_UPDATED가 공유하는 Phase 7 lifecycle DTO를 검증한다.
@@ -658,6 +680,7 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
     assert_unit_interval_ratio(trading.scale_in, 'trading.scale_in');
     assert_unit_interval_ratio(trading.scale_out, 'trading.scale_out');
     assert_boolean(trading.has_open_position, 'trading.has_open_position');
+
     // 잔여 자산은 Position 종료와 무관하게 원본 Decimal 문자열로 보존한다.
     for (const field of ['residual_quantity', 'residual_cost_basis'] as const) {
         if (trading[field] !== undefined) assert_non_negative_decimal_string(trading[field], `trading.${field}`);
@@ -689,10 +712,12 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
         const active_logic = assert_record(trading.active_logic, 'trading.active_logic');
         const regime_type = assert_string(active_logic.regime_type, 'active_logic.regime_type');
         const root_state = assert_string(active_logic.root_state, 'active_logic.root_state');
+
         // 확장 지표 계약도 전체 snapshot과 event에서 같은 검증 경계를 통과시킨다.
         if (active_logic.indicators != null && !is_trading_indicator_snapshot(active_logic.indicators)) {
             throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'active_logic.indicators is invalid');
         }
+
         const active_strategies = active_logic.active_strategies;
         if (!BACKEND_REGIME_TYPES.has(regime_type)
             || !['LOWER_TOUCH_WATCH', 'TRADE_MANAGEMENT', 'STOPPING'].includes(root_state)
@@ -745,6 +770,7 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
             'trading.risk_policy_availability is invalid',
         );
     }
+
     const configured_risk_policy_version = assert_nullable_safe_integer(
         trading.configured_risk_policy_version,
         'trading.configured_risk_policy_version',
@@ -905,6 +931,7 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
     return value as BackendTradingSnapshot;
 }
 
+
 /**
  * 함수 이름: validate_indicator_snapshot()
  * 기능: REGIME 표시와 provenance에 필요한 indicator snapshot field를 검증한다.
@@ -913,6 +940,7 @@ function validate_trading_snapshot(value: unknown): BackendTradingSnapshot {
  * 작성 날짜: 2026/08/21
  */
 function validate_indicator_snapshot(value: unknown): BackendIndicatorSnapshot {
+    // 지표 객체와 지원 심볼·주기를 검증한다.
     const indicator = assert_record(value, 'indicator');
     const ema9_series = indicator.ema9_series;
     const swing = assert_record(indicator.swing, 'indicator.swing');
@@ -929,6 +957,8 @@ function validate_indicator_snapshot(value: unknown): BackendIndicatorSnapshot {
             'indicator.timeframe must be 4h',
         );
     }
+
+    // EMA 수치와 계산 근거의 version·시각을 검사한다.
     if (!Array.isArray(ema9_series)) {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
@@ -945,6 +975,7 @@ function validate_indicator_snapshot(value: unknown): BackendIndicatorSnapshot {
     assert_string(indicator.source_candle_id, 'indicator.source_candle_id');
     assert_utc_timestamp(indicator.calculated_at, 'indicator.calculated_at');
 
+    // 스윙 고저점 배열과 방향 판정값을 검사한다.
     for (const point_name of ['highs', 'lows'] as const) {
         const points = swing[point_name];
 
@@ -966,6 +997,7 @@ function validate_indicator_snapshot(value: unknown): BackendIndicatorSnapshot {
     return value as BackendIndicatorSnapshot;
 }
 
+
 /**
  * 함수 이름: validate_account_snapshot()
  * 기능: account와 balance의 Decimal·asset·UTC contract를 검증한다.
@@ -974,6 +1006,7 @@ function validate_indicator_snapshot(value: unknown): BackendIndicatorSnapshot {
  * 작성 날짜: 2026/08/21
  */
 export function validate_account_snapshot(value: unknown): BackendAccountSnapshot {
+    // 지원하는 평가·quote 자산과 계좌 기본 필드를 확인한다.
     const account = assert_record(value, 'account');
     const balances = account.balances;
 
@@ -989,12 +1022,16 @@ export function validate_account_snapshot(value: unknown): BackendAccountSnapsho
             'account.quote_asset must be USDT',
         );
     }
+
+    // 평가값·version·갱신 시각의 계약을 검사한다.
     assert_nullable_decimal_string(account.current_price, 'account.current_price');
     assert_nullable_decimal_string(account.valuation, 'account.valuation');
     assert_safe_integer(account.version, 'account.version');
     if (account.updated_at !== null) {
         assert_utc_timestamp(account.updated_at, 'account.updated_at');
     }
+
+    // 잔고 배열의 각 자산과 수량을 검증한다.
     if (!Array.isArray(balances)) {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
@@ -1012,6 +1049,7 @@ export function validate_account_snapshot(value: unknown): BackendAccountSnapsho
 
     return value as BackendAccountSnapshot;
 }
+
 
 /**
  * 함수 이름: validate_trade_snapshot()
@@ -1081,6 +1119,7 @@ export function validate_trade_snapshot(value: unknown): BackendTradeSnapshot {
     return value as BackendTradeSnapshot;
 }
 
+
 /**
  * 함수 이름: validate_performance_snapshot()
  * 기능: Performance Decimal과 non-negative count field를 검증한다.
@@ -1089,6 +1128,7 @@ export function validate_trade_snapshot(value: unknown): BackendTradeSnapshot {
  * 작성 날짜: 2026/08/21
  */
 export function validate_performance_snapshot(value: unknown): BackendPerformanceSnapshot {
+    // 성과의 decimal 문자열 필드를 공통 규칙으로 검사한다.
     const performance = assert_record(value, 'performance');
     const decimal_fields = [
         'daily_return_rate',
@@ -1103,6 +1143,8 @@ export function validate_performance_snapshot(value: unknown): BackendPerformanc
     decimal_fields.forEach((field_name) => {
         assert_decimal_string(performance[field_name], `performance.${field_name}`);
     });
+
+    // 선택적인 승률과 완료 매도 건수의 정수 계약을 확인한다.
     assert_nullable_decimal_string(performance.win_rate, 'performance.win_rate');
     for (const count_name of [
         'winning_sell_count',
@@ -1115,6 +1157,7 @@ export function validate_performance_snapshot(value: unknown): BackendPerformanc
 
     return value as BackendPerformanceSnapshot;
 }
+
 
 /**
  * 함수 이름: validate_backend_snapshot()
@@ -1138,6 +1181,7 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
     }
     assert_boolean(connection.ready, 'connection.ready');
     assert_schema_version(connection.schema_version);
+
     // 구버전 snapshot은 환경 미확인으로 남기고, 제공된 환경 정보는 엄격하게 검증한다.
     if (snapshot.environment !== undefined) {
         const environment = assert_record(snapshot.environment, 'snapshot.environment');
@@ -1170,6 +1214,7 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
             'market.symbol must use the supported ETHUSDT product',
         );
     }
+
     const market_current_price = assert_decimal_string(
         market.current_price,
         'market.current_price',
@@ -1183,6 +1228,7 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
             'Backend snapshot does not contain a ready indicator',
         );
     }
+
     const indicator = validate_indicator_snapshot(regime.indicator);
 
     // 시세 tick은 시장 version만 전진시키며 REGIME은 마지막 4H 평가의 provenance를 유지한다.
@@ -1235,6 +1281,7 @@ export function validate_backend_snapshot(value: unknown): BackendSnapshot {
     return value as BackendSnapshot;
 }
 
+
 /**
  * 함수 이름: decode_backend_http_envelope()
  * 기능: 공통 HTTP envelope, request ID와 data runtime contract를 함께 검증한다.
@@ -1249,6 +1296,7 @@ export function decode_backend_http_envelope<Data>(
     expected_request_id: string,
     validate_data: (data: unknown) => Data,
 ): Data {
+    // schema와 request ID를 검증해 다른 요청의 응답을 수락하지 않는다.
     const envelope = assert_record(value, 'response');
 
     assert_schema_version(envelope.schema_version);
@@ -1258,6 +1306,8 @@ export function decode_backend_http_envelope<Data>(
             'Backend response request ID does not match',
         );
     }
+
+    // 성공 payload는 호출자가 제공한 검증 함수에 전달한다.
     if (envelope.ok === true) {
         return validate_data(envelope.data);
     }
@@ -1265,6 +1315,7 @@ export function decode_backend_http_envelope<Data>(
         throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'response.ok is invalid');
     }
 
+    // 실패 봉투의 코드·메시지·재시도 여부를 검증한 뒤 명령 오류로 전달한다.
     const error = assert_record(envelope.error, 'response.error');
     const details = assert_record(error.details, 'response.error.details');
     const failure_envelope = envelope as unknown as BackendHttpEnvelope<never>;
@@ -1285,6 +1336,7 @@ export function decode_backend_http_envelope<Data>(
         details,
     );
 }
+
 
 /**
  * 클래스 이름: BackendCommandError
@@ -1312,6 +1364,7 @@ export class BackendCommandError extends Error {
         retryable: boolean,
         details: Readonly<Record<string, unknown>> = {},
     ) {
+        // function Object() { [native code] }
         super(message);
         this.name = 'BackendCommandError';
         this.code = code;
@@ -1319,6 +1372,7 @@ export class BackendCommandError extends Error {
         this.details = details;
     }
 }
+
 
 /**
  * 함수 이름: parse_backend_web_socket_message()
@@ -1330,6 +1384,7 @@ export class BackendCommandError extends Error {
 export function parse_backend_web_socket_message(
     frame_data: unknown,
 ): ParsedBackendWebSocketMessage {
+    // 문자열 JSON 프레임만 파싱해 이벤트 객체로 검사한다.
     if (typeof frame_data !== 'string') {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
@@ -1347,6 +1402,7 @@ export function parse_backend_web_socket_message(
         );
     }
 
+    // 공통 schema·session을 검증하고 resync 제어 메시지를 구분한다.
     const message = assert_record(parsed_value, 'event');
     assert_schema_version(message.schema_version);
     const session_id = assert_uuid(message.session_id, 'event.session_id');
@@ -1366,6 +1422,7 @@ export function parse_backend_web_socket_message(
         };
     }
 
+    // 일반 이벤트의 식별자·순번·시각·payload를 검증한다.
     assert_uuid(message.event_id, 'event.event_id');
     assert_safe_integer(message.sequence, 'event.sequence', 1);
     assert_utc_timestamp(message.occurred_at, 'event.occurred_at');
@@ -1383,6 +1440,7 @@ export function parse_backend_web_socket_message(
     };
 }
 
+
 /**
  * 함수 이름: decimal_tone()
  * 기능: Decimal 문자열의 부호만으로 표시 tone을 선택하고 어떤 금융 계산도 수행하지 않는다.
@@ -1397,6 +1455,7 @@ function decimal_tone(decimal_text: string): RegimeMetric['tone'] {
 
     return decimal_text.startsWith('-') ? 'negative' : 'positive';
 }
+
 
 /**
  * 함수 이름: map_indicator_metrics()
@@ -1457,6 +1516,7 @@ function map_indicator_metrics(
     ];
 }
 
+
 /**
  * 함수 이름: map_trade_record()
  * 기능: durable backend Trade를 계산 없이 기존 UI 체결 record로 변환한다.
@@ -1465,6 +1525,7 @@ function map_indicator_metrics(
  * 작성 날짜: 2026/08/21
  */
 export function map_trade_record(trade: BackendTradeSnapshot): TradeRecord {
+    // 원래 거래의 식별자와 금액 문자열을 보존해 화면 계약으로 옮긴다.
     return {
         id: trade.trade_id,
         symbol: trade.symbol,
@@ -1488,6 +1549,7 @@ export function map_trade_record(trade: BackendTradeSnapshot): TradeRecord {
     };
 }
 
+
 /**
  * 함수 이름: map_account_asset()
  * 기능: backend Account이 실제 제공하는 ETH/USDT 값만 표시하고 총자산·평가손익은 추측하지 않는다.
@@ -1496,6 +1558,7 @@ export function map_trade_record(trade: BackendTradeSnapshot): TradeRecord {
  * 작성 날짜: 2026/08/21
  */
 function map_account_asset(account: BackendAccountSnapshot): UiServerOwnedSnapshot['account_asset'] {
+    // 평가 자산과 quote 자산의 잔고를 각각 찾는다.
     const eth_balance = account.balances.find((balance) => {
         return balance.asset === account.valuation_asset;
     });
@@ -1503,6 +1566,7 @@ function map_account_asset(account: BackendAccountSnapshot): UiServerOwnedSnapsh
         return balance.asset === account.quote_asset;
     });
 
+    // 없는 잔고와 평가값은 가짜 수치 대신 기존 미확인 표시로 변환한다.
     return {
         ethAmount: eth_balance === undefined
             ? '-'
@@ -1520,6 +1584,7 @@ function map_account_asset(account: BackendAccountSnapshot): UiServerOwnedSnapsh
     };
 }
 
+
 /**
  * 함수 이름: format_rate()
  * 기능: backend percentage Decimal 문자열을 계산 없이 percentage 표시로 변환한다.
@@ -1530,6 +1595,7 @@ function map_account_asset(account: BackendAccountSnapshot): UiServerOwnedSnapsh
 function format_rate(decimal_text: string | null): string {
     return decimal_text === null ? '--%' : `${format_decimal_text(decimal_text)}%`;
 }
+
 
 /**
  * 함수 이름: map_trade_history_summary()
@@ -1543,6 +1609,7 @@ export function map_trade_history_summary(
     performance: BackendPerformanceSnapshot,
     holdings: string | null = null,
 ): UiServerOwnedSnapshot['trade_history_summary'] {
+    // 보유 수량과 전체 성과를 상세 화면 요약의 표시 필드로 변환한다.
     const result_tone = decimal_tone(performance.realized_pnl);
 
     return {
@@ -1570,6 +1637,7 @@ export function map_trade_history_summary(
     };
 }
 
+
 /**
  * 함수 이름: get_account_eth_holdings()
  * 기능: validated Account에서 D-12 현재 ETH 보유량을 찾아 Decimal 문자열로 반환한다.
@@ -1584,6 +1652,7 @@ function get_account_eth_holdings(account: BackendAccountSnapshot): string {
 
     return eth_balance?.total ?? '0';
 }
+
 
 /**
  * 함수 이름: map_backend_snapshot()
@@ -1710,6 +1779,7 @@ export function map_backend_snapshot(
     };
 }
 
+
 /**
  * 함수 이름: map_backend_event_to_intents()
  * 기능: 알려진 backend event를 기존 facade intent로만 변환하고 알 수 없는 type은 무시한다.
@@ -1734,6 +1804,7 @@ export function map_backend_event_to_intents(
                     'Account event aggregate version does not match its payload',
                 );
             }
+
             const holdings = get_account_eth_holdings(account);
 
             // 같은 account version에서 dashboard 자산과 상세 ETH 보유량을 함께 갱신한다.
@@ -1758,6 +1829,7 @@ export function map_backend_event_to_intents(
                     'REGIME_RECOMMENDED payload is invalid',
                 );
             }
+
             const intents: Array<UiApplicationIntent> = [{
                 type: 'REGIME_RECOMMENDED',
                 regime: regime_value as RegimeType,
@@ -1768,6 +1840,7 @@ export function map_backend_event_to_intents(
                     metrics: map_indicator_metrics(validate_indicator_snapshot(payload.indicator)),
                 });
             }
+
             return intents;
         }
         case 'REGIME_APPLIED': {
@@ -1778,6 +1851,7 @@ export function map_backend_event_to_intents(
                     'REGIME_APPLIED payload is invalid',
                 );
             }
+
             return [{ type: 'REGIME_APPLIED', regime: regime_value as RegimeType }];
         }
         case 'REGIME_SELECTED': {
@@ -1788,6 +1862,7 @@ export function map_backend_event_to_intents(
                     'REGIME_SELECTED selection is invalid',
                 );
             }
+
             // Phase 6 registry coverage와 event support 상태를 교차 검증해 fallback을 차단한다.
             const expected_support_status = selected === 'type0'
                 ? 'supported'
@@ -1798,6 +1873,7 @@ export function map_backend_event_to_intents(
                     'REGIME_SELECTED support status is inconsistent',
                 );
             }
+
             const version = assert_safe_integer(payload.version, 'REGIME_SELECTED.version');
             if (event.aggregate_version !== version) {
                 throw new BackendContractError(
@@ -1872,6 +1948,7 @@ export function map_backend_event_to_intents(
                 payload.performance ?? payload,
             );
             const summary = map_trade_history_summary(performance);
+
             return [{
                 type: 'TRADE_HISTORY_PERFORMANCE_UPDATED',
                 daily_return: summary.dailyReturn,
@@ -1882,6 +1959,7 @@ export function map_backend_event_to_intents(
         case 'ORDER_EXECUTED': {
             const trade = validate_trade_snapshot(payload.trade ?? payload);
             const mapped_trade = map_trade_record(trade);
+
             return [{
                 type: mapped_trade.side === 'buy'
                     ? 'BUY_ORDER_EXECUTED'
@@ -1893,6 +1971,7 @@ export function map_backend_event_to_intents(
             return [];
     }
 }
+
 
 /**
  * 함수 이름: is_backend_regime_type()

@@ -78,7 +78,7 @@ export class UiRegionComposition {
     /**
      * 함수 이름: scope_args()
      * 기능: 루트 Action 인자를 해당 기능의 context와 원래 이벤트로 투영한다.
-     * 인자: feature -> 대상 기능, action_arguments -> 루트 context·event·actor 인자
+     * 인자: feature -> 대상 기능, action_arguments -> 루트 context·event 평가 인자
      * 반환값: 기능 context와 공통 요청을 포함한 실행 인자
      * 작성 날짜: 2026/09/16
      */
@@ -182,6 +182,7 @@ export class UiRegionComposition {
                         },
                     };
                 });
+
                 return feature === 'csv_export' && action === 'reset_draft'
                     ? [{ type: 'ui.read_current_date' }, update]
                     : [update];
@@ -342,7 +343,7 @@ export class UiRegionComposition {
     /**
      * 함수 이름: command()
      * 기능: 작업 시작·취소와 token을 검사하는 완료·실패 handler를 구성한다.
-     * 인자: feature -> 명령 소유 기능, path -> 작업 상태 ID, invocation -> invoke 정의
+     * 인자: feature -> 명령 소유 기능, path -> 작업 상태 ID, invocation -> 명령 또는 타이머의 순수 요청 정의
      * 반환값: 시작·취소 Action, 결과 handler와 작업 key
      * 작성 날짜: 2026/09/16
      */
@@ -384,6 +385,8 @@ export class UiRegionComposition {
                     },
                 },
             });
+
+            // 실행 객체 없이 명령 입력 또는 절대 만료 시각만 Controller로 전달한다.
             const request = invocation.timer
                 ? { type: 'start_timer', key, token, due_at_ms: context.evaluation.now_epoch_ms + input }
                 : { type: 'run_command', key, token, operation: invocation.src, input };
@@ -563,6 +566,7 @@ export class UiRegionComposition {
      * 작성 날짜: 2026/09/16
      */
     connect_commands(node: any): any {
+        // 각 전이의 작업 완료 연결을 조립하되 이미 만들어진 복귀 이벤트는 건너뛴다.
         for (const [event, original] of Object.entries(node.on ?? {})) {
             if (event.includes('.resume.')) {
                 continue;
@@ -579,6 +583,7 @@ export class UiRegionComposition {
             }
         }
 
+        // 중첩 Region에도 같은 완료 연결을 재귀적으로 적용한다.
         for (const child of Object.values(node.states ?? {})) {
             this.connect_commands(child);
         }

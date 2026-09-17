@@ -1,3 +1,4 @@
+/* 최근 주문 목록의 행과 간격을 구성한다. */
 .list {
     padding: 0;
     margin: 0;
@@ -14,6 +15,7 @@
     border-top: 1px solid var(--color-border-default);
 }
 
+/* 매수·매도를 구분할 상태 점을 표시한다. */
 .dot {
     width: 10px;
     height: 10px;
@@ -29,11 +31,12 @@
     background: var(--color-status-negative);
 }
 
+/* 주문 설명과 수치를 각 열에 정렬한다. */
 .description,
 .values {
     display: flex;
     flex-direction: column;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
 }
 
 .description strong,
@@ -67,6 +70,7 @@
     color: var(--color-text-positive);
 }
 
+/* 최근 주문이 없을 때 안내 문구를 배치한다. */
 .empty {
     display: grid;
     min-height: 190px;

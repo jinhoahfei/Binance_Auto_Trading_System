@@ -1,5 +1,6 @@
 const DECIMAL_TEXT_PATTERN = /^([+-]?)(0|[1-9][0-9]*)(\.[0-9]+)?$/u;
 
+
 /**
  * 함수 이름: format_decimal_text()
  * 기능: 금융 Decimal 문자열을 JS Number 변환 없이 반올림하고 천 단위 구분을 적용한다.
@@ -34,6 +35,7 @@ export function format_decimal_text(decimal_text: string, decimal_places: 2 | 4 
     return `${sign}${grouped_integer}.${rounded_fraction}`;
 }
 
+
 /**
  * 함수 이름: format_eth_quantity()
  * 기능: ETH 보유량과 체결 수량을 소수점 넷째 자리까지 반올림해 표시한다.
@@ -44,6 +46,7 @@ export function format_decimal_text(decimal_text: string, decimal_places: 2 | 4 
 export function format_eth_quantity(decimal_text: string): string {
     return format_decimal_text(decimal_text, 4);
 }
+
 
 /**
  * 함수 이름: format_quote_amount()
@@ -63,6 +66,7 @@ export function format_quote_amount(
         ? `₩${formatted_amount}`
         : `${formatted_amount} ${quote_asset}`;
 }
+
 
 /**
  * 함수 이름: format_signed_quote_amount()

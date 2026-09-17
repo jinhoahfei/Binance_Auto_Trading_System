@@ -1,3 +1,5 @@
+// 가격 차트에서 사용하는 데이터 구조와 입력·표시 타입을 정의한다.
+
 import type { ChartDrawing } from '../../shared/contracts';
 
 export type ChartInterval = '1m' | '30m' | '4h' | '1d';

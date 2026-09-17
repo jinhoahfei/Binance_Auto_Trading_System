@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zeroize::Zeroize;
 
+
 /// 함수 이름: choose_csv_export_directory_for_current_host_smoke()
 /// 기능: opt-in current-host harness가 production native picker command를 동일한 Tauri plugin에서 실행한다.
 /// 인자: app -> dialog plugin을 설치한 최소 smoke application handle
@@ -32,6 +33,7 @@ pub async fn choose_csv_export_directory_for_current_host_smoke(
 
 const BACKEND_SCHEMA_VERSION: u32 = 3; // Python transport schema와 native descriptor gate를 맞춘다.
 const RELEASE_PROVENANCE_MARKER: &str = env!("BINANCE_AUTO_RELEASE_PROVENANCE");
+
 
 /// 함수 이름: retain_release_provenance_marker()
 /// 기능: build-time clean Git commit marker가 최종 native executable에 남도록 linker-visible 참조를 유지한다.
@@ -220,6 +222,7 @@ impl BackendConnectionDescriptorState {
     }
 }
 
+
 /// 함수 이름: is_canonical_uuid()
 /// 기능: dependency 추가 없이 lowercase RFC 4122 variant canonical UUID shape를 검증한다.
 /// 인자: value -> session ID 후보
@@ -243,6 +246,7 @@ fn is_canonical_uuid(value: &str) -> bool {
 
     matches!(bytes[14], b'1'..=b'8') && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
 }
+
 
 /// 함수 이름: get_backend_connection_descriptor()
 /// 기능: 허용된 메인 창에만 실행 중 backend의 연결 정보를 제공해 화면 새로고침을 복구한다.
@@ -276,6 +280,7 @@ enum LateReadyStartupRoute {
     FatalRecovery,
 }
 
+
 /// 함수 이름: select_late_ready_startup_route()
 /// 기능: recovery task가 시작되고 child가 live인 경우에만 waiting status를 허용한다.
 /// 인자: recovery_started -> FD4 background recovery scheduling 성공 여부,
@@ -292,6 +297,7 @@ fn select_late_ready_startup_route(
         LateReadyStartupRoute::FatalRecovery
     }
 }
+
 
 /// 함수 이름: setup_backend_and_window()
 /// 기능: AppKit quit gate, core dump 차단, stale owner 조정과 sidecar ready/stage/monitor 뒤에만 deferred main window를 만든다.
@@ -314,6 +320,7 @@ fn setup_backend_and_window(app: &mut tauri::App) -> Result<(), Box<dyn Error>> 
     continue_backend_startup(app.handle());
     Ok(())
 }
+
 
 /// 함수 이름: continue_backend_startup()
 /// 기능: 최초 실행과 만료 소유권 해제 뒤의 준비를 동일 프로세스에서 계속한다.
@@ -423,6 +430,7 @@ fn continue_backend_startup(app_handle: &AppHandle) {
     }
 }
 
+
 /// 함수 이름: schedule_renderer_startup_recovery()
 /// 기능: 개발 화면 서버 부재를 빈 창 대신 재시도·종료가 가능한 native 안내로 표시한다.
 /// 인자: app_handle -> backend를 아직 시작하지 않은 앱 handle
@@ -445,6 +453,7 @@ fn schedule_renderer_startup_recovery(app_handle: AppHandle) {
         });
 }
 
+
 /// 함수 이름: resume_backend_startup()
 /// 기능: native 대화상자 callback에서 기존 main event loop로 시작 작업을 돌려보낸다.
 /// 인자: app_handle -> 동일 프로세스에서 준비를 계속할 앱 handle
@@ -459,6 +468,7 @@ fn resume_backend_startup(app_handle: AppHandle) {
         schedule_pre_ready_startup_failure(app_handle, "BACKEND_SIDECAR_STARTUP_FAILED");
     }
 }
+
 
 /// 함수 이름: pre_ready_failure_copy()
 /// 기능: credential 부재와 기타 pre-READY 실패를 secret/path 없는 native 안내로 변환한다.
@@ -491,6 +501,7 @@ fn pre_ready_failure_copy(failure_code: &str) -> (&'static str, &'static str) {
     )
 }
 
+
 /// 함수 이름: stale_runtime_owner_prompt_copy()
 /// 기능: exact stale process identity와 state를 secret/path 없는 operator attestation 문구로 만든다.
 /// 인자: owner_state -> ACTIVE 또는 ORPHANED artifact state,
@@ -511,6 +522,7 @@ fn stale_runtime_owner_prompt_copy(
     );
     ("이전 백엔드 소유권 확인", message)
 }
+
 
 /// 함수 이름: schedule_stale_runtime_owner_release()
 /// 기능: stale identity를 확인받아 같은 inode를 RELEASED fsync한 뒤 동일 프로세스에서 시작을 계속한다.
@@ -553,6 +565,7 @@ fn schedule_stale_runtime_owner_release(
         });
 }
 
+
 /// 함수 이름: schedule_pre_ready_startup_failure()
 /// 기능: child가 없는 startup 실패를 native dialog로 보인 뒤 process를 안전하게 종료한다.
 /// 인자: app_handle -> dialog/exit owner, failure_code -> fixed failure discriminator
@@ -572,6 +585,7 @@ fn schedule_pre_ready_startup_failure(app_handle: AppHandle, failure_code: &'sta
             exit_handle.exit(1);
         });
 }
+
 
 /// 함수 이름: schedule_ready_fatal_recovery()
 /// 기능: READY child를 안전하게 보존한 채 renderer startup을 금지하고 operator manual recovery 안내를 유지한다.
@@ -604,6 +618,7 @@ pub(crate) fn schedule_ready_fatal_recovery(app_handle: AppHandle) {
     });
 }
 
+
 /// 함수 이름: startup_recovery_copy()
 /// 기능: 고정 시작 실패 사유와 관찰된 child 종료 상태를 구분해 안내한다.
 /// 인자: code -> 검증된 실패 코드, running -> 종료가 아직 관찰되지 않았는지 여부
@@ -624,6 +639,7 @@ fn startup_recovery_copy(code: &str, running: bool) -> (&'static str, String) {
         ("백엔드 시작에 실패했습니다", format!("{reason}\n\n백엔드 프로세스의 종료를 확인했습니다. 확인을 누르면 앱을 닫습니다."))
     }
 }
+
 
 /// 함수 이름: schedule_late_ready_status()
 /// 기능: recoverable READY timeout 중 native status를 유지하고 valid late READY window가 생기면 반복을 멈춘다.
@@ -655,6 +671,7 @@ fn schedule_late_ready_status(app_handle: AppHandle, sidecar_state: sidecar::Sid
         });
 }
 
+
 /// 함수 이름: schedule_ready_window_recovery()
 /// 기능: READY 후 main window build 실패를 operator에게 보이고 확인할 때마다 window를 kill 없이 재생성한다.
 /// 인자: app_handle -> native dialog/window manager, port -> validated backend loopback port
@@ -683,6 +700,7 @@ pub(crate) fn schedule_ready_window_recovery(app_handle: AppHandle, port: u16) {
             }
         });
 }
+
 
 /// 함수 이름: run()
 /// 기능: 최소 권한으로 Tauri 데스크톱 셸을 시작한다.

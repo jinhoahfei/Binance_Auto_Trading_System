@@ -1,7 +1,10 @@
+// 전략·자산 요약 카드와 주문 비율 컨트롤을 거래·계좌 영역에 배치한다.
+
 import { AssetCard } from './AssetCard';
 import { StrategyCard } from './StrategyCard';
 import type { AccountSectionProps } from '../types';
 import styles from './AccountSection.module.css';
+
 
 /**
  * 함수 이름: AccountSection()

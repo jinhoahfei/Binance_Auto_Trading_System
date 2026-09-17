@@ -18,6 +18,7 @@ export interface CalendarPopoverProps {
   onDismiss: () => void;
 }
 
+
 /**
  * 함수 이름: pad_date_part()
  * 기능: 달력 날짜의 월과 일을 ISO 날짜 형식에 맞게 두 자리로 만든다.
@@ -29,6 +30,7 @@ function pad_date_part(value: number) {
   return String(value).padStart(2, '0');
 }
 
+
 /**
  * 함수 이름: create_iso_date()
  * 기능: 달력의 연도, 월, 일을 시간대 영향이 없는 ISO 날짜 문자열로 조합한다.
@@ -39,6 +41,7 @@ function pad_date_part(value: number) {
 function create_iso_date(year: number, month: number, day: number) {
   return `${year}-${pad_date_part(month)}-${pad_date_part(day)}`;
 }
+
 
 /**
  * 함수 이름: create_calendar_cells()
@@ -60,6 +63,7 @@ function create_calendar_cells(year: number, month: number) {
   });
 }
 
+
 /**
  * 함수 이름: handle_calendar_key_down()
  * 기능: Escape 입력을 달력 닫기 의도로 변환한다.
@@ -75,6 +79,7 @@ function handle_calendar_key_down(event: KeyboardEvent<HTMLElement>, on_dismiss:
   }
 }
 
+
 /**
  * 함수 이름: move_calendar_grid_focus()
  * 기능: 날짜 grid의 방향키·Home·End 입력을 같은 월의 날짜 focus 이동으로 변환한다.
@@ -83,6 +88,7 @@ function handle_calendar_key_down(event: KeyboardEvent<HTMLElement>, on_dismiss:
  * 작성 날짜: 2026/08/12
  */
 function move_calendar_grid_focus(event: KeyboardEvent<HTMLButtonElement>) {
+  // 허용된 키 이동량과 현재 선택 가능한 날짜 목록을 준비한다.
   const movement_by_key: Readonly<Record<string, number>> = {
     ArrowLeft: -1,
     ArrowRight: 1,
@@ -99,6 +105,7 @@ function move_calendar_grid_focus(event: KeyboardEvent<HTMLButtonElement>) {
     return;
   }
 
+  // Home·End와 방향키를 날짜 목록의 목표 위치로 변환한다.
   let target_index: number | null = null;
 
   if (event.key === 'Home') {
@@ -117,9 +124,11 @@ function move_calendar_grid_focus(event: KeyboardEvent<HTMLButtonElement>) {
     return;
   }
 
+  // 브라우저 기본 이동을 막고 유효한 날짜 범위 안으로 초점을 제한한다.
   event.preventDefault();
   enabled_days[Math.min(enabled_days.length - 1, Math.max(0, target_index))]?.focus();
 }
+
 
 /**
  * 함수 이름: CalendarPopover()

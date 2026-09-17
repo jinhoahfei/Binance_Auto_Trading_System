@@ -1,3 +1,4 @@
+/* 상태 아이콘을 이루는 배경·고리·점을 겹칠 기준을 만든다. */
 .icon {
     position: relative;
     display: block;
@@ -5,6 +6,7 @@
     height: 34px;
 }
 
+/* 세 이미지 조각을 같은 좌표계에 배치한다. */
 .background,
 .ring,
 .dot {

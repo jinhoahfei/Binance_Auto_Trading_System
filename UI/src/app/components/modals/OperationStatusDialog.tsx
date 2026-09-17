@@ -13,6 +13,7 @@ export interface OperationStatusDialogProps {
     readonly onConfirm?: () => void;
 }
 
+
 /**
  * 함수 이름: OperationStatusDialog()
  * 기능: CSV와 앱 종료의 처리 중·완료·실패 결과를 공통 modal 표면에 표시한다.
@@ -30,6 +31,7 @@ export function OperationStatusDialog({
     actionTone = 'info',
     onConfirm,
 }: OperationStatusDialogProps) {
+    // 진행·성공·오류 표시를 묶고 확인 callback이 있을 때만 확인 조작을 제공한다.
     return (
         <ModalSurface open={open} title={title} description={description}>
             <div aria-live="polite" className={`${styles.status} ${styles[status]}`}>

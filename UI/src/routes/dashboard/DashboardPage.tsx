@@ -19,6 +19,7 @@ export interface DashboardPageProps {
     readonly trader: TraderPanelProps;
 }
 
+
 /**
  * 함수 이름: DashboardPage()
  * 기능: REGIME, 가격 차트, 계좌와 트레이딩 기능 모듈을 메인 대시보드 격자에 배치한다.
@@ -34,6 +35,7 @@ export function DashboardPage({
     splitOrder,
     trader,
 }: DashboardPageProps) {
+    // 차트·REGIME·계좌·트레이더 패널에 전달받은 표시값과 조작을 연결한다.
     const page_class_name = [styles.page, className].filter(Boolean).join(' ');
 
     return (

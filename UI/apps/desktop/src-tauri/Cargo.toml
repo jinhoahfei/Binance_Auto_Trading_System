@@ -1,3 +1,4 @@
+# 데스크톱 shell과 검증 도구의 빌드 대상·기능·의존성을 정의한다.
 [package]
 name = "binance-auto-trader"
 version = "0.1.0"
@@ -8,6 +9,7 @@ default-run = "binance-auto-trader"
 publish = false
 license-file = "../../../../LICENSE"
 
+# 앱과 검증 실행 파일이 공유할 라이브러리를 구성한다.
 [lib]
 name = "binance_auto_trader_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -22,10 +24,12 @@ name = "background-liveness-soak"
 path = "src/bin/background_liveness_soak.rs"
 required-features = ["background-liveness-smoke"]
 
+# 명시적으로 선택한 검증 전용 실행 기능을 정의한다.
 [features]
 native-picker-smoke = []
 background-liveness-smoke = ["tauri/custom-protocol"]
 
+# Tauri 빌드 단계와 실행 단계의 의존성을 구분한다.
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -39,6 +43,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 zeroize = "1.8"
 
+# macOS의 창 수명·OS 관찰·자격 증명 의존성을 연결한다.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSResponder", "NSWindow", "NSWorkspace", "std"] }
@@ -47,5 +52,6 @@ objc2-web-kit = { version = "0.3", default-features = false, features = ["std", 
 block2 = "0.6"
 security-framework = "3.7"
 
+# Windows의 프로세스·파일·IPC·자격 증명 의존성을 연결한다.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading", "Win32_UI_Shell"] }

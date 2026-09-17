@@ -22,6 +22,7 @@ export interface RealtimePriceChartViewModel {
     readonly timestampLabel: string;
 }
 
+
 /**
  * 함수 이름: read_date_part()
  * 기능: Intl 날짜 part 목록에서 요청한 값을 안전하게 읽는다.
@@ -36,6 +37,7 @@ function read_date_part(
     return date_parts.find((part) => part.type === part_type)?.value ?? '--';
 }
 
+
 /**
  * 함수 이름: format_timestamp_label()
  * 기능: 시장 snapshot 갱신 시각을 KST 날짜·시각 라벨로 변환한다.
@@ -44,10 +46,12 @@ function read_date_part(
  * 작성 날짜: 2026/08/20
  */
 function format_timestamp_label(updated_at: number | null): string {
+    // 아직 갱신 시각이 없으면 연결 대기 안내를 표시한다.
     if (updated_at === null) {
         return '실시간 연결 대기 중';
     }
 
+    // 갱신 시각을 차트 머리말의 날짜·시각 문구로 조립한다.
     const date_parts = new Intl.DateTimeFormat('en-CA', {
         year: 'numeric',
         month: '2-digit',
@@ -58,10 +62,12 @@ function format_timestamp_label(updated_at: number | null): string {
         hourCycle: 'h23',
         timeZone: 'Asia/Seoul',
     }).formatToParts(new Date(updated_at));
+
     return `${read_date_part(date_parts, 'year')}.${read_date_part(date_parts, 'month')}`
         + `.${read_date_part(date_parts, 'day')} · ${read_date_part(date_parts, 'hour')}`
         + `:${read_date_part(date_parts, 'minute')}:${read_date_part(date_parts, 'second')} KST`;
 }
+
 
 /**
  * 함수 이름: create_candle_view_model()
@@ -82,6 +88,7 @@ function create_candle_view_model(kline: NormalizedKline): CandleViewModel {
     };
 }
 
+
 /**
  * 함수 이름: create_realtime_chart_view_model()
  * 기능: 선택 봉의 MarketSnapshot과 계산 지표를 PriceChart Boundary ViewModel로 투영한다.
@@ -93,6 +100,7 @@ export function create_realtime_chart_view_model(
     snapshot: RealtimeChartDataSnapshot,
     interval: ChartInterval,
 ): RealtimePriceChartViewModel {
+    // 선택 주기의 봉으로 지표를 계산하고 warmup의 빈 값은 선에서 제외한다.
     const klines = snapshot.klines_by_interval[interval];
     const indicator_points = calculate_kline_indicators(klines);
     const ema = indicator_points.flatMap((point) => {
@@ -109,6 +117,7 @@ export function create_realtime_chart_view_model(
             : [{ open_time: point.open_time, value: point.bollinger_lower }];
     });
 
+    // 가격·지표선·갱신 상태를 같은 차트 표시 모델로 묶는다.
     return {
         bollingerLower: bollinger_lower,
         bollingerUpper: bollinger_upper,

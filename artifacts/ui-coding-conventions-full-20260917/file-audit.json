@@ -1,0 +1,3018 @@
+{
+  "tracked_files": 374,
+  "changed_this_pass": 296,
+  "categories": {
+    "configuration": 5,
+    "typescript_javascript_source": 176,
+    "documentation": 4,
+    "structured_data": 17,
+    "native_source": 23,
+    "visual_asset": 49,
+    "html_entry": 2,
+    "stylesheet": 37,
+    "test_source": 60,
+    "generated_contract": 1
+  },
+  "changed_categories": {
+    "configuration": 3,
+    "typescript_javascript_source": 173,
+    "native_source": 22,
+    "html_entry": 1,
+    "stylesheet": 37,
+    "test_source": 60
+  },
+  "files": [
+    {
+      "file": "UI/.gitignore",
+      "kind": "configuration",
+      "changed_this_pass": true,
+      "before_sha256": "8c815a379b205ba274d1a5abe19cf33423777567f701541517c9d2654f060b58",
+      "after_sha256": "94a0a0de99ee638dfab33217671ead94292ccf664ac5d3c04dff38c4c7844df1",
+      "review": "주석 지원 설정의 파일 역할·구획을 점검하고 실제 설정값과 규칙 순서를 유지했다."
+    },
+    {
+      "file": "UI/.storybook/main.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b7eb21b698d10eba2072fb4a3239cf4fc4e1c25340ca6564c7e0447ae190ee22",
+      "after_sha256": "8e378806a34c070d4717e6dd984c7a99735518ecf6338796a7eab6326b005ebc",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/.storybook/preview.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "cc85e204f99634a6c8b21b999bc321d40a0bb6c083b45867a601cd08acbe7ad5",
+      "after_sha256": "544da495a535e95832c20b9aaf56cad63194830762a8b162523d21e09a08eed7",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/README.md",
+      "kind": "documentation",
+      "changed_this_pass": false,
+      "before_sha256": "4db19e0f5564823c08698fdbcbc733931bc584f6fa22f5f759d83216a3ab586a",
+      "after_sha256": "4db19e0f5564823c08698fdbcbc733931bc584f6fa22f5f759d83216a3ab586a",
+      "review": "코드가 아닌 기존 설명 문서로서 주석 보완 대상에서 제외했다."
+    },
+    {
+      "file": "UI/UI_ARCHITECTURE_AND_FILE_REFERENCE.md",
+      "kind": "documentation",
+      "changed_this_pass": false,
+      "before_sha256": "4cf5851e0a399116d3a9eff5372fe9977eb2a372b5a0b9d58d11a5fefcebed70",
+      "after_sha256": "4cf5851e0a399116d3a9eff5372fe9977eb2a372b5a0b9d58d11a5fefcebed70",
+      "review": "코드가 아닌 기존 설명 문서로서 주석 보완 대상에서 제외했다."
+    },
+    {
+      "file": "UI/UI_Implementation_Architecture_Plan.md",
+      "kind": "documentation",
+      "changed_this_pass": false,
+      "before_sha256": "ae31ac7395d13dfa30cb466cb3d56507b1419bc1454b27061702f5a21b7acbec",
+      "after_sha256": "ae31ac7395d13dfa30cb466cb3d56507b1419bc1454b27061702f5a21b7acbec",
+      "review": "코드가 아닌 기존 설명 문서로서 주석 보완 대상에서 제외했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/.gitignore",
+      "kind": "configuration",
+      "changed_this_pass": false,
+      "before_sha256": "4c830308b6b763ff8f178fd07c3d19b050a7b84db3dc51bc707ccc651b7120db",
+      "after_sha256": "4c830308b6b763ff8f178fd07c3d19b050a7b84db3dc51bc707ccc651b7120db",
+      "review": "주석 지원 설정의 파일 역할·구획을 점검하고 실제 설정값과 규칙 순서를 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/Cargo.lock",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "32389be3dce8d41d387b4ede0a5648c4c14f4a7343541b557755d4839a288b39",
+      "after_sha256": "32389be3dce8d41d387b4ede0a5648c4c14f4a7343541b557755d4839a288b39",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/Cargo.toml",
+      "kind": "configuration",
+      "changed_this_pass": true,
+      "before_sha256": "6540bec21d0b0af1b5e8c07b5fb0b649210ea8c47f1d3c79374a88065cc01c72",
+      "after_sha256": "3d33a1aad8962699a1956db67d0f89123216bcce932088cea841fd96de9f2ded",
+      "review": "주석 지원 설정의 파일 역할·구획을 점검하고 실제 설정값과 규칙 순서를 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/binaries/.gitignore",
+      "kind": "configuration",
+      "changed_this_pass": false,
+      "before_sha256": "5f64101a593808757aad48e594997d349ebbd80b87ed3a6418ac06ba54cfabc4",
+      "after_sha256": "5f64101a593808757aad48e594997d349ebbd80b87ed3a6418ac06ba54cfabc4",
+      "review": "주석 지원 설정의 파일 역할·구획을 점검하고 실제 설정값과 규칙 순서를 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/build.rs",
+      "kind": "native_source",
+      "changed_this_pass": false,
+      "before_sha256": "a7d1fe5c24807c9479005f884b6277efa2aa70fad511483f5770a1e75697be31",
+      "after_sha256": "a7d1fe5c24807c9479005f884b6277efa2aa70fad511483f5770a1e75697be31",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/capabilities/background-soak.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "641c785a19b4a327895598f934949871500f09bc1aff07432903ff740ff05d1a",
+      "after_sha256": "641c785a19b4a327895598f934949871500f09bc1aff07432903ff740ff05d1a",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/capabilities/main-window.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "b289bb9585e9341df8154982f76f2643b35a4fe06ac11b09a5fedb83c34fe53f",
+      "after_sha256": "b289bb9585e9341df8154982f76f2643b35a4fe06ac11b09a5fedb83c34fe53f",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/icons/icon.icns",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "2cc657772e9cecbd47ae4a0572fb3cfed7e198ea236795f5f2573f3fc8736ec3",
+      "after_sha256": "2cc657772e9cecbd47ae4a0572fb3cfed7e198ea236795f5f2573f3fc8736ec3",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/icons/icon.ico",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "940951135a68373319b47ddafd8a6b5188af4e17efacb50abe9ff6fb5b1fe30f",
+      "after_sha256": "940951135a68373319b47ddafd8a6b5188af4e17efacb50abe9ff6fb5b1fe30f",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/icons/icon.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "d363c8dfb6b315c518cf517437b64df19f8c033002724a975d97e11162c47751",
+      "after_sha256": "d363c8dfb6b315c518cf517437b64df19f8c033002724a975d97e11162c47751",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/icons/icon.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "8e39cfb58f9f7236aad97cda661f9a32fd956348ae80643c2d291d510e323f1d",
+      "after_sha256": "8e39cfb58f9f7236aad97cda661f9a32fd956348ae80643c2d291d510e323f1d",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/backend_connection_diagnostics.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "15fd125907b50171da713e6b5e47e2e26bcf4a2486a02de726759bfbf8e54e65",
+      "after_sha256": "046cac096d15138729bbadaba89b7e1e0a0fd0119fdb30151a59944a7c6e1027",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/background_liveness_soak.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "1c29113d4c470544bcb6bb773cc4911d941da8be2b635bb16693c3360970c288",
+      "after_sha256": "3759a1f56aea876d13c464be9d65f13172bfdb8060323822b959bb5e6ee620c7",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/bin/background_liveness_soak.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "8322934b449d2827648e463b74fd6e26bc5d283229d4a21139be0ebfc7429a3f",
+      "after_sha256": "cfbae1dbc08f6e18a0024a4542b232e625bd4093e814e5950aa9508d52f7957b",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/bin/native_picker_current_host_smoke.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "0dac5e9b0c4ba85878270a624411fa45622280e35cad80bc250d344a9a6b91c8",
+      "after_sha256": "e80434e3b1defaa1232dd64b91467102e1cf1681d30ec4afac42bcb704c432cb",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/chart_diagnostics.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "265acf7379e54b9852a6878481d8a20f404e0a6844a3c7771703c89567829862",
+      "after_sha256": "83e14c39b8e1190f2c25c15d0ed69a8fbfe14ea7238d2a1dfa937845de1fa40d",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/dialog.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "88ab6ed3fc7e0095fe10d953b8b38995c9042dc0f76dbcf77a066ae5f3ce814d",
+      "after_sha256": "6ee334caa7a91cd2ba8a6544d94a3edf2c6b46036dccae29477e5204656f919e",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/exit_bridge.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "48564426414337b7892e10fd1456e297580cba4be69817ba6008fe1bdb86db62",
+      "after_sha256": "fea4b8f4d55590f3ca6882ca2855d2581cd426310143f96f7551b104dc5d886f",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/lib.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "3e260bf17447d09a7fc52447cb536a411edc4cd3df1792cf8035b4d0ee7d4ade",
+      "after_sha256": "9332459b5e875ad27f151e559096e6c400772639879c27d4b5ccf5c66d4306d8",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/macos_quit_guard.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "81765fa897c4cd7730203bb8a896c2d8070c92fbc56a2d28e52964abf183ae1a",
+      "after_sha256": "a9a10bd41d810f93b521ef78988cf0e1cc894c21010bd6101a495ae3880c6971",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/main.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "a4ea561c5674e13302f8f17a213adcad9a964e955495a622e21032ee96ecdfa7",
+      "after_sha256": "10c7eddf5cdaf6952f764ec0acf4c4b5e5c85c696eef5836096d28f7f71880e2",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/os_evidence.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "7116bce9182fc2d08f10498fb6de446c7f1f00aa00e69cb1bb9eafc9653a7141",
+      "after_sha256": "08ec953e304f40f801dbee3e9cba93f154d70cde4ffa37a77755e774f82fd81c",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/runtime_diagnostics.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "582648cda3acb47d5abba908aefe400807093e99a2e84f7802546ce41f46352c",
+      "after_sha256": "92289a62cdfc3dca9c3dfda4044a088ce730c23ac3ce9777bf0a06529ac0b787",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/runtime_diagnostics_macos.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "661fd265e21da49381fa225e0f438fb9db5fb17b8ccfa30aae3744f7b9e801c1",
+      "after_sha256": "dbee88a83b3fd8d689acd3b7e28170be8e861953ebf2e6dcb230a9c4973c609b",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "b9dfd608168df8777a3acf37dd55de667fee5c93fc490ab29040122386c5fc64",
+      "after_sha256": "ab09068c07b4ecc794538fb514d3d8a82da36e75a115f79a47183ff252feede4",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/framed.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "d47d9bc4fdf5eef9902207274e846d1dde63ddedadbf8a9256237210e5fd7622",
+      "after_sha256": "ab692d08b13b2fdd4cdba9289a28268e6318a5827331d12ddf56a9236fbc8a1a",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/macos.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "5aa67637fb4583f4322b79b6ae3bdadec26ae69680c2761f3f23583a53be2b25",
+      "after_sha256": "38a7194176a840d7c78d076fe2c7df647c3c4ce548c35169f474316b89d8738f",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/macos_profile.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "11f18c66eb345e6b6d1c7e99d8cb6fc638468625d53d8a7d10e883c960fc8273",
+      "after_sha256": "4e3e383b780987e50c247cf5d8a29c8c7df7a5c3cffe62b74922c11e4a1476c7",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/windows.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "ceb0ea8e2837d431fded0ea95792d6def0444711fcd5a0c6840794a5c1b1fb1c",
+      "after_sha256": "e30f97f52bbefde4ff2532e7aa93ae8e31baee3038eba0d0567100cc8fc1fafa",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/windows/credentials.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "c2d7a39757097abb256c040233339e394b91300397177afe15b769512e001958",
+      "after_sha256": "0859989976b75ff39642eb967e7c19f11c875eeb6418774f9e0cbb72fe4010a1",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/windows/files.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "39008da94f37dd1af961909e4c8bea9287753ace5bf2ea5ac61e152c54b79226",
+      "after_sha256": "714d3860198d4f1b12177b872b55500aa81a10bb993a9171a40b6f2fb3b6a8d7",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/windows/ipc.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "87577b637acf3f6ebc921a789baea73545f55b8e1c9a995e3cb6bd0ea6927103",
+      "after_sha256": "2b7037a5019a8c1a8ad5ffcb81aa418e711f32b144461468a40a3118c3276b2e",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/src/sidecar/windows/process.rs",
+      "kind": "native_source",
+      "changed_this_pass": true,
+      "before_sha256": "01a644aac2853768b973eea0288622c55977c3f66e0fdb400022d4d2feede8a4",
+      "after_sha256": "722da301ba2e29da102518722360c571163ec696fbffaa9ef4f0686e9e9fa9e0",
+      "review": "기존 함수 설명과 작업 단위 주석, 함수 사이 빈 줄을 점검하고 필요한 부분만 보완했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/tauri.conf.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "3e06cde9547244728cfed32fbf80c5bb566d83531cbce2ceb25a1fa92b73c2a9",
+      "after_sha256": "3e06cde9547244728cfed32fbf80c5bb566d83531cbce2ceb25a1fa92b73c2a9",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/tauri.soak.conf.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "4c57f7a22f25c7ef2caa6ca232a7e47fbc9ac0ddc3c8e1be5e420e8e993204e7",
+      "after_sha256": "4c57f7a22f25c7ef2caa6ca232a7e47fbc9ac0ddc3c8e1be5e420e8e993204e7",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/apps/desktop/src-tauri/tauri.windows.conf.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "197b3b1d80fdbd583f7d9e9a47a046de58028da619159ea9c2df780b3e2d7553",
+      "after_sha256": "197b3b1d80fdbd583f7d9e9a47a046de58028da619159ea9c2df780b3e2d7553",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/index.html",
+      "kind": "html_entry",
+      "changed_this_pass": false,
+      "before_sha256": "726135843d8813e1ab4db093a1d30b019fbe4c4591cf4a692508f739c6be49ea",
+      "after_sha256": "726135843d8813e1ab4db093a1d30b019fbe4c4591cf4a692508f739c6be49ea",
+      "review": "기존 초기 표시 설명을 확인하거나 단일 진입점의 파일 역할을 한 줄 주석으로 보완했다."
+    },
+    {
+      "file": "UI/package.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "50945b448b67d231ae1ee28d52f7527ef3651a24f1bedb1ac98b8491141c527d",
+      "after_sha256": "50945b448b67d231ae1ee28d52f7527ef3651a24f1bedb1ac98b8491141c527d",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/pnpm-lock.yaml",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "cd48652d053fef9ef8c30d8eb14543c25a5988de1f301c9aa1f3408a00d64e97",
+      "after_sha256": "cd48652d053fef9ef8c30d8eb14543c25a5988de1f301c9aa1f3408a00d64e97",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/pnpm-workspace.yaml",
+      "kind": "configuration",
+      "changed_this_pass": true,
+      "before_sha256": "19bd95a41a68034eb3dab6fbd91e96b52a8a29fbf2bc31f29a86893ac6c90c9b",
+      "after_sha256": "7b581f85a6399d4d1f3a9a036f8a2d17e23579b2f4bc72626198377fce187d44",
+      "review": "주석 지원 설정의 파일 역할·구획을 점검하고 실제 설정값과 규칙 순서를 유지했다."
+    },
+    {
+      "file": "UI/scripts/backendConnectionSoak.mjs",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "66432cf37726544fec4f92db60a121eacb2d3ac0716f267efc0045ba298842c2",
+      "after_sha256": "ea562f05839b9bd41447058a9b2ea8d87dbd68a7dcba4c39af770717bcb3b099",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/scripts/background-soak/index.html",
+      "kind": "html_entry",
+      "changed_this_pass": true,
+      "before_sha256": "7ab5979988482dc4b3dce89c54ab04676b952dc9224d8e09848483c3ecfb8fcb",
+      "after_sha256": "114821abf74611832a085c4e6f0e0033dba3a01c77876ac73837d142e091ff06",
+      "review": "기존 초기 표시 설명을 확인하거나 단일 진입점의 파일 역할을 한 줄 주석으로 보완했다."
+    },
+    {
+      "file": "UI/scripts/background-soak/main.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "22d668c88d711f5b45ab957e5cc0690dece84e1b6c8315b632624108ef9921a7",
+      "after_sha256": "6e4f680315169928f487460ef094c708f46e1363df887ce610c2022ef84d79b6",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/scripts/buildBackgroundLivenessSoak.mjs",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "f9b35be2ab2c1c87f6f10d67283d19c270986e365576b73d4f7d40d9cb412410",
+      "after_sha256": "9060560bab47445b777b5200848803829c313ba2f9b5318a9a3bfb035dbe7dbd",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/scripts/desktopFrontend.mjs",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "2c6c3ec1677247c8d02f99bbd6fa43fd60874fb049df55e70fae955e2650a6fc",
+      "after_sha256": "8b5221497ea7144c3b058c6efe88c6888d79fd344565ae89b8a0542838fc8a3e",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/scripts/desktopLauncher.mjs",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a96e89f5dd8eab5cb1b9878173f8b4fd3ae1741ef42a778fc3f14a57da1db33d",
+      "after_sha256": "fb7388fc81f5b3142d801d1ffa1989558c5df253ece96452514cf47568e08ce2",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/scripts/desktopSmokePlugin.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "1eb518c11bc1a288dd2c9ec11aff37db453f9d666fc8f25532b413c29de14666",
+      "after_sha256": "df843c0603ccc3b21076383258efc5539c98c814f6d4d9205ffd48f18dcb264f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/App.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "ffc84e3a5f4bd001f098ef64ae10d80fbcfab0851e8619fe18bcc38263a8b18b",
+      "after_sha256": "606b458318af9aefc6ce362a1c2d693d886008565eef49398e11d0f8d7c16fef",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/app/App.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "6097f47f9166e2cf373ffc24b49527e7333ce41069b4a204f85ea7ccd82e66d2",
+      "after_sha256": "2de7bc6cbd829c58d13deaf5b80af2135db102ce680b0aacedbb35744f0d4436",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/App.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "00aa04711b262066acd49760a9dcc5d642755ec19a0d6380a5cd70214cf8afa2",
+      "after_sha256": "2bbebed681390605d117571e1a5d88f909415b91165c70b12bbebb0c273ad7aa",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/activeTradingStrategy.process.test.mjs",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "71c5811c7311a884bebc56de6d7b484b997774a03a94e0177d413ce88825f329",
+      "after_sha256": "53e27bf4c141a3a44fa9b081c973aa7767b488cccd28b694e323fc710e2beb7a",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/createDemoUiApplication.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ef1ea007bc02798577efacc3d8a41f7c60118ff9766cde1a47bd766bea9682e4",
+      "after_sha256": "49d26c51109b4fc27cf0e926c726f98092c420e87df6e94284378219009e41b7",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/createLiveUiApplication.process.test.mjs",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "b8bed9162e72c466c3a16b65a4888a8043c42c02f2f5e59ab5b9d7a3a9147559",
+      "after_sha256": "435d4180c9651eb96ac32bb5bcc2049f94a0965f83378e42ab1692e1ce65821e",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/createLiveUiApplication.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "bb36f9dd4c83c4923942664ee083ec2e42c8f6f7c6951a355087df8f402f39a4",
+      "after_sha256": "e101ab8f354c38b89d6417f2e6e6b4d029588add7af6e91a2836258f6014fc61",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/createLiveUiApplication.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "8a30955ef7bd8c0e229e5f86112e1c1bb02d24ccfe8d73b9ff3f9799c30c8959",
+      "after_sha256": "8ffc6edc02df1fab9435696e339012a9cdab83f7fa76d32c67816b2e4b56e65f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/demoFixtures.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "18f496c271ca67b1608f0ee48ed1fcffb723af9126dd768648587902c2b88e05",
+      "after_sha256": "6088e3e1b09d588bed222b294300de4c36c2000afc8e9066cb35fb40540f0b01",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "149c87f6c31e0e0a66705e84a8072d48f829067124ebb94e3d16f51919275f19",
+      "after_sha256": "e474574a6ec86a0175563f981e72abfbdecfb9ff51bce631487a664597f42a55",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/bootstrap/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "74ae1301562fabd6d92c64892aa3e58950ba9f0e7b6c59a4c14bb2be5f2a87da",
+      "after_sha256": "16421d021bf73250cf29863a7aaf5332593ea581957183b54beadb848c387f59",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/components/AppModalHost.phase13Trace.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "7c3e287284f478344087d6f639585e9ec87e1b47424e272372c14895030976a5",
+      "after_sha256": "1f3f406ee8db15d8aa307293c325108ce3cc4f4ff8989b2cc9c44d2f5f9eb8ce",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/components/AppModalHost.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "74ad8fd4356316b683af8aca5a3fb1236963148d14984722524adcd3654b2587",
+      "after_sha256": "170bb1e6539b6d0a5bd1a58bc90a2e2dbe2c18de04f27a3a7454a7d45b6a3fa3",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/components/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "13c53a37e28d3e1866508ad50c993c863d8d6cc68bce028d513ab96e628660e1",
+      "after_sha256": "59e5e0ca367b6563ad5ef549fb25ff9d1f8ad93db7f7e97c1fd4d724323eed43",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/components/modals/ExitConfirmationDialog.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "a9f048d474385720d9962d5b0a6d66ea0faf6db4859e8ae6b2ab6924e0781599",
+      "after_sha256": "a9c67c2bd1c914ef07ab7fcc05cf4ee6e11fe2ba46b16d57816c98d2f03fafc6",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/app/components/modals/ExitConfirmationDialog.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "cbada8b4dd660bc67ba529210a3d651ea8e43bf45b54ccf158f9a6a35b5f2f68",
+      "after_sha256": "5a406752b0385dbf5b47bc452cc824495666d54a2e74ff2532bf12661bdd9250",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/components/modals/OperationStatusDialog.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "2aadba3c7ea5e53d00e0c5c657e9accaffa95a7db80de5404c4e70c24710a70f",
+      "after_sha256": "2ffffc91428e9bf8b1523a4127b2bafc95042a1aef1915171f9bce4e4ae5fa26",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/app/components/modals/OperationStatusDialog.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c104f421a9adcc90cbf24739fbd76a415fbedbc0d9d9fe61ce2e93259172f7bc",
+      "after_sha256": "caffb9b6a81b4059bf25bb36a3c444d3f0f61517774f1593e34a734e3850ef87",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/UIStateController.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "93488af8c059e439bc5536a4fa0d059fc2be663c03a4660be8fbe95172f8b45f",
+      "after_sha256": "b1dde31f42148589bbbd3b54a58d9bf6a58c124d1c0f2511250fcd5c57c4a8ec",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/control/UIStateController.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "4709a79c35a9b3c9b098b153295c65ddbc6402dd63ace0dc46701eec3a8fc195",
+      "after_sha256": "50aa1a8c028d1f7e08d1155bcbfb8045f94e3622010bab4364a94d7ded502fe5",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/UiApplicationFacade.phase13Trace.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "7d790ed50ee8960c4ad32fdd55e9413b9dea491c30075c414cddb2b3dd2f1d51",
+      "after_sha256": "0e26bc0afb1ae131af5cf3fb9541dc5ed09349de0dd0faab3b2379099aa321ee",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/control/UiApplicationFacade.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "89a9070c415566def7e0cf89ca990d193ef9ba8d30c44e4c7f824c02e69c31af",
+      "after_sha256": "c3bdaaf6a16623ec9fc9be3e5133fcc55c3eaea6e1e4ab68d2e97acddac5e694",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/control/UiApplicationFacade.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": false,
+      "before_sha256": "af0e767593ceb1157298e2189072e79856afce53054cda9ec68306aa8f59f19e",
+      "after_sha256": "af0e767593ceb1157298e2189072e79856afce53054cda9ec68306aa8f59f19e",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/UiCommandExecutor.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "0a5a4b1c002610f03fc0c2ddfb918c7e8fcafa68893db27ca2283f68bd08b6bd",
+      "after_sha256": "3eef23bdb56e991f2da987a8e63bcc6545e9d8dad3194d1a8fb0cd2e2d16729f",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/control/UiCommandExecutor.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a492b891a7d3a09688736d7e4e0ac89e8036caed2bba8a3765b94c696572d796",
+      "after_sha256": "abeb2316816597ecd144a351d74ec4d232dcf4c839600afd4d33ec93f19da038",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/__snapshots__/ui-separation-navigation.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "727a5eafd8d9bbe05a8cbccf2697a76e1d641382d1dcba953300b2a26506cbfc",
+      "after_sha256": "727a5eafd8d9bbe05a8cbccf2697a76e1d641382d1dcba953300b2a26506cbfc",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/src/app/control/__snapshots__/ui-separation-races.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "4d8a036393d2c884bcaad089f30a20c678f6c181ca6cf00ad705ba56f7a6e1eb",
+      "after_sha256": "4d8a036393d2c884bcaad089f30a20c678f6c181ca6cf00ad705ba56f7a6e1eb",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/src/app/control/__snapshots__/ui-separation-timers.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "08ebc682f28bd6d8e47c28650ea30ce0db08d557d2fcd8314ef5a8c343a206f0",
+      "after_sha256": "08ebc682f28bd6d8e47c28650ea30ce0db08d557d2fcd8314ef5a8c343a206f0",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/src/app/control/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c5ad7d828a8b1d99ba555257f1c0135dbec2a99fda53a5a7c800f8038f385ebf",
+      "after_sha256": "a0b510bd586feebcbd8a670207bc302d013600b48c34a28d9ba646e8a31e7d64",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/selectAppViewModel.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "f678a15fc20a9e3d08180fa75d9101a61026ec273cc9c4f30e8514c4e79d7368",
+      "after_sha256": "c80469aeda9ee65ab09f9851925a6433acb084f297bde97cca7c601c96b2cb6c",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/uiApplicationContracts.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "64666a5d119b3283d4ce05b9792670d4f018354e9d71c96bb4efa15208088796",
+      "after_sha256": "0818357b63b937131e251e0da527c648fd2cc342fd3862586494bc4efb75e1fa",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/uiApplicationIntents.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0a34b2eaf223c5ab29ad03c4a97d318bee99d8c8326f7b51c2162b1befe5e3b4",
+      "after_sha256": "df5240d049253b2436b9a5f60b371a1ac726aac6366a15b7c2ef138f8880a81a",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/uiModalPolicy.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ee354086ccdc336ba0d209baff0ddb078b46707b012d8070c37dded1bba51fe8",
+      "after_sha256": "f1faf0521f893dea20630eb3197d8d761231ba55dd1048a9241d9f643005df75",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/uiModalTypes.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "caceac4c1760a143d679e330d9d8e3567178a08f237bf11042627a35993781ed",
+      "after_sha256": "347685a724248d54cab2119d973181ad069a89b6cff9671de47a2d3766be8104",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/control/uiSeparationReplay.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "3d21a3a7584190be1e00afd007fe00fa0a5673a5ce13312ce2c3ade2ced614cc",
+      "after_sha256": "c51daa3a333f83d28828f3488de8be670fc7b267dd7b7487699a7c35d9071412",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/hooks/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "eb8d2fbf2892dc859d5bf192f21caa3e67ddced7c447e1a1e7e4fc0fe22f31d2",
+      "after_sha256": "bd698258eb3e645cb9310cc20db0e5035a1f927e0aca63de708f7ed479775f25",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/hooks/useBinanceConnectionStatus.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "d163b6cbc9ef2150c620e4ce14829708ed82cd21d3b1eef559ef9188c722408c",
+      "after_sha256": "d15a23bcce88d10dcc2e36a2d0575728f7e3b4dbf5ebe41a8e4c1567bdc9d7cf",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/hooks/useBinanceConnectionStatus.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "9ef9429041593534932a97ada56e4990138bd483e5a9f55d547b42bc63aa8bde",
+      "after_sha256": "d29cd22f6de8090f7fce772644ce4d62bec1eb952d59e43520020c23839abef8",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/hooks/useCsvCalendarNavigation.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "8d375ddf4ef5f07635ad38bfbd45b07fefdbe0e0286639a58d489fab9ec6f900",
+      "after_sha256": "e9d3a65cf4f6e0dde5b2868be146b296371c017a6d5cda87ffdbfde647309728",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/hooks/useDesktopWindowLifecycle.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "19fc2bffe5a13229db67d3a72670e0f59db8b5e1a2b34a44ae52ffb2b4a756bf",
+      "after_sha256": "04f1847fd4355ae59332b82d01aa6a4ff2f5360c9ed232c58f7909406eac1c7d",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/hooks/useDesktopWindowLifecycle.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "1b14c45c57f21160e8448906849c0c282896ce072d18c35d1a33dc101c036bfe",
+      "after_sha256": "3340a7b107be322759f0affd4bca7a62d321e06319392886ef223459ed8ddb53",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/hooks/useUiApplication.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0603eb56100f135420d7dfe186b754421548fc64b9e3695365674ff093e734d4",
+      "after_sha256": "561a70a9ed692d67a600945ebde27b40b773667c5940333efc830dab1d00600f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/UISTM.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "ff6eec45c7d5024a07bacaf7518f6bc440e6d44e81175e7d443abe9549bf9150",
+      "after_sha256": "e20dc59dcbd177dc37cb9a39f0c8ae78dd44730745b32ca83a551d2a97b1dbdc",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/machines/UISTM.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ac0aca580e3d49ce7cc864a82abd862fcca630e63dd63050a23729c96424e02c",
+      "after_sha256": "2f2e986208a6374c483cb1199da0c14b592f59a3a7eeb8199c636fd5a0ff7af6",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "06cd258965fa0b1a5c9a352c3428a42509c11ae774295799eb77e19d3411b4bb",
+      "after_sha256": "5dda1d65df4bed18c5f1ed706d69a416b1555c6a7a02ddd0b4c1de40cf2a648f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiActions.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "60ed4905f5904ca40dd12e77a7046bd880e8f1ef801661748497b993bb39591a",
+      "after_sha256": "9fbcea9b78b9a8d2899085d1f3c405ea2ec3798927234f5489b9e5596a88c8a4",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiApplicationMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "f9afea24ef31d1b36af899846f0a5362af75602049541a25b2e6f39c01b2743b",
+      "after_sha256": "37f7a743888f8446aa9d958c473d549b2217e82af59c696824283463ea06e73e",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiApplicationMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "df77d740e2fef5e3f4382eb71226d9b3509471a4ca9158bd77d667ba47cc2101",
+      "after_sha256": "20cc7f382f378e22907a6da28289b1989d1a87698761952bfd606cc1c6c23a47",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiApplicationTypes.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b17c1992d5204ba9658ea30e41690c043288f640f99553c60d75b4d87039f28f",
+      "after_sha256": "09278fa586f785e96f19eafc80a12ad939d6a4ee3977e908ca31f90234cc5bf0",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiApplicationViews.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b157bc65a2eeaf826e4a13c94126fe9a222ebdfc484f57f808e7b96f7c2fa79f",
+      "after_sha256": "805b621365c16f4b9bfae11da6d3d91e850edc238e7acccb95556060ba09346a",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiArchitecture.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "18321fd19485f053e6ff32e33dced09fc7a61593e9c5cd2b09f21504dc825157",
+      "after_sha256": "4ab196021dff597f3b65da87d707f9e393aa8edd4653cdfe5b466531ec21d0db",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiEventActionCoverage.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "362ead8f95eabdb87bdc3e7abbf84eb3a9d50f0cc0e88ee79c6746f0f5c29ea6",
+      "after_sha256": "1bca3cdc438ba217eab6f618e918d4097240a089a6df3afd1e906dd87e37a8b5",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiFeatureDefinitions.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "cebc19e0a38f6ddd00691c8ee41894ac77cc1dd9e2b406cb825fb9d1abc3c36c",
+      "after_sha256": "67b0d55d7f49a0fb21931193b5b9cffdbd5c132d50535507d5ad3c539ead5233",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiRegionComposition.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ee5d7997319196274f4038fd1ef5f4e52061736b802dd3eb821568bcf0fd7eb6",
+      "after_sha256": "aa91638e9a9f332052d59cfef5b03847636e55a7f8909349d56f086f569780ee",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/machines/uiShellMachine.phase13Trace.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "b91dbfd31159a3296e55a45d6d496849481daf3ecb43e1c7b87511c87f093ced",
+      "after_sha256": "23c1a1bccbbca23a9eb905fdae02094362a8b2866965f456dd3dcbbbefa18c54",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/presenters/activeTradingStrategy.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "4310ff2e9401c039b1dc99ba9d567d7aa862a2021039960a2b99a6fdf549fb80",
+      "after_sha256": "5e42930e8726b6128717b106f8e06d20de950855a523ab9787e7b5ac5f9b41c5",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/presenters/csvExportPresenter.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b59786e85bf7ecc27e5b767cb13d19c78927715439814c16a473df05e5b7d84b",
+      "after_sha256": "d57c5038c16c3491d117f7092574a903e04f3365862c78f942988e09ffd5adc9",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/presenters/dashboardPresenter.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "9102d101e933ed40d0c47a11a40ffce0a1e857b3912b0331eb5aef890728180d",
+      "after_sha256": "9545f7a08763d96ee7001faa71d04bca295b014525b1cba67f332b611bb610f8",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/presenters/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "79c1689e065067db8498c79ab62ca1c06d184f61f2fffab90225ed17647c34f3",
+      "after_sha256": "9405f79a10529b29b258d6592685d3859d3b853d7ed824bc0f658f394d26ea14",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/presenters/presenters.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "73276cba5e5285aa9f5dfed0f7a07ae3cf7b79183b4688a2811b38d6e5806189",
+      "after_sha256": "ef7a8be63b278347e6f895946e8c7446707f3d339c98ac0a536caff41e30d42e",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/presenters/tradeHistoryPresenter.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "83a0a0de8895f1cdc9d2388fff4ff2afeb71bf01fc284e5a2b5af5d245c7056e",
+      "after_sha256": "608ef9e2831ad777a600a39407546007fa9dcafa3a872f9d247b74f921243322",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/providers/AppProviders.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "fbfcfc1f12ae31ea0569e72a8423e4fc3a54131f8ed9d6aeb6204e4014b8bd62",
+      "after_sha256": "0b3207da7e1372220f34c0a66dc8f55f29759e289bb60f793648ee6d19fbcb6b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/runtime/DesktopWindowLifecycle.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "f71f0f509f09767745f924b3ea5c84e38e0af904aadaa7242b065d72e8b4f86a",
+      "after_sha256": "f9eef31631a1051cc1ca8111c38a6b055297764a639d25424c4b3d9ffe16d382",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/runtime/NativeSidecarLifecycle.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "9062f2ee43842d985d57659276c7ff4341c548731671afde44531d8f8254f9d6",
+      "after_sha256": "b8df0b1b6d1c85707309c1ebddeb95f70bf99ccc85bbb9e678c77aa30672b6ff",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/runtime/NativeSidecarLifecycle.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "dffc3aaf7a9cb91af975434434018917759eada618eaa1127206e2df49b8930d",
+      "after_sha256": "079be1cea638a90e62658d69b6bb1d7c8cdd4b617fc3646a95c454685f71e7ac",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/runtime/UiApplicationStore.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "3439ed0b625d8840569953998f583755b7df217f8f4832cc599cdd5237414402",
+      "after_sha256": "93a3dc9a9cd3e317c0146df9f5e56fe7561f57eed8c17bd6cbe163ff15024dcc",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/app/runtime/UiApplicationStore.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "dec594c51fddeb671207151fca83ecf34bcdf917bf058b21610bdb1d205f0edc",
+      "after_sha256": "e1f62a4b9bc9ffd0a79043530f285a91ae97d6f4419cf26c31e11c8c1abfecd1",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/app/runtime/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c9ff54daaf30d759030fb71443524b52b3c3317f86eb90de7c9277ee953ae640",
+      "after_sha256": "9707e430e6b2ce3f176afddca6ea2a6fc0e522b8173200f5b4fdb8388d0b17d0",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/assets/figma/chart-maximize.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "17b8c1c70d4c4e90ee96918aec48ff74a97d2efd01dc42a155bed199bba55174",
+      "after_sha256": "17b8c1c70d4c4e90ee96918aec48ff74a97d2efd01dc42a155bed199bba55174",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/chart-pen.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "99a6bf9b169ad743193fb207de9bf3325f33e2747a0e663ef86f838337db6e49",
+      "after_sha256": "99a6bf9b169ad743193fb207de9bf3325f33e2747a0e663ef86f838337db6e49",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/csv-export-icon-bg.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "d750cf2d9612be6e052ab463191779059e43604fa70450c259a44fcdf15ecab5",
+      "after_sha256": "d750cf2d9612be6e052ab463191779059e43604fa70450c259a44fcdf15ecab5",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/header-start.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "af355931f7e406d7d7977508b02328596b977838d7c091a2b7ca454f687cb83e",
+      "after_sha256": "af355931f7e406d7d7977508b02328596b977838d7c091a2b7ca454f687cb83e",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/header-stop-icon.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "b3e1e2765dbd3e6b502245ed38af31de3f79bf5963484cd7af325c8347fdfe8b",
+      "after_sha256": "b3e1e2765dbd3e6b502245ed38af31de3f79bf5963484cd7af325c8347fdfe8b",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/logo-frame.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "31c73596fc68fed4b9604c8e7845c535367b6a48ac1f7d1679c97f63b9d48a94",
+      "after_sha256": "31c73596fc68fed4b9604c8e7845c535367b6a48ac1f7d1679c97f63b9d48a94",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/logo-glyph.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "df3c4813034867098d211244ac716339ba07a215448fdc36052aa34e3390ff2e",
+      "after_sha256": "df3c4813034867098d211244ac716339ba07a215448fdc36052aa34e3390ff2e",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/modal-status-negative-bg.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "bf6b267ab7c6d0356ceb84578bd89ada3925a1ccd3a2b2b971f0fa0c2535e76c",
+      "after_sha256": "bf6b267ab7c6d0356ceb84578bd89ada3925a1ccd3a2b2b971f0fa0c2535e76c",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/modal-status-negative-dot.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "9addffd48bbf6b86365b503e8bb627c38487a3660a19d687d793d58727d56c3c",
+      "after_sha256": "9addffd48bbf6b86365b503e8bb627c38487a3660a19d687d793d58727d56c3c",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/modal-status-negative-ring.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "7e496ac3280c58000ab4aa93261ad98d183d9d9dee5b880999244ddeb60b82f6",
+      "after_sha256": "7e496ac3280c58000ab4aa93261ad98d183d9d9dee5b880999244ddeb60b82f6",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/modal-status-positive-bg.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "5e845e84f5e762a3a751ae3712d1a8dbe27b59e900a94ab78b880d895e792d80",
+      "after_sha256": "5e845e84f5e762a3a751ae3712d1a8dbe27b59e900a94ab78b880d895e792d80",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/modal-status-positive-dot.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "e4c15b2da1cd1d712aa3b28ca8f393ecff81c4b33ebf112b32a9b90671e2422d",
+      "after_sha256": "e4c15b2da1cd1d712aa3b28ca8f393ecff81c4b33ebf112b32a9b90671e2422d",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/assets/figma/modal-status-positive-ring.svg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "ebc80649533a7055f0d3deac642bdd796799900a9617e548415246b7f46ef860",
+      "after_sha256": "ebc80649533a7055f0d3deac642bdd796799900a9617e548415246b7f46ef860",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/components/AccountSection.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "80dbbac88978d87f1cd3818bcf3736d7eedc42b9f4b5350d24b54c4bebf62a04",
+      "after_sha256": "540d55abb7afec83525209e4cbd55c17615786aca91e695ebfa7b18b00fe8581",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/components/AccountSection.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "10d3545724550ede48e2bf25d88ecf583bd22ea4f0a9710a62a69db00226df09",
+      "after_sha256": "983ae4c30b21b5e424d29d78caae1bbe83ae345c525badd3c88aff87d8fe94d2",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/components/AccountSummaryCards.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "aee41bb612d7fa29052ff775f9e4fd788b3505cc3c5f4c4f1f660005243a649c",
+      "after_sha256": "9809aab5982e501701833d6493922e8b003491920c76b79936fb01f15c61ebf0",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/components/AssetCard.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "b68f4be5fa4586b95373139fa77323b57e401a59a251ce46df7edb54e5bc714b",
+      "after_sha256": "0ac6036c820218ce220f1d20e3a209c8dbd257bd22a9f61f8d3a4a56ece4f727",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/components/AssetCard.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "f19c88635a52fbceea5fa218e77f2865941d1d12ebbbccdaa60fafe9774aabf7",
+      "after_sha256": "0b1f2d87abb782c2774a541e329cae383d4776e339ebb90853d33d589188b1fd",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/components/StrategyCard.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "5a65ebda18fbd8076da39d021032b7af2d4cb54657b7fe00e61e321928f2b244",
+      "after_sha256": "1d67ae245ecad5d0a90d40a906e8d2d3e4b6902a2520641908ea36324c00bbcb",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/components/StrategyCard.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b68bbf3af96cbb5354bd3ae1f3fa41079a320da115a9582c8aa0e9982dcb515e",
+      "after_sha256": "39991505e756b86b7a43340106c9c3756e434ee4a74f5bf6b42eebaee0e4dcdf",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "d6cbabe353b09ba39494e80c3f0a71762ef5841fef133217fd4d3d3c55eddf7d",
+      "after_sha256": "94667843dd11ecf75aa11a7d87246eb3d6e8a61aac0d83659eebdef7b38c66dd",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/machines/accountSummaryMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "e052a53fd9d2592896abcae754931d3635bda69552fac22640ac9437c3308493",
+      "after_sha256": "1df759539bd30d597a0c659ccdc8b35f863e5e42a2663233c20414950f843fe3",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/machines/accountSummaryMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "e9fdf89bfef1267ff105a1851a07fb6829c5117c20cb70f284dbe08a3c2bb134",
+      "after_sha256": "69d543eb31ed834d17812660824c70f7bf8ba3c61bdc7ac9479fff408dc51d26",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/account-summary/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0fbdbf0060cd9f9a20bee9032780706dbd98864936b0555803056e099d6fdb79",
+      "after_sha256": "e8602540802aa24339d591bb1d7ec0afea2628bf2b045ba91c55ea9986cb6e38",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/app-exit/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "29cdaefb9a8ac400d986a5f522047d2ab9435504c58078bd6daa4aa441679260",
+      "after_sha256": "34c3602bc8cd72c62bcc11f0cc641c28d066eb86ceabfe5258e35eefce5eda43",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/app-exit/machines/appExitMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "7485a04624a67bdc19fc9bceeb879f6d6c7f83922e045202872e149b354d0774",
+      "after_sha256": "aadfbc6c44719d4e1486673c34074214d420910520d082451428eafd152bc876",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/app-exit/machines/appExitMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "09eb84dd859dc9bded984d2e8fef04f8578adc0f2376b29f863a7f88e18b294e",
+      "after_sha256": "7d71918ea0155c66d7da664eec8a294c2d65db2d3f1abb9a1e73820375f5d9a0",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/connection-status/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "8a2e4b51da18300ff3406730d2ba32d675a2efdf0d31a3bd0f9aa36c82d54ba1",
+      "after_sha256": "23d0d84b750598c8026ac66a8d4a5e53d308d4ae35cbd866e61093ed5a1fe444",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/connection-status/machines/connectionMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "d5addbe1504d1f2e4c545c5bff7c48b6e387d92419501c30412f04bfce9c84aa",
+      "after_sha256": "2e9be9aca6616fed573ab9111cec6fcc4dc02684f24836031e7f93ad84933e0b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/components/CSVExportDialog.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "01552c930a7ad743d3afa733a0cf11eaaa5d50323669d058205eec3bafd61449",
+      "after_sha256": "6f6497dc113b647624d22dd802cc711bc94b51b8445d67e3070a61b6cbd45844",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/components/CSVExportDialog.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "dff5b908a5847f4597c0381ec7a8e88ed5d51c779c0dec78132229419d04c60e",
+      "after_sha256": "b0d3883c07ff5ed5a1c6158fe43abb211d90bc5f2b48de5f3e99c50544f3aeef",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/components/CSVExportDialog.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "1a2301b5776f51b02ff93c4595a5b18b028c79e5fc4b61a6235f3930e44b0b5d",
+      "after_sha256": "c4a1a179e69097f37fa2385eebfe5122084dd7c59c650debbe53a877e082afe2",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/components/CalendarPopover.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "b49058eb059ebbd7d7efca25a73e3089343114a0f1abf4dad95395e6ffcf0159",
+      "after_sha256": "24fdea5dfb919b51f60aea800b2639ff927843be16b3874a2eafa54886907c24",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/components/CalendarPopover.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0649ed5e62d2a14f6aa09cb403845bccb12b73be35c8ddee4f645c0620e5d427",
+      "after_sha256": "658e64b904cc3525320630ddd6ee7768471e5f2b3662e1afaeab13a84f326f07",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/components/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "3f82faf368d37014a7526a789f57b5a1025a1387ac9efcec529b06c9a36bbd53",
+      "after_sha256": "4adbf0934b635c39f3852e40c35f92fe95d197d51afe0f15292ccd6e02f44ad5",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/components/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a32e86aa90e4aa2908e6dd0e7891e75fb05e21e7c02400ecafd4a2c2325e1a33",
+      "after_sha256": "a17277a84655068675e300dfdb8e40ac997d1cdf5b2d34ee505957c96869e677",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "18f659c62921a42ea7c1b8ea7ecbf32bbf9e1c83dd711ba3696c5e75a93c03c6",
+      "after_sha256": "47153ba33da2eb1bfcccab44add4ea2dc3b58d3dc25e25c01f9af89e31905c66",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/machines/csvExportMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "e66e6beea7836b96d4e2150c3ea211ae12346d2f03af4734312b409ad3e75e32",
+      "after_sha256": "93a8412cdf55bed2e94e5f001d15442766aae547da48a233fc10bbf1f2d36605",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/machines/csvExportMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "6bf1d5438371f388f88177166a38695728b0786f967e3309fe02f15bef699344",
+      "after_sha256": "8d9b141a437c59dc6cc412bf2922f178dbbde8dadd059b50a3328b16094c13d0",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/csv-export/machines/csvExportRegions.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a44bbc2dd03d49eaff4a2560f3e43d554c2c86d9c0ff83127a3e48fbeb6adf84",
+      "after_sha256": "e914089ef10b2809b0c16f97c7d4aa2bcd577fc1a0dedc8f3479a1fa21758439",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/ChartCanvas.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "bab88a04b74a2c06497f59e98ee3e1bbdb669cbd3686e8e89ddc8b2961562035",
+      "after_sha256": "831a07b421105ca4e2a73c178c226c6e66dbbb69ceea73c8a62c98b24e49e443",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/ChartCanvas.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "6c7bc4c8778aa383ebfe327c50d618ee1d2d6ab2aafa65216ef367ab3cb70763",
+      "after_sha256": "94feaf3da73e003e55c266b423e47443c7c552fdc613c473b6850231e056aea8",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/ChartCanvasCoordinateDrawing.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "b2c355d74d723254e303658ce7f0fcec5cb0eac321eb4fbc88ea82519330c56d",
+      "after_sha256": "79b7a76c6eca5f0599551825a9f05711e352deb7fd434826440bf5b2dcd49825",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/ChartToolbar.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "e617df219cc4866d802193f1190b26d33185ac18de8bc7de99a2068f5d1d5167",
+      "after_sha256": "98a0d0ced178cf2c588e2e9229fffae4b365568807ca147d43f44dffe97c67e8",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/ChartToolbar.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "048f7e49d0a40179877c0db46552b70c6967672887668a90875707c2620fc0da",
+      "after_sha256": "d7eda643c8255dde50adef24b8a46cbca991dd00f73a452bab8d54d81d04d78d",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/IndicatorSettingsPopover.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "3ae8e63b51fab53b5dfd9325dbe17502a76abb94dce77529821a56dfa06a74bf",
+      "after_sha256": "47bb48299751c34841517202efb16029e2bee482bec5586218b4994f84915c3e",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/IndicatorSettingsPopover.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a718b596de1bf6bbe3eb189da0b58296e67ede2364b7b7acac30d188c9db5838",
+      "after_sha256": "4cfd7e339118f70a6c9bcacc6c803195d074d6073a21e58fecd76f847ac72433",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/LightweightChartSurface.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "95c3e3aa3050f947f7085af77d84709743b35fbe76bde4bf87da9ccd53d4b8b8",
+      "after_sha256": "e9d403d37a59851c6f01a2c42da8237eb72c16c60e4fdc4903652b8cdb43bc33",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/LightweightChartSurface.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "c1b43c1b8164aab8937a2ae98bd5226eb3c239665a49ccbb47457e5c4ab2b9d0",
+      "after_sha256": "5d4e784bffe678cb68d46a889e364f1cd98900471d8002fae5b22d199692825a",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/LightweightChartSurface.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "304cfe14e1d1d8ecb6d5e8e855b05d46fccdbd6f46a2f1123549f4921b97b866",
+      "after_sha256": "06a084c1be4e6e3ea65238f04ea707fa316444f9927c63b1cf3ea34ed9c40c80",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/PriceChartPanel.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "d260048b6c0f65d292e1f3e06d0202e1930b893618ca49b2754f2113ff40c47f",
+      "after_sha256": "49df3b8a27522060657ccbcd1c9d13e66ee43771be94b89d684f2623ec425d13",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/PriceChartPanel.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "aa9efae2c202c536942e30a99bf19b492698a0455cee3f2fb3d2372fd5e9cdb5",
+      "after_sha256": "c62c992257d78fde2ee1cc6d6e35a50a98b9a317747c883a3a5f36b94a3a26a5",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/components/PriceChartPanel.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ba218f883d0547f1ea8d6e7127aede273afd4f0f4093fb2a9d566b3d9d113054",
+      "after_sha256": "ba812eb814963582e4252d3c371c1ee4369e96f66e382864ff319925dfc8bb18",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/binanceKlines.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "206cdad388599389cf10327d662727513ead2e7ab78785ad28e011e5b70374a3",
+      "after_sha256": "b8daf5cf21b9e6b19d18751b75a4a6053ec6888851821bc29a9ee6adb465abd9",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/binanceKlines.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "44ca0ea20035f8adb8e70d06f2c2cce2030f22a76a2a36e712511559ced57902",
+      "after_sha256": "101713e1be2de63b0e2fcd6cb631a2e6ff1c91023e1697fd8dcda1162f7624b5",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/chartDataError.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "8e1c773e717f026f2fd60935d0eb95f8e427cb22e33fb574937efd62c0237db4",
+      "after_sha256": "59ad220e9282f5b9ec26f6913a2fce1ae047adad744a92dc6cab3538db05270a",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/chartDiagnostics.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "faba243f80948a549663d2ccaec9e6561a9eaf8d5212d332f718afeaa17893e8",
+      "after_sha256": "f06d727a6494e7b4a355913e26f6fe40858370b784ce4eda79aaef1599f2af49",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/chartDiagnostics.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c89db4238870727adce1e255eeff355a05e80e145578900fd417a3840c60a594",
+      "after_sha256": "d00f95cd8f59c0e0065115139f60eaf5dfd477bc7364e628bcc8d1b2aca8b73e",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "736ebd39aba366370562882c98c14cb3ac53cbe5594ec1d8a79d98331f72086c",
+      "after_sha256": "9c03dd9cd7e8f67ffe79137b0e1df1939035805024a9d31870d99832ada2aba7",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/klineCalculations.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "08f8efceb392afe905448f79924519ca40bd2616ba55e263db9476344b18202e",
+      "after_sha256": "b4bbcf74b5e79ffa3eef19a091162bee72305a9146bbbef5b75d13dd445a9327",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/klineCalculations.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0e6bee46275c1c2e8a40570552523f0768e72737fa0318a3cfd1ca80d374bf75",
+      "after_sha256": "d87ae9524d603a4ff3c76f1a9563e5e8cf9ef66ac81e70c979338b7d788561cd",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/data/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c6edaebf8e3b4b1b077cbd16b578f3d2d880c6ae13ab397b0e87fa6d1d5affb1",
+      "after_sha256": "9c420e00377cad09135a9855aeed9efcf4488358aa5b7dc09638af0284e5ffac",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/hooks/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "cd4a0d705e832345f780d20cf6fc99379bb8e71c8ea4c48fb0ac4af6034e6918",
+      "after_sha256": "a75a97a718ac148094764669d302fb177c1082a5380d6beb8c8bcf5c9e03d8bc",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/hooks/useRealtimeChartData.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "05e2e46ee1ba4b55afb5477b8de9c5db4bd95da683aed5866bb690f91c98ce26",
+      "after_sha256": "16e829eb3a1c63fbaf4a294976b3ab9efffbfbb3074f3e4fb02c734b82b55d10",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/hooks/useRealtimeChartData.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "f6658c07f991d760872230576b51e92f8f13648acb6092016469fd3f1c8e038b",
+      "after_sha256": "91fb57561012ba2d6577fb7fcc493c933b73df92d701e5d5a0ccdd966f0ce73b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ad0592f8adf4443bc5faeddb7f8c5c77a71b8f78fab149706c94c336824630d3",
+      "after_sha256": "6559180651610293f24e8aa83b724d5df6388da19bd80513584d577269c71319",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/machines/chartMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "5b9ee073e144342e0725425ad3bcbf50ec8d89ef4d56fe3587fea193a31c3f94",
+      "after_sha256": "4515421747bed69167acaa1b0dad731dc9c3f11f148dd522dfc12615b3d6a7e5",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/machines/chartMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "05d2a4df51b637a1547f02b068a5e0c6be779306da1ab3890b879f4aa5795a98",
+      "after_sha256": "10469973e2cd19edd15143fb00f6c312828192ffe47016f56b14b8b47fb1ae6e",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/presenters/createRealtimeChartViewModel.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "debdff4798ef62778369a6a476ef856c951eb4f232874066764bb05ce7c38242",
+      "after_sha256": "cdc655474b8d192b3c666585de7b9041a781307fdca687c56f43d1840df43d3d",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/presenters/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a60a5423acbbdcbd2b35f4008adddeb452be6a1833a985019b7567030bb0ee0a",
+      "after_sha256": "86b0d5a1ce29243bbb079e436b941a7e1657f4c9ead81bcab4ebfd03494998bb",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/price-chart/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b6b5f5b71f3bb6fc7e8d70d3a82084431ae6125dc794c6c7f6ba7aca583a9aac",
+      "after_sha256": "9850fb49c4e60e9f1e8879d04c9daa5e6e73aa8653ffe1314162166d73a30dad",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/IndicatorCountdown.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "657f26877de5bef95958c1249e4a917e12e4b443c2f5b51ca7c08c86cc922304",
+      "after_sha256": "ebe5ddbaa89bbd45aa11088d952bf0d5ae049380ce7ca9bbe6baa5982f109d09",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/IndicatorCountdown.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0fb5e2744ba3d90bcb83025f27c5da4b1d6149398a2d37ab0d6102c5ae1bcaa6",
+      "after_sha256": "16588e35e1cb12e1be4cf7954e511b2e75b7fdbf2d1c4440414fcdf647ca03cd",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/RealtimeIndicators.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "a3c2c00092d10279ff29298d18076101daa6392e15d2f17a09a4dc6c2521523b",
+      "after_sha256": "517822b6cade4c2454639177d21a503b76081809ed5aecdf4491bf70484c023a",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/RealtimeIndicators.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "bb84f594be886bbac4329f853ae05987ac14dd9de900ca0dcf75b5c6000012e3",
+      "after_sha256": "5f1fc8ce956e92883ce3213cc36441f6d754fbeb73c2552ab5614ca45bc20bd4",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/RecentOrdersList.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "c45173b30411ad2a5ff03cd128a95e89e3bc91d9df30c66b3d6ba7474bd95eda",
+      "after_sha256": "91918f94c6993b6aafc86c1d6b2f08b18b7a96785e6194b601d9627b66d66401",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/RecentOrdersList.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "9293a23a4491bd1bb172a9c41267d57ce6db745b2fbd8df7042861478580e6f9",
+      "after_sha256": "801ef8ca7e71d99cd7cef6afbfb9ab009a1b91351b700d87d0de421de4c1f2c8",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/TraderPanel.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "86e4b103930d906f08bab5f688dcb4a264993dcf37b32a53de194f4acd3a52bb",
+      "after_sha256": "29371af1c317a9bfa70a51a1719c97f3b181f03110f1d8eee69e81e956fe9f70",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/TraderPanel.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "341b0c15b288a3516a55a493787a6a8d136e27277b9d31db5f1523bcb9b57762",
+      "after_sha256": "212095ab96782bda08e913df564bb8086891433677937ae1ec728cef454d6a01",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/components/TraderPanel.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "30bad48352b2e8f02de537a4060d52d5468bca5abb1d028a959d3436c69e973d",
+      "after_sha256": "dfe79b15298719f958d7b5f859a3e7051fa222bee584659650b2138d37f68cef",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c7f8b3f688737d3c375948f4ef15ea04d33cde6248dc3724ebc0378b7d7fc9d7",
+      "after_sha256": "2cfed8737976635325d32a718bf44064791e03416d719bf79ee0305e62156d0b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/indicatorTimer.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "10cceb125b9e909b77ef8cd2cde5c9ab99e0376f27bb07c38ba0fef1f8f8400f",
+      "after_sha256": "d948c70776ca9ce843bb3d126d7eb372000fc2f69fca1ce03d0fbf3e43efbdfe",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/indicatorTimerPresenter.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "08a9b7b6579555a139d75bd3df83b50dfb74de9c97d7381c2c9f9e28618e14f3",
+      "after_sha256": "f2b9764cb04be65d2483d8ded0820555fe749d44c86141458970d1ae004de10d",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/machines/recentOrdersMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "52822e618d530cf0949f4c1d553c0bb8b1f07c5907291fd88649ac1733232e2a",
+      "after_sha256": "58ab33a09beafce150d62b67d5c0ab9fca5289bc5442c629e3f9d6742d1fe6e8",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/tradingIndicatorPresenter.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "17a92fa2c9a3f6a34bcc0594435236260c0e2595437e1484849944363af9fdb4",
+      "after_sha256": "0466b468a027dd8369e7dd1a2b5c915e23bc8a84f1d0227b2311cce396bc0bbc",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/tradingIndicatorPresenter.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c8cb0cb3e014bfbcaa66106b9e475041a2902ff69d0ef0998a2feab80619119b",
+      "after_sha256": "ff553b32e3ef7c7ecb1e789db4e2e64bb058b6bca018d400618e3849ef8e0f46",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/recent-orders/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "f1e16e3048f179c5894395ff9260388a2c9fe1d3827a3031c968b493158efabb",
+      "after_sha256": "3df4c7ad3ff07c032235559c1d8f99d4176bbcbf6050f5e7d13385d242148f1c",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimeChangeDialog.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "5c5e243a8ab68fd926ce892b82042bf144797f6f6123f82f7c1b9ee9d5fea4de",
+      "after_sha256": "e5deb4324e47e259764b4cd8dd3c6ef687cbf0fe2f1e76178d8aeebc16ab2aac",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimeChangeDialog.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "3fab77acaf3efbb9ad91eae185312cfdb62741baa0e10ae190fb0fb6703bd6de",
+      "after_sha256": "3a109bdb08f732ce7260843c7787c84d42909c955b3d4ebc3347a18a866e3702",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimeMetric.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "bbaaacba31cbed999a460a113490ace457041209871e54a141cc8c10cb0569f5",
+      "after_sha256": "6c92afa344e3ee46273b990c18074d497f3514adf2d95718b4aec0b391f4a778",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimeMetric.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "083f3a7501a213dd820ea8fc651cdd990278d4352ff2404492fa0862a06ed95f",
+      "after_sha256": "b43117e45fba622b537fd98dbe8e5336afb0140bd01b93ec7fd73bd6b7e26cfd",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimePanel.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "d3f4e8414e6a9960ced8ffa629d1620e0245719e6e194d2c22e23a15adc831d8",
+      "after_sha256": "d8fa2055d15c9727f114cf89aedbd5fd1534969d478d60f7403593762137b99a",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimePanel.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "39f1c18d28d6f7642f4dcdf63db79924616cffad31b67467860b630178749380",
+      "after_sha256": "8bcd885259e027d0353e629a431c6e1b27bf53228aab569f8a2dd8fef85022f0",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimePanel.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "50a1d89ee9e9a7ed5c5acd433d941e97982ce09006e8e4505de7e849de5cf7fe",
+      "after_sha256": "50b65db30f967ea58426ec658a96549583785a41e4bf188901b483c8355736af",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimeTypeButton.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "a36f339ba2508a74b57a0fca3b413797f457704d44f8ee13dc098ef769ace2bd",
+      "after_sha256": "22f3bafdde4a0a3da216dbc59ca68d4ac7a18ae9c04fb44b330a3d5a3b13f0f4",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/components/RegimeTypeButton.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "633efc46833c8ca6e2900f0095c7ae53d368960d2c92cffa504207c2d4ee66c8",
+      "after_sha256": "393d2d65b3f890b1712bdd80c789025e37d46b49e0e2ee6996689f93b8feb746",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0fc28e5e1f8facf248fd14bec76bd2ddbe10eec798ed0e9550c4fbae7047ad49",
+      "after_sha256": "d300eafe5a3e50c5bdb126e853ea8ff5c2df0713b122bbac874860ec4e62e522",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/machines/regimeMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "53b4c25315f940e3beda706fd329f62983a2ba111f0d899935f82950eccc0ad5",
+      "after_sha256": "8761d3269c1ca197376553533a1dd461495fd0298203abcd1909d27a66f4ca75",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/machines/regimeMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "7b3d4ef7d7f447fdf0d0d9d22d33a37941f403668816a10c6cd59e74b607307b",
+      "after_sha256": "475d61994daa13e5e0b89758a5c7be64746350b23b5eadc63263109941373643",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/machines/regimeRegions.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b0c72f4cea1f8c867e79d71f3ad471e002b1d3ecbd835ae9b0cc5655a4af38ba",
+      "after_sha256": "1483be55ab208e0927fed7b1f6e3451dfbb037c6e632f50b92114ab185193f46",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/regime-selection/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "82d07391fc1114ef2a89ae8d4291b854b8d54039a539c03b86dd467853a0cc82",
+      "after_sha256": "8e165b5c278dac1d1634de780d1504b55d4cc836d3068640d03d9b2013d94b6e",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/split-order/components/PercentSlider.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "f63b941e8035add7b9eb49ebaba1018af7a3ad6d2b877ac74f81a22dde48fa83",
+      "after_sha256": "f8c48be5694903a639b06406bdfb398a9ef8199625f7e4833f77916a886a5e0a",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/split-order/components/PercentSlider.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "3778625fc8a34caf91aff5fe4e8c00b1ef2c131ffee8a948188af29d4107c385",
+      "after_sha256": "f8fde011a4c6d75299be1eae5ce73db861c97978f464c836df47829c0286e7bb",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/split-order/components/SplitOrderControls.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "f39b403be30904d380518f761c721e46f73239d40789449edd7801d45d4db42e",
+      "after_sha256": "976807ccb1fbca8e0a3f10dfe3080c0a9b5523e0d4f593ca7b40a90fdeaddced",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/split-order/components/SplitOrderControls.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "37dbbfdf3d51229e4f223414c5e1e05463c14a759513915e29515dfda9a3e023",
+      "after_sha256": "6626caba4d860d6a3232348b1245187d22c06a03fa09445d463c43b0e69095cc",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/split-order/components/SplitOrderControls.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "8a112dd687503084e04e57ba47b3ab38eef8776c60f1e8bfa3eea9b016603b1d",
+      "after_sha256": "5486d3c1907809643cae585ec2fb058527e8d99a372fb75f468a81b658e69764",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/split-order/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "443102c95129612f7c1b7dfacfe139fdf3a330086af8adb64d24f20d3c78b852",
+      "after_sha256": "9444f4ceb4b7b2557a0a5e54de90003a7019d3543b1d9b17aafa7e8f2461dedb",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/split-order/machines/splitOrderMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "81c603de5239d8eacb16939708ea1d7f847d378ae80868256da667fedd535104",
+      "after_sha256": "43eb0d8b68f4401d79e95c211ce2c8ac3b2c06a82233c935756b3684037a1731",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/split-order/machines/splitOrderMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "4b9fc0552bfbc5f55eeac9d327df29e60a0111641634b9c0ab982e9d8cdde990",
+      "after_sha256": "5e2dc1234fd25f988d14f7f30fb583c50e9c38b7c55ca2e5b228ce399402ff68",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/split-order/machines/splitOrderRegions.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "e7c18aa12c85eb090dbd979c1e433e770882e862aad9c19590b63b3a3eac6a95",
+      "after_sha256": "006c704f570869da055e44dbf51e9174c3d0790f362d4349bc9f0f3eb10599cb",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/split-order/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "4c1ef563f4f27a82fad128a95bd43f5ada83ad5853b873d46375f15c7bd35109",
+      "after_sha256": "99dd049548eb7f4fccbdc6273e9529d5e5f453864edb018ea1fd83cebe5b8759",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/HistoryFilters.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "219de91fbf28bd02f425118a52e389e04631c1546529ff7f2966f0cf99803e27",
+      "after_sha256": "088a8e12f3c892195aba80822e4690e9cbdd6d85d1afba46f9904a512477c554",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/HistoryFilters.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "71b637497e5ca1da44bd213d4890ed5501d020e1551eff4ee71621968735d181",
+      "after_sha256": "5dd38d413fd33405dea56566bd84573ddfd9bba4b9351f9a5d942d665b68269f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/SummaryCards.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "97bb8a827fca57ebf4b15540633c973962dd34270f08e767703ced960f5b4e84",
+      "after_sha256": "8ae8fc05945aff43dd1c980c79df2ba59f29414232bec7010ab3f5b573ab66ef",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/SummaryCards.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "0ccedc7e2739442f8fb56bfc7332a1c67a43a48bb7101d95de4bb88db8aa3e94",
+      "after_sha256": "325ec049b3f3eed56187e3db591555f0561380e890db906f21db2e673425765c",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/TradeHistoryComponents.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "110e4634cd05f4047e35ce0b23d4d33acfb0ca2b8e9cc4a11637fa2087193622",
+      "after_sha256": "8c2ade96e2ba06576127de04edbea6226b9bea076907b039eb2eb8c57a149280",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/TradeTable.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "f6d729dcbb27e3bf64c207f26e99f1b6a819e188a671c1dacebd20bb145e4d52",
+      "after_sha256": "b062f175a64bf60008dccfb3aebc7caa85a9aabd55a792b3e142c196c066acd5",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/TradeTable.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b5e61ff5ee8539fb3b78fb4df5b520a933633dd698d678d79735ad7bc34a9234",
+      "after_sha256": "c66ee8e1060e4167620cfa020fdb296dedf8efe6782b95d89ad60ff6fbf4bcf4",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "e7593d9df588fb875f8377e0699b845baf427bba09fd1ae9ac4663a75358aab7",
+      "after_sha256": "a0b41441933946415e94516e41a3c34f79b0350c8259b031c238e50d678e032d",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/components/types.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "d99fc385962a912df692f598a86c903527d6ce5fd08d44000b9e132dc4f0af12",
+      "after_sha256": "df92167e5353470e6120ca6b38a4a4822fb60d8dd51e054482c7a6ca7510f93d",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/fixtures.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "256360c262dde2319f35a4abe70d0d6f6f56d4488e19270dc965e14472903ee9",
+      "after_sha256": "c9e5d6955f7754522327a521f0f5dbf088a7e3294175beb5a7920cf5015739af",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "4417a634c13593a2686f3a81fe0656691cc8ddeb2b2c0be07a3fc623f8842bf0",
+      "after_sha256": "be5ae05a499a8e7d96e5f9c7078af7205edc7dcf3d19323961de180ca7363e92",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/machines/historyFilterRegions.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c805a924c8e51a5010a00a1a9f3ca1d378016dd2e7a75e4a48212f5fba150c22",
+      "after_sha256": "2a114bc2aafc806ffae95a90ab61b6d5f26f1e7e07cfb65ab99ea9fcdb59ead1",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/machines/tradeHistoryMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "3fbf3f01f2c3ee9336518e532d4969548b9310e772c34328f6c86b56b0805ad9",
+      "after_sha256": "f8416e3db9c5db315402d55f3a167fb732a52d829c617ecb6dea34925d4b6ef9",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/machines/tradeHistoryMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "858f39ed16f236c23e2788ce8d61b072f9f32858a8b0296936b0d13d0bf55466",
+      "after_sha256": "e010621a3782c634966555bfa71873c34e275fa88c32e0aa9a11b653547545b8",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/machines/tradeHistorySummaryMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "42be5de79535c277db0eeaf6bef691fd72d447e0a7dfd9d5927b10eb4d21723f",
+      "after_sha256": "caa551da4101ea10808a6305a8a27596d5dc3942bad243657665743b9c4076fb",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/trade-history/machines/tradeHistorySummaryMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "8665cf6dbcb8944dfe0cea8799208396638dc55d3bbe532d096a13dab8c32af4",
+      "after_sha256": "6136b180bc62d3c4c54bd93bd9f4e728cd5602ed5571a501d2d82b7fa7ef89bd",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/components/AppHeader.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "98bfeb09ebc6c123aa6dfc9d2c8cdcc43292d9609d5c40b9ea90f1fcee8bee20",
+      "after_sha256": "b2f4a962cfbc847eb051a0d2ff5fb419b901756fd5cf6d766c62f2785cca1e58",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/components/AppHeader.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "187503e6e74b8416a754ba7ef3d429ab09ef19b8a920f902d1864a3ce1a24c01",
+      "after_sha256": "66ecd391f734193d840675218c91729e6ebc39ed5f6cd9a8c38212799c9f6c6b",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/components/AppHeader.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "bdfb8915aa4f959227d94ff86adf82fdd650021847fba59734b0a1516479b90f",
+      "after_sha256": "2b4a1cddc1d9e90effa9051b6991b745b24126dab27e7a0b74c7a6b81a5a5de7",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/components/TradingConfirmationDialog.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "8ab04e644b746aa023340e6e14013f6f1e419f279f4cb6db3d20503782efb5f6",
+      "after_sha256": "938d8fe243459cf30145993910518544a633bbb90ff7f58550c757f73385477d",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/components/TradingConfirmationDialog.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "8d37d8294058a89e9d9553d951f65e95f18111728e72ca0f4ba056e7d6e3fb7c",
+      "after_sha256": "d3625e1e15c813665821d9a4934dcd79ffd4c29115be93ced2582c037e296c4a",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/components/TradingConfirmationDialog.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "44006a2fff581d3f73710fc1d25012cde829783a05214ac5a24377fbf980a9dc",
+      "after_sha256": "9a1b4450d351f4390e51056fad79a3a92ba64ea6d19f619033ace4d2abf3660e",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "294b7f430906d874b4bde7fd22db846cc38ce83c09c123958d1778f83184beea",
+      "after_sha256": "412a401d107d6e6515debc9a3a34977c07ec1741d9a8bffcc90ea9dd26e839e5",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/machines/tradingCommandMachine.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "049b4ceed165b85da092f03bd8fbf70170d1103e4a9c57f5db8dfc5903e73bd9",
+      "after_sha256": "41677991c8c00cc3cbbb73f134b001e69168db563fcae250630afad3514c19cc",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/machines/tradingCommandMachine.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "7081e8a7dbf013e34568ea0dc1eb91d432aeb67f555bf012299b54b787103fd9",
+      "after_sha256": "913def73f870d820827cba58cd33aabf9705894f1ce5e5ff0a04866e5d164180",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/features/trading-control/machines/tradingRegions.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "3aef54c6546f7eaf6571c695f18096f56281d0c039a117d9bdee174fa4e93a09",
+      "after_sha256": "8076ef72721c3adb317e0725de42180ccfc89676f03ecc0e38289a6eeb580474",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/main.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "28552746e57469196a6c419e2846fdd58faa7623d0ae44e575eab7b72a3ae95e",
+      "after_sha256": "99c930353aa9f9dfca90e185d47d936dc4c13d3819604f99cb41d4fcec9ea0c1",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/main.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a1498c5c219b556959c26f626dab3d205767094f6eb2854eac633b7adee50e0f",
+      "after_sha256": "52d55cbcba070272098a583f7efa119ba90fbed0e5f8f1bc5cb6bca627647151",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/routes/dashboard/DashboardPage.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "f41b7686b621ab795719a077a856fbf31eaaba7ed907e1caa828e57aa2b3ae29",
+      "after_sha256": "d97d62cd219f34f81b96d56940650027ed55d3cf77141daaab239460b2ca0e9c",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/routes/dashboard/DashboardPage.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "1bb8fb9117db80b0d8a27fe952a959c69d1583d5c9cb0c799eb6b2fd6226a040",
+      "after_sha256": "cefbfabf43a00a4d84c1b852e820110239698e1ebe009268b9337d02edf3ab07",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/routes/dashboard/DashboardPage.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "38bd8e62464bc54941cb20f0e995f99b5e9b82a7b584ab815b13e1ba077c32e2",
+      "after_sha256": "2d0635fb6717e68f9f783f7d129b17e507dbd64a3d75f8c5e5c6e573548632a7",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/routes/dashboard/dashboardFixture.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "5335965bb7d9e84f2e9c3abb3117d19946cf1b26ac7c5ec1222fc17c05550a1c",
+      "after_sha256": "a45d58e96a298d86e59326db5af1343ffe8671f53c75d1cfea011ae5002fca6a",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/routes/dashboard/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a8f926e86f1ca2071318b09039d5352039c94ba7bb2987b4f5d80bbdcd16f6aa",
+      "after_sha256": "7d95b1c3fb4f010c32b5e6ede05dc0ed70e89ac2634228e89baffdcad2bfc299",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/routes/trade-history/TradeHistoryPage.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "a9f87789977c92d4ba354ed0556d98f9ec1352be41ca8336f70de05f2c07fc23",
+      "after_sha256": "5eb4ade3bb6013d8642248522906d8ffcb80c1a40876678d5af6f6f73acf66cf",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/routes/trade-history/TradeHistoryPage.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "1c6a6b55fc1fdc7493ddbfe8dea79e6f56695a866ebacba6086d339a36938351",
+      "after_sha256": "5471f324f1ceb44ab294a8b5ec6f11e18af87acceb7259b68aca98f2b74b7500",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/routes/trade-history/TradeHistoryPage.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "2174ccc797ca492e23f116db7dd1d89b32e9d27c85a550983abb868ce9325b35",
+      "after_sha256": "336b773c9da226ea637379d6ffef79505fbf3ec1d8d8d45dd9c3b20a39749796",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/routes/trade-history/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "f51a4b8aa46be380f80015622f6fbcd7a1299acec8f291b1e04e607ff725bfe7",
+      "after_sha256": "6cf7ec53b39b7cbb0a5e0ad143d1c474aa463ecdf9e7c443849fce805c8332d2",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/BackendUiAdapter.recovery.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "de3a7b62e7613b3f7781bf435f5f01857d106bab4b6e86567aa2daba02e82038",
+      "after_sha256": "c0f19bca9d9a2949cf6fc67ebd5c30d3549a730399f3d165ea8eaec89ac9f118",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/api/BackendUiAdapter.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "0fa2507b20ffbeb1ae371ba8b014372f635a099078e7e21ea9c8df1a7c1ba3d1",
+      "after_sha256": "e1ebb9f1840a962a4dbd71ead0781a7f563dccf6acaf65bec58ba503cffe25a3",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/api/BackendUiAdapter.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "7e6789a3e539d5dffac26531ca22a3266b17a651740c473908415d04dbe00420",
+      "after_sha256": "d9b53092463fc79a3d3cc23909ff5f2e30b4a2650d5002be306594bac2695b66",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/backendConnectionDiagnostics.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "7ab15a7f3a09c5dbd19ae430e1c351ae79ffc29ff2a2c3120678e471ec796ffc",
+      "after_sha256": "5f643875d161db6285abc360bf6046ec10a2ef3122c669780caaa4c2a55deb4c",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/api/backendConnectionDiagnostics.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "106c451cbda1e797a68931b902383ec0b10256bf204df8b4eb47dec60a9d1f6e",
+      "after_sha256": "532f1daf4106c0598af0e3bf203f71f3f8d028ad47a88eb3cd39ae3f516e4e1a",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/backendEventMapper.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "699204a2e508345038738c5d484872d6f5e867787b3432a4ec1b3bd1d7288732",
+      "after_sha256": "e5eea0957fd034696d082802fae30b72e63a5b1235a2284b953abdf226b5357b",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/api/backendEventMapper.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "60b8b8e5c819c7cef1370b00e5cde78f06840d73f0ac9b7bf9e1984cb8c81398",
+      "after_sha256": "e7eb6b215f0e3c92361c1a8df68234ec6dd63c63f6f8393454b78e6a50dc8677",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/backendTestFixtures.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "23f2389e6c315781ba57b6b754e2fb1caaf499948440ce6c31c56a5bbf404b13",
+      "after_sha256": "adc491f928c07a526892cba4ecc323aaa21806acb79ea5a399bff1a16368e48b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/balanceReconciliation.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "8f6e62aecb321fe980281cc626c9a32b055e923d8daa05ef586e0494c1526bd5",
+      "after_sha256": "88904685a24ff201540e197d05366b73c13e19c311620b4bc9e721b286992561",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/api/balanceReconciliation.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "908db4e9db1aeecc640b586335e0d02b0cb7126fdcd370c583604476a535691f",
+      "after_sha256": "251492ba42e3c8053e1ec7ce44a894cc5e7621fab8d1a30f4e0704f7a7f02926",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/balanceReconciliationFixture.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "d4c9a12c0a44cd7d4e71dcdbdd2133ae0f4586c4d99d0ab01e77e7867216d405",
+      "after_sha256": "49d495e730aca0e1da56c9cd7ea1bdaa5b979d4cc4cd109842f48702ed800533",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/binanceConnectionStatus.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "716a6340698c66acd4fb9fffb5d894a2681f6f25fa95b919bee05ad2dd936c77",
+      "after_sha256": "8647698e4c31c28bfe83bf3f3260a2b2f8ee767501061db68d1e26f3aed24a91",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/connectionErrorCodes.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": false,
+      "before_sha256": "11f8c4844b53ede2eed7a9b4b5c562da9fedd653a760b21b146b66057e7e4d8a",
+      "after_sha256": "11f8c4844b53ede2eed7a9b4b5c562da9fedd653a760b21b146b66057e7e4d8a",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/connectionRecoveryMessage.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "2995bd24ea01b8137cb607b92c5e0d6adb101609e8d625f3a878936a99abfd68",
+      "after_sha256": "baf2db94497dfaae1993348c39f7c0c3eef92f40e1bcff2e01d7661427185c85",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/connectionValidationFields.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": false,
+      "before_sha256": "b8e592e91db8f47dd47e7f72f2c6fbaeef70e75adf4d591c5c3237faf3595588",
+      "after_sha256": "b8e592e91db8f47dd47e7f72f2c6fbaeef70e75adf4d591c5c3237faf3595588",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "15fc8729f74664555d5c8f6118d9388bf31e5fc3d5c86e510a58e8c1cb83250a",
+      "after_sha256": "110f89444440fce6467719da8caac4346046784cf9d0ea378999e7148041edae",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/rendererLiveness.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "7db50baf411c787252522171b2ccf8cacb1a31a6578257c6c679412b08dc664c",
+      "after_sha256": "e6557f334a3d650d6f3bc7c8eec5fca13692e946181057a2642b6016df5c9fa0",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/api/rendererLiveness.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "46b1509c27545398791c42a5d4acdb779de5bfa403602d35e19867885c4dd6a2",
+      "after_sha256": "d5f02c3a0b9583b39ab6330558eeeef12d084f06f9f9c62ff742f9549de2419b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/shutdownMessages.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "af1497f169736e765c3d1f6cb2c028cb1902118b2f6428994b9ca95b92fb2195",
+      "after_sha256": "c0264e30e46c547dfa11efe33bdeabdba502784e647c6e6b872856f2f0a237b0",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/shutdownTestFixtures.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "d1acbcd1d2b7608e4536f03959e46a5f60f475810c9c8c9e31aeeb2fa3b43443",
+      "after_sha256": "6c7a687376952a8c08bcf2493d532da6246fe152cfa645ef2bc46f99235a1bbb",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/tradingIndicatorValidation.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "2c2eef1778b31fb8eccd98364ad39cb98f808fddd7d7ac68ec85b10dc5c088f2",
+      "after_sha256": "978010faba07f0070ca5c14821fa65b420f5ec9e4e26c690108cada33e599c23",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/api/tradingTimerValidation.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "2b15e009f5fab0d7251146f1a417831a2b125eb863ba33990ea584f28608c541",
+      "after_sha256": "e68325960b9eceaf50fc5ffcf3c3f01090a7d11b299c12dceb89c30f77f0e3ac",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/contracts/backendContracts.generated.ts",
+      "kind": "generated_contract",
+      "changed_this_pass": false,
+      "before_sha256": "c1a517cbae29948bdc6cf838e283cc3744b67df37198aaea67fdc6bb29b7a47b",
+      "after_sha256": "c1a517cbae29948bdc6cf838e283cc3744b67df37198aaea67fdc6bb29b7a47b",
+      "review": "생성기가 관리하는 계약 출력과 기존 생성 설명을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/contracts/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "22101b4bf229201ee9b4c1f860336e93b40188a1043ccf81efdea92d9fa77a4d",
+      "after_sha256": "2fa80e563b98ecd31ee1b661f441002d1a40a81044e8dcbb12efb272b2ef3a9c",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/contracts/uiContracts.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "a56b670e67f0e1601c3453586be057f223cc49c9f07f849a1dd38cd58ff8acb0",
+      "after_sha256": "2570376c6847dc0d44075719d93fcae16e4270c4a5ebe4481e9b9769dfdd048f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/errors/commandFailure.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "79cedb4db07cd79b9e24a45ee22903f946a8ef88c61a0287ae8b278c868275b4",
+      "after_sha256": "d96c23585ac6abfb260ec0a571427be0fe9054333fa4f48def7f784c8ac2709f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/errors/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "69aa57ac8e246494b6e229b7b1c4484968283983ecd1900a398bea214e17880b",
+      "after_sha256": "37c8440908519363ca72e3e9bb55444f8299b3072be8f71bb442218d74f52883",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/formatting/decimalText.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "6cdb32db73ae4cf1502ca472b882c1d94dffd83d14a5940e45dd26d8f8abe527",
+      "after_sha256": "73f09aed89479c168515999650e4b39e8c486c904e139f5f44941bbe6d1d01a5",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/formatting/decimalText.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "34d38fe37d12d5fbe71a92756c0180cf143cceb5b9537513ec64b51d5d7fee67",
+      "after_sha256": "0b95b8198f6676b3bd08f7b22ff4fbe431254f29f892cf8d31ca54b1e34ee45a",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/formatting/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c74a2f0c2ca2f6a22443475ab039e30ba99c96a6a5dbeac8fd8e45a4a8c68f19",
+      "after_sha256": "61f0d80c8d4fde9b89c934a0375d050807729ff2540e63664999999b7f1ab7f0",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/formatting/tradingLogicState.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "061cb5fccefa5288718ab2b6a3efc840d45732945ce55fe2f14ffaa14359aeac",
+      "after_sha256": "ed50674950aa4b2fa63b26f77210d9e832340caf4cfbef5dbb78f526d31d657f",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/formatting/tradingLogicState.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "5a374ea30a1888e8b36933da14c8c240aa7d23ddbfcf1b20a2c7756eda59debd",
+      "after_sha256": "b54b14e66d3b9352f2bf281d333e5dc30ed4eb909da6f40e5e16965e20f4afcb",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/hooks/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "72c0517e9908dce0e6a4973a443c8bfdb06b51416b8024ce2262471f4fe45f1f",
+      "after_sha256": "e2fc3132ebd07e062d3b0f5c11eda7dd7a075c5bf9f2f07e145745352aec18da",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/hooks/useDialogFocusReturn.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "c5576b984bc80d2aa7f4b97b06e6a50785aea6cee8693be200032f4fe4d6d83e",
+      "after_sha256": "4bad81f7b0c3390c305385758852ff7180934bd020a868f3cfca94188e2b1f93",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/ports/UiCommandPort.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "4b8afbab56a57404d6cab728e329504a5786ef4052fb5e152261042e741eb570",
+      "after_sha256": "0752c184e224cfa8800559d858eca87e9e7d98ac140c381127468351671717c5",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/ports/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "6fc15f2fa81fe656abf61155361447f8c4f4fca78ac3382876f9f5506a347418",
+      "after_sha256": "37d1c1f534df68d2a97fa0079882536d2903072a035b3aba91d8bf9c04b90dc7",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/styles/global.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "ee79b62b0fd997010fab5f64f8d1c50d0857793eb633f327b1d29f30ccc52940",
+      "after_sha256": "3d50613a6c83af5bf2756eaf5c2b550ed7b650377e1dbaaa9f928c86ea51156c",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/shared/styles/global.test.ts",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "5126a20875c41c6fb9475570f99cbe210c59c6c800c8410d9bd15002fef53fee",
+      "after_sha256": "6e142581e4aa3a64c9cdee4b7fd2828022d2558e8d6ad8fad3928896b280f7ef",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/shared/styles/tokens.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "4209ec75a9de1191af0c4eee84b48b641692c0442e529737779dbfd3715529ec",
+      "after_sha256": "e5cecbe97747e9686bb095830662bf245ace4fd23f588cdb0c30688769aa6880",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/shared/testing/FakeUiCommandAdapter.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ee1f5d0e296dd49389bd8a6f9d975d01ce0447143f68772c6c8116c1b587ebbc",
+      "after_sha256": "29fba877aa3577e64d41c3944ab0595797d43f08f0adda5792c18290beaebf27",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/testing/createFeatureTestController.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "422bf91e02eb01072eb6f956de6e7c6b3a3fa544da20213329af5a80dfa421b0",
+      "after_sha256": "032298fd30fa9e9e958e1b8ca09cff1a6ee4517b98ba012128f79b7c9a968eb6",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/testing/fixtures.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "44e7ca382031ff352bdf1e5909eb11eb5b64eb8eae35698a5ddfb1583493b4d8",
+      "after_sha256": "93862c410b27bd103c8f69505a0d37f810d863bb30a8fa91a2dbcc95e7e0d557",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/testing/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "736335e9df3fd81ca127a9f7e59c83a0736d8e7cbac74189405877d47d3dc60d",
+      "after_sha256": "3e061fadb3656a41787719d799307966178102609c954da1a9c0768a3a58c93f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/ui/Button/Button.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "710acb13d7672af220494cae64df319b366dc49eb1a2f0e0df00b42545951f8a",
+      "after_sha256": "0f875ba86552197ab566902e273240787f3dcf590f8ae8f9a0100be2c38a918d",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/shared/ui/Button/Button.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ad020556b01089948e877097fc2b3f4c4b64e8c2b80ec181222fc6fe03a88452",
+      "after_sha256": "8905018971e91155847062a1ee480c658fd7e16a18c23a9bd8f5fabe27be4493",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/ui/ModalSurface/ModalSurface.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "c02ec6b5496fd6785995059d9102acff0ef2113964379e7bfca6f54d8cbc09c6",
+      "after_sha256": "a26ba803ae0c5625281bd0ec6fd277e136bf75e0f847ef709612d7984be0c484",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/shared/ui/ModalSurface/ModalSurface.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "277590bec6dafb68c92fcf6b362a23a7136ef77a0707bfa681401c8f188e0f9f",
+      "after_sha256": "5620b566b4f4ed26042015c3e3d5c6270bf5b8d0a43aeb6cf1e2cf86c32a5bc6",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/ui/StatusIndicatorIcon/StatusIndicatorIcon.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "e6267ad520a852bd3528f3a19c5251adf1b79fc1ca43b613fd20df0b1342a1be",
+      "after_sha256": "6fcbf4d9825e9a7689fd7b64b8c908c2cb64938b4f47ebec967d3ed0ce272272",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/shared/ui/StatusIndicatorIcon/StatusIndicatorIcon.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "7b3e9f2441605057e022a66d3350d4a91d3184e8446f121039ce5ada92c95088",
+      "after_sha256": "f3e274aaa1c990765782f1bc1ab72029a3fe72997c8c7c23f03c5b302e4f0dae",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/ui/Surface/Surface.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "4f05a02322dcfdd14c430a4e50366781b50b01d9a27b5f698a330e86f894ca1d",
+      "after_sha256": "8a774058694ae01aebfe22be00c5ff88aa8a83d6c680e6848199a2ed59cdeb00",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/shared/ui/Surface/Surface.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "ba7f4f37b58f372fa5b7d9e7fbeb76ba2a91f236a628c5841123882401d71e56",
+      "after_sha256": "0a196861f9099d36f5e01b7f448403aec51cc5e6f1619a4f4ee4784c3555fe1f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/shared/ui/index.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "43828e5e924d24611d59f3d4b4ff42b2f3fb7655ef23bf2db5e4581a41b589a6",
+      "after_sha256": "a881de4674c91bfc98ddd77c22aec78464deaae57fb55bac36b05755c16fb34d",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/stories/BalanceReconciliation.stories.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "07fe3f071a8c7f63569df7dd8321e75afc45d5a2a4876e8dc51e2be019369171",
+      "after_sha256": "ebba32dffcbe668e3b14ad261d9a2a24967a31bc19a6e0d43eb50caa901bbfd1",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/stories/FigmaFrames.stories.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "fe01eefb5786206e36fde13976dd3aa866022aeb7501f6d2cf68db403be12900",
+      "after_sha256": "6ee35af9f49443f96b8792b8160d98be60f2ce98d72fca8cd6533419a46b458b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/stories/figma-frames/FigmaFrameHarness.a11y.test.tsx",
+      "kind": "test_source",
+      "changed_this_pass": true,
+      "before_sha256": "be160be8d762ac6c2d8297a12badc49b497d55dc818322ab7d0e2e7a05153a36",
+      "after_sha256": "b830a767af51b6b0fd613521c5ddd70b8b8886c0a727b19cfd9dd8c899c5b38b",
+      "review": "준비·조작·검증·정리 흐름을 구분하고 기존 테스트 기대값을 유지했다."
+    },
+    {
+      "file": "UI/src/stories/figma-frames/FigmaFrameHarness.module.css",
+      "kind": "stylesheet",
+      "changed_this_pass": true,
+      "before_sha256": "0f3f74eee2b4235c5bbcf2260eec619d67ecdd65cfe65e27f4d96c1bdd3cb675",
+      "after_sha256": "8c8d5972bf78a7412511e1952fa6700065dbd4cfe65b84c3330d99406288cacf",
+      "review": "규칙 순서·선택자·속성·값을 유지하며 표시 목적별 블록 주석·빈 줄·문장 주석을 점검했다."
+    },
+    {
+      "file": "UI/src/stories/figma-frames/FigmaFrameHarness.tsx",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "fc922168189bc7705f0b3672aad854d621ad431d9f5e3e79ad5b094151c7c414",
+      "after_sha256": "b3f6209b835007d34706ece0ed3d4c1cc5911b92f869cdf6f4250408e34f3f2f",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/stories/figma-frames/figmaFrameFixtures.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "5d554805155b17272661e99e3e6269e62c27dfbfcf153d029f464853a169b3da",
+      "after_sha256": "271aa47e798dc2e1a303a7b367ff9bd04090c637b114538234e30a74759425b4",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/test/desktopRecoveryReloadSmoke.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "fabeece3a47b6d4cdcb0f9b13f71ebe45cb23a58856e3748c217cfd6f474066b",
+      "after_sha256": "30fb7ae04e0f64a00f0867d578fbc37cf489d4eabb2a2fbf0ad4affa6b6b807b",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/test/desktopRecoveryShutdownSmoke.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "7565e3732740fa15ae8e7fee0828edc4d3bb38b9c719985f87f2aa55f9325fd0",
+      "after_sha256": "3375368f0ee93eac47cfd1ad97225b46f4ed2b006bd16ae562da9cdc22999229",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/test/desktopSmoke.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "b530e39d472c6428ba976205b957cb4783d718076f0fe24a879daf100a0e108f",
+      "after_sha256": "6f4c204968385169f5269fbce709bd6a84bc1d39ec37200ab31f6cb316c7f932",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/test/recoverySmokeInvoke.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "1eb0a9eb00f496efc0fda9e435b9f246f7f5336e20225b37cb721a9e7f463871",
+      "after_sha256": "86646ba3e157a5a4bc161041ebb1903cf5d0c960edc60b31d3c66e211a5653ca",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/test/setup.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "d3491cbf9cd3907ea827b7bbe18189c7486e2e665208333bce843ecbb1fb706f",
+      "after_sha256": "a5803b96f165c375ba6e4828f62f965f08af18222ca9460c3f145d3a45f4f8d7",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/src/vite-env.d.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
+      "after_sha256": "fe58cec0b6030fdcb2fb9b52d370404de4f7f62305bce60ea10933e42e6e3203",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/tsconfig.app.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "4609fe4600800ea3b3b36f3f9c5bb01525b95c2246be42c90f965fd973f962dd",
+      "after_sha256": "4609fe4600800ea3b3b36f3f9c5bb01525b95c2246be42c90f965fd973f962dd",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/tsconfig.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "770b4140bbb581e2dfd9ea9946ffc9c75a1d86ba7d2db5f77c83e37cbdf9d808",
+      "after_sha256": "770b4140bbb581e2dfd9ea9946ffc9c75a1d86ba7d2db5f77c83e37cbdf9d808",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/tsconfig.node.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "e6a630cab1b49e23234688d840146f3c5f541f50c9529bad051c2d729e3eb4fd",
+      "after_sha256": "e6a630cab1b49e23234688d840146f3c5f541f50c9529bad051c2d729e3eb4fd",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/README.md",
+      "kind": "documentation",
+      "changed_this_pass": false,
+      "before_sha256": "5c422446216e9cff76e2c62e90a1e73ce092028740c4105c09db1825d3772a4a",
+      "after_sha256": "5c422446216e9cff76e2c62e90a1e73ce092028740c4105c09db1825d3772a4a",
+      "review": "코드가 아닌 기존 설명 문서로서 주석 보완 대상에서 제외했다."
+    },
+    {
+      "file": "UI/visual-regression/baseline_manifest.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "cd7cc366e886df438b46dafdbb92264a0c69cd6f46ad258eeacb0d892a2e7569",
+      "after_sha256": "cd7cc366e886df438b46dafdbb92264a0c69cd6f46ad258eeacb0d892a2e7569",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/comparison_policy.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "7b55d0eda5900be7a66707b27f220c5503f6781b1ba31e3c24d97c3e0908ebf5",
+      "after_sha256": "7b55d0eda5900be7a66707b27f220c5503f6781b1ba31e3c24d97c3e0908ebf5",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/01-realtime-indicator.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "646c766af06e638d0df22e50a4bacebe33dfe9301a9a42d0d5ba038dc1957428",
+      "after_sha256": "646c766af06e638d0df22e50a4bacebe33dfe9301a9a42d0d5ba038dc1957428",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/02-recent-orders.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "54e37bf85afac02c65fd0463962cc886687e843ab9ac995d7a51e211d25e8105",
+      "after_sha256": "54e37bf85afac02c65fd0463962cc886687e843ab9ac995d7a51e211d25e8105",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/03-indicator-settings.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "d325122f73319535d7a4e4c34b733d45901d37976b9f3d82ede54d7d01f1d738",
+      "after_sha256": "d325122f73319535d7a4e4c34b733d45901d37976b9f3d82ede54d7d01f1d738",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/04-trade-history.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "15843189d6096c5658c43796ca8cf0e3b5d1111de4e3562ffd1b857c0aaf9259",
+      "after_sha256": "15843189d6096c5658c43796ca8cf0e3b5d1111de4e3562ffd1b857c0aaf9259",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/05-start-confirm.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "311fa5c21d0d26fde94efbbe856e8fd602a2db591aa407fb15102c5e8a59d9c8",
+      "after_sha256": "311fa5c21d0d26fde94efbbe856e8fd602a2db591aa407fb15102c5e8a59d9c8",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/06-stop-with-position.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "fd2f63018f59384d0188cb608e52c533f99218920918d767e737c9bb7b0028f3",
+      "after_sha256": "fd2f63018f59384d0188cb608e52c533f99218920918d767e737c9bb7b0028f3",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/07-stop-no-position.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "f1195cd796ec0309e6321d10f19f2f33d0c82dac29704963db14830ee62a02e7",
+      "after_sha256": "f1195cd796ec0309e6321d10f19f2f33d0c82dac29704963db14830ee62a02e7",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/08-csv-end-calendar.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "e4a498cd46075818728a3f444f2864f25e14c22e7ba13cfc443735789c532459",
+      "after_sha256": "e4a498cd46075818728a3f444f2864f25e14c22e7ba13cfc443735789c532459",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/09-csv-start-calendar.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "30f358c0f4d7084a4017d42706981dc940ebc434e17d15574beb5f7d3e7e3164",
+      "after_sha256": "30f358c0f4d7084a4017d42706981dc940ebc434e17d15574beb5f7d3e7e3164",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/10-csv-no-calendar.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "1eb60d4dc2a172a43f8c73562325b37e169b2cd20b4fa81dd4b43bc638f29cff",
+      "after_sha256": "1eb60d4dc2a172a43f8c73562325b37e169b2cd20b4fa81dd4b43bc638f29cff",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/11-regime-confirm.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "7a5ac87d27ae3cd45ed53fcba4c444ffbc9505f6e6eb174d5b5bb987b5b6d739",
+      "after_sha256": "7a5ac87d27ae3cd45ed53fcba4c444ffbc9505f6e6eb174d5b5bb987b5b6d739",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/12-regime-required.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "b07be9adb14db6f2db383a66b75e8ae6ac5b9a29970066107803830473da525e",
+      "after_sha256": "b07be9adb14db6f2db383a66b75e8ae6ac5b9a29970066107803830473da525e",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/13-regime-highlight.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "6e938c06b02c0001beb73a4ac34025deb60bff9b7b8cb8f3ef2860e33c7aa774",
+      "after_sha256": "6e938c06b02c0001beb73a4ac34025deb60bff9b7b8cb8f3ef2860e33c7aa774",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/14-history-empty.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "661b0861f7346b14ccd871782eef3d97d3e27b706e740a3a7a3855478c780ab9",
+      "after_sha256": "661b0861f7346b14ccd871782eef3d97d3e27b706e740a3a7a3855478c780ab9",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/15-start-loading.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "ec097ed8f0ce2a16801d1ed5d743228fbdbf4ebddd6ec7647ee794f51e996dc4",
+      "after_sha256": "ec097ed8f0ce2a16801d1ed5d743228fbdbf4ebddd6ec7647ee794f51e996dc4",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current/16-csv-error.jpg",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "d88fbbf9f9a59bcb164712249eef232eaa361dc68fd6f13eac9b42f38893e658",
+      "after_sha256": "d88fbbf9f9a59bcb164712249eef232eaa361dc68fd6f13eac9b42f38893e658",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/current_capture_manifest.json",
+      "kind": "structured_data",
+      "changed_this_pass": false,
+      "before_sha256": "1383e37828ebde100876d696478052663f88f071bb9137b7c2199a4215fdeb14",
+      "after_sha256": "1383e37828ebde100876d696478052663f88f071bb9137b7c2199a4215fdeb14",
+      "review": "주석 미지원 데이터 형식 또는 도구 관리 잠금 파일을 원본 그대로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/01-realtime-indicator.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "ea27698faf6a359c3737e718d7f50af19293ebc008044c7af8706af9b56fe7b1",
+      "after_sha256": "ea27698faf6a359c3737e718d7f50af19293ebc008044c7af8706af9b56fe7b1",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/02-recent-orders.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "85bd608c636f9fce81903a9731347ed14f9a2947667d93f436ab3b53cb70fee8",
+      "after_sha256": "85bd608c636f9fce81903a9731347ed14f9a2947667d93f436ab3b53cb70fee8",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/03-indicator-settings.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "4b041507fee41a68cbff548fdeb35a20edc67b14ea4112d7499fad1b9e78d34f",
+      "after_sha256": "4b041507fee41a68cbff548fdeb35a20edc67b14ea4112d7499fad1b9e78d34f",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/04-trade-history.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "e297d8c38033b4515be7d9c00105d04ae951967c2aa8294846622b00907f1cb4",
+      "after_sha256": "e297d8c38033b4515be7d9c00105d04ae951967c2aa8294846622b00907f1cb4",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/05-start-confirm.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "4e194312810b90b1778125c06527b22a8fad9e027fab183a04eec81300afaa58",
+      "after_sha256": "4e194312810b90b1778125c06527b22a8fad9e027fab183a04eec81300afaa58",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/06-stop-with-position.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "fc61fa54b27dc0157ef475a7e90874e99fe65dc53793d1d3a7e6dc7595671176",
+      "after_sha256": "fc61fa54b27dc0157ef475a7e90874e99fe65dc53793d1d3a7e6dc7595671176",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/07-stop-no-position.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "b94ed78f87f9bda55282473505d515df9af1404cc13221e6b10b48812873c331",
+      "after_sha256": "b94ed78f87f9bda55282473505d515df9af1404cc13221e6b10b48812873c331",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/08-csv-end-calendar.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "5d595e7b58bd9eb0711223bb2625280c00d1c6b1c278acaf3800fb7e6e0fc3e5",
+      "after_sha256": "5d595e7b58bd9eb0711223bb2625280c00d1c6b1c278acaf3800fb7e6e0fc3e5",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/09-csv-start-calendar.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "ccdbdb89cb959ef785bac47f62b6fbd926d82ee10bac7ccdc19095f37c90f5d5",
+      "after_sha256": "ccdbdb89cb959ef785bac47f62b6fbd926d82ee10bac7ccdc19095f37c90f5d5",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/10-csv-no-calendar.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "35d1cd2afe41fc31b52ba1549e9694e5a435fc6648b7ce2822f6c9f8e094250f",
+      "after_sha256": "35d1cd2afe41fc31b52ba1549e9694e5a435fc6648b7ce2822f6c9f8e094250f",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/11-regime-confirm.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "013df13f5964b41d4aa7bfba9f363d5c9510de361d0a754565f0a6c4691a074f",
+      "after_sha256": "013df13f5964b41d4aa7bfba9f363d5c9510de361d0a754565f0a6c4691a074f",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/12-regime-required.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "ae75673aa3726dfa4dbfec8d1fd919f9c0792481d207c9f23079617a265bc01d",
+      "after_sha256": "ae75673aa3726dfa4dbfec8d1fd919f9c0792481d207c9f23079617a265bc01d",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/13-regime-highlight.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "355d808d65c16a0253d79e0b3fd5cce14e1f635e965389752ea8823247bfcf02",
+      "after_sha256": "355d808d65c16a0253d79e0b3fd5cce14e1f635e965389752ea8823247bfcf02",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/14-history-empty.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "cb4c1779d6295c19659905088856c41f822884e0621d13d646ea4e5d5ec347e2",
+      "after_sha256": "cb4c1779d6295c19659905088856c41f822884e0621d13d646ea4e5d5ec347e2",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/15-start-loading.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "d543b59cf421445d3b6bef2c4a20573ffa87626cd3c127023fd6d108197a1fd6",
+      "after_sha256": "d543b59cf421445d3b6bef2c4a20573ffa87626cd3c127023fd6d108197a1fd6",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/visual-regression/figma/16-csv-error.png",
+      "kind": "visual_asset",
+      "changed_this_pass": false,
+      "before_sha256": "ea9d75c16a070d1171425870f0bd43f4e5c1a7a955a790d2a8611e84e84f28d5",
+      "after_sha256": "ea9d75c16a070d1171425870f0bd43f4e5c1a7a955a790d2a8611e84e84f28d5",
+      "review": "화면 자산의 원본을 바이트 단위로 유지했다."
+    },
+    {
+      "file": "UI/vite.config.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "e63b9281bb6db994b80fe56ead196a5b1e13cc6666bbc4273ebd78fae89052b1",
+      "after_sha256": "b72e4f7058de059d66e3434cf4ca03b00d397d8cbcbef3d5fcffc989275e0010",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    },
+    {
+      "file": "UI/vitest.config.ts",
+      "kind": "typescript_javascript_source",
+      "changed_this_pass": true,
+      "before_sha256": "466972c03bb240fafd82557a9d4672be565d5f7d07315f82a93e2984e5d9f2de",
+      "after_sha256": "03cf17abb882ab6eadcfe40fc6942e144650a4a0801783d7c12625736996ef76",
+      "review": "선언·작업 단위 설명과 빈 줄을 점검하고 단순 재수출·타입·설정에는 필요한 파일 설명을 보완했다."
+    }
+  ]
+}

@@ -1,0 +1,158 @@
+{
+  "date": "2026-09-17",
+  "baseline_commit": "620a929c8dee1d183b1d058268259e699ff19fbc",
+  "source_change_scope": "comments_and_whitespace_only",
+  "modified_ui_files": [
+    "UI/apps/desktop/src-tauri/src/backend_connection_diagnostics.rs",
+    "UI/apps/desktop/src-tauri/src/background_liveness_soak.rs",
+    "UI/apps/desktop/src-tauri/src/bin/background_liveness_soak.rs",
+    "UI/apps/desktop/src-tauri/src/chart_diagnostics.rs",
+    "UI/apps/desktop/src-tauri/src/os_evidence.rs",
+    "UI/apps/desktop/src-tauri/src/runtime_diagnostics.rs",
+    "UI/apps/desktop/src-tauri/src/runtime_diagnostics_macos.rs",
+    "UI/scripts/backendConnectionSoak.mjs",
+    "UI/scripts/background-soak/main.tsx",
+    "UI/scripts/desktopSmokePlugin.ts",
+    "UI/src/app/App.tsx",
+    "UI/src/app/bootstrap/createLiveUiApplication.process.test.mjs",
+    "UI/src/app/control/UIStateController.test.ts",
+    "UI/src/app/control/UIStateController.ts",
+    "UI/src/app/control/UiCommandExecutor.test.ts",
+    "UI/src/app/control/UiCommandExecutor.ts",
+    "UI/src/app/control/uiSeparationReplay.test.ts",
+    "UI/src/app/hooks/useBinanceConnectionStatus.test.tsx",
+    "UI/src/app/hooks/useUiApplication.ts",
+    "UI/src/app/machines/UISTM.test.ts",
+    "UI/src/app/machines/UISTM.ts",
+    "UI/src/app/machines/uiArchitecture.test.ts",
+    "UI/src/app/machines/uiRegionComposition.ts",
+    "UI/src/app/presenters/tradeHistoryPresenter.ts",
+    "UI/src/app/runtime/UiApplicationStore.ts",
+    "UI/src/features/price-chart/components/ChartCanvas.tsx",
+    "UI/src/features/price-chart/components/PriceChartPanel.tsx",
+    "UI/src/features/price-chart/data/binanceKlines.test.ts",
+    "UI/src/features/price-chart/data/binanceKlines.ts",
+    "UI/src/features/price-chart/data/chartDataError.ts",
+    "UI/src/features/price-chart/hooks/useRealtimeChartData.test.tsx",
+    "UI/src/features/price-chart/hooks/useRealtimeChartData.ts",
+    "UI/src/features/trade-history/machines/tradeHistoryMachine.test.ts",
+    "UI/src/main.test.tsx",
+    "UI/src/main.tsx",
+    "UI/src/shared/api/BackendUiAdapter.recovery.test.ts",
+    "UI/src/shared/api/BackendUiAdapter.test.ts",
+    "UI/src/shared/api/BackendUiAdapter.ts",
+    "UI/src/shared/api/backendConnectionDiagnostics.ts",
+    "UI/src/shared/api/balanceReconciliation.ts",
+    "UI/src/shared/api/connectionErrorCodes.ts",
+    "UI/src/shared/api/connectionValidationFields.ts",
+    "UI/src/shared/api/rendererLiveness.ts",
+    "UI/src/shared/api/shutdownMessages.ts",
+    "UI/src/shared/api/shutdownTestFixtures.ts",
+    "UI/src/shared/testing/createFeatureTestController.ts",
+    "UI/src/test/desktopSmoke.ts"
+  ],
+  "documentation_audit": {
+    "typescript_javascript": {
+      "files": 233,
+      "declarations": 676,
+      "missing": 0,
+      "by_file": {}
+    },
+    "rust": {
+      "files": 23,
+      "functions": 271,
+      "missing": 0,
+      "missing_functions": []
+    },
+    "descriptions_added_or_completed": {
+      "typescript_javascript": 126,
+      "rust": 44
+    }
+  },
+  "typescript_javascript_equivalence": {
+    "files_compared": 233,
+    "changed_files": 40,
+    "executable_ast_identical": true,
+    "files": [
+      "UI/src/shared/api/connectionErrorCodes.ts",
+      "UI/src/shared/api/connectionValidationFields.ts",
+      "UI/src/shared/api/BackendUiAdapter.recovery.test.ts",
+      "UI/src/shared/api/backendConnectionDiagnostics.ts",
+      "UI/src/shared/api/BackendUiAdapter.ts",
+      "UI/src/shared/api/balanceReconciliation.ts",
+      "UI/src/shared/api/shutdownTestFixtures.ts",
+      "UI/src/shared/api/BackendUiAdapter.test.ts",
+      "UI/src/shared/api/rendererLiveness.ts",
+      "UI/src/shared/api/shutdownMessages.ts",
+      "UI/src/shared/testing/createFeatureTestController.ts",
+      "UI/src/features/trade-history/machines/tradeHistoryMachine.test.ts",
+      "UI/src/features/price-chart/data/binanceKlines.test.ts",
+      "UI/src/features/price-chart/data/chartDataError.ts",
+      "UI/src/features/price-chart/data/binanceKlines.ts",
+      "UI/src/features/price-chart/hooks/useRealtimeChartData.ts",
+      "UI/src/features/price-chart/hooks/useRealtimeChartData.test.tsx",
+      "UI/src/features/price-chart/components/ChartCanvas.tsx",
+      "UI/src/features/price-chart/components/PriceChartPanel.tsx",
+      "UI/src/main.tsx",
+      "UI/src/main.test.tsx",
+      "UI/src/test/desktopSmoke.ts",
+      "UI/scripts/desktopSmokePlugin.ts",
+      "UI/scripts/background-soak/main.tsx",
+      "UI/scripts/backendConnectionSoak.mjs",
+      "UI/src/app/runtime/UiApplicationStore.ts",
+      "UI/src/app/control/uiSeparationReplay.test.ts",
+      "UI/src/app/bootstrap/createLiveUiApplication.process.test.mjs",
+      "UI/src/app/App.tsx",
+      "UI/src/app/control/UIStateController.test.ts",
+      "UI/src/app/control/UIStateController.ts",
+      "UI/src/app/control/UiCommandExecutor.ts",
+      "UI/src/app/control/UiCommandExecutor.test.ts",
+      "UI/src/app/presenters/tradeHistoryPresenter.ts",
+      "UI/src/app/hooks/useUiApplication.ts",
+      "UI/src/app/hooks/useBinanceConnectionStatus.test.tsx",
+      "UI/src/app/machines/UISTM.test.ts",
+      "UI/src/app/machines/uiRegionComposition.ts",
+      "UI/src/app/machines/uiArchitecture.test.ts",
+      "UI/src/app/machines/UISTM.ts"
+    ]
+  },
+  "rust_equivalence": {
+    "files_compared": 23,
+    "non_documentation_token_streams_identical": true
+  },
+  "production_build_equivalence": {
+    "files_before": 612,
+    "files_after": 612,
+    "byte_identical": true,
+    "manifest_sha256_before": "04ef1127c0b462ac5a4958056ceee96fc0f2e45fb49e3450b1080ef87bbd2537",
+    "manifest_sha256_after": "04ef1127c0b462ac5a4958056ceee96fc0f2e45fb49e3450b1080ef87bbd2537",
+    "different_files": []
+  },
+  "checks": {
+    "typescript_typecheck": "passed",
+    "production_build": "passed",
+    "diff_whitespace": "passed",
+    "ui_tests": {
+      "before": {
+        "files": 60,
+        "passed": 660,
+        "failed": 0
+      },
+      "after": {
+        "files": 60,
+        "passed": 660,
+        "failed": 0
+      }
+    },
+    "rust_library_tests": {
+      "before": {
+        "passed": 59,
+        "failed": 0
+      },
+      "after": {
+        "passed": 59,
+        "failed": 0
+      }
+    }
+  }
+}

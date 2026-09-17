@@ -8,6 +8,7 @@ export interface IndicatorCountdownProps {
     readonly visible: boolean;
 }
 
+
 /**
  * 함수 이름: use_countdown_clock()
  * 기능: 보이는 실행 타이머만 매초 다시 그리며 탭·문서가 숨겨지면 화면 갱신을 중지한다.
@@ -37,13 +38,16 @@ function use_countdown_clock(active: boolean): number {
         }
         synchronize_visibility();
         document.addEventListener('visibilitychange', synchronize_visibility);
+
         return () => {
             clearInterval(interval);
             document.removeEventListener('visibilitychange', synchronize_visibility);
         };  // 단계 전환으로 사라진 행의 interval을 남기지 않는다.
     }, [active]);
+
     return now;
 }
+
 
 /**
  * 함수 이름: IndicatorCountdown()
@@ -61,6 +65,7 @@ export function IndicatorCountdown({ timer, visible }: IndicatorCountdownProps) 
     if (fallback.current.signature !== signature) {
         fallback.current = { signature, received_at: performance.now() };
     }
+
     const presentation = present_indicator_timer({
         ...timer, received_at: timer.received_at ?? fallback.current.received_at,
     }, Math.max(now, performance.now()));

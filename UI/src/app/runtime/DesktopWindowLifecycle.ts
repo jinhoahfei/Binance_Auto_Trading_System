@@ -18,6 +18,7 @@ export interface DesktopWindowLifecycle {
     ): Promise<() => void>;
 }
 
+
 /**
  * 클래스 이름: TauriDesktopWindowLifecycle
  * 기능: Tauri 현재 창의 닫기 요청 구독과 최종 창 제거 명령을 좁은 UI port로 변환한다.
@@ -50,6 +51,7 @@ class TauriDesktopWindowLifecycle implements DesktopWindowLifecycle {
     }
 }
 
+
 /**
  * 함수 이름: is_tauri_runtime()
  * 기능: 현재 문서가 Tauri IPC runtime 안에서 실행되는지 전역 marker로 판별한다.
@@ -60,6 +62,7 @@ class TauriDesktopWindowLifecycle implements DesktopWindowLifecycle {
 function is_tauri_runtime(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
+
 
 /**
  * 함수 이름: create_desktop_window_lifecycle()

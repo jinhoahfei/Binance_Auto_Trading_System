@@ -6,10 +6,12 @@ import { TradingConfirmationDialog } from './TradingConfirmationDialog';
 
 describe('TradingConfirmationDialog', () => {
   it('Radix modal은 첫 action에 focus하고 Escape로 확인 절차를 우회하지 않는다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const handle_cancel = vi.fn();
     const handle_confirm = vi.fn();
     const user = userEvent.setup();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradingConfirmationDialog
         kind="start"
@@ -23,6 +25,8 @@ describe('TradingConfirmationDialog', () => {
 
     // Radix가 dialog를 연 직후 DOM 순서상 첫 action을 initial focus로 선택해야 한다.
     await waitFor(() => expect(cancel_button).toHaveFocus());
+
+    // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
     await user.keyboard('{Escape}');
 
     // 거래 확인 modal은 명시적 버튼 intent 없이 Escape만으로 닫히거나 command를 보내지 않는다.
@@ -33,6 +37,7 @@ describe('TradingConfirmationDialog', () => {
   });
 
   it('Radix modal이 제거되면 modal을 열었던 trigger로 focus를 복원한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const trigger = document.createElement('button');
 
     trigger.textContent = '자동매매 실행';
@@ -48,6 +53,7 @@ describe('TradingConfirmationDialog', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     await waitFor(() => expect(screen.getByRole('button', { name: '취소' })).toHaveFocus());
     unmount();
 
@@ -57,6 +63,7 @@ describe('TradingConfirmationDialog', () => {
   });
 
   it('Phase 6: 시작 확인 문구 누락을 TYPE_0 표시로 대체하지 않는다', () => {
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradingConfirmationDialog
         kind="start"
@@ -66,12 +73,14 @@ describe('TradingConfirmationDialog', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByText('미선택 REGIME으로 거래를 시작하시겠습니까?'))
       .toBeInTheDocument();
     expect(screen.queryByText(/Type 0/u)).not.toBeInTheDocument();
   });
 
   it('거래 명령 실패 사유를 재시도 확인창에 표시한다', () => {
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradingConfirmationDialog
         error="order command failed"
@@ -82,11 +91,12 @@ describe('TradingConfirmationDialog', () => {
       />,
     );
 
-    expect(screen.getByRole('alert')).toHaveTextContent('order command failed');
+    expect(screen.getByRole('alert')).toHaveTextContent('order command failed');  // 화면의 표시 내용과 입력 가능 상태를 검증한다.
   });
 
   /** 시작 pending 표시가 유효한 live status 이름을 제공하는지 검증한다. */
   it('시작 pending progress를 접근 가능한 status로 표시한다', () => {
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradingConfirmationDialog
         kind="starting"
@@ -101,6 +111,7 @@ describe('TradingConfirmationDialog', () => {
   });
 
   it('Phase 9: 복구 Position을 자동매매 재개와 구분한 청산 문구를 표시한다', () => {
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradingConfirmationDialog
         kind="recoveryLiquidation"
@@ -110,6 +121,7 @@ describe('TradingConfirmationDialog', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByRole('dialog', { name: '복구 포지션을 청산할까요?' }))
       .toBeInTheDocument();
     expect(screen.getByText(/자동매매는 재개되지 않습니다/u)).toBeInTheDocument();
@@ -118,10 +130,12 @@ describe('TradingConfirmationDialog', () => {
 
   /** Communication Case 1 메시지 8의 stop 취소와 Escape 음성 경계를 검증한다. */
   it('test_stop_confirmation_cancel_and_escape_do_not_confirm: stop 확인을 우회하지 않는다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const handle_cancel = vi.fn();
     const handle_confirm = vi.fn();
     const user = userEvent.setup();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradingConfirmationDialog
         kind="stop"
@@ -134,12 +148,15 @@ describe('TradingConfirmationDialog', () => {
     // 명시적 취소는 취소 intent만 보내고 Escape는 별도 거래 명령을 만들지 않는다.
     await user.click(screen.getByRole('button', { name: '취소' }));
     await user.keyboard('{Escape}');
+
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(handle_cancel).toHaveBeenCalledTimes(1);
     expect(handle_confirm).not.toHaveBeenCalled();
   });
 
   /** Communication Case 1 메시지 8R의 복구 청산 confirm/cancel 분리를 검증한다. */
   it('test_recovery_liquidation_confirm_and_cancel_are_distinct: 복구 입력을 정확히 분기한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const handle_cancel = vi.fn();
     const handle_confirm = vi.fn();
     const user = userEvent.setup();
@@ -154,6 +171,8 @@ describe('TradingConfirmationDialog', () => {
 
     // Confirm 경로가 recovery 전용 label에서 정확히 한 번만 호출되는지 확인한다.
     await user.click(screen.getByRole('button', { name: '복구 포지션 청산' }));
+
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(handle_confirm).toHaveBeenCalledTimes(1);
     expect(handle_cancel).not.toHaveBeenCalled();
 
@@ -165,7 +184,11 @@ describe('TradingConfirmationDialog', () => {
         open
       />,
     );
+
+    // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
     await user.click(screen.getByRole('button', { name: '취소' }));
+
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(handle_cancel).toHaveBeenCalledTimes(1);
     expect(handle_confirm).toHaveBeenCalledTimes(1);
   });
@@ -186,6 +209,7 @@ describe('TradingConfirmationDialog', () => {
     description,
     detail,
   }) => {
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradingConfirmationDialog
         kind="tradingUnavailable"
@@ -196,6 +220,7 @@ describe('TradingConfirmationDialog', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByText(description)).toBeInTheDocument();
     expect(screen.getByText(detail)).toBeInTheDocument();
   });

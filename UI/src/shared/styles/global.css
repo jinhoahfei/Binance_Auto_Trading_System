@@ -1,3 +1,4 @@
+/* 공통 글꼴을 불러오고 앱 전체의 기본 표시·접근성 규칙을 설정한다. */
 @import '@fontsource/inter/400.css';
 @import '@fontsource/inter/500.css';
 @import '@fontsource/inter/600.css';
@@ -7,73 +8,82 @@
 @import '@fontsource/ibm-plex-sans-kr/600.css';
 @import './tokens.css';
 
+/* 모든 요소에 테두리를 포함한 크기 계산을 적용한다. */
 *,
 *::before,
 *::after {
-  box-sizing: border-box;
+    box-sizing: border-box;
 }
 
+/* 앱의 최소 화면 폭과 전체 높이 기준을 공유한다. */
 html,
 body,
 #root {
-  width: 100%;
-  min-width: 1180px;
-  min-height: 100%;
-  margin: 0;
+    width: 100%;
+    min-width: 1180px;
+    min-height: 100%;
+    margin: 0;
 }
 
+/* 페이지의 공통 배경·글꼴과 가로 넘침 처리를 설정한다. */
 body {
-  overflow-x: auto;
-  background: var(--color-bg-canvas);
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+    overflow-x: auto;
+    background: var(--color-bg-canvas);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
+/* 기본 입력 요소가 앱의 글꼴과 색을 상속하도록 한다. */
 button,
 input,
 select {
-  color: inherit;
-  font: inherit;
+    color: inherit;
+    font: inherit;
 }
 
 button {
-  cursor: pointer;
+    cursor: pointer;
 }
 
 button:disabled {
-  cursor: not-allowed;
+    cursor: not-allowed;
 }
 
+/* 키보드 초점의 윤곽을 공통 색으로 표시한다. */
 :focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
 }
 
+/* 사용자가 선택한 텍스트를 구분한다. */
 ::selection {
-  background: rgb(20 84 197 / 62%);
+    background: rgb(20 84 197 / 62%);
 }
 
+/* 시각적 표시를 숨겨도 접근성 설명은 문서에 유지한다. */
 .sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
+/* 움직임 감소 설정에서는 반복 강조와 전환 시간을 줄인다. */
 @media (prefers-reduced-motion: reduce) {
-  *,
+    /* 모든 요소에 테두리를 포함한 크기 계산을 적용한다. */
+    *,
   *::before,
   *::after {
-    scroll-behavior: auto !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
 }

@@ -41,6 +41,7 @@ const HISTORY_SIDE_LABELS: Readonly<Record<AppViewModel['trade_history']['side']
     sell: '매도',
 };
 
+
 /**
  * 함수 이름: create_fee_display()
  * 기능: 실제 수수료 자산·금액을 반올림 없이 표시하고 quote 환산값을 구분한다.
@@ -49,9 +50,18 @@ const HISTORY_SIDE_LABELS: Readonly<Record<AppViewModel['trade_history']['side']
  * 작성 날짜: 2026/09/10
  */
 function create_fee_display(trade_record: TradeRecord): Pick<TradeRowViewModel, 'fee' | 'feeNote'> {
+    /**
+     * 함수 이름: exact_amount()
+     * 기능: 소수 문자열의 불필요한 뒤쪽 0만 제거하고 부동소수 변환 없이 원 금액을 보존한다.
+     * 인자: value -> 원 수수료 금액 문자열
+     * 반환값: 불필요한 0과 끝 소수점을 제거한 문자열
+     * 작성 날짜: 2026/09/17
+     */
     const exact_amount = (value: string) => value.includes('.')
         ? value.replace(/0+$/u, '').replace(/\.$/u, '')
         : value;
+
+    // 수수료 자산이 있으면 원래 자산의 정확한 문자열로 표시한다.
     if (trade_record.fee_amount !== undefined && trade_record.fee_asset !== undefined) {
         if (trade_record.fee_asset !== 'MIXED') {
             return {
@@ -61,16 +71,20 @@ function create_fee_display(trade_record: TradeRecord): Pick<TradeRowViewModel, 
                     : { feeNote: `≈ ${exact_amount(trade_record.fee)} ${trade_record.quote_asset ?? 'USDT'}` }),
             };
         }
+
         return {
             fee: `${exact_amount(trade_record.fee)} ${trade_record.quote_asset ?? 'USDT'} 환산`,
             ...(trade_record.fee_note === undefined ? {} : { feeNote: trade_record.fee_note }),
         };
     }
+
+    // 자산별 정보가 없는 기존 데이터는 quote 기준 표시로 처리한다.
     return {
         fee: format_quote_amount(trade_record.fee, trade_record.quote_asset),
         ...(trade_record.fee_note === undefined ? {} : { feeNote: trade_record.fee_note }),
     };
 }
+
 
 /**
  * 함수 이름: map_history_period_to_view()
@@ -92,6 +106,7 @@ function map_history_period_to_view(
     return period_map[period];
 }
 
+
 /**
  * 함수 이름: map_view_period_to_history()
  * 기능: HistoryFilters 표시 enum을 actor의 공통 기간 계약으로 변환한다.
@@ -112,6 +127,7 @@ function map_view_period_to_history(
     return period_map[period];
 }
 
+
 /**
  * 함수 이름: map_history_side_to_view()
  * 기능: actor의 거래 방향 계약을 HistoryFilters 표시 enum으로 변환한다.
@@ -130,6 +146,7 @@ function map_history_side_to_view(
 
     return side_map[side];
 }
+
 
 /**
  * 함수 이름: map_view_side_to_history()
@@ -150,6 +167,7 @@ function map_view_side_to_history(
     return side_map[side];
 }
 
+
 /**
  * 함수 이름: format_history_time()
  * 기능: actor ISO 시각을 상세 거래 표의 YY/MM/DD - HH:mm:ss KST 문자열로 변환한다.
@@ -158,6 +176,7 @@ function map_view_side_to_history(
  * 작성 날짜: 2026/08/12
  */
 function format_history_time(occurred_at: string): string {
+    // 거래 시각을 지정한 시간대의 날짜·시각 조각으로 분리한다.
     const date_parts = new Intl.DateTimeFormat('en-CA', {
         year: '2-digit',
         month: '2-digit',
@@ -168,12 +187,22 @@ function format_history_time(occurred_at: string): string {
         hour12: false,
         timeZone: 'Asia/Seoul',
     }).formatToParts(new Date(occurred_at));
+
+    /**
+     * 함수 이름: get_part()
+     * 기능: KST 날짜의 지정 구성 요소를 찾고 없으면 두 자리 기본값을 반환한다.
+     * 인자: part_type -> Intl 날짜 구성 요소 이름
+     * 반환값: 해당 날짜 요소 또는 00
+     * 작성 날짜: 2026/09/17
+     */
     const get_part = (part_type: Intl.DateTimeFormatPartTypes) => (
         date_parts.find((part) => part.type === part_type)?.value ?? '00'
     );
 
+    // 날짜와 시각 조각을 거래 내역의 고정 표시 형식으로 조립한다.
     return `${get_part('year')}/${get_part('month')}/${get_part('day')} - ${get_part('hour')}:${get_part('minute')}:${get_part('second')}`;
 }
+
 
 /**
  * 함수 이름: create_trade_row_view_model()
@@ -183,6 +212,7 @@ function format_history_time(occurred_at: string): string {
  * 작성 날짜: 2026/08/12
  */
 function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewModel {
+    // 기존 fixture 행은 보관된 화면 표시값을 그대로 사용한다.
     const fixture_row = trade_record.quote_asset === undefined
         ? HISTORY_ROW_BY_ID.get(trade_record.id)
         : undefined;
@@ -191,6 +221,7 @@ function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewMod
         return fixture_row;
     }
 
+    // 실제 거래 데이터는 시각·금액·전략·수수료의 표시 계약으로 변환한다.
     return {
         id: trade_record.id,
         time: format_history_time(trade_record.occurred_at),
@@ -213,6 +244,7 @@ function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewMod
     };
 }
 
+
 /**
  * 함수 이름: present_trade_history_props()
  * 기능: AppViewModel의 route actor 상태를 제어형 TradeHistoryPage props로 투영한다.
@@ -224,6 +256,7 @@ export function present_trade_history_props(
     view_model: AppViewModel,
     controller: UiApplicationController,
 ): TradeHistoryPageProps {
+    // 조회 중·실패·빈 결과의 안내를 현재 조회 상태에서 선택한다.
     const is_empty = view_model.trade_history.status === 'empty';
     const is_failed = view_model.trade_history.status === 'failed';
     const is_loading = view_model.trade_history.is_loading;
@@ -246,6 +279,7 @@ export function present_trade_history_props(
                 ? EMPTY_HISTORY_STATE
                 : undefined;
 
+    // 필터와 조회 결과를 표시 모델로 묶고 조작을 Controller에 연결한다.
     return {
         description: `${HISTORY_PERIOD_LABELS[view_model.trade_history.period]} · ${view_model.trade_history.symbol} · ${HISTORY_SIDE_LABELS[view_model.trade_history.side]} · ${status_label}`,
         summary: view_model.trade_history.summary,
@@ -273,6 +307,7 @@ export function present_trade_history_props(
                 onStartTrading: () => {
                     if (is_failed) {
                         controller.dispatch({ type: 'REFRESH_TRADE_HISTORY' });
+
                         return;
                     }
 

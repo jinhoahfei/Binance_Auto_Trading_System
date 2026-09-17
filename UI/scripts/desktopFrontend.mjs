@@ -1,6 +1,9 @@
+// 데스크톱 실행에 필요한 프런트엔드 개발·빌드 명령을 연결한다.
+
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+
 
 /**
  * 함수 이름: main()

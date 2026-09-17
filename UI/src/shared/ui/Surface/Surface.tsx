@@ -1,3 +1,5 @@
+// 대시보드와 거래 내역에서 공통으로 사용하는 패널 표면을 표시한다.
+
 import type { HTMLAttributes, ReactNode } from 'react';
 
 import styles from './Surface.module.css';
@@ -6,6 +8,7 @@ export interface SurfaceProps extends HTMLAttributes<HTMLElement> {
   children: ReactNode;
   as?: 'section' | 'article' | 'div';
 }
+
 
 /**
  * 함수 이름: Surface()

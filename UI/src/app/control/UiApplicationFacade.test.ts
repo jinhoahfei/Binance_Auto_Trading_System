@@ -10,6 +10,7 @@ import { map_backend_snapshot } from '../../shared/api';
 import { create_backend_snapshot_fixture } from '../../shared/api/backendTestFixtures';
 import { UiApplicationFacade } from './UiApplicationFacade';
 
+
 /**
  * 함수 이름: wait_for_trade_history_settlement()
  * 기능: facade가 시작한 거래 상세 Promise와 actor 전이를 다음 event loop까지 기다린다.
@@ -46,6 +47,7 @@ const AUTHORITATIVE_RISK_STATE = {
 
 describe('UiApplicationFacade', () => {
     it('test_show_trade_details_message_trace: SHOW intent를 Case 3 1계열 live query와 render까지 연결한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-23',
@@ -53,13 +55,19 @@ describe('UiApplicationFacade', () => {
         });
         const observed_message_ids: Array<string> = ['1'];
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         facade.start();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.dispatch({ type: 'SHOW_TRADE_HISTORY' })).toBe(true);
         observed_message_ids.push('1.1', '1.1.1');
         expect(facade.get_view_model().route).toBe('trade_history');
         expect(facade.get_view_model().trade_history.status).toBe('loading');
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_trade_history_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(command_adapter.command_records).toContainEqual({
             name: 'load_trade_history',
             payload: { period: 'today', side: 'all' },
@@ -74,15 +82,19 @@ describe('UiApplicationFacade', () => {
             '1.1.2',
             '1.1.3',
         ]);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('test_trade_history_filter_message_trace: filter intent를 Case 3 2계열 combined query와 render까지 연결한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-23',
         });
 
+        // SHOW_TRADE_HISTORY → HISTORY_SIDE_SELECTED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
         await wait_for_trade_history_settlement();
@@ -91,14 +103,19 @@ describe('UiApplicationFacade', () => {
         command_adapter.command_records.splice(0);
 
         const observed_message_ids: Array<string> = ['2'];
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.dispatch({
             type: 'HISTORY_PERIOD_SELECTED',
             period: 'last30days',
         })).toBe(true);
         observed_message_ids.push('2.1', '2.1.1');
         expect(facade.get_view_model().trade_history.status).toBe('loading');
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_trade_history_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(command_adapter.command_records).toEqual([{
             name: 'load_trade_history',
             payload: { period: 'last30days', side: 'sell' },
@@ -113,45 +130,65 @@ describe('UiApplicationFacade', () => {
             '2.1.2',
             '2.1.3',
         ]);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('VR-01: REGIME 미선택 시작 intent를 안내 modal과 highlight 흐름으로 조정한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-12',
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         facade.start();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.dispatch({ type: 'START_TRADING_CLICKED' })).toBe(true);
         expect(facade.get_view_model().active_modal).toBe('select_regime_notice');
 
+        // SELECT_REGIME_NOTICE_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'SELECT_REGIME_NOTICE_CONFIRMED' });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().active_modal).toBeNull();
         expect(facade.get_view_model().regime.is_highlighted).toBe(true);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('ES2-02/ES2-03: route 이동 후 dashboard feature snapshot을 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-12',
         });
 
+        // CHART_INTERVAL_SELECTED → SHOW_TRADE_HISTORY 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'CHART_INTERVAL_SELECTED', interval: '4h' });
         facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
-        expect(facade.get_view_model().route).toBe('trade_history');
+        expect(facade.get_view_model().route).toBe('trade_history');  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
 
+        // BACK_TO_DASHBOARD 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'BACK_TO_DASHBOARD' });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().route).toBe('dashboard');
         expect(facade.get_view_model().chart.interval).toBe('4h');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('DC3-02/DC6-02~06: chart 상태 갱신과 drawing 선택 event를 feature actor로 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-12',
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         facade.start();
         facade.dispatch({ type: 'CHART_ACTIVE_STATE_UPDATED', state_label: 'ENTRY_WAIT' });
         facade.dispatch({ type: 'CHART_DRAWING_TOOL_CLICKED' });
@@ -164,21 +201,29 @@ describe('UiApplicationFacade', () => {
         });
         facade.dispatch({ type: 'CHART_LINE_CONTEXT_MENU_REQUESTED' });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().chart.active_trading_logic_state).toBe('ENTRY_WAIT');
         expect(facade.get_view_model().chart.line_selection_state).toBe('context_menu');
         expect(facade.get_view_model().chart.selected_line_id).toBe(CHART_DRAWING_FIXTURE.id);
 
+        // CHART_LINE_DELETE_REQUESTED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'CHART_LINE_DELETE_REQUESTED' });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().chart.drawings).toEqual([]);
         expect(facade.get_view_model().chart.line_selection_state).toBe('awaiting_selection');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('DI1-02/DI2-02/D1-02: backend 표시 snapshot을 요약 actor와 ViewModel에 투영한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-12',
         });
 
+        // ACCOUNT_STRATEGY_UPDATED → TRADE_HISTORY_PROFIT_RATE_UPDATED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({
             type: 'ACCOUNT_STRATEGY_UPDATED',
@@ -195,16 +240,21 @@ describe('UiApplicationFacade', () => {
             daily_return: { value: '+0.82%', tone: 'positive' },
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().account_summary.strategy.appliedState).toBe('EXIT_WAIT');
         expect(facade.get_view_model().trade_history.summary.dailyReturn.value).toBe('+0.82%');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('ACCOUNT/PERFORMANCE intent가 D-12 summary의 holdings와 성과 범위를 독립 갱신한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-23',
         });
 
+        // TRADE_HISTORY_HOLDINGS_UPDATED → TRADE_HISTORY_PERFORMANCE_UPDATED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({
             type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
@@ -227,16 +277,20 @@ describe('UiApplicationFacade', () => {
             },
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trade_history.summary).toMatchObject({
             position: { quantity: '2.5 ETH' },
             dailyReturn: { value: '+1.25%' },
             sellPerformance: { completedCount: '3 / 5' },
             fees: { amount: '0.25 USDT' },
         });
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('조회 중 event보다 오래된 초기 summary는 버리고 이후 명시적 refresh summary는 적용한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         let resolve_stale_query: ((details: TradeHistoryDetails) => void) | undefined;
         let query_count = 0;
@@ -261,11 +315,13 @@ describe('UiApplicationFacade', () => {
             today: '2026-08-23',
         });
 
+        // SHOW_TRADE_HISTORY 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
         await wait_for_trade_history_settlement();
-        expect(facade.get_view_model().trade_history.status).toBe('loading');
+        expect(facade.get_view_model().trade_history.status).toBe('loading');  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
 
+        // TRADE_HISTORY_HOLDINGS_UPDATED → TRADE_HISTORY_PERFORMANCE_UPDATED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({
             type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
             position: { quantity: '2.5 ETH' },
@@ -296,6 +352,7 @@ describe('UiApplicationFacade', () => {
         });
         await wait_for_trade_history_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trade_history.records).toEqual([
             TRADE_RECORD_FIXTURES[0],
         ]);
@@ -307,20 +364,26 @@ describe('UiApplicationFacade', () => {
         // 새 revision에서 시작한 명시적 refresh는 KST rollover를 포함한 최신 composite를 적용한다.
         facade.dispatch({ type: 'REFRESH_TRADE_HISTORY' });
         await wait_for_trade_history_settlement();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trade_history.summary).toMatchObject({
             dailyReturn: { value: '+2.00%' },
             position: { quantity: '3 ETH' },
         });
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('ORDER_EXECUTED는 recent orders를 항상 갱신하고 active history에서만 현재 query를 refresh한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-23',
             recent_trades: [],
         });
 
+        // SHOW_TRADE_HISTORY → BUY_ORDER_EXECUTED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
         await wait_for_trade_history_settlement();
@@ -333,35 +396,46 @@ describe('UiApplicationFacade', () => {
             trade: TRADE_RECORD_FIXTURES[0]!,
         });
         await wait_for_trade_history_settlement();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trader_panel.trades[0]).toEqual(TRADE_RECORD_FIXTURES[0]);
         expect(command_adapter.command_records.filter((record) => {
             return record.name === 'load_trade_history';
         })).toHaveLength(query_count_before_order + 1);
 
+        // BACK_TO_DASHBOARD → SELL_ORDER_EXECUTED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'BACK_TO_DASHBOARD' });
         facade.dispatch({
             type: 'SELL_ORDER_EXECUTED',
             trade: TRADE_RECORD_FIXTURES[1]!,
         });
         await wait_for_trade_history_settlement();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trader_panel.trades[0]).toEqual(TRADE_RECORD_FIXTURES[1]);
         expect(command_adapter.command_records.filter((record) => {
             return record.name === 'load_trade_history';
         })).toHaveLength(query_count_before_order + 1);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('full resync의 recent_trades로 filtered table을 덮지 않고 active current query를 다시 읽는다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-23',
         });
 
+        // SHOW_TRADE_HISTORY → HISTORY_SIDE_SELECTED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
         await wait_for_trade_history_settlement();
         facade.dispatch({ type: 'HISTORY_SIDE_SELECTED', side: 'sell' });
         await wait_for_trade_history_settlement();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trade_history.records).toEqual([
             TRADE_RECORD_FIXTURES[0],
         ]);
@@ -370,16 +444,23 @@ describe('UiApplicationFacade', () => {
             create_backend_snapshot_fixture(),
             '2026-08-23',
         ).server_snapshot;
+
+        // BACKEND_SNAPSHOT_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({
             type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
             snapshot: synchronized_snapshot,
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trade_history.status).toBe('loading');
         expect(facade.get_view_model().trade_history.records).toEqual([
             TRADE_RECORD_FIXTURES[0],
         ]);
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_trade_history_settlement();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(command_adapter.command_records.at(-1)).toEqual({
             name: 'load_trade_history',
             payload: { period: 'today', side: 'sell' },
@@ -387,10 +468,13 @@ describe('UiApplicationFacade', () => {
         expect(facade.get_view_model().trade_history.records).toEqual([
             TRADE_RECORD_FIXTURES[0],
         ]);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('Phase 6: 미지원 REGIME 선택은 유지하되 시작 명령은 unavailable 안내로 차단한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-21',
@@ -398,18 +482,23 @@ describe('UiApplicationFacade', () => {
             command_enabled: true,
         });
 
+        // API_CONNECTED → START_TRADING_CLICKED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'API_CONNECTED', sequence: 1 });
         facade.dispatch({ type: 'START_TRADING_CLICKED' });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().regime.applied).toBe('type2');
         expect(facade.get_view_model().active_modal).toBe('trading_unavailable_notice');
         expect(facade.get_view_model().trading.unavailable_reason).toBe('unsupported_logic');
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('Phase 6: live command 비활성 상태는 지원 REGIME도 명령 없이 차단한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-21',
@@ -417,17 +506,22 @@ describe('UiApplicationFacade', () => {
             command_enabled: false,
         });
 
+        // API_CONNECTED → START_TRADING_CLICKED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'API_CONNECTED', sequence: 1 });
         facade.dispatch({ type: 'START_TRADING_CLICKED' });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().active_modal).toBe('trading_unavailable_notice');
         expect(facade.get_view_model().trading.unavailable_reason).toBe('command_disabled');
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('Phase 9: 복구 Position은 별도 확인 modal과 liquidation command로 조정한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-24',
@@ -437,6 +531,7 @@ describe('UiApplicationFacade', () => {
             has_open_position: true,
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         facade.start();
 
         // 열린 복구 Position이 있는 동안 facade도 새 자동매매 시작 intent를 fail closed한다.
@@ -449,9 +544,11 @@ describe('UiApplicationFacade', () => {
         expect(facade.get_view_model().active_modal).toBe('force_sell_stop_confirmation');
         expect(facade.get_view_model().trading.is_recovery_liquidation).toBe(true);
 
+        // RECOVERED_POSITION_LIQUIDATION_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
         await wait_for_trade_history_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(command_adapter.command_records).toEqual([{
             name: 'liquidate_recovered_position',
             payload: null,
@@ -463,10 +560,13 @@ describe('UiApplicationFacade', () => {
             has_open_position: false,
         });
         expect(facade.get_view_model().active_modal).toBeNull();
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('Phase 9: STOPPING 복구 청산은 실행 상태를 되살리지 않고 start를 계속 차단한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.recovered_position_liquidation_receipt = {
             status: 'stopping',
@@ -480,6 +580,7 @@ describe('UiApplicationFacade', () => {
             has_open_position: true,
         });
 
+        // STOP_TRADING_CLICKED → RECOVERED_POSITION_LIQUIDATION_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({
             type: 'STOP_TRADING_CLICKED',
@@ -488,6 +589,7 @@ describe('UiApplicationFacade', () => {
         facade.dispatch({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
         await wait_for_trade_history_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trading).toMatchObject({
             is_trading: false,
             is_pending: true,
@@ -499,31 +601,44 @@ describe('UiApplicationFacade', () => {
             name: 'liquidate_recovered_position',
             payload: null,
         }]);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('exit progress stays pending until the backend operation and native exit complete', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const commands = new FakeUiCommandAdapter();
         let finish!: () => void;
         const shutdown = vi.spyOn(commands, 'shutdown_application').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
         const facade = new UiApplicationFacade(commands, { today: '2026-09-16', is_trading: false, has_open_position: true });
+
+        // APP_EXIT_CLICKED → FORCE_SELL_EXIT_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         facade.start(); facade.dispatch({ type: 'APP_EXIT_CLICKED' }); facade.dispatch({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
         await wait_for_trade_history_settlement();
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(facade.get_view_model().app_exit.status).toBe('shutting_down');
         expect(facade.get_view_model().active_modal).toBe('exit_processing');
         expect(shutdown).toHaveBeenCalledExactlyOnceWith(true);
         finish(); await wait_for_trade_history_settlement();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().app_exit.is_final).toBe(true); facade.stop();
     });
 
     it('메시지 4~5: coherent backend snapshot을 한 번만 발행하고 UI-local 상태를 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-21',
         });
 
+        // CHART_INTERVAL_SELECTED → REGIME_TYPE_CLICKED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'CHART_INTERVAL_SELECTED', interval: '4h' });
         facade.dispatch({ type: 'REGIME_TYPE_CLICKED', regime: 'type4' });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().active_modal).toBe('regime_change_confirmation');
 
         let notification_count = 0;
@@ -532,6 +647,7 @@ describe('UiApplicationFacade', () => {
         });
         notification_count = 0;
 
+        // BACKEND_SNAPSHOT_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({
             type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
             snapshot: {
@@ -608,8 +724,10 @@ describe('UiApplicationFacade', () => {
             },
         });
 
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const view_model = facade.get_view_model();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(notification_count).toBe(1);
         expect(view_model.route).toBe('dashboard');
         expect(view_model.chart.interval).toBe('4h');
@@ -655,10 +773,13 @@ describe('UiApplicationFacade', () => {
         });
 
         unsubscribe();
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('Phase 6: 시작 확인 뒤 backend resync가 gate를 닫으면 stale 확인 명령을 차단한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-21',
@@ -666,10 +787,11 @@ describe('UiApplicationFacade', () => {
             command_enabled: true,
         });
 
+        // API_CONNECTED → START_TRADING_CLICKED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'API_CONNECTED', sequence: 1 });
         facade.dispatch({ type: 'START_TRADING_CLICKED' });
-        expect(facade.get_view_model().active_modal).toBe('start_confirmation');
+        expect(facade.get_view_model().active_modal).toBe('start_confirmation');  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
 
         // 열린 확인창은 유지하되 authoritative command gate를 false로 최신화한다.
         facade.dispatch({
@@ -723,39 +845,52 @@ describe('UiApplicationFacade', () => {
                 trading_state_label: 'not_started',
             },
         });
-        expect(facade.get_view_model().active_modal).toBe('start_confirmation');
+        expect(facade.get_view_model().active_modal).toBe('start_confirmation');  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
 
+        // START_TRADING_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'START_TRADING_CONFIRMED' });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().active_modal).toBe('trading_unavailable_notice');
         expect(facade.get_view_model().trading.unavailable_reason).toBe('command_disabled');
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('화면 통신 장애는 실행 중 매매·포지션을 유지하며 중지 명령이나 API 팝업을 만들지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(adapter, { today: '2026-09-16', applied_regime: 'type0', command_enabled: true });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         facade.start();
         facade.dispatch({ type: 'API_CONNECTED', sequence: 1 });
         facade.dispatch({ type: 'BACKEND_TRADING_STARTED' });
         facade.dispatch({ type: 'POSITION_UPDATED', has_open_position: true });
         const before = facade.get_view_model().trading;
         facade.dispatch({ type: 'UI_CONNECTION_DISCONNECTED', reason: 'EVENT_STREAM_STALE' });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trading).toEqual(before);
         expect(facade.get_view_model().connection.is_online).toBe(false);
         expect(facade.get_view_model().active_modal).toBeNull();
         expect(adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('Phase 7 lifecycle event는 stopping을 pending으로 유지하고 terminated에서만 완료한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const facade = new UiApplicationFacade(new FakeUiCommandAdapter(), {
             today: '2026-08-21',
             applied_regime: 'type0',
             command_enabled: true,
         });
 
+        // BACKEND_TRADING_STARTED → POSITION_UPDATED → TRADING_SESSION_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'BACKEND_TRADING_STARTED' });
         facade.dispatch({ type: 'POSITION_UPDATED', has_open_position: true });
@@ -776,6 +911,7 @@ describe('UiApplicationFacade', () => {
             strategy_status_tone: 'neutral',
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trading).toMatchObject({
             is_trading: true,
             is_pending: true,
@@ -792,6 +928,7 @@ describe('UiApplicationFacade', () => {
             statusTone: 'neutral',
         });
 
+        // TRADING_SESSION_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({
             type: 'TRADING_SESSION_SYNCHRONIZED',
             status: 'terminated',
@@ -809,32 +946,45 @@ describe('UiApplicationFacade', () => {
             strategy_status_tone: 'neutral',
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().trading).toMatchObject({
             is_trading: false,
             is_pending: false,
             has_open_position: false,
         });
         expect(facade.get_view_model().account_summary.strategy.status).toBe('자동매매 종료');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 
     it('Phase 12 abnormal sidecar event는 command 없이 restart recovery modal을 우선한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const facade = new UiApplicationFacade(command_adapter, {
             today: '2026-08-24',
         });
 
+        // BACKEND_SIDECAR_EXITED_ABNORMALLY 입력을 전달해 해당 전이를 실행한다.
         facade.start();
         facade.dispatch({ type: 'BACKEND_SIDECAR_EXITED_ABNORMALLY' });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().app_exit.status).toBe('sidecar_exit_failure');
         expect(facade.get_view_model().active_modal).toBe('sidecar_exit_failure');
 
         // Native·renderer close intent가 다시 와도 dead child에 shutdown command를 보내지 않는다.
         facade.dispatch({ type: 'APP_EXIT_CLICKED' });
-        expect(facade.get_view_model().active_modal).toBe('sidecar_exit_failure');
+        expect(facade.get_view_model().active_modal).toBe('sidecar_exit_failure');  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
+
+        // APP_EXIT_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'APP_EXIT_CONFIRMED' });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_view_model().app_exit.is_final).toBe(true);
         expect(command_adapter.command_records).toEqual([]);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
     });
 });

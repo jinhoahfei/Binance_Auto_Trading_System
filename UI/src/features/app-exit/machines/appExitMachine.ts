@@ -26,6 +26,7 @@ export type AppExitMachineEvent =
         readonly has_open_position: boolean;
     };
 
+
 /**
  * 함수 이름: has_failure_code()
  * 기능: 명령 결과의 unknown 오류에서 공개 가능한 typed failure code 하나만 비교한다.
@@ -40,6 +41,7 @@ function has_failure_code(error: unknown, expected_code: string): boolean {
         && error.code === expected_code;
 }
 
+
 /**
  * 함수 이름: create_app_exit_machine()
  * 기능: OS 종료 요청을 Position 청산, authoritative terminal 확인과 안전 종료로 조정한다.
@@ -49,10 +51,13 @@ function has_failure_code(error: unknown, expected_code: string): boolean {
  */
 export function create_app_exit_machine() {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as AppExitMachineContext,
             events: {} as AppExitMachineEvent,
         },
+
+        // 입력 수락 조건을 순수 가드로 정의한다.
         guards: {
             shutdown_needs_liquidation_confirmation: ({ event }) => 'error' in event
                 && has_failure_code(event.error, 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED'),
@@ -73,6 +78,8 @@ export function create_app_exit_machine() {
                     && has_failure_code(event.error, 'SHUTDOWN_OUTCOME_AMBIGUOUS');
             },
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             require_liquidation_confirmation: assign({ had_open_position: true }),
             remember_position: assign({
@@ -101,6 +108,8 @@ export function create_app_exit_machine() {
     }).createMachine({
         id: 'appExitMachine',
         initial: 'awaiting_exit',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             had_open_position: false,
             error: null,
@@ -111,6 +120,8 @@ export function create_app_exit_machine() {
                 actions: 'remember_sidecar_exit_failure',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             awaiting_exit: {
                 meta: { spec_ids: ['ES3-01', 'ES3-02', 'ES3-03'] },

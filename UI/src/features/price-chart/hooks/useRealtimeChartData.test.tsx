@@ -22,6 +22,7 @@ interface WebSocketCloseCall {
     readonly reason: string | undefined;
 }
 
+
 /**
  * 클래스 이름: FakeWebSocket
  * 기능: hook 테스트에서 WebSocket lifecycle event와 close 호출을 수동 제어한다.
@@ -34,6 +35,13 @@ class FakeWebSocket {
     onmessage: WebSocket['onmessage'] = null;
     onopen: WebSocket['onopen'] = null;
 
+    /**
+     * 함수 이름: FakeWebSocket.constructor()
+     * 기능: 차트 WebSocket 테스트 대역에 요청 URL을 보관한다.
+     * 인자: url -> 차트 연결 URL
+     * 반환값: 생성된 FakeWebSocket
+     * 작성 날짜: 2026/09/17
+     */
     constructor(readonly url: string) {}
 
     /**
@@ -85,6 +93,7 @@ class FakeWebSocket {
     }
 }
 
+
 /**
  * 함수 이름: create_pending_fetch()
  * 기능: 각 REST 요청을 기록하고 테스트가 명시적으로 응답할 때까지 보류한다.
@@ -123,6 +132,7 @@ function create_pending_fetch(
     }) as typeof fetch;
 }
 
+
 /**
  * 함수 이름: create_fake_web_socket_factory()
  * 기능: 생성된 fake socket과 선택적 lifecycle 호출 순서를 기록한다.
@@ -141,9 +151,11 @@ function create_fake_web_socket_factory(
         const socket = new FakeWebSocket(url);
 
         sockets.push(socket);
+
         return socket as unknown as WebSocket;
     };
 }
+
 
 /**
  * 함수 이름: create_rest_response()
@@ -161,6 +173,7 @@ function create_rest_response(
 ): Response {
     return create_rest_page_response(interval, [{ close_value, open_time }]);
 }
+
 
 /**
  * 함수 이름: create_rest_page_response()
@@ -199,6 +212,7 @@ function create_rest_page_response(
     });
 }
 
+
 /**
  * 함수 이름: resolve_rest_requests()
  * 기능: 보류 중인 네 주기 REST 요청을 지정한 종가로 모두 완료한다.
@@ -218,6 +232,7 @@ function resolve_rest_requests(
         ));
     });
 }
+
 
 /**
  * 함수 이름: create_web_socket_kline_message()
@@ -255,6 +270,7 @@ function create_web_socket_kline_message(
     });
 }
 
+
 /**
  * 함수 이름: emit_initial_klines()
  * 기능: 연결 open과 실제 네 주기 수신을 구분해 정상 LIVE fixture를 준비한다.
@@ -267,6 +283,7 @@ function emit_initial_klines(socket: FakeWebSocket | undefined, close_values = {
 }
 
 afterEach(() => {
+    // 테스트가 바꾼 전역 환경과 실행 자원을 정리한다.
     vi.useRealTimers();
 });
 
@@ -285,57 +302,95 @@ describe('차트 연결 복구와 진단', () => {
         const diagnostics: Array<ChartDiagnostic> = [];
         const fetch_implementation = create_pending_fetch(requests);
         const web_socket_factory = create_fake_web_socket_factory(sockets);
+
+        /**
+         * 함수 이름: diagnostic_sink()
+         * 기능: 진단 발생 순서와 payload를 검증할 배열에 기록한다.
+         * 인자: event -> 차트 진단 이벤트
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         const diagnostic_sink = (event: ChartDiagnostic) => { diagnostics.push(event); };
         const hook = renderHook(() => use_realtime_chart_data({ fetch_implementation, web_socket_factory, diagnostic_sink }));
+
         return { ...hook, requests, sockets, diagnostics };
     }
 
     it('연결 open과 REST만으로는 LIVE를 표시하지 않는다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const test = prepare_connection();
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await act(async () => {
             test.sockets[0]!.emit_open();
             resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
         });
-        expect(test.result.current.data_status).toBe('reconnecting');
+        expect(test.result.current.data_status).toBe('reconnecting');  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => { emit_initial_klines(test.sockets[0]); });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.result.current.data_status).toBe('live');
         expect(test.diagnostics.filter((event) => event.event === 'first_kline')).toHaveLength(4);
         expect(test.diagnostics.filter((event) => event.event === 'connection_ready')).toHaveLength(1);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         await act(async () => { test.unmount(); });
-        expect(vi.getTimerCount()).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it('조용한 수신 정지를 감지하고 늦은 이전 응답을 차단한 뒤 최신 봉으로 복구한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const test = prepare_connection();
+
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => {
             test.sockets[0]!.emit_open(); emit_initial_klines(test.sockets[0]);
             resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
         });
         const old_handler = test.sockets[0]!.onmessage!;
         await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.result.current.data_status).toBe('reconnecting');
         expect(test.diagnostics.some((event) => event.event === 'stream_stale')).toBe(true);
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => { old_handler.call(test.sockets[0] as unknown as WebSocket, new MessageEvent('message', {
             data: create_web_socket_kline_message('30m',999),
         })); });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.result.current.klines_by_interval['30m'].at(-1)?.close).toBe(130);
         expect(test.result.current.data_status).toBe('reconnecting');
+
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-        expect(test.sockets).toHaveLength(2);
+        expect(test.sockets).toHaveLength(2);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await act(async () => {
             test.sockets[1]!.emit_open();
             emit_initial_klines(test.sockets[1], {'1m':201,'30m':232,'4h':240,'1d':250});
             resolve_rest_requests(test.requests.slice(4), {'1m':201,'30m':230,'4h':240,'1d':250});
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.result.current.data_status).toBe('live');
         expect(test.result.current.klines_by_interval['30m'].at(-1)?.close).toBe(232);
         expect(test.diagnostics.filter((event) => event.event === 'connection_ready')).toHaveLength(2);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         await act(async () => { test.unmount(); });
-        expect(vi.getTimerCount()).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it('다른 주기가 계속 와도 30분봉의 정지를 별도로 감지한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const test = prepare_connection();
+
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => {
             test.sockets[0]!.emit_open(); emit_initial_klines(test.sockets[0]);
             resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
@@ -345,15 +400,24 @@ describe('차트 연결 복구와 진단', () => {
         act(() => {
             (['1m','4h','1d'] as const).forEach((interval) => test.sockets[0]!.emit_message(create_web_socket_kline_message(interval,111)));
         });
-        expect(test.result.current.updated_at_by_interval?.['30m']).toBe(previous_time);
+        expect(test.result.current.updated_at_by_interval?.['30m']).toBe(previous_time);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
+
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.result.current.data_status).toBe('reconnecting');
         expect(test.diagnostics).toContainEqual(expect.objectContaining({ event:'stream_stale', interval:'30m' }));
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         await act(async () => { test.unmount(); });
     });
 
     it('REST 하나가 응답하지 않아도 15초 뒤 취소하고 재시도한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const test = prepare_connection();
+
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => {
             test.sockets[0]!.emit_open(); emit_initial_klines(test.sockets[0]);
             resolve_rest_requests(test.requests.slice(0,3), {'1m':101,'30m':130,'4h':140,'1d':150});
@@ -361,48 +425,73 @@ describe('차트 연결 복구와 진단', () => {
         await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
         act(() => { emit_initial_klines(test.sockets[0]); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.requests[3]!.signal?.aborted).toBe(true);
         expect(test.diagnostics.some((event) => event.event === 'rest_timeout')).toBe(true);
+
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-        expect(test.sockets).toHaveLength(2);
+        expect(test.sockets).toHaveLength(2);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         await act(async () => { test.unmount(); });
-        expect(vi.getTimerCount()).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it('WebSocket open 무응답과 잘못된 메시지를 기록하고 복구한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const test = prepare_connection();
+
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => {
             resolve_rest_requests(test.requests, {'1m':101,'30m':130,'4h':140,'1d':150});
             await vi.advanceTimersByTimeAsync(16_000);
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.diagnostics.some((event) => event.event === 'connect_timeout')).toBe(true);
         expect(test.sockets).toHaveLength(2);
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             test.sockets[1]!.emit_open();
             test.sockets[1]!.emit_message('invalid private payload');
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.diagnostics.some((event) => event.event === 'parse_error')).toBe(true);
         expect(JSON.stringify(test.diagnostics)).not.toContain('private payload');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         await act(async () => { test.unmount(); });
     });
 
     it('REST 장애의 주기와 HTTP 상태를 원본 body 없이 기록한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const test = prepare_connection();
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await act(async () => {
             test.requests[1]!.resolve_response(new Response('private upstream body', { status: 429 }));
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(test.diagnostics).toContainEqual(expect.objectContaining({
             event: 'rest_failed', interval: '30m', error_kind: 'http_error', http_status: 429,
         }));
         expect(JSON.stringify(test.diagnostics)).not.toContain('private upstream body');
         expect(test.requests[0]!.signal?.aborted).toBe(true);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         await act(async () => { test.unmount(); });
-        expect(vi.getTimerCount()).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 });
 
 describe('use_realtime_chart_data', () => {
     it('creates the WebSocket before starting any REST request', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const event_order: Array<string> = [];
         const pending_requests: Array<PendingFetchRequest> = [];
         const sockets: Array<FakeWebSocket> = [];
@@ -413,6 +502,7 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
@@ -432,6 +522,7 @@ describe('use_realtime_chart_data', () => {
     });
 
     it('lets a buffered WebSocket candle override the same pending REST candle', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_requests: Array<PendingFetchRequest> = [];
         const sockets: Array<FakeWebSocket> = [];
         const fetch_implementation = create_pending_fetch(pending_requests);
@@ -441,10 +532,12 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[0]?.emit_open();
             emit_initial_klines(sockets[0]);
@@ -461,6 +554,7 @@ describe('use_realtime_chart_data', () => {
             await Promise.resolve();
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.data_status).toBe('live');
         });
@@ -482,6 +576,7 @@ describe('use_realtime_chart_data', () => {
     });
 
     it('replaces the live candle while retaining every interval map', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_requests: Array<PendingFetchRequest> = [];
         const sockets: Array<FakeWebSocket> = [];
         const fetch_implementation = create_pending_fetch(pending_requests);
@@ -491,10 +586,12 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[0]?.emit_open();
             emit_initial_klines(sockets[0]);
@@ -508,6 +605,8 @@ describe('use_realtime_chart_data', () => {
             });
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.data_status).toBe('live');
         });
@@ -516,10 +615,12 @@ describe('use_realtime_chart_data', () => {
         const retained_4h_klines = result.current.klines_by_interval['4h'];
         const retained_1d_klines = result.current.klines_by_interval['1d'];
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             sockets[0]?.emit_message(create_web_socket_kline_message('1m', 303));
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.klines_by_interval['1m'][0]?.close).toBe(303);
         });
@@ -532,6 +633,7 @@ describe('use_realtime_chart_data', () => {
     });
 
     it('loads one older page per interval without truncating history on later WebSocket updates', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_requests: Array<PendingFetchRequest> = [];
         const sockets: Array<FakeWebSocket> = [];
         const fetch_implementation = create_pending_fetch(pending_requests);
@@ -543,9 +645,12 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[0]?.emit_open();
             emit_initial_klines(sockets[0]);
@@ -559,16 +664,21 @@ describe('use_realtime_chart_data', () => {
             });
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.data_status).toBe('live');
         });
 
         const stable_load_callback = result.current.load_earlier_klines;
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             result.current.load_earlier_klines('1m');
             result.current.load_earlier_klines('1m');
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(5);
         });
@@ -585,6 +695,7 @@ describe('use_realtime_chart_data', () => {
         expect(result.current.history_load_state_by_interval['1m'].is_loading).toBe(true);
         expect(result.current.history_load_state_by_interval['30m'].is_loading).toBe(false);
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[0]?.emit_message(create_web_socket_kline_message('1m', 202, 2_000));
         });
@@ -596,6 +707,8 @@ describe('use_realtime_chart_data', () => {
             await Promise.resolve();
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.klines_by_interval['1m']).toHaveLength(4);
         });
@@ -613,38 +726,49 @@ describe('use_realtime_chart_data', () => {
         });
         expect(result.current.load_earlier_klines).toBe(stable_load_callback);
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             sockets[0]?.emit_message(create_web_socket_kline_message('1m', 303, 2_000));
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.klines_by_interval['1m'].at(-1)?.close).toBe(303);
         });
         expect(result.current.klines_by_interval['1m']).toHaveLength(4);
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             result.current.load_earlier_klines('1m');
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(6);
         });
         expect(pending_requests[5]?.request_url.searchParams.get('endTime')).toBe('99');
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         await act(async () => {
             pending_requests[5]?.resolve_response(create_rest_page_response('1m', []));
             await Promise.resolve();
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.history_load_state_by_interval['1m'].is_exhausted).toBe(true);
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             result.current.load_earlier_klines('1m');
         });
-        expect(pending_requests).toHaveLength(6);
+        expect(pending_requests).toHaveLength(6);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it('tracks concurrent interval history requests independently and permits retry after an error', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_requests: Array<PendingFetchRequest> = [];
         const sockets: Array<FakeWebSocket> = [];
         const fetch_implementation = create_pending_fetch(pending_requests);
@@ -656,9 +780,12 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[0]?.emit_open();
             emit_initial_klines(sockets[0]);
@@ -672,20 +799,26 @@ describe('use_realtime_chart_data', () => {
             });
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.data_status).toBe('live');
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             result.current.load_earlier_klines('1m');
             result.current.load_earlier_klines('30m');
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(6);
         });
         expect(result.current.history_load_state_by_interval['1m'].is_loading).toBe(true);
         expect(result.current.history_load_state_by_interval['30m'].is_loading).toBe(true);
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         await act(async () => {
             pending_requests[4]?.resolve_response(create_rest_page_response('1m', [], 503));
             pending_requests[5]?.resolve_response(create_rest_page_response('30m', [
@@ -694,6 +827,8 @@ describe('use_realtime_chart_data', () => {
             await Promise.resolve();
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.history_load_state_by_interval['1m'].error_message)
                 .toContain('HTTP 503');
@@ -704,20 +839,26 @@ describe('use_realtime_chart_data', () => {
         expect(result.current.history_load_state_by_interval['4h'])
             .toEqual({ error_message: null, is_exhausted: false, is_loading: false });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             result.current.load_earlier_klines('1m');
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(7);
         });
         expect(result.current.history_load_state_by_interval['1m'].error_message).toBeNull();
         expect(result.current.history_load_state_by_interval['1m'].is_loading).toBe(true);
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         await act(async () => {
             pending_requests[6]?.resolve_response(create_rest_page_response('1m', []));
             await Promise.resolve();
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.history_load_state_by_interval['1m']).toEqual({
                 error_message: null,
@@ -728,6 +869,7 @@ describe('use_realtime_chart_data', () => {
     });
 
     it('retains previously prepended history when the WebSocket connection is initialized again', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_requests: Array<PendingFetchRequest> = [];
         const reconnect_delays = [0] as const;
         const sockets: Array<FakeWebSocket> = [];
@@ -741,9 +883,12 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[0]?.emit_open();
             emit_initial_klines(sockets[0]);
@@ -757,16 +902,23 @@ describe('use_realtime_chart_data', () => {
             });
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.data_status).toBe('live');
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             result.current.load_earlier_klines('1m');
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(5);
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         await act(async () => {
             pending_requests[4]?.resolve_response(create_rest_page_response('1m', [
                 { close_value: 11, open_time: 100 },
@@ -775,17 +927,24 @@ describe('use_realtime_chart_data', () => {
             await Promise.resolve();
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.klines_by_interval['1m']).toHaveLength(3);
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             sockets[0]?.emit_close();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(sockets).toHaveLength(2);
             expect(pending_requests).toHaveLength(9);
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[1]?.emit_open();
             emit_initial_klines(sockets[1], {'1m':202,'30m':230,'4h':240,'1d':250});
@@ -799,14 +958,19 @@ describe('use_realtime_chart_data', () => {
             });
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.data_status).toBe('live');
             expect(result.current.klines_by_interval['1m']).toHaveLength(3);
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             sockets[1]?.emit_message(create_web_socket_kline_message('1m', 303));
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.klines_by_interval['1m'].at(-1)?.close).toBe(303);
         });
@@ -819,6 +983,7 @@ describe('use_realtime_chart_data', () => {
     });
 
     it('aborts an in-flight older-page request and ignores its stale response on unmount', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_requests: Array<PendingFetchRequest> = [];
         const sockets: Array<FakeWebSocket> = [];
         const fetch_implementation = create_pending_fetch(pending_requests);
@@ -830,9 +995,12 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         act(() => {
             sockets[0]?.emit_open();
             emit_initial_klines(sockets[0]);
@@ -846,13 +1014,18 @@ describe('use_realtime_chart_data', () => {
             });
             await Promise.resolve();
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(result.current.data_status).toBe('live');
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             result.current.load_earlier_klines('1m');
         });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(5);
         });
@@ -863,6 +1036,8 @@ describe('use_realtime_chart_data', () => {
         unmount();
 
         expect(history_request?.signal?.aborted).toBe(true);
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         await act(async () => {
             history_request?.resolve_response(create_rest_page_response('1m', [
                 { close_value: 11, open_time: 100 },
@@ -871,10 +1046,11 @@ describe('use_realtime_chart_data', () => {
             await Promise.resolve();
             await Promise.resolve();
         });
-        expect(result.current).toBe(snapshot_before_unmount);
+        expect(result.current).toBe(snapshot_before_unmount);  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
     });
 
     it('schedules a reconnect after close with an injected zero delay', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_requests: Array<PendingFetchRequest> = [];
         const reconnect_delays = [0] as const;
         const sockets: Array<FakeWebSocket> = [];
@@ -886,14 +1062,17 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(pending_requests).toHaveLength(4);
         });
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             sockets[0]?.emit_close();
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await waitFor(() => {
             expect(sockets).toHaveLength(2);
         });
@@ -908,6 +1087,7 @@ describe('use_realtime_chart_data', () => {
     });
 
     it('aborts fetch, clears reconnect, closes the socket, and ignores stale work on unmount', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         vi.useFakeTimers();
 
         const pending_requests: Array<PendingFetchRequest> = [];
@@ -921,6 +1101,7 @@ describe('use_realtime_chart_data', () => {
             web_socket_factory,
         }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(pending_requests).toHaveLength(4);
 
         const socket = sockets[0];
@@ -928,14 +1109,19 @@ describe('use_realtime_chart_data', () => {
         expect(socket).toBeDefined();
         const stale_message_handler = socket?.onmessage ?? null;
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             socket?.emit_close();
         });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(vi.getTimerCount()).toBeGreaterThan(0);
         const snapshot_before_unmount = result.current;
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await act(async () => { unmount(); });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(pending_requests.every((request) => request.signal?.aborted === true)).toBe(true);
         expect(socket?.close_calls).toEqual([{
             code: 1_000,
@@ -947,6 +1133,7 @@ describe('use_realtime_chart_data', () => {
         expect(socket?.onopen).toBeNull();
         expect(vi.getTimerCount()).toBe(0);
 
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await act(async () => {
             resolve_rest_requests(pending_requests, {
                 '1m': 101,
@@ -965,6 +1152,7 @@ describe('use_realtime_chart_data', () => {
             await Promise.resolve();
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(sockets).toHaveLength(1);
         expect(pending_requests).toHaveLength(4);
         expect(result.current).toBe(snapshot_before_unmount);

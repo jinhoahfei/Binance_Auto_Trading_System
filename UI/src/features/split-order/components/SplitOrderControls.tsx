@@ -2,6 +2,7 @@ import { PercentSlider } from './PercentSlider';
 import type { SplitOrderControlsProps } from '../types';
 import styles from './SplitOrderControls.module.css';
 
+
 /**
  * 함수 이름: SplitOrderControls()
  * 기능: 분할 매수·매도 비율 슬라이더를 하나의 계좌 카드에 표시하고 intent를 전달한다.
@@ -15,6 +16,7 @@ export function SplitOrderControls({
     onIntent,
     sellPercentage,
 }: SplitOrderControlsProps) {
+    // 매수·매도 입력을 분리하고 각 변경을 해당 방향의 intent로 전달한다.
     return (
         <section aria-labelledby="split-order-title" className={styles.card}>
             <h3 id="split-order-title">분할 매수/매도</h3>

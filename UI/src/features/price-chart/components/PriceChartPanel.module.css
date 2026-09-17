@@ -1,6 +1,7 @@
+/* 가격 차트 패널의 경계와 내부 배치를 구성한다. */
 .panel {
     position: relative;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 472px;
     padding: 10px 24px 12px;
     overflow: hidden;
@@ -15,6 +16,7 @@
     background: #20303e;
 }
 
+/* 전체화면 상태의 차트 영역을 별도로 배치한다. */
 .fullscreenPanel {
     position: fixed;
     z-index: 70;
@@ -25,6 +27,7 @@
     box-shadow: var(--shadow-modal), 0 0 0 1px var(--color-focus);
 }
 
+/* 차트 제목과 보조 설명을 도구 영역과 정렬한다. */
 .header {
     display: grid;
     grid-template-columns: 150px 1fr;
@@ -34,7 +37,7 @@
 }
 
 .heading {
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
 }
 
 .titleRow {
@@ -67,6 +70,7 @@
     white-space: nowrap;
 }
 
+/* 시세의 정상·대기·오류 상태를 표시색으로 구분한다. */
 .dataStatus {
     display: inline-flex;
     align-items: center;
@@ -96,7 +100,9 @@
     background: color-mix(in srgb, var(--color-status-negative) 10%, transparent);
 }
 
+/* 화면 조건 (max-width: 1280px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 1280px) {
+    /* 차트 제목과 보조 설명을 도구 영역과 정렬한다. */
     .header {
         grid-template-columns: 138px 1fr;
         gap: 12px;

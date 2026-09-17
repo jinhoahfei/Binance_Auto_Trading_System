@@ -1,0 +1,67 @@
+   Compiling binance-auto-trader v0.1.0 (/Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.13s
+     Running unittests src/lib.rs (target/debug/deps/binance_auto_trader_lib-1390144c3b713e33)
+
+running 59 tests
+test macos_quit_guard::tests::configured_method_encoding_uses_64_bit_terminate_shape ... ok
+test macos_quit_guard::tests::routing_always_returns_terminate_cancel ... ok
+test dialog::tests::absolute_utf8_directory_rejects_non_utf8_path_without_reflection ... ok
+test dialog::tests::absolute_utf8_directory_rejects_relative_path_without_reflection ... ok
+test exit_bridge::tests::command_q_before_arm_keeps_first_pending_intent ... ok
+test dialog::tests::absolute_utf8_directory_accepts_native_absolute_path ... ok
+test exit_bridge::tests::pre_bootstrap_window_close_is_latched_until_arm ... ok
+test exit_bridge::tests::payload_has_exact_secret_free_shape ... ok
+test chart_diagnostics::tests::rejects_arbitrary_payload_and_unknown_event ... ok
+test runtime_diagnostics::os_evidence::tests::visibility_and_policy_are_not_suspension_evidence ... ok
+test runtime_diagnostics::tests::queue_overflow_is_observable_and_never_blocks ... ok
+test runtime_diagnostics::os_evidence::tests::target_identity_and_direct_event_are_required ... ok
+test runtime_diagnostics::os_evidence::tests::negative_or_application_messages_are_not_direct_os_proof ... ok
+test macos_quit_guard::tests::routing_panic_cannot_open_the_appkit_exit_gate ... ok
+test backend_connection_diagnostics::tests::rejects_free_text_and_accepts_fixed_failure_context ... ok
+test runtime_diagnostics::tests::renderer_schema_rejects_secrets ... ok
+test sidecar::framed::tests::frame_wire_and_partial_reads_are_exact ... ok
+test sidecar::framed::tests::bootstrap_uses_exact_secret_channel_and_readonly_configuration ... ok
+test sidecar::framed::tests::invalid_lengths_and_trailing_frames_fail_closed ... ok
+test sidecar::macos_profile::tests::profile_is_exact_and_namespace_isolated ... ok
+test sidecar::tests::armed_listener_receives_future_sidecar_exit_immediately ... ok
+test sidecar::macos_profile::tests::native_live_wire_binds_cap_and_readonly_namespace ... ok
+test sidecar::tests::bootstrap_configuration_is_exact_read_only_contract ... ok
+test sidecar::tests::exit_event_payload_has_exact_secret_free_shape ... ok
+test sidecar::tests::exit_receipt_requires_expected_clean_code ... ok
+test sidecar::tests::exit_timeout_has_default_and_hard_max_without_kill_policy ... ok
+test sidecar::tests::expected_exit_requires_native_fd5_release_intent ... ok
+test sidecar::tests::generated_token_has_required_base64url_shape ... ok
+test sidecar::tests::descriptor_access_and_navigation_require_the_exact_renderer_origin ... ok
+test sidecar::tests::lifecycle_preserves_launcher_and_python_runtime_identities_separately ... ok
+test sidecar::tests::lifecycle_rejects_mismatched_late_runtime_identity ... ok
+test sidecar::tests::production_csp_replaces_only_exact_random_loopback_sentinels ... ok
+test sidecar::tests::ready_descriptor_rejects_unknown_fields_and_schema_drift ... ok
+test backend_connection_diagnostics::tests::persists_first_failure_with_native_and_backend_identity_without_backend_access ... ok
+test sidecar::tests::ready_descriptor_requires_positive_exact_pid_and_canonical_start_uuid ... ok
+test sidecar::tests::private_app_data_directory_enforces_owner_only_mode ... ok
+test sidecar::tests::ready_eof_is_terminal_and_not_retryable ... ok
+test sidecar::tests::ready_wait_ambiguity_never_allows_forced_child_abort ... ok
+test chart_diagnostics::tests::persists_rotates_and_repairs_partial_tail ... ok
+test sidecar::tests::sidecar_exit_before_listener_is_flushed_once_on_arm ... ok
+test sidecar::tests::startup_failure_wire_is_typed_and_never_a_ready_descriptor ... ok
+test tests::descriptor_is_absent_until_phase12_stages_it ... ok
+test tests::invalid_descriptor_never_enters_native_state ... ok
+test tests::duplicate_descriptor_stage_preserves_existing_ready_slot ... ok
+test sidecar::tests::renderer_startup_waits_for_an_actual_html_server ... ok
+test tests::late_ready_start_failure_never_returns_headless ... ok
+test tests::ownership_failures_use_fixed_fail_closed_operator_copy ... ok
+test tests::pre_ready_credential_failure_uses_secret_free_operator_copy ... ok
+test tests::release_provenance_marker_has_fail_closed_shape ... ok
+test tests::renderer_reload_reuses_descriptor_until_backend_exit ... ok
+test sidecar::tests::startup_failure_wait_observes_exit_without_killing_live_child ... ok
+test tests::stale_runtime_owner_prompt_binds_exact_nonsecret_identity ... ok
+test tests::startup_recovery_distinguishes_unobserved_and_confirmed_exit ... ok
+test sidecar::tests::live_or_locked_runtime_owner_never_reaches_release_attestation ... ok
+test sidecar::tests::ready_timeout_preserves_fd_and_recovers_late_descriptor ... ok
+test sidecar::tests::ready_timeout_preserves_partial_framing ... ok
+test sidecar::tests::unsafe_or_nonexact_runtime_owner_artifact_is_never_attested ... ok
+test sidecar::tests::release_revalidates_pid_and_same_inode_after_operator_delay ... ok
+test sidecar::tests::stale_active_and_orphaned_owner_release_preserves_identity_and_inode ... ok
+
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

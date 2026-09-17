@@ -1,3 +1,5 @@
+// 최근 주문과 실시간 지표 모듈의 공개 타입과 진입점을 한 경로로 재수출한다.
+
 export { RealtimeIndicators } from './components/RealtimeIndicators';
 export type { RealtimeIndicatorsProps } from './components/RealtimeIndicators';
 export { RecentOrdersList } from './components/RecentOrdersList';

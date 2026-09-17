@@ -58,6 +58,7 @@ export function route_of(snapshot: UiApplicationSnapshot): 'dashboard' | 'trade_
  * 작성 날짜: 2026/09/16
  */
 export function feature_state(snapshot: UiApplicationSnapshot, feature: FeatureKey): StateValue {
+    // 루트 final과 병렬 중지 Region의 상태를 표시용 기능 상태에 반영한다.
     if (feature === 'app_exit' && snapshot.value === 'UI_FINAL_STATE') {
         return 'ui_final_state';
     }
@@ -70,6 +71,7 @@ export function feature_state(snapshot: UiApplicationSnapshot, feature: FeatureK
         }
     }
 
+    // 분할 주문은 활성 요청과 오류를 기준으로 저장 상태를 읽는다.
     if (feature === 'split_order') {
         return Object.entries(snapshot.context.requests).some(([key, request]) => (
             key.startsWith('split_order.') && request.status === 'pending'
@@ -78,12 +80,14 @@ export function feature_state(snapshot: UiApplicationSnapshot, feature: FeatureK
             : snapshot.context.features.split_order.error ? 'failed' : 'ready';
     }
 
+    // 활성 화면의 실제 상태 경로를 우선 사용한다.
     const active_state = value_at(snapshot.value, feature_paths[feature]);
 
     if (active_state !== undefined) {
         return active_state;
     }
 
+    // 비활성 상세 조회는 idle로, CSV와 대시보드는 보관된 상태로 표시한다.
     if (feature === 'trade_history') {
         return 'idle';
     }
@@ -140,6 +144,7 @@ export function feature_view<K extends FeatureKey | 'shell'>(snapshot: UiApplica
  * 작성 날짜: 2026/09/16
  */
 export function select_feature_views(snapshot: UiApplicationSnapshot) {
+    // 현재 루트에서 모든 기능의 context와 표시 상태를 같은 시점에 읽는다.
     return {
         shell: feature_view(snapshot, 'shell'),
         account_summary: feature_view(snapshot, 'account_summary'),

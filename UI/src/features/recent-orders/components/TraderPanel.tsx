@@ -84,6 +84,7 @@ const MANUAL_KILL_BEHAVIOR_LABEL_BY_VALUE: Readonly<Record<string, string>> = {
     CANCEL_AND_LIQUIDATE: '주문 취소 및 포지션 청산',
 };
 
+
 /**
  * 함수 이름: create_risk_operator_notices()
  * 기능: authoritative risk 상태를 raw payload가 없는 allowlist 경고와 운영자 조치로 변환한다.
@@ -206,6 +207,7 @@ function create_risk_operator_notices(
     return notices;
 }
 
+
 /**
  * 함수 이름: resolve_keyboard_target_tab()
  * 기능: ARIA tablist의 방향키·Home·End 입력을 다음 focus 대상 탭으로 변환한다.
@@ -234,8 +236,10 @@ function resolve_keyboard_target_tab(
     const target_index = (
         current_index + movement + TAB_OPTIONS.length
     ) % TAB_OPTIONS.length;
+
     return TAB_OPTIONS[target_index]!.tab;
 }
+
 
 /**
  * 함수 이름: TraderPanel()
@@ -280,6 +284,7 @@ export function TraderPanel({
         const panel = panel_ref.current;
         const indicators = indicator_panel_ref.current;
         if (panel === null || indicators === null) return;
+
         const target = panel.scrollTop + indicators.getBoundingClientRect().top
             - panel.getBoundingClientRect().top - 62;
         panel.scrollTop = Math.max(0, target);  // sticky 탭 바로 아래에 새 제목을 둔다.
@@ -320,6 +325,7 @@ export function TraderPanel({
         }
 
         event.preventDefault();
+
         // Controlled state가 갱신되기 전에도 실제 keyboard focus는 즉시 목표 탭으로 이동한다.
         tab_button_refs.current[target_tab]?.focus();
         if (target_tab !== activeTab) {

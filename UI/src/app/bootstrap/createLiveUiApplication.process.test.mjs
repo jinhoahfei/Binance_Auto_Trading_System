@@ -24,6 +24,7 @@ const PROCESS_FIXTURE_PATH = path.join(
     'phase5_process_fixture.py',
 );
 
+
 /**
  * 클래스 이름: ProcessFixtureWebSocket
  * 기능: 실제 HTTP snapshot 뒤 UI adapter의 첫 인증 frame과 URL 비노출을 관찰한다.
@@ -74,6 +75,7 @@ class ProcessFixtureWebSocket {
     }
 }
 
+
 /**
  * 함수 이름: read_json_line()
  * 기능: child pipe의 첫 newline JSON object를 bounded timeout 안에 읽는다.
@@ -89,7 +91,13 @@ function read_json_line(readable, timeout_milliseconds) {
             reject(new Error('Phase 5 process fixture timed out'));
         }, timeout_milliseconds);
 
-        /** 첫 JSON line을 얻거나 stream이 닫히면 모든 listener와 timer를 정리한다. */
+        /**
+         * 함수 이름: cleanup()
+         * 기능: 최초 응답 대기가 끝나면 stdout·오류 listener와 제한 시간 timer를 정리한다.
+         * 인자: 없음
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         function cleanup() {
             clearTimeout(timeout_handle);
             readable.off('data', on_data);
@@ -97,7 +105,13 @@ function read_json_line(readable, timeout_milliseconds) {
             readable.off('error', on_error);
         }
 
-        /** newline 이전 bytes만 JSON으로 해석하고 나머지 출력은 소비하지 않는다. */
+        /**
+         * 함수 이름: on_data()
+         * 기능: fixture stdout 조각을 누적하여 첫 줄이 완성되면 응답을 전달한다.
+         * 인자: chunk -> 수신한 stdout 조각
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         function on_data(chunk) {
             buffered_text += chunk.toString('utf8');
             const newline_index = buffered_text.indexOf('\n');
@@ -113,13 +127,25 @@ function read_json_line(readable, timeout_milliseconds) {
             }
         }
 
-        /** Ready/trace 없이 종료한 process를 raw stderr 없이 안전하게 보고한다. */
+        /**
+         * 함수 이름: on_end()
+         * 기능: 첫 descriptor 없이 stdout이 닫히면 연결 준비 실패로 처리한다.
+         * 인자: 없음
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         function on_end() {
             cleanup();
             reject(new Error('Phase 5 process fixture closed before readiness'));
         }
 
-        /** Pipe 내부 오류도 secret-bearing payload 없이 정적 오류로 변환한다. */
+        /**
+         * 함수 이름: on_error()
+         * 기능: fixture stdout 오류를 고정된 오류로 변환해 준비 대기 Promise를 실패시킨다.
+         * 인자: 없음
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         function on_error() {
             cleanup();
             reject(new Error('Phase 5 process fixture pipe failed'));
@@ -130,6 +156,7 @@ function read_json_line(readable, timeout_milliseconds) {
         readable.on('error', on_error);
     });
 }
+
 
 /**
  * 함수 이름: create_process_fetch()
@@ -146,6 +173,7 @@ function create_process_fetch() {
         return fetch(input, { ...init, headers });
     };
 }
+
 
 /**
  * 함수 이름: stop_child_process()
@@ -180,6 +208,7 @@ async function stop_child_process(child_process) {
 // 이 fixture는 POSIX FD 3/4/5 상속 전용이다. Windows stdio process seam은 backend 별도 fixture로 검증한다.
 describe.skipIf(process.platform === 'win32')('Phase 5 actual process live read', () => {
     it.each([false, true])('Python startup 1~3 뒤 UISTM 4와 AppShell 5가 실제 snapshot을 표시한다: live tick %s', async (advance_market) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const session_token = randomBytes(32).toString('base64url');
         const python_path = [
             path.join(REPOSITORY_ROOT, 'backend', 'src'),
@@ -219,6 +248,7 @@ describe.skipIf(process.platform === 'win32')('Phase 5 actual process live read'
                         create_web_socket: (url) => {
                             web_socket_urls.push(url);
                             event_socket = new ProcessFixtureWebSocket();
+
                             return event_socket;
                         },
                     },

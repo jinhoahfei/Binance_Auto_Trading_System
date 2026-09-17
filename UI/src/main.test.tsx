@@ -45,6 +45,7 @@ vi.mock('@tauri-apps/api/window', () => ({
     getCurrentWindow: () => ({ destroy: destroy_window_mock, onCloseRequested: async () => () => {} }),
 }));
 
+
 /**
  * 함수 이름: create_live_descriptor()
  * 기능: production main bootstrap test에 전달할 valid one-shot descriptor를 만든다.
@@ -60,6 +61,7 @@ function create_live_descriptor() {
         token: TEST_BACKEND_TOKEN,
     } as const;
 }
+
 
 /**
  * 함수 이름: create_success_response()
@@ -80,6 +82,7 @@ function create_success_response(
         data,
     }), { status });
 }
+
 
 /**
  * 함수 이름: request_headers()
@@ -104,6 +107,7 @@ function request_headers(init?: RequestInit): Readonly<{
 
 describe('production main bootstrap recovery', () => {
     beforeEach(() => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         vi.resetModules();
         vi.clearAllMocks();
         native_listeners.clear();
@@ -121,6 +125,7 @@ describe('production main bootstrap recovery', () => {
 
             native_listeners.set(event_name, listener);
             native_unlisteners.set(event_name, unlisten);
+
             return unlisten;
         });
         destroy_window_mock.mockResolvedValue(undefined);
@@ -142,6 +147,7 @@ describe('production main bootstrap recovery', () => {
     });
 
     afterEach(() => {
+        // 테스트가 바꾼 전역 환경과 실행 자원을 정리한다.
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
         Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
@@ -149,11 +155,43 @@ describe('production main bootstrap recovery', () => {
     });
 
     it.each([false, true])('실행 중 치명적 연결 오류 후 새 연결로 안전 종료하며 위험 상태에서는 창을 유지한다: %s', async (blocked) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<{ onmessage: ((event: MessageEvent) => void) | null }> = [];
-        vi.stubGlobal('WebSocket', class {
+        vi.stubGlobal('WebSocket',
+        /**
+         * 클래스 이름: WebSocket 테스트 대역(익명 클래스)
+         * 기능: 생성된 연결을 테스트에 노출하여 서버 메시지와 복구 연결을 외부 통신 없이 검증한다.
+         * 작성 날짜: 2026/09/17
+         */
+        class {
             onopen = null; onmessage = null; onclose = null; onerror = null;
+
+            /**
+             * 함수 이름: constructor()
+             * 기능: 새 WebSocket 대역을 외부 제어 목록에 등록한다.
+             * 인자: 없음
+             * 반환값: 생성된 WebSocket 테스트 대역
+             * 작성 날짜: 2026/09/17
+             */
             constructor() { sockets.push(this); }
-            send() {} close() {}
+
+            /**
+             * 함수 이름: send()
+             * 기능: 이 테스트에서 검증하지 않는 WebSocket 전송을 외부 통신 없이 수락한다.
+             * 인자: 없음
+             * 반환값: 없음
+             * 작성 날짜: 2026/09/17
+             */
+            send() {}
+
+            /**
+             * 함수 이름: close()
+             * 기능: 이 테스트에서 검증하지 않는 WebSocket 종료를 외부 동작 없이 수락한다.
+             * 인자: 없음
+             * 반환값: 없음
+             * 작성 날짜: 2026/09/17
+             */
+            close() {}
         });
         const paths: string[] = [];
         vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -168,34 +206,45 @@ describe('production main bootstrap recovery', () => {
             if (path === '/v1/shutdown') {
                 if (blocked) return new Response(JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION, request_id,
                     ok: false, error: { code: 'SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE', message: 'Exposure remains', retryable: false, details: { accepted: false, status: 'blocked', version: 42, position_open: true, pending_order: true, reconciliation_required: true } } }), { status: 409 });
+
                 return create_success_response(request_id, { accepted: true, status: 'accepted', version: 42 }, 202);
             }
             throw new Error('Unexpected request');
         }));
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await act(async () => { await import('./main'); });
-        await waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+        await waitFor(() => expect(sockets.length).toBeGreaterThan(0));  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         await act(async () => { sockets[0]!.onmessage?.({ data: '{invalid' } as MessageEvent); });
         fireEvent.click(await screen.findByRole('button', { name: '안전 종료' }));
         if (blocked) {
             expect(await screen.findByText('SHUTDOWN_BLOCKED_BY_OPEN_EXPOSURE')).toBeInTheDocument();
             expect(destroy_window_mock).not.toHaveBeenCalled();
+
             // 테스트가 남기는 복구 adapter도 명시적 native 종료 경계로 정리한다.
             await act(async () => { native_listeners.get('backend-sidecar-exited')?.({ payload: { code: 0 } }); });
         } else await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
         expect(invoke_mock.mock.calls.filter(([command]) => command === 'get_backend_connection_descriptor')).toHaveLength(2);
         expect(document.body).not.toHaveTextContent(TEST_BACKEND_TOKEN);
     });
 
     it.each(['연결 다시 확인', '안전 종료'] as const)('연결 정보가 없던 화면의 %s 버튼도 native 연결을 복구한다', async (action_name) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const original_invoke = invoke_mock.getMockImplementation()!;
         let descriptor_attempts = 0;
         invoke_mock.mockImplementation(async (command) => {
             if (command === 'get_backend_connection_descriptor' && ++descriptor_attempts === 1) {
                 throw { code: 'BACKEND_DESCRIPTOR_UNAVAILABLE' };
             }
+
             return original_invoke(command);
         });
+
         const snapshot = create_backend_snapshot_fixture();
         const requested_paths: string[] = [];
         vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -220,11 +269,16 @@ describe('production main bootstrap recovery', () => {
             throw new Error('Unexpected recovery request');
         }));
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await act(async () => { await import('./main'); });
+
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(await screen.findByText('BACKEND_DESCRIPTOR_UNAVAILABLE')).toBeInTheDocument();
         expect(screen.getByText(/현재 화면에 백엔드 연결 정보가 없습니다/u)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: '연결 다시 확인' })).toBeEnabled();
         expect(screen.getByRole('button', { name: '안전 종료' })).toBeEnabled();
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.click(screen.getByRole('button', { name: action_name }));
         if (action_name === '연결 다시 확인') {
             expect(await screen.findByText('BACKEND_NOT_READY')).toBeInTheDocument();
@@ -242,20 +296,27 @@ describe('production main bootstrap recovery', () => {
     });
 
     it('새 화면에서 backend 종료를 확인하면 동작하지 않는 복구 버튼 대신 창 닫기를 제공한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const original_invoke = invoke_mock.getMockImplementation()!;
         invoke_mock.mockImplementation(async (command) => {
             if (command === 'get_backend_connection_descriptor') {
                 throw { code: 'BACKEND_SIDECAR_EXITED' };
             }
+
             return original_invoke(command);
         });
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         await act(async () => { await import('./main'); });
         fireEvent.click(await screen.findByRole('button', { name: '창 닫기' }));
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
         expect(screen.queryByRole('button', { name: '연결 다시 확인' })).not.toBeInTheDocument();
     });
 
     it('전체 snapshot이 계속 malformed여도 안전 종료는 별도 상태를 읽고 실제 종료 확인까지 진행한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const malformed_snapshot = {
             ...snapshot,
@@ -283,10 +344,14 @@ describe('production main bootstrap recovery', () => {
             throw new Error('Unexpected recovery request');
         }));
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await act(async () => { await import('./main'); });
-        expect(await screen.findByText('MALFORMED_BACKEND_PAYLOAD')).toBeInTheDocument();
+        expect(await screen.findByText('MALFORMED_BACKEND_PAYLOAD')).toBeInTheDocument();  // 화면의 표시 내용과 입력 가능 상태를 검증한다.
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.click(screen.getByRole('button', { name: '안전 종료' }));
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await waitFor(() => expect(destroy_window_mock).toHaveBeenCalledOnce());
         expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
         expect(invoke_mock).toHaveBeenCalledWith('await_backend_sidecar_exit');
@@ -298,6 +363,7 @@ describe('production main bootstrap recovery', () => {
     ] as const)(
         'READY child snapshot failure 뒤 %s native intent도 같은 token으로 안전 종료한다',
         async (native_source, _native_label) => {
+            // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
             const ready_snapshot = create_backend_snapshot_fixture();
             const not_ready_snapshot = {
                 ...ready_snapshot,
@@ -314,6 +380,7 @@ describe('production main bootstrap recovery', () => {
                 }
                 if (path === '/v1/snapshot') {
                     snapshot_attempt += 1;
+
                     return create_success_response(
                         request_id,
                         snapshot_attempt === 1 ? not_ready_snapshot : ready_snapshot,
@@ -325,6 +392,7 @@ describe('production main bootstrap recovery', () => {
                     if (shutdown_attempt === 1) {
                         throw new TypeError('Simulated response loss after shutdown send');
                     }
+
                     return create_success_response(request_id, {
                         accepted: true,
                         status: 'accepted',
@@ -343,6 +411,8 @@ describe('production main bootstrap recovery', () => {
 
             // main side effect는 첫 malformed-ready snapshot을 typed recovery 화면으로 전환한다.
             await import('./main');
+
+            // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
             expect(await screen.findByText('백엔드 연결 복구가 필요합니다.')).toBeInTheDocument();
             expect(screen.getByText('BACKEND_NOT_READY')).toBeInTheDocument();
             expect(invoke_mock).toHaveBeenCalledWith('get_backend_connection_descriptor');
@@ -362,16 +432,22 @@ describe('production main bootstrap recovery', () => {
                     native_exit_listener({ payload: { source: native_source } });
                 }
             });
+
+            // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
             expect(screen.getByText(
                 '창 닫기 또는 Command-Q 요청을 감지했습니다. 아래 안전 종료를 확인해 주세요.',
             )).toBeInTheDocument();
             expect(screen.getAllByRole('button', { name: '안전 종료' })).toHaveLength(1);
             expect(destroy_window_mock).not.toHaveBeenCalled();
+
+            // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
             fireEvent.click(screen.getByRole('button', { name: '안전 종료' }));
 
             // 첫 response loss는 child를 강제 종료하지 않고 같은 command 재시도만 허용한다.
             expect(await screen.findByText('SHUTDOWN_OUTCOME_AMBIGUOUS')).toBeInTheDocument();
             expect(destroy_window_mock).not.toHaveBeenCalled();
+
+            // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
             fireEvent.click(screen.getByRole('button', { name: '안전 종료' }));
 
             // 같은 descriptor/token으로 snapshot을 복구하고 202 및 native code 0 뒤에만 창을 닫는다.

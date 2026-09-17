@@ -6,6 +6,7 @@ export interface SummaryCardsProps {
   summary: TradeHistorySummaryViewModel;
 }
 
+
 /**
  * 함수 이름: get_tone_class()
  * 기능: 거래 성과의 의미에 맞는 CSS 색상 클래스를 선택한다.
@@ -25,6 +26,7 @@ function get_tone_class(tone: MetricTone) {
   return styles.neutral;
 }
 
+
 /**
  * 함수 이름: SummaryCards()
  * 기능: D-12의 오늘 계좌 범위와 전체 history 범위를 구분한 요약을 네 개 카드로 표시한다.
@@ -35,6 +37,7 @@ function get_tone_class(tone: MetricTone) {
 export function SummaryCards({ summary }: SummaryCardsProps) {
   const daily_return_tone = get_tone_class(summary.dailyReturn.tone);
   const sell_performance_tone = get_tone_class(summary.sellPerformance.tone);
+
   // 집계가 없는 placeholder 승률은 과거 손익 detail의 positive tone을 상속하지 않는다.
   const sell_rate_tone = summary.sellPerformance.winRate.includes('--')
     ? styles.neutral

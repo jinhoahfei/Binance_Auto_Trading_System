@@ -114,6 +114,7 @@ export interface LightweightChartSurfaceProps {
     readonly symbol?: string;
 }
 
+
 /**
  * 함수 이름: get_candle_open_time()
  * 기능: 실시간 봉의 시작 시각을 사용하고 fixture에는 주기 기반 결정적 시각을 보완한다.
@@ -136,6 +137,7 @@ function get_candle_open_time(
     return FALLBACK_CHART_END_TIME - ((candle_count - index) * interval_duration);
 }
 
+
 /**
  * 함수 이름: create_chart_time()
  * 기능: 밀리초 단위 봉 시작 시각을 Lightweight Charts의 UNIX 초 시각으로 변환한다.
@@ -147,6 +149,7 @@ function create_chart_time(open_time: number): UTCTimestamp {
     return Math.floor(open_time / 1_000) as UTCTimestamp;
 }
 
+
 /**
  * 함수 이름: read_time_milliseconds()
  * 기능: Lightweight Charts의 UNIX timestamp 또는 BusinessDay를 밀리초 시각으로 변환한다.
@@ -155,6 +158,7 @@ function create_chart_time(open_time: number): UTCTimestamp {
  * 작성 날짜: 2026/08/20
  */
 function read_time_milliseconds(chart_time: Time | undefined): number | null {
+    // 초 단위 timestamp, 문자열 날짜, 영업일 객체를 밀리초 기준으로 통일한다.
     if (typeof chart_time === 'number') {
         return chart_time * 1_000;
     }
@@ -170,6 +174,7 @@ function read_time_milliseconds(chart_time: Time | undefined): number | null {
     return Date.UTC(chart_time.year, chart_time.month - 1, chart_time.day);
 }
 
+
 /**
  * 함수 이름: get_line_open_time()
  * 기능: 지표의 명시 시각 또는 대응 봉 시각을 사용해 선 point를 봉과 정렬한다.
@@ -184,10 +189,12 @@ function get_line_open_time(
     candles: ReadonlyArray<CandleViewModel>,
     interval: ChartInterval,
 ): number {
+    // 지표에 원래 봉 시각이 있으면 우선 사용한다.
     if (point.open_time !== undefined) {
         return point.open_time;
     }
 
+    // 시각이 없는 fixture는 대응 캔들 또는 고정 기준 시각에 맞춘다.
     const candle_index = candles.length - point_count + index;
     const candle = candles[candle_index];
 
@@ -197,6 +204,7 @@ function get_line_open_time(
 
     return FALLBACK_CHART_END_TIME + (index * INTERVAL_DURATION_MILLISECONDS[interval]);
 }
+
 
 /**
  * 함수 이름: create_candlestick_data()
@@ -211,6 +219,7 @@ function create_candlestick_data(
     candle_count: number,
     interval: ChartInterval,
 ): CandlestickData<UTCTimestamp> {
+    // 각 봉을 엔진의 시각·OHLC 형식으로 변환하고 거래량을 보조값에 보관한다.
     return {
         close: candle.close,
         customValues: { volume: candle.volume ?? 0 },
@@ -220,6 +229,7 @@ function create_candlestick_data(
         time: create_chart_time(get_candle_open_time(candle, index, candle_count, interval)),
     };
 }
+
 
 /**
  * 함수 이름: create_volume_data()
@@ -241,6 +251,7 @@ function create_volume_data(
     };
 }
 
+
 /**
  * 함수 이름: create_line_data()
  * 기능: 지표 ViewModel을 대응 봉 시각의 Lightweight Charts line data로 변환한다.
@@ -256,6 +267,7 @@ function create_line_data(
     candles: ReadonlyArray<CandleViewModel>,
     interval: ChartInterval,
 ): LineData<UTCTimestamp> {
+    // 유효한 지표 값과 대응 봉의 시각만 엔진의 선 데이터로 변환한다.
     return {
         time: create_chart_time(get_line_open_time(
             point,
@@ -267,6 +279,7 @@ function create_line_data(
         value: point.value,
     };
 }
+
 
 /**
  * 함수 이름: calculate_minimum_bar_spacing()
@@ -290,6 +303,7 @@ function calculate_minimum_bar_spacing(
     return Math.min(DEFAULT_MINIMUM_BAR_SPACING, time_scale_width / required_bar_count);
 }
 
+
 /**
  * 함수 이름: apply_minimum_bar_spacing()
  * 기능: 적재 봉 수와 최신 시간축 폭에 맞는 축소 한계를 값이 달라졌을 때만 적용한다.
@@ -303,17 +317,20 @@ function apply_minimum_bar_spacing(
     candle_count: number,
     current_minimum: number | null,
 ): number {
+    // 현재 축 폭과 봉 개수로 최소 간격을 계산한다.
     const minimum_bar_spacing = calculate_minimum_bar_spacing(
         handles.chart.timeScale().width(),
         candle_count,
     );
 
+    // 간격이 바뀐 경우에만 엔진 옵션을 갱신한다.
     if (minimum_bar_spacing !== current_minimum) {
         handles.chart.timeScale().applyOptions({ minBarSpacing: minimum_bar_spacing });
     }
 
     return minimum_bar_spacing;
 }
+
 
 /**
  * 함수 이름: read_color_token()
@@ -327,6 +344,7 @@ function read_color_token(token_name: string, fallback: string): string {
 
     return token_value || fallback;
 }
+
 
 /**
  * 함수 이름: format_chart_price()
@@ -342,6 +360,7 @@ function format_chart_price(price: number): string {
     }).format(price);
 }
 
+
 /**
  * 함수 이름: format_chart_volume()
  * 기능: 선택 봉의 실제 base asset 거래량을 읽기 쉬운 문자열로 만든다.
@@ -355,6 +374,7 @@ function format_chart_volume(volume: number): string {
         maximumFractionDigits: 4,
     }).format(volume);
 }
+
 
 /**
  * 함수 이름: read_date_part()
@@ -370,6 +390,7 @@ function read_date_part(
     return date_parts.find((part) => part.type === part_type)?.value ?? '--';
 }
 
+
 /**
  * 함수 이름: format_hover_time()
  * 기능: 선택 봉 시작 시각을 Binance 형식과 가까운 KST 라벨로 변환한다.
@@ -378,6 +399,7 @@ function read_date_part(
  * 작성 날짜: 2026/08/20
  */
 function format_hover_time(open_time: number): string {
+    // 포인터가 가리킨 봉의 시각을 KST로 표시한다.
     const date_parts = new Intl.DateTimeFormat('en-CA', {
         year: 'numeric',
         month: '2-digit',
@@ -393,6 +415,7 @@ function format_hover_time(open_time: number): string {
         + `:${read_date_part(date_parts, 'minute')} KST`;
 }
 
+
 /**
  * 함수 이름: format_tick_mark()
  * 기능: 실제 차트 시간축 tick을 KST 날짜 또는 시각으로 표시한다.
@@ -401,11 +424,14 @@ function format_hover_time(open_time: number): string {
  * 작성 날짜: 2026/08/20
  */
 function format_tick_mark(chart_time: Time, tick_mark_type: TickMarkType): string {
+    // 엔진의 시간 표현을 해석할 수 없으면 빈 눈금을 반환한다.
     const open_time = read_time_milliseconds(chart_time);
 
     if (open_time === null) {
         return '';
     }
+
+    // 연·월·일·시각 눈금 종류에 맞춰 KST 표시 단위를 선택한다.
     if (tick_mark_type === TickMarkType.Year) {
         return new Intl.DateTimeFormat('ko-KR', {
             year: 'numeric',
@@ -428,6 +454,7 @@ function format_tick_mark(chart_time: Time, tick_mark_type: TickMarkType): strin
     }).format(new Date(open_time));
 }
 
+
 /**
  * 함수 이름: read_base_asset()
  * 기능: Binance symbol에서 hover 거래량 단위로 사용할 base asset을 읽는다.
@@ -438,6 +465,7 @@ function format_tick_mark(chart_time: Time, tick_mark_type: TickMarkType): strin
 function read_base_asset(symbol: string): string {
     return symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol;
 }
+
 
 /**
  * 함수 이름: calculate_change_rate()
@@ -450,6 +478,7 @@ function calculate_change_rate(candle: HoveredCandleViewModel): number {
     return candle.open === 0 ? 0 : ((candle.close - candle.open) / candle.open) * 100;
 }
 
+
 /**
  * 함수 이름: calculate_price_range_rate()
  * 기능: Binance Range와 같은 시가 대비 고가·저가 변동폭을 계산한다.
@@ -460,6 +489,7 @@ function calculate_change_rate(candle: HoveredCandleViewModel): number {
 function calculate_price_range_rate(candle: HoveredCandleViewModel): number {
     return candle.open === 0 ? 0 : ((candle.high - candle.low) / candle.open) * 100;
 }
+
 
 /**
  * 함수 이름: create_latest_candle_view_model()
@@ -472,12 +502,14 @@ function create_latest_candle_view_model(
     candles: ReadonlyArray<CandleViewModel>,
     interval: ChartInterval,
 ): HoveredCandleViewModel | null {
+    // 마지막 캔들이 없으면 표시할 값을 만들지 않는다.
     const candle = candles.at(-1);
 
     if (candle === undefined) {
         return null;
     }
 
+    // 최신 캔들의 가격·시각·거래량만 화면 정보로 추출한다.
     return {
         close: candle.close,
         high: candle.high,
@@ -488,6 +520,7 @@ function create_latest_candle_view_model(
     };
 }
 
+
 /**
  * 함수 이름: create_chart_coordinate_space()
  * 기능: Lightweight Charts의 현재 visible range와 시각·가격 좌표 변환기를 만든다.
@@ -496,18 +529,21 @@ function create_latest_candle_view_model(
  * 작성 날짜: 2026/08/20
  */
 function create_chart_coordinate_space(handles: LightweightChartHandles): ChartCoordinateSpace | null {
+    // 엔진이 유효한 패널 크기를 제공한 뒤에만 좌표 공간을 만든다.
     const pane_size = handles.chart.paneSize();
 
     if (pane_size.width <= 0 || pane_size.height <= 0) {
         return null;
     }
 
+    // 현재 보이는 시간 범위와 추가 조회에 필요한 봉 범위를 읽는다.
     const visible_range = handles.chart.timeScale().getVisibleRange();
     const visible_logical_range = handles.chart.timeScale().getVisibleLogicalRange();
     const visible_bars = visible_logical_range === null
         ? null
         : handles.candle_series.barsInLogicalRange(visible_logical_range);
 
+    // 드로잉과 과거 조회가 사용할 크기·범위·변환 함수를 묶는다.
     return {
         bars_before: visible_bars?.barsBefore ?? null,
         pane_height: pane_size.height,
@@ -537,6 +573,7 @@ function create_chart_coordinate_space(handles: LightweightChartHandles): ChartC
         },
     };
 }
+
 
 /**
  * 함수 이름: create_lightweight_chart()
@@ -635,6 +672,7 @@ function create_lightweight_chart(container: HTMLDivElement): LightweightChartHa
             timeVisible: true,
         },
     });
+
     // 현재가는 오른쪽 가격표만 유지하고 차트 전체를 가로지르는 기본 기준선은 숨긴다.
     const candle_series = chart.addSeries(CandlestickSeries, {
         borderVisible: false,
@@ -691,6 +729,7 @@ function create_lightweight_chart(container: HTMLDivElement): LightweightChartHa
         volume_series,
     };
 }
+
 
 /**
  * 함수 이름: create_fixture_lightweight_chart()
@@ -797,6 +836,7 @@ function create_fixture_lightweight_chart(container: HTMLDivElement): Lightweigh
     };
 }
 
+
 /**
  * 함수 이름: create_fixture_chart_time()
  * 기능: fixture 순번을 Figma 기준의 결정적 5분 간격 chart 시각으로 변환한다.
@@ -807,6 +847,7 @@ function create_fixture_lightweight_chart(container: HTMLDivElement): Lightweigh
 function create_fixture_chart_time(index: number): UTCTimestamp {
     return (FIXTURE_BASE_CHART_TIME + index * FIXTURE_CHART_TIME_STEP_SECONDS) as UTCTimestamp;
 }
+
 
 /**
  * 함수 이름: read_crosshair_candle()
@@ -819,10 +860,12 @@ function read_crosshair_candle(
     event: MouseEventParams<Time>,
     handles: LightweightChartHandles,
 ): HoveredCandleViewModel | null {
+    // 크로스헤어가 가리키는 캔들·거래량·시각을 각 series에서 읽는다.
     const candle_data = event.seriesData.get(handles.candle_series);
     const volume_data = event.seriesData.get(handles.volume_series);
     const open_time = read_time_milliseconds(event.time);
 
+    // 시각 또는 OHLC가 없는 위치는 캔들 정보로 표시하지 않는다.
     if (open_time === null
         || candle_data === undefined
         || !('open' in candle_data)
@@ -832,6 +875,7 @@ function read_crosshair_candle(
         return null;
     }
 
+    // 거래량 series가 없는 경우 캔들의 보조값을 사용한다.
     const custom_volume = candle_data.customValues?.volume;
     const volume = volume_data !== undefined && 'value' in volume_data
         ? volume_data.value
@@ -848,6 +892,7 @@ function read_crosshair_candle(
         volume,
     };
 }
+
 
 /**
  * 함수 이름: LightweightChartSurface()
@@ -1028,6 +1073,7 @@ export function LightweightChartSurface({
                     { time: create_fixture_chart_time(logical_index + 2) },
                 ];
             }));
+
             // SVG fixture가 보조지표를 소유하므로 library 가격축에는 candle 범위만 남긴다.
             handles.ema_series.setData([]);
             handles.bollinger_upper_series.setData([]);
@@ -1040,6 +1086,7 @@ export function LightweightChartSurface({
                 }))
                 : []);
             set_is_ready(true);
+
             return;
         }
 

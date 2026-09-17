@@ -21,6 +21,7 @@ const STOP_CHILD_FD: RawFd = 5;
 const CONFIG_CHILD_FD: RawFd = 6;
 const MINIMUM_STAGING_FD: RawFd = 16;
 
+
 /// 함수 이름: open_locked_runtime_ownership_artifact()
 /// 기능: owner-only regular artifact를 no-follow로 열고 nonblocking exclusive lock 아래 exact JSON을 읽는다.
 /// 인자: directory -> Tauri per-user app-data directory
@@ -92,6 +93,7 @@ pub(super) fn open_locked_runtime_ownership_artifact(
     )))
 }
 
+
 /// 함수 이름: runtime_process_exists()
 /// 기능: signal을 보내지 않는 kill(pid, 0)으로 recorded PID의 존재 여부를 보수적으로 판정한다.
 /// 인자: runtime_pid -> artifact의 positive Python runtime PID
@@ -110,6 +112,7 @@ pub(super) fn runtime_process_exists(runtime_pid: u32) -> bool {
     !matches!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH))
 }
 
+
 /// 함수 이름: disable_process_core_dumps()
 /// 기능: renderer token과 FD6 credential이 native/backend crash dump에 기록되지 않게 RLIMIT_CORE를 0으로 고정한다.
 /// 인자: 없음
@@ -118,6 +121,7 @@ pub(super) fn runtime_process_exists(runtime_pid: u32) -> bool {
 pub(super) fn platform_disable_process_core_dumps() -> Result<(), SidecarFailure> {
     set_zero_core_dump_limit().map_err(|_| SidecarFailure::startup())
 }
+
 
 /// 함수 이름: prepare_backend_sidecar()
 /// 기능: Keychain/config/token pipe를 조립하고 ready를 strict 검증해 renderer publication 직전 상태를 만든다.
@@ -259,6 +263,7 @@ pub(super) fn platform_prepare_backend_sidecar(
     }))
 }
 
+
 /// 함수 이름: read_keychain_credentials()
 /// 기능: macOS Security.framework에서 두 credential을 renderer와 subprocess stdout 밖에서 읽는다.
 /// 인자: 없음
@@ -281,6 +286,7 @@ pub(super) fn read_keychain_credentials() -> Result<NativeCredentials, SidecarFa
         api_secret,
     })
 }
+
 
 /// 함수 이름: read_keychain_secret()
 /// 기능: generic-password bytes를 bounded printable ASCII String으로 검증하고 오류 bytes를 zeroize한다.
@@ -318,6 +324,7 @@ pub(super) fn read_keychain_secret(account: &str) -> Result<String, SidecarFailu
     Ok(secret)
 }
 
+
 /// 함수 이름: ensure_private_app_data_directory()
 /// 기능: credential-adjacent history directory가 symlink가 아닌 per-user directory이며 mode 0700임을 보장한다.
 /// 인자: app_data_directory -> Tauri identifier-scoped application data directory
@@ -337,6 +344,7 @@ pub(super) fn ensure_private_app_data_directory(
     fs::set_permissions(app_data_directory, fs::Permissions::from_mode(0o700))
         .map_err(|_| SidecarFailure::startup())
 }
+
 
 /// 함수 이름: resolve_sidecar_executable()
 /// 기능: target suffix가 제거되어 main executable 옆에 bundle된 exact sidecar를 검증한다.
@@ -368,6 +376,7 @@ pub(super) fn resolve_sidecar_executable() -> Result<PathBuf, SidecarFailure> {
     Ok(canonical_sidecar)
 }
 
+
 /// 함수 이름: create_parent_writer_child_reader()
 /// 기능: parent write/child read anonymous pipe를 만들고 child end를 collision-free staging FD로 옮긴다.
 /// 인자: 없음
@@ -380,6 +389,7 @@ pub(super) fn create_parent_writer_child_reader() -> io::Result<(File, OwnedFd)>
     Ok((File::from(writer), child_reader))
 }
 
+
 /// 함수 이름: create_parent_reader_child_writer()
 /// 기능: parent read/child write anonymous pipe를 만들고 child end를 collision-free staging FD로 옮긴다.
 /// 인자: 없음
@@ -391,6 +401,7 @@ pub(super) fn create_parent_reader_child_writer() -> io::Result<(File, OwnedFd)>
     drop(writer);
     Ok((File::from(reader), child_writer))
 }
+
 
 /// 함수 이름: create_anonymous_pipe()
 /// 기능: 양 끝에 CLOEXEC를 적용한 macOS anonymous pipe를 만든다.
@@ -411,6 +422,7 @@ pub(super) fn create_anonymous_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok((reader, writer))
 }
 
+
 /// 함수 이름: set_close_on_exec()
 /// 기능: exec에서 명시적으로 dup하지 않은 pipe end가 sidecar에 남지 않게 FD_CLOEXEC를 설정한다.
 /// 인자: descriptor -> 설정할 raw FD
@@ -427,6 +439,7 @@ pub(super) fn set_close_on_exec(descriptor: RawFd) -> io::Result<()> {
     Ok(())
 }
 
+
 /// 함수 이름: duplicate_staging_fd()
 /// 기능: pre_exec dup2 source를 target 3~6과 겹치지 않는 CLOEXEC FD로 복제한다.
 /// 인자: descriptor -> pipe의 원래 child end
@@ -441,6 +454,7 @@ pub(super) fn duplicate_staging_fd(descriptor: RawFd) -> io::Result<OwnedFd> {
 
     Ok(unsafe { OwnedFd::from_raw_fd(staged_descriptor) })
 }
+
 
 /// 함수 이름: configure_child_file_descriptors()
 /// 기능: pre_exec에서 staged pipe를 FD3 token/4 ready/5 stop/6 config로만 상속한다.
@@ -467,6 +481,7 @@ pub(super) fn configure_child_file_descriptors(
     }
 }
 
+
 /// 함수 이름: duplicate_to_child_fd()
 /// 기능: staged descriptor를 고정 child FD로 원자적으로 복제한다.
 /// 인자: source -> 16 이상 source FD, target -> ADR fixed FD
@@ -478,6 +493,7 @@ pub(super) fn duplicate_to_child_fd(source: RawFd, target: RawFd) -> io::Result<
     }
     Ok(())
 }
+
 
 /// 함수 이름: set_zero_core_dump_limit()
 /// 기능: 현재 process 또는 pre_exec child의 core dump soft/hard limit를 모두 0으로 만든다.
@@ -495,6 +511,7 @@ pub(super) fn set_zero_core_dump_limit() -> io::Result<()> {
     Ok(())
 }
 
+
 /// 함수 이름: write_pipe_payload()
 /// 기능: bounded payload를 anonymous pipe에 전부 쓰고 File drop으로 EOF를 전달한다.
 /// 인자: writer -> parent pipe File, payload -> token 또는 strict config bytes
@@ -503,6 +520,7 @@ pub(super) fn set_zero_core_dump_limit() -> io::Result<()> {
 pub(super) fn write_pipe_payload(mut writer: File, payload: &[u8]) -> io::Result<()> {
     writer.write_all(payload)
 }
+
 
 /// 함수 이름: read_ready_descriptor()
 /// 기능: nonblocking FD4에서 bounded framing을 보존하며 exact JSON ready descriptor를 timeout 내 읽는다.
@@ -568,6 +586,7 @@ pub(super) fn read_ready_descriptor(
     }
 }
 
+
 /// 함수 이름: set_nonblocking()
 /// 기능: ready FD wait에 native hard timeout을 적용할 수 있도록 O_NONBLOCK을 설정한다.
 /// 인자: descriptor -> parent ready FD
@@ -584,6 +603,7 @@ pub(super) fn set_nonblocking(descriptor: RawFd) -> io::Result<()> {
     Ok(())
 }
 
+
 /// 함수 이름: resolve_app_data_directory()
 /// 기능: 기존 macOS Tauri per-user app-data 경로를 유지한다.
 /// 인자: app_handle -> Tauri native path owner
@@ -597,6 +617,7 @@ pub(super) fn resolve_app_data_directory(app_handle: &AppHandle) -> tauri::Resul
         profile,
     )) // Live owner는 별도 directory에만 존재한다.
 }
+
 
 /// 함수 이름: write_closed_ack()
 /// 기능: 기존 FD5의 한 byte ACK와 writer close 계약을 유지한다.

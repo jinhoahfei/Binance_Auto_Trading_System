@@ -4,6 +4,7 @@ import { is_trading_indicator_snapshot } from '../../shared/api/tradingIndicator
 import { RealtimeIndicators } from './components/RealtimeIndicators';
 import { present_trading_indicators } from './tradingIndicatorPresenter';
 
+
 /**
  * 함수 이름: create_condition()
  * 기능: 화면 판정 경계 테스트에서 수신 여부를 구분할 조건을 생성한다.
@@ -28,7 +29,11 @@ describe('현재 단계 실시간 지표 표시', () => {
             create_condition({ condition_id: 'b_profit_zone', value: '0.61', threshold: '0.60', comparison: '>=', satisfied: false, source: 'realtime', hold_seconds: 5 }),
             create_condition({ condition_id: 'b_signal_low', value: null, threshold: null, satisfied: null, evaluated_at: null, market_version: null, context_version: null }),
         ] };
+
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(<RealtimeIndicators groups={present_trading_indicators(snapshot, 'Case_B', true, true)} />);
+
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.getAllByRole('heading')).toHaveLength(1);
         const rows = screen.getAllByRole('listitem');
         expect(rows[0]).toHaveAttribute('data-tone', 'positive');
@@ -48,9 +53,14 @@ describe('현재 단계 실시간 지표 표시', () => {
         ['-0.005', '0', '-0.01', '0.00'],
         ['99.999', '100', '100.00', '100.00'],
     ])('지표 %s와 기준 %s를 두 자리로 표시한다', (value, threshold, displayed, limit) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const row = create_condition({ value, threshold });
+
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'B', notice: null, conditions: [row] };
         const indicator = present_trading_indicators(snapshot, 'Case_B', true, true)[0]!.indicators[0]!;
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(indicator.value).toBe(displayed);
         expect(indicator.criterion).toBe(`< ${limit}`);
         expect(indicator.tone).toBe('positive');
@@ -59,16 +69,20 @@ describe('현재 단계 실시간 지표 표시', () => {
     });
 
     it('병렬 감시는 Case별 제목과 현재 단계를 표시하고 연결이 끊기면 판정을 지운다', () => {
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'PARALLEL', notice: null, conditions: [
             create_condition(), create_condition({ condition_id: 'c_stop', strategy: 'CASE_C', phase: 'CASE_C_HOLDING' }),
         ] };
         const groups = present_trading_indicators(snapshot, 'Case_B / Case_C', false, true);
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(groups.map((group) => group.title)).toEqual(['Case_B 실시간 지표', 'Case_C 실시간 지표']);
         expect(groups.every((group) => group.phase === 'POSITION_OPEN · 포지션 보유')).toBe(true);
         expect(groups.flatMap((group) => group.indicators).every((row) => row.tone === 'neutral' && row.value === '—')).toBe(true);
     });
 
     it('WAIT_SIGNAL·Case C 회복 단계를 분리하고 이전 BBW 행을 제거하며 공통 조건은 한 번 표시한다', () => {
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const snapshot: BackendTradingIndicatorSnapshot = {
             phase_key: 'parallel-recovery', notice: null,
             phases: [
@@ -82,9 +96,13 @@ describe('현재 단계 실시간 지표 표시', () => {
                 create_condition({ condition_id: 'upper_safe_exit', strategy: null, phase: 'UPPER_SAFE_EXIT' }),
             ],
         };
+
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(<RealtimeIndicators groups={present_trading_indicators(snapshot, 'Case_B / Case_C', true, true)} />);
         const case_b = screen.getByRole('region', { name: 'Case_B 실시간 지표' });
         const case_c = screen.getByRole('region', { name: 'Case_C 실시간 지표' });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(case_b).toHaveTextContent('WAIT_SIGNAL');
         expect(case_b).toHaveTextContent('일시정지');
         expect(case_b).not.toHaveTextContent('터치 순간 30분봉 BBW');
@@ -94,6 +112,7 @@ describe('현재 단계 실시간 지표 표시', () => {
     });
 
     it('지표가 없는 주문·종료 단계도 backend 상태 그대로 표시한다', () => {
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const snapshot: BackendTradingIndicatorSnapshot = {
             phase_key: 'pending', notice: 'order_pending', conditions: [],
             phases: [
@@ -102,6 +121,8 @@ describe('현재 단계 실시간 지표 표시', () => {
             ],
         };
         const groups = present_trading_indicators(snapshot, 'Case_C', true, true);
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(groups).toHaveLength(2);
         expect(groups[0]?.notice).toContain('터치 순간 BBW');
         expect(groups[1]?.phase).toBe('매수 주문 · 체결 대기');
@@ -112,6 +133,7 @@ describe('현재 단계 실시간 지표 표시', () => {
     });
 
     it('구버전과 종료 후에는 예시값을 만들지 않고 대기·빈 상태 안내를 표시한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         for (const active of [false, true]) {
             const group = present_trading_indicators(null, '전략 확인 대기', true, active)[0]!;
             expect(group.indicators).toEqual([]);
@@ -120,7 +142,10 @@ describe('현재 단계 실시간 지표 표시', () => {
     });
 
     it('잘못된 Decimal·판정·출처와 중복 지표 계약을 거부한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const row = create_condition();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(is_trading_indicator_snapshot({ phase_key: 'B', notice: null, conditions: [row] })).toBe(true);
         for (const invalid of [
             { value: 0.1 }, { value: 'NaN' }, { satisfied: 'true' }, { value: null },

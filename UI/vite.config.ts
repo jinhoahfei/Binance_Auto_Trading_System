@@ -1,3 +1,5 @@
+// React UI의 개발 서버와 production build, 명시적 smoke 진입점을 설정한다.
+
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { desktop_smoke_plugin } from './scripts/desktopSmokePlugin.ts';

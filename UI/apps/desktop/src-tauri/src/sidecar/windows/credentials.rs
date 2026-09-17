@@ -36,6 +36,7 @@ impl Drop for CredentialAllocation {
     }
 }
 
+
 /// 함수 이름: read_secret()
 /// 기능: 고정 target의 generic blob을 bounded printable ASCII로 검증한다.
 /// 인자: target -> 코드에 고정한 두 target 중 하나
@@ -71,6 +72,7 @@ fn read_secret(target: &str) -> Result<String, SidecarFailure> {
     }
     Ok(String::from_utf8(bytes.to_vec()).expect("validated ASCII credential")) // 반환 직후 OS 복사본은 Drop에서 지운다.
 }
+
 
 /// 함수 이름: read_credentials()
 /// 기능: fixed generic target pair를 renderer와 분리된 zeroizing native owner로 묶는다.

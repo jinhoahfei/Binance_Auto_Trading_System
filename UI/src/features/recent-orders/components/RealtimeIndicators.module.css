@@ -1,3 +1,4 @@
+/* 실시간 매매 지표를 그룹 단위로 배치한다. */
 .groups {
     display: flex;
     flex-direction: column;
@@ -23,6 +24,7 @@
     border-top: 1px solid var(--color-border-default);
 }
 
+/* 현재 판단 단계와 그 설명을 함께 표시한다. */
 .phase {
     display: flex;
     flex-wrap: wrap;
@@ -48,6 +50,7 @@
     line-height: 17px;
 }
 
+/* 지표의 상태 점·항목명·현재 값을 행별로 정렬한다. */
 .group ul {
     padding: 0;
     margin: 0;
@@ -59,7 +62,9 @@
     display: grid;
     grid-template-columns: 10px minmax(0, 1fr) auto;
     gap: 13px;
-    row-gap: 0; /* 타이머는 같은 지표 행 안에서 값 아래에 이어 붙인다. */
+    row-gap: 0;
+
+    /* 타이머는 같은 지표 행 안에서 값 아래에 이어 붙인다. */
     align-items: center;
     min-height: 58px;
     padding: 0 0 0 7px;
@@ -92,6 +97,7 @@
     font-weight: 600;
 }
 
+/* 지표 값과 상태 점의 긍정·부정·중립 색을 대응시킨다. */
 .positive {
     color: var(--color-text-positive);
 }
@@ -135,5 +141,7 @@
 .group strong {
     max-width: 125px;
     padding: 10px 0;
-    overflow-wrap: anywhere; /* 긴 Decimal도 가로 스크롤 없이 원래 정밀도로 표시한다. */
+    overflow-wrap: anywhere;
+
+    /* 긴 Decimal도 가로 스크롤 없이 원래 정밀도로 표시한다. */
 }

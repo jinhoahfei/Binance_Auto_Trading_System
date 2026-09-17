@@ -1,3 +1,5 @@
+// 분할 주문에서 사용하는 데이터 구조와 입력·표시 타입을 정의한다.
+
 export type SplitOrderSide = 'buy' | 'sell';
 
 export interface SplitOrderIntent {

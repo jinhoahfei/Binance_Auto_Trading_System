@@ -1,7 +1,8 @@
+/* 차트와 드로잉을 겹칠 기준 영역을 구성한다. */
 .canvas {
     position: relative;
     width: 100%;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 378px;
     overflow: hidden;
 }
@@ -30,11 +31,13 @@
     bottom: -2px;
 }
 
+/* 그리기 모드에서 SVG 영역이 포인터 입력을 받도록 한다. */
 .canvas[data-drawing-active='true'] .chart {
     cursor: crosshair;
     pointer-events: auto;
 }
 
+/* 드로잉 오버레이를 시세 차트 위에 맞춘다. */
 .chart {
     position: absolute;
     z-index: 2;
@@ -44,7 +47,7 @@
     width: calc(100% - 46px);
     height: 328px;
     overflow: visible;
-    pointer-events: none;
+    pointer-events: none;  /* 표시 전용 레이어가 포인터 입력을 가로채지 않게 한다. */
 }
 
 .canvas:has([data-chart-engine-ready='true']) .marketLayer {
@@ -60,6 +63,7 @@
     visibility: hidden;
 }
 
+/* 시세 로딩·오류 안내를 차트 위에 표시한다. */
 .dataStatus {
     position: absolute;
     z-index: 3;
@@ -91,6 +95,7 @@
     line-height: 18px;
 }
 
+/* 과거 봉 추가 조회 상태와 재시도 조작을 배치한다. */
 .historyDataStatus {
     position: absolute;
     z-index: 3;
@@ -122,6 +127,7 @@
     outline: none;
 }
 
+/* 확대된 차트 영역에 차트와 가격 축 높이를 맞춘다. */
 .fullscreenCanvas {
     height: calc(100vh - 133px);
 }
@@ -131,6 +137,7 @@
     height: calc(100vh - 183px);
 }
 
+/* 차트 격자와 가격 지표 선을 구분해 표시한다. */
 .grid line {
     stroke: color-mix(in srgb, var(--color-border-default) 70%, transparent);
     stroke-width: 1;
@@ -152,6 +159,7 @@
     vector-effect: non-scaling-stroke;
 }
 
+/* 양봉·음봉과 거래량의 색을 대응시킨다. */
 .positiveCandle {
     fill: var(--color-status-positive);
     stroke: var(--color-status-positive);
@@ -179,6 +187,7 @@
     vector-effect: non-scaling-stroke;
 }
 
+/* 드로잉 선의 기본 표시와 선택 상태를 구성한다. */
 .drawing,
 .selectedDrawing {
     pointer-events: none;
@@ -188,6 +197,7 @@
     vector-effect: non-scaling-stroke;
 }
 
+/* 가느다란 선도 선택할 수 있도록 별도의 입력 영역을 둔다. */
 .drawingHitArea {
     cursor: context-menu;
     pointer-events: stroke;
@@ -215,6 +225,7 @@
     stroke-width: 3;
 }
 
+/* 선 편집 조작을 포인터 위치의 메뉴로 제공한다. */
 .lineContextMenu {
     position: absolute;
     z-index: 4;
@@ -242,6 +253,7 @@
     outline: none;
 }
 
+/* 가격 축과 시간 축의 눈금을 배치한다. */
 .priceAxis {
     position: absolute;
     top: 0;
@@ -272,6 +284,7 @@
     line-height: 16px;
 }
 
+/* 그리기·확대 도구와 선택된 도구의 강조 상태를 배치한다. */
 .tools {
     position: absolute;
     z-index: 3;

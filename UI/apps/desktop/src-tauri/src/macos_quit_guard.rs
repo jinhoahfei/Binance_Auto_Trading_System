@@ -41,6 +41,7 @@ impl fmt::Display for MacOsQuitGuardInstallFailure {
 
 impl Error for MacOsQuitGuardInstallFailure {}
 
+
 /// 함수 이름: cancel_after_routing()
 /// 기능: routing 성공·실패·panic과 무관하게 AppKit 정상 종료를 fail closed한다.
 /// 인자: route_exit_intent -> 기존 renderer 안전 종료 bridge로 intent를 전달하는 작업
@@ -56,6 +57,7 @@ where
     let _ = catch_unwind(AssertUnwindSafe(route_exit_intent));
     NSApplicationTerminateReply::TerminateCancel
 }
+
 
 /// 함수 이름: application_should_terminate()
 /// 기능: Command-Q, Dock Quit, AppleEvent Quit을 취소하고 기존 application exit intent로 단일화한다.
@@ -81,6 +83,7 @@ unsafe extern "C-unwind" fn application_should_terminate(
     })
 }
 
+
 /// 함수 이름: method_implementation()
 /// 기능: typed Objective-C callback을 class_addMethod가 요구하는 opaque IMP로 변환한다.
 /// 인자: 없음
@@ -96,6 +99,7 @@ fn method_implementation() -> Imp {
     // IMP는 같은 Objective-C ABI 함수 포인터의 type-erased 표현이며 selector encoding을 별도로 등록한다.
     unsafe { std::mem::transmute(callback) }
 }
+
 
 /// 함수 이름: install_macos_quit_guard()
 /// 기능: sidecar 시작 전에 현재 Tao application delegate에 fail-closed quit callback을 추가한다.

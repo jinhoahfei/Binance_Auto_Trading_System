@@ -1,3 +1,4 @@
+/* 타이머 이름·남은 시간·상태를 함께 표시한다. */
 .timer {
     grid-column: 2 / -1;
     min-height: 40px;
@@ -14,9 +15,12 @@
     gap: 6px 10px;
 }
 
+/* 변하는 숫자의 표시 폭을 안정적으로 유지한다. */
 .time {
     font-family: var(--font-numeric);
-    font-variant-numeric: tabular-nums; /* 매초 숫자가 바뀌어도 행과 스크롤 위치를 유지한다. */
+    font-variant-numeric: tabular-nums;
+
+    /* 매초 숫자가 바뀌어도 행과 스크롤 위치를 유지한다. */
 }
 
 .status {
@@ -47,9 +51,12 @@
     color: var(--color-text-secondary);
 }
 
+/* 타이머 상태의 보조 사유를 낮은 강조도로 표시한다. */
 .reason {
     display: block;
-    min-height: 15px; /* 리셋 사유가 생겨도 목록 높이를 바꾸지 않는다. */
+    min-height: 15px;
+
+    /* 리셋 사유가 생겨도 목록 높이를 바꾸지 않는다. */
     font-size: 10px;
     line-height: 15px;
 }

@@ -27,6 +27,7 @@ const NOTICES: Readonly<Record<string, string>> = {
     case_finished: '이번 하단 이벤트의 신규 진입 감시가 종료되었습니다.',
 };
 
+
 /**
  * 함수 이름: format_indicator_value()
  * 기능: 지표와 기준값을 소수점 둘째 자리로 표시하고 시간 값에 초 단위를 붙인다.
@@ -36,10 +37,13 @@ const NOTICES: Readonly<Record<string, string>> = {
  */
 function format_indicator_value(value: string | null, source: string): string {
     if (value === null) return '—';
+
     // 화면만 반올림하며 조건 충족 여부는 원본 정밀도로 평가한 backend 결과를 사용한다.
     const display = format_decimal_text(value);
+
     return source === 'elapsed' ? `${display}초` : display;
 }
+
 
 /**
  * 함수 이름: present_condition_criterion()
@@ -56,6 +60,7 @@ function present_condition_criterion(row: BackendTradingCondition): string {
     const threshold = row.source === 'elapsed' && row.threshold !== null
         ? duration_labels[row.threshold] ?? format_indicator_value(row.threshold, row.source)
         : format_indicator_value(row.threshold, row.source);
+
     return `${operator} ${reference}${threshold}${duration}`;
 }
 
@@ -80,6 +85,7 @@ const PHASE_LABELS: Readonly<Record<string, readonly [string, string]>> = {
     CASE_C_FINAL_STATE: ['신호 감시 종료', '같은 하단 이벤트에서는 Case_C 신규 진입을 다시 시도하지 않습니다.'],
     LOWER_TOUCH_WATCH: ['하단 터치 대기', '현재가와 실시간 30분봉 하단 밴드를 비교합니다.'],
 };
+
 
 /**
  * 함수 이름: present_trading_indicators()
@@ -111,6 +117,7 @@ export function present_trading_indicators(
     // 구버전은 실제 수신한 행의 소속과 단계만 사용한다. 지표 없는 Case를 임의 생성하지 않는다.
     const phases = snapshot?.phases?.length ? snapshot.phases : (['CASE_B', 'CASE_C'] as const).flatMap((strategy) => {
         const row = rows.find((candidate) => candidate.strategy === strategy);
+
         return row ? [{ strategy, phase: row.phase, notice: snapshot?.notice ?? null }] : [];
     });
     const definitions = phases.map((phase) => ({
@@ -131,6 +138,7 @@ export function present_trading_indicators(
 
     return definitions.map((group) => {
         const phase_label = PHASE_LABELS[group.phase];
+
         return {
             id: `${snapshot?.phase_key ?? 'waiting'}:${group.strategy ?? 'common'}`,
             title: group.title,
@@ -140,6 +148,7 @@ export function present_trading_indicators(
             indicators: rows.filter((row) => row.strategy === group.strategy && (group.strategy === null || row.phase === group.phase)).map((row) => {
                 const available = is_online && evaluation_running && row.satisfied !== null;
                 const has_timer = row.timer != null || row.hold_seconds !== null || row.source === 'elapsed' || row.condition_id === 'c_flush';
+
                 return {
                     id: `${row.strategy ?? 'common'}:${row.phase}:${row.condition_id}`,
                     label: CONDITION_LABELS[row.condition_id] ?? row.condition_id,

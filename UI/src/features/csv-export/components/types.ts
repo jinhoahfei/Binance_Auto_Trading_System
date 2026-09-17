@@ -1,3 +1,5 @@
+// CSV 내보내기에서 사용하는 데이터 구조와 입력·표시 타입을 정의한다.
+
 export type CSVExportPeriod = 'TODAY' | 'WEEKLY' | 'MONTHLY' | 'CUSTOM';
 
 export type CalendarTarget = 'START' | 'END';

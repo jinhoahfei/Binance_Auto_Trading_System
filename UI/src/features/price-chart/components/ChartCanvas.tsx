@@ -102,6 +102,7 @@ interface DraftDrawingPoint {
     readonly x_ratio: number;
 }
 
+
 /**
  * 함수 이름: get_chart_range()
  * 기능: 캔들 및 보조지표 전체를 포함하는 차트 표시 가격 범위를 계산한다.
@@ -113,6 +114,7 @@ function get_chart_range(
     candles: ReadonlyArray<CandleViewModel>,
     lines: ReadonlyArray<ReadonlyArray<LinePointViewModel>>,
 ): ChartRange {
+    // 캔들 고저가와 표시할 지표선을 함께 포함하는 가격 범위를 구한다.
     let minimum_value = Number.POSITIVE_INFINITY;
     let maximum_value = Number.NEGATIVE_INFINITY;
 
@@ -127,6 +129,7 @@ function get_chart_range(
         });
     });
 
+    // 사용할 수 없는 범위는 기본값으로, 동일한 최솟값·최댓값은 폭이 있는 범위로 처리한다.
     if (!Number.isFinite(minimum_value) || !Number.isFinite(maximum_value)) {
         return FALLBACK_CHART_RANGE;
     }
@@ -136,6 +139,7 @@ function get_chart_range(
         maximum: maximum_value === minimum_value ? minimum_value + 1 : maximum_value,
     };
 }
+
 
 /**
  * 함수 이름: create_axis_values()
@@ -156,6 +160,7 @@ function create_axis_values(range: ChartRange): ReadonlyArray<number> {
     return Array.from({ length: 5 }, (_, index) => minimum_axis_value + nice_step * (4 - index));
 }
 
+
 /**
  * 함수 이름: map_price_to_y()
  * 기능: 가격을 SVG 차트 내부의 세로 좌표로 변환한다.
@@ -169,6 +174,7 @@ function map_price_to_y(price: number, range: ChartRange): number {
 
     return CHART_PADDING_TOP + drawable_height * (1 - normalized_value);
 }
+
 
 /**
  * 함수 이름: map_y_to_price()
@@ -188,6 +194,7 @@ function map_y_to_price(chart_y: number, range: ChartRange): number {
     return range.minimum + normalized_value * (range.maximum - range.minimum);
 }
 
+
 /**
  * 함수 이름: build_line_points()
  * 기능: 보조지표 배열을 SVG polyline의 points 문자열로 변환한다.
@@ -203,6 +210,7 @@ function build_line_points(points: ReadonlyArray<LinePointViewModel>, range: Cha
     )).join(' ');
 }
 
+
 /**
  * 함수 이름: get_drawing_pixel_points()
  * 기능: drawing의 실제 봉 시각·가격을 현재 Lightweight Charts pane 좌표로 투영한다.
@@ -217,6 +225,7 @@ function get_drawing_pixel_points(
     range: ChartRange,
     coordinate_space: ChartCoordinateSpace | null,
 ): ReadonlyArray<ChartPixelPoint> {
+    // 실시간 엔진 좌표계가 있으면 시간·가격을 해당 좌표로 변환한다.
     if (coordinate_space !== null) {
         return drawing.points.flatMap((point) => {
             const open_time = Date.parse(point.time);
@@ -232,6 +241,7 @@ function get_drawing_pixel_points(
         });
     }
 
+    // 좌표계가 없는 fixture에서는 보관된 비율과 기본 간격을 사용한다.
     const horizontal_step = drawing.points.length > 1
         ? CHART_WIDTH / (drawing.points.length - 1)
         : CHART_WIDTH;
@@ -246,6 +256,7 @@ function get_drawing_pixel_points(
     });
 }
 
+
 /**
  * 함수 이름: build_drawing_points()
  * 기능: 현재 pane의 drawing point 목록을 SVG polyline points 문자열로 변환한다.
@@ -259,6 +270,7 @@ function build_drawing_points(drawing_points: ReadonlyArray<ChartPixelPoint>): s
     }).join(' ');
 }
 
+
 /**
  * 함수 이름: format_drawing_price()
  * 기능: chart engine이 계산한 가격을 직렬화 가능한 최대 여덟 소수 자릿수 문자열로 만든다.
@@ -269,6 +281,7 @@ function build_drawing_points(drawing_points: ReadonlyArray<ChartPixelPoint>): s
 function format_drawing_price(price: number): string {
     return price.toFixed(8).replace(/\.?0+$/, '');
 }
+
 
 /**
  * 함수 이름: create_draft_drawing_point()
@@ -287,6 +300,7 @@ function create_draft_drawing_point(
     range: ChartRange,
     coordinate_space: ChartCoordinateSpace | null,
 ): DraftDrawingPoint | null {
+    // 포인터 위치를 차트 영역 안의 비율과 픽셀 좌표로 제한한다.
     const chart_rect = chart_element.getBoundingClientRect();
     const x_ratio = chart_rect.width === 0
         ? 0
@@ -299,6 +313,7 @@ function create_draft_drawing_point(
     const chart_x = x_ratio * chart_width;
     const chart_y = y_ratio * chart_height;
 
+    // 실시간 좌표계가 있으면 가격·시간 변환 결과를 사용한다.
     if (coordinate_space !== null) {
         const chart_point = coordinate_space.convert_coordinates_to_point(chart_x, chart_y);
 
@@ -315,6 +330,7 @@ function create_draft_drawing_point(
         };
     }
 
+    // fixture 좌표에서는 기본 가격 범위와 현재 시각으로 초안을 구성한다.
     return {
         chart_x,
         chart_y,
@@ -323,6 +339,7 @@ function create_draft_drawing_point(
         x_ratio,
     };
 }
+
 
 /**
  * 함수 이름: format_axis_price()
@@ -337,11 +354,13 @@ function format_axis_price(price: number): string {
     if (absolute_price >= 1_000_000) {
         return `${(price / 1_000_000).toFixed(2)}M`;
     }
+
     return new Intl.NumberFormat('en-US', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     }).format(price);
 }
+
 
 /**
  * 함수 이름: get_candle_open_time()
@@ -364,6 +383,7 @@ function get_candle_open_time(
         - ((candle_count - index) * INTERVAL_DURATION_MILLISECONDS[interval]);
 }
 
+
 /**
  * 함수 이름: format_time_axis_value()
  * 기능: 봉 주기에 맞춰 KST 차트 축 시각을 시간 또는 날짜 형식으로 표시한다.
@@ -372,6 +392,7 @@ function get_candle_open_time(
  * 작성 날짜: 2026/08/20
  */
 function format_time_axis_value(open_time: number, interval: ChartInterval): string {
+    // 일·장기 주기에는 날짜를 포함하고 짧은 주기에는 시각을 중심으로 표시한다.
     if (interval === '1d') {
         return new Intl.DateTimeFormat('ko-KR', {
             month: '2-digit',
@@ -398,6 +419,7 @@ function format_time_axis_value(open_time: number, interval: ChartInterval): str
     }).format(new Date(open_time));
 }
 
+
 /**
  * 함수 이름: create_time_axis_labels()
  * 기능: 현재 표시 봉의 처음부터 끝까지 균등한 다섯 개 KST 축 라벨을 만든다.
@@ -409,6 +431,7 @@ function create_time_axis_labels(
     candles: ReadonlyArray<CandleViewModel>,
     interval: ChartInterval,
 ): ReadonlyArray<string> {
+    // 표시 범위 양 끝의 캔들이 없으면 시각을 추정하지 않고 placeholder를 반환한다.
     const first_candle = candles[0];
     const last_candle = candles.at(-1);
 
@@ -416,6 +439,7 @@ function create_time_axis_labels(
         return Array.from({ length: 5 }, () => '--:--');
     }
 
+    // 양 끝의 봉 시각 사이에서 다섯 개의 축 표식을 만든다.
     const first_open_time = get_candle_open_time(first_candle, 0, candles.length, interval);
     const last_open_time = get_candle_open_time(
         last_candle,
@@ -430,6 +454,7 @@ function create_time_axis_labels(
         return format_time_axis_value(open_time, interval);
     });
 }
+
 
 /**
  * 함수 이름: ChartCanvas()
@@ -526,6 +551,7 @@ export function ChartCanvas({
     useEffect(() => {
         if (!history_boundary_is_visible) {
             history_boundary_request_ref.current = null;
+
             return;
         }
 
@@ -573,6 +599,13 @@ export function ChartCanvas({
             return undefined;
         }
 
+        /**
+         * 함수 이름: handle_outside_pointer_down()
+         * 기능: 선 메뉴와 선 hit 영역 바깥 클릭에서만 메뉴 닫기 intent를 전달한다.
+         * 인자: event -> 문서 pointerdown 이벤트
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         const handle_outside_pointer_down = (event: PointerEvent) => {
             if (event.target instanceof Element
                 && (event.target.closest('[data-chart-line-menu]') !== null
@@ -613,6 +646,7 @@ export function ChartCanvas({
                 if (event.key === 'Escape' && lineContextMenuOpen) {
                     event.preventDefault();
                     onIntent?.({ type: 'DRAWING_LINE_CONTEXT_MENU_CLOSED' });
+
                     return;
                 }
 
@@ -668,6 +702,7 @@ export function ChartCanvas({
                         set_draft_start(drawing_point);
                         set_draft_current(drawing_point);
                         onIntent?.({ type: 'DRAWING_STARTED' });
+
                         return;
                     }
 
@@ -762,6 +797,7 @@ export function ChartCanvas({
                     {candles.map((candle, index) => {
                         const candle_is_positive = candle.close >= candle.open;
                         const candle_color_class = candle_is_positive ? styles.positiveCandle : styles.negativeCandle;
+
                         // Fixture candle은 Figma의 60px 중심 간격을, production fallback은 가용 폭을 사용한다.
                         const candle_center_x = presentationMode === 'fixture'
                             ? FIXTURE_CANDLE_FIRST_CENTER_X + FIXTURE_CANDLE_HORIZONTAL_STEP * index

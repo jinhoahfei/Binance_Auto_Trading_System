@@ -1,57 +1,62 @@
+/* 공통 버튼의 크기·표면·글자와 상태 전환을 정의한다. */
 .button {
-  min-height: 40px;
-  padding: 0 20px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-control);
-  color: var(--color-text-primary);
-  box-shadow: var(--shadow-control);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1;
-  transition: border-color 140ms ease, filter 140ms ease, transform 140ms ease;
+    min-height: 40px;
+    padding: 0 20px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-control);
+    color: var(--color-text-primary);
+    box-shadow: var(--shadow-control);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+    transition: border-color 140ms ease, filter 140ms ease, transform 140ms ease;
 }
 
+/* 활성 버튼의 포인터 반응과 눌림 상태를 표시한다. */
 .button:hover:not(:disabled) {
-  filter: brightness(1.09);
+    filter: brightness(1.09);
 }
 
 .button:active:not(:disabled) {
-  transform: translateY(1px);
+    transform: translateY(1px);
 }
 
+/* 사용할 수 없는 버튼의 강조도를 낮춘다. */
 .button:disabled {
-  opacity: 0.48;
+    opacity: 0.48;
 }
 
+/* 좁은 조작 영역에 사용할 버튼 크기를 정의한다. */
 .compact {
-  min-height: 34px;
-  padding: 0 16px;
-  font-size: 12.5px;
+    min-height: 34px;
+    padding: 0 16px;
+    font-size: 12.5px;
 }
 
+/* 긍정·부정·정보·중립 조작의 표시색을 구분한다. */
 .positive {
-  border-color: var(--color-status-positive);
-  background: var(--color-status-positive-strong);
-  color: var(--color-text-on-strong-status);
+    border-color: var(--color-status-positive);
+    background: var(--color-status-positive-strong);
+    color: var(--color-text-on-strong-status);
 }
 
 .positive:disabled {
-  color: var(--color-text-primary);
+    color: var(--color-text-primary);
 }
 
 .negative {
-  border-color: var(--color-status-negative);
-  background: var(--color-status-negative-strong);
-  color: var(--color-text-on-strong-status);
+    border-color: var(--color-status-negative);
+    background: var(--color-status-negative-strong);
+    color: var(--color-text-on-strong-status);
 }
 
 .info {
-  border-color: var(--color-status-info);
-  background: var(--color-status-info-strong);
-  color: white;
+    border-color: var(--color-status-info);
+    background: var(--color-status-info-strong);
+    color: white;
 }
 
 .neutral {
-  background: var(--color-bg-control);
+    background: var(--color-bg-control);
 }

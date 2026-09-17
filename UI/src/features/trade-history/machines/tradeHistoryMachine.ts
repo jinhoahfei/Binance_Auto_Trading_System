@@ -44,6 +44,7 @@ export type TradeHistoryMachineEvent =
     | { readonly type: 'SELL_TRADE_HISTORY_SELECTED' }
     | { readonly type: 'DISMISS_TRADE_HISTORY_ERROR' };
 
+
 /**
  * 함수 이름: milliseconds_until_next_kst_midnight()
  * 기능: timezone database나 local browser timezone에 의존하지 않고 다음 Asia/Seoul 자정까지 계산한다.
@@ -70,6 +71,7 @@ export function milliseconds_until_next_kst_midnight(
         - (now_epoch_ms + KST_UTC_OFFSET_MILLISECONDS);
 }
 
+
 /**
  * 함수 이름: create_trade_history_machine()
  * 기능: 거래 내역의 결합 filter query와 조회 중 체결·resync 경쟁을 포함한 실제 조회 상태를 관리한다.
@@ -81,10 +83,13 @@ export function create_trade_history_machine(
     options: TradeHistoryMachineOptions = {},
 ) {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as TradeHistoryMachineContext,
             events: {} as TradeHistoryMachineEvent,
         },
+
+        // 입력 수락 조건을 순수 가드로 정의한다.
         guards: {
             is_first_entry: ({ context }) => !context.has_entered,
             needs_follow_up_refresh: ({ context }) => context.refresh_pending,
@@ -97,6 +102,8 @@ export function create_trade_history_machine(
                     && event.output.records.length > 0;
             },
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             // 루트 조립기가 이 내부 Action을 요약 Region의 순수 데이터 갱신으로 연결한다.
             ui_publish_summary: assign({}),
@@ -218,6 +225,8 @@ export function create_trade_history_machine(
             : options.records.length > 0
                 ? 'ready'
                 : 'empty',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             symbol: options.symbol ?? 'ETH/KRW',
             period: options.period ?? 'today',
@@ -255,6 +264,8 @@ export function create_trade_history_machine(
                 actions: 'invalidate_cache',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             idle: {},
             loading: {

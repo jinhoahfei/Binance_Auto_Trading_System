@@ -1,3 +1,4 @@
+/* 대시보드의 주 영역과 보조 영역을 열 단위로 구성한다. */
 .page {
     display: grid;
     grid-template-columns: minmax(0, 2.3fr) minmax(360px, 1fr);
@@ -8,24 +9,29 @@
     margin: 0 auto;
 }
 
+/* 왼쪽 열에 차트·REGIME·계좌 영역을 배치한다. */
 .leftColumn {
     display: flex;
     flex-direction: column;
     gap: 16px;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
 }
 
+/* 계좌 요약 영역의 열과 간격을 설정한다. */
 .accountRow {
     margin-top: 0;
 }
 
+/* 화면 조건 (max-width: 1240px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 1240px) {
+    /* 대시보드의 주 영역과 보조 영역을 열 단위로 구성한다. */
     .page {
         grid-template-columns: minmax(0, 1fr);
         height: auto;
     }
-
     .page > aside {
-        height: 640px; /* 단일 열에서도 패널 내부 스크롤 높이를 확정한다. */
+        height: 640px;
+
+        /* 단일 열에서도 패널 내부 스크롤 높이를 확정한다. */
     }
 }

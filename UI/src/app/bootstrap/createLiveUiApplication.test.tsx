@@ -18,6 +18,7 @@ import {
 
 const TEST_REQUEST_ID = 'f5a4f621-25f8-4dd2-bfb7-1b80e9561423';
 
+
 /**
  * 클래스 이름: BootstrapFakeWebSocket
  * 기능: live App render test가 실제 network 없이 event connection 생성을 관찰한다.
@@ -53,6 +54,7 @@ class BootstrapFakeWebSocket implements BackendWebSocket {
     }
 }
 
+
 /**
  * 함수 이름: create_descriptor()
  * 기능: live bootstrap component test용 valid descriptor를 만든다.
@@ -68,6 +70,7 @@ function create_descriptor() {
         token: TEST_BACKEND_TOKEN,
     } as const;
 }
+
 
 /**
  * 함수 이름: create_snapshot_fetch()
@@ -91,31 +94,41 @@ function create_snapshot_fetch(snapshot: unknown): typeof fetch {
 
 describe('create_live_ui_application', () => {
     it('snapshot을 먼저 받은 뒤 StrictMode App에 실제 USDT 상태를 render한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const lifecycle_order: Array<string> = [];
+
         // 실제 시세와 Testnet 계좌를 구분한 backend 환경 정보가 화면까지 전달되어야 한다.
         const base_snapshot = create_backend_snapshot_fixture();
+
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const snapshot = {
             ...base_snapshot,
             environment: { market_data: 'mainnet', account: 'testnet', orders_enabled: false },
             trading: { ...base_snapshot.trading, mode: 'testnet' },
         };
+
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot_fetch = create_snapshot_fetch(snapshot);
         const application = await create_live_ui_application(create_descriptor(), {
             today: '2026-08-21',
             adapter_dependencies: {
                 fetch: async (input, init) => {
                     lifecycle_order.push('snapshot');
+
                     return snapshot_fetch(input, init);
                 },
                 create_uuid: () => TEST_REQUEST_ID,
                 create_web_socket: () => {
                     lifecycle_order.push('web_socket');
+
                     return new BootstrapFakeWebSocket();
                 },
             },
         });
 
-        expect(lifecycle_order).toEqual(['snapshot']);
+        expect(lifecycle_order).toEqual(['snapshot']);  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
+
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const application_factory = create_live_ui_application_factory(application);
         const rendered = render(
             <StrictMode>
@@ -123,6 +136,7 @@ describe('create_live_ui_application', () => {
             </StrictMode>,
         );
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(await screen.findByRole('button', { name: '화면 연결 상태: 연결됨' })).toBeInTheDocument();
         expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('시세·REGIME 실제 시장');
         expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('계좌 Testnet · 주문 비활성');
@@ -145,17 +159,23 @@ describe('create_live_ui_application', () => {
         expect(strategy_card).not.toHaveTextContent('-0.40 USDT');
         expect(document.body).not.toHaveTextContent(TEST_BACKEND_TOKEN);
 
+        // 화면 또는 실행 수명의 종료를 요청한다.
         rendered.unmount();
     });
 
     it('주문 비활성 상태에서도 시작 클릭으로 REGIME 안내·점멸과 시작 차단 팝업을 표시한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const user = userEvent.setup();
         const base_snapshot = create_backend_snapshot_fixture();
+
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const snapshot = {
             ...base_snapshot,
             environment: { market_data: 'mainnet', account: 'testnet', orders_enabled: false },
             trading: { ...base_snapshot.trading, mode: 'testnet', command_enabled: false },
         };
+
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot_fetch = create_snapshot_fetch(snapshot);
         const request_paths: string[] = [];
         const application = await create_live_ui_application(create_descriptor(), {
@@ -168,6 +188,7 @@ describe('create_live_ui_application', () => {
                     }
                     if (path === '/v1/regime/selection') {
                         expect(JSON.parse(init?.body as string)).toMatchObject({ regime_type: 'type0' });
+
                         return create_snapshot_fetch({
                             selected: 'type0', support_status: 'supported', version: 1,
                         })(input, init);
@@ -183,41 +204,60 @@ describe('create_live_ui_application', () => {
 
         const regime_panel = await screen.findByRole('region', { name: 'REGIME 판단 패널' });
         const start_button = screen.getByRole('button', { name: '자동매매 실행' });
-        expect(start_button).toBeEnabled();
+        expect(start_button).toBeEnabled();  // 화면의 표시 내용과 입력 가능 상태를 검증한다.
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         await user.click(start_button);
         const regime_notice = await screen.findByRole('dialog', { name: 'REGIME type을 먼저 선택해주세요' });
         await user.click(within(regime_notice).getByRole('button', { name: 'REGIME 선택' }));
+
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         expect(regime_panel).toHaveAttribute('data-highlighted', 'true');
         expect(request_paths).toEqual(['/v1/snapshot']);
 
         // 선택 확인 문구가 바뀌어도 기존 REGIME 선택 요청을 통해 후보를 적용한다.
         const regime_button = screen.getByRole('button', { name: 'type0 횡보 적용 요청' });
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         await user.click(regime_button);
         const regime_confirmation = await screen.findByRole('dialog', { name: 'REGIME type을 선택할까요?' });
         await user.click(within(regime_confirmation).getByRole('button', { name: '확인' }));  // 선택 확정 뒤 적용 상태를 기다린다.
         await waitFor(() => expect(regime_button).toHaveAttribute('aria-pressed', 'true'));
 
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         await user.click(start_button);
         const unavailable_notice = await screen.findByRole('dialog', { name: '자동매매를 시작할 수 없습니다' });
+
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(unavailable_notice).toHaveTextContent('거래 시작 명령이 아직 활성화되지 않았습니다.');
         expect(within(unavailable_notice).queryByRole('button', { name: '거래 시작' })).not.toBeInTheDocument();
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         await user.click(within(unavailable_notice).getByRole('button', { name: '확인' }));
+
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
         // 안내를 닫은 뒤 키보드로 다시 눌러도 실행 명령 없이 같은 차단 안내가 열린다.
         start_button.focus();
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         await user.keyboard('{Enter}');
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(await screen.findByRole('dialog', { name: '자동매매를 시작할 수 없습니다' })).toBeInTheDocument();
         expect(start_trading).not.toHaveBeenCalled();
         expect(request_paths).toEqual(['/v1/snapshot', '/v1/regime/selection']);
         expect(application.facade.get_view_model().trading.is_trading).toBe(false);
         expect(screen.getByLabelText('시세 및 거래 환경')).toHaveTextContent('계좌 Testnet · 주문 비활성');
 
+        // 화면 또는 실행 수명의 종료를 요청한다.
         rendered.unmount();
     });
 
     it('startup snapshot이 ready가 아니면 facade나 demo state를 만들지 않고 typed 실패한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const not_ready_snapshot = {
             ...snapshot,
@@ -225,6 +265,7 @@ describe('create_live_ui_application', () => {
         };
         const create_web_socket = vi.fn(() => new BootstrapFakeWebSocket());
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(create_live_ui_application(create_descriptor(), {
             adapter_dependencies: {
                 fetch: create_snapshot_fetch(not_ready_snapshot),
@@ -237,7 +278,9 @@ describe('create_live_ui_application', () => {
     });
 
     it('snapshot 뒤 React activation 전 sidecar exit는 activate 완료 후 recovery로 replay한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const lifecycle_order: Array<string> = [];
+
         const snapshot = create_backend_snapshot_fixture();
         const application = await create_live_ui_application(create_descriptor(), {
             today: '2026-08-24',
@@ -246,6 +289,7 @@ describe('create_live_ui_application', () => {
                 create_uuid: () => TEST_REQUEST_ID,
                 create_web_socket: () => {
                     lifecycle_order.push('web_socket');
+
                     return new BootstrapFakeWebSocket();
                 },
             },
@@ -274,6 +318,8 @@ describe('create_live_ui_application', () => {
         expect(application.facade.get_view_model().app_exit.status).toBe(
             'sidecar_exit_failure',
         );
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         rendered.unmount();
     });
 });

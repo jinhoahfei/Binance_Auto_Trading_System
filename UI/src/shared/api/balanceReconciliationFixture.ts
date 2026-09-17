@@ -1,3 +1,5 @@
+// backend 통신에서 재사용할 고정 설정과 테스트 데이터를 제공한다.
+
 import type { BackendBalanceReconciliation } from '../contracts';
 
 export const earned_balance_fixture: BackendBalanceReconciliation = {

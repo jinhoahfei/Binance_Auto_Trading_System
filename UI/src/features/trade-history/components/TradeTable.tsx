@@ -30,6 +30,7 @@ export interface TradeTableProps {
   onStartTrading?: () => void;
 }
 
+
 /**
  * 함수 이름: get_result_tone_class()
  * 기능: 수익률 또는 실현손익 문자열의 부호에 맞는 색상 클래스를 선택한다.
@@ -49,6 +50,7 @@ function get_result_tone_class(value: string) {
   return styles.muted;
 }
 
+
 /**
  * 함수 이름: TradeTable()
  * 기능: 체결 거래 표와 조회 loading, empty 또는 failed 상태를 같은 table layout 안에 표시한다.
@@ -62,6 +64,7 @@ export function TradeTable({
   emptyState = DEFAULT_EMPTY_TRADE_HISTORY,
   onStartTrading,
 }: TradeTableProps) {
+  // 열 순서를 유지하며 실제 거래 행과 조회 중·빈 결과 안내를 같은 표 안에 표시한다.
   return (
     <section
       aria-busy={isLoading}

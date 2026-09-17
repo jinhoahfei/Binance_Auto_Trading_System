@@ -63,6 +63,7 @@ const DEFAULT_TRADE_HISTORY_SUMMARY: TradeHistorySummaryViewModel = {
     },
 };
 
+
 /**
  * 함수 이름: create_trade_history_summary_machine()
  * 기능: 상세 화면의 수익률, 매도 성과, ETH 보유량과 당일 수수료 snapshot을 독립 region으로 투영한다.
@@ -74,10 +75,13 @@ export function create_trade_history_summary_machine(
     options: TradeHistorySummaryMachineOptions = {},
 ) {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as TradeHistorySummaryMachineContext,
             events: {} as TradeHistorySummaryMachineEvent,
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             synchronize_summary: assign({
                 summary: ({ context, event }) => {
@@ -139,6 +143,8 @@ export function create_trade_history_summary_machine(
     }).createMachine({
         id: 'tradeHistorySummaryMachine',
         type: 'parallel',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             summary: options.summary ?? DEFAULT_TRADE_HISTORY_SUMMARY,
         },
@@ -153,6 +159,8 @@ export function create_trade_history_summary_machine(
                 actions: 'update_position',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             profit_rate: {
                 initial: 'displayed',

@@ -1,3 +1,4 @@
+/* 종료 영향 안내의 제목·상세·오류 문구를 한 묶음으로 배치한다. */
 .notice {
     display: flex;
     flex-direction: column;
@@ -25,14 +26,19 @@
     font-size: 12px;
 }
 
+/* 위험한 종료 조건을 안내 테두리로 구분한다. */
 .warning {
     border-color: color-mix(in srgb, var(--color-status-negative) 45%, var(--color-border-default));
 }
 
+/* 취소와 종료 확인 버튼을 같은 폭으로 배치한다. */
 .actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 18px;
 }
 
-.notice p { white-space: pre-line; overflow-wrap: anywhere; }
+.notice p {
+    white-space: pre-line;  /* 안내 문구에 포함된 줄바꿈을 유지한다. */
+    overflow-wrap: anywhere;
+}

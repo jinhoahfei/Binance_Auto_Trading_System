@@ -25,6 +25,7 @@ export interface FigmaFrameHarnessProps {
   readonly frame: FigmaFrameKey;
 }
 
+
 /**
  * 함수 이름: ignore_story_intent()
  * 기능: 정적 Figma Story에서 발생한 사용자 입력을 안전하게 무시한다.
@@ -34,6 +35,7 @@ export interface FigmaFrameHarnessProps {
  */
 function ignore_story_intent(): void {}
 
+
 /**
  * 함수 이름: create_dashboard_props()
  * 기능: 공통 대시보드 fixture에 프레임별 탭, 팝오버와 REGIME 상태를 반영한다.
@@ -42,6 +44,7 @@ function ignore_story_intent(): void {}
  * 작성 날짜: 2026/08/12
  */
 function create_dashboard_props(fixture: FigmaFrameFixture): DashboardPageProps {
+  // 기준 프레임의 기능별 fixture를 실제 대시보드 컴포넌트 props에 연결한다.
   const applied_regime = fixture.show_regime_confirmation
     ? 'type2'
     : fixture.regime_is_selected
@@ -78,6 +81,7 @@ function create_dashboard_props(fixture: FigmaFrameFixture): DashboardPageProps 
   };
 }
 
+
 /**
  * 함수 이름: create_csv_dialog_props()
  * 기능: CSV 관련 Figma 프레임 fixture를 제어형 CSVExportDialog props로 변환한다.
@@ -86,12 +90,14 @@ function create_dashboard_props(fixture: FigmaFrameFixture): DashboardPageProps 
  * 작성 날짜: 2026/08/12
  */
 function create_csv_dialog_props(fixture: FigmaFrameFixture): CSVExportDialogProps | undefined {
+  // CSV가 없는 기준 화면에는 내보내기 창을 만들지 않는다.
   if (fixture.csv_export === null) {
     return undefined;
   }
 
   const csv_fixture = fixture.csv_export;
 
+  // 캡처 기준의 draft·달력·오류 표시를 고정된 props로 구성한다.
   return {
     open: true,
     draft: csv_fixture.draft,
@@ -112,6 +118,7 @@ function create_csv_dialog_props(fixture: FigmaFrameFixture): CSVExportDialogPro
     onExport: ignore_story_intent,
   };
 }
+
 
 /**
  * 함수 이름: create_trade_history_props()
@@ -157,6 +164,7 @@ function create_trade_history_props(fixture: FigmaFrameFixture): TradeHistoryPag
   };
 }
 
+
 /**
  * 함수 이름: FigmaFrameHarness()
  * 기능: 공통 AppHeader와 route Boundary에 Figma 16개 프레임의 상태 fixture를 주입한다.
@@ -165,12 +173,14 @@ function create_trade_history_props(fixture: FigmaFrameFixture): TradeHistoryPag
  * 작성 날짜: 2026/08/12
  */
 export function FigmaFrameHarness({ frame }: FigmaFrameHarnessProps) {
+  // 선택한 기준 화면과 고정 강조 상태를 읽는다.
   const fixture = FIGMA_FRAME_FIXTURES[frame];
   const frame_class_name = [
     styles.frame,
     fixture.highlight_regime ? styles.frozenHighlight : '',
   ].filter(Boolean).join(' ');
 
+  // 실제 컴포넌트에 결정적 fixture를 주입해 같은 화면을 재현한다.
   return (
     <div
       className={frame_class_name}

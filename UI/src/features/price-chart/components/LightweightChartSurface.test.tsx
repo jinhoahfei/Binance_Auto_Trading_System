@@ -50,6 +50,7 @@ const INDICATOR_SETTINGS = {
 };
 const INITIAL_OPEN_TIME = Date.UTC(2026, 7, 20, 9, 0, 0);
 
+
 /**
  * 함수 이름: create_candles()
  * 기능: 초기 표시 범위와 과거 prepend를 검증할 연속 1분봉을 만든다.
@@ -67,6 +68,7 @@ function create_candles(count: number, first_open_time: number) {
         volume: 20 + index,
     }));
 }
+
 
 /**
  * 함수 이름: create_series_mock()
@@ -87,6 +89,7 @@ function create_series_mock() {
         update: vi.fn(),
     };
 }
+
 
 /**
  * 함수 이름: create_chart_harness()
@@ -189,6 +192,7 @@ function create_chart_harness() {
 let chart_harness: ReturnType<typeof create_chart_harness>;
 
 beforeEach(() => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     chart_harness = create_chart_harness();
     vi.mocked(createChart).mockReset();
     vi.mocked(createChart).mockReturnValue(chart_harness.chart as unknown as IChartApi);
@@ -198,17 +202,21 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    // 테스트가 바꾼 전역 환경과 실행 자원을 정리한다.
     vi.unstubAllGlobals();
 });
 
 describe('LightweightChartSurface', () => {
     it('재연결로 보정된 과거 봉도 다시 반영하며 기존 확대 범위를 유지한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const candles = create_candles(3, INITIAL_OPEN_TIME);
         const props = { bollingerLower: [], bollingerUpper: [], ema: [],
             indicatorSettings: INDICATOR_SETTINGS, interval: '1m' as const };
         const { rerender } = render(<LightweightChartSurface {...props} candles={candles} dataRevision={1} />);
         const corrected = candles.map((candle, index) => index === 0 ? { ...candle, high: 150, close: 140 } : candle);
         rerender(<LightweightChartSurface {...props} candles={corrected} dataRevision={3} />);
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_harness.candle_series.setData).toHaveBeenCalledTimes(2);
         expect(chart_harness.candle_series.setData.mock.calls.at(-1)?.[0][0].close).toBe(140);
         expect(chart_harness.candle_series.update).not.toHaveBeenCalled();
@@ -238,6 +246,8 @@ describe('LightweightChartSurface', () => {
             symbol: 'ETHUSDT',
             updated_at: INITIAL_OPEN_TIME,
         };
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         facade.start();
 
         /**
@@ -253,11 +263,13 @@ describe('LightweightChartSurface', () => {
             return <PriceChartPanel {...chart_props} candles={create_candles(3, INITIAL_OPEN_TIME)} />;
         }
 
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { rerender, unmount } = render(render_position_chart());
         const initial_price_line = chart_harness.candle_series.createPriceLine.mock.results[0]?.value;
         const price_formatter = vi.mocked(createChart).mock.calls[0]?.[1]
             ?.localization?.priceFormatter as (price: number) => string;
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledWith({
             price: 2451.425,
             color: '#1768d4',
@@ -283,9 +295,13 @@ describe('LightweightChartSurface', () => {
         expect(chart_harness.candle_series.createPriceLine).toHaveBeenLastCalledWith(
             expect.objectContaining({ price: 2460 }),
         );
+
+        // CHART_INTERVAL_SELECTED → CHART_FULLSCREEN_CHANGED 입력을 전달해 해당 전이를 실행한다.
         facade.dispatch({ type: 'CHART_INTERVAL_SELECTED', interval: '4h' });
         facade.dispatch({ type: 'CHART_FULLSCREEN_CHANGED', is_fullscreen: true });
         rerender(render_position_chart());
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledTimes(2);
         expect(createChart).toHaveBeenCalledOnce();  // 표시 값 갱신 때문에 chart 인스턴스를 초기화하지 않는다.
 
@@ -295,26 +311,34 @@ describe('LightweightChartSurface', () => {
             snapshot: map_backend_snapshot(backend_snapshot, '2026-09-05').server_snapshot,
         });
         rerender(render_position_chart());
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_harness.candle_series.removePriceLine).toHaveBeenCalledTimes(2);
         expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledTimes(2);
 
         // 열린 포지션을 다시 동기화해도 이전 가격이 아닌 snapshot의 평단가 하나만 복구한다.
         facade.dispatch({ type: 'BACKEND_SNAPSHOT_SYNCHRONIZED', snapshot: mapped_snapshot.server_snapshot });
         rerender(render_position_chart());
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_harness.candle_series.createPriceLine).toHaveBeenCalledTimes(3);
         expect(chart_harness.candle_series.createPriceLine).toHaveBeenLastCalledWith(
             expect.objectContaining({ price: 2451.425 }),
         );
         unmount();
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         facade.stop();
-        expect(chart_harness.chart.remove).toHaveBeenCalledOnce();
+        expect(chart_harness.chart.remove).toHaveBeenCalledOnce();  // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     });
 
     it('초기 좌표 발행 뒤 unmount하면 예약한 frame이 제거된 차트를 다시 조회하지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const pending_frames = new Map<number, FrameRequestCallback>();
         let next_frame_id = 0;
         vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
             pending_frames.set(++next_frame_id, callback);
+
             return next_frame_id;
         }));
         vi.stubGlobal('cancelAnimationFrame', vi.fn((frame_id: number) => {
@@ -338,16 +362,20 @@ describe('LightweightChartSurface', () => {
             />,
         );
         const queued_callbacks = [...pending_frames.values()];
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(queued_callbacks.length).toBeGreaterThan(0);
 
         unmount();
 
         expect(pending_frames.size).toBe(0);
+
         // 이미 실행 queue에 넘어간 callback도 이전 StrictMode chart에 접근하지 않는다.
         expect(() => queued_callbacks.forEach((callback) => callback(0))).not.toThrow();
     });
 
     it('차트 가격은 2자리, ETH 거래량은 4자리로 반올림하고 원본 봉 값은 유지한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const candle = {
             close: 2451.425,
             high: 2452.5678,
@@ -356,6 +384,8 @@ describe('LightweightChartSurface', () => {
             open_time: INITIAL_OPEN_TIME,
             volume: 330.86914999,
         };
+
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <LightweightChartSurface
                 bollingerLower={[]}
@@ -371,12 +401,14 @@ describe('LightweightChartSurface', () => {
         const price_formatter = vi.mocked(createChart).mock.calls[0]?.[1]
             ?.localization?.priceFormatter as ((price: number) => string) | undefined;
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(information).toHaveTextContent('시가 2,450.99');
         expect(information).toHaveTextContent('고가 2,452.57');
         expect(information).toHaveTextContent('저가 2,449.12');
         expect(information).toHaveTextContent('종가 2,451.43');
         expect(information).toHaveTextContent('거래량(ETH) 330.8691');
         expect(price_formatter?.(0.125)).toBe('0.13');
+
         // 현재가의 오른쪽 가격표는 유지하고 기본 점선과 포지션 없는 평단가 선은 숨긴다.
         expect(chart_harness.chart.addSeries.mock.calls[0]?.[1]).toMatchObject({
             lastValueVisible: true,
@@ -392,6 +424,7 @@ describe('LightweightChartSurface', () => {
     });
 
     it('Binance형 zoom, pan, 동적 축과 crosshair option을 활성화한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { unmount } = render(
             <LightweightChartSurface
                 bollingerLower={[]}
@@ -411,6 +444,7 @@ describe('LightweightChartSurface', () => {
         );
         const chart_options = vi.mocked(createChart).mock.calls[0]?.[1];
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_options).toMatchObject({
             crosshair: {
                 mode: CrosshairMode.Normal,
@@ -454,6 +488,7 @@ describe('LightweightChartSurface', () => {
     });
 
     it('적재 봉 수에 맞춰 최대 x축 축소 간격을 다시 계산하고 conflation을 적용한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const loaded_candles = create_candles(4_000, INITIAL_OPEN_TIME);
         const { rerender } = render(
             <LightweightChartSurface
@@ -471,6 +506,7 @@ describe('LightweightChartSurface', () => {
         const initial_scale_options = chart_harness.time_scale.applyOptions.mock.calls.at(-1)?.[0];
         const initial_minimum_bar_spacing = initial_scale_options?.minBarSpacing;
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_options).toMatchObject({
             timeScale: {
                 conflationThresholdFactor: 1,
@@ -513,6 +549,7 @@ describe('LightweightChartSurface', () => {
         expect(prepended_minimum_bar_spacing ?? Number.POSITIVE_INFINITY)
             .toBeLessThan(initial_minimum_bar_spacing ?? 0);
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             chart_harness.emit_time_scale_size_change(400);
         });
@@ -520,6 +557,7 @@ describe('LightweightChartSurface', () => {
         const resized_scale_options = chart_harness.time_scale.applyOptions.mock.calls.at(-1)?.[0];
         const resized_minimum_bar_spacing = resized_scale_options?.minBarSpacing;
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(resized_minimum_bar_spacing).toBeTypeOf('number');
         expect((resized_minimum_bar_spacing ?? Number.POSITIVE_INFINITY)
             * prepended_candles.length
@@ -530,6 +568,7 @@ describe('LightweightChartSurface', () => {
     });
 
     it('crosshair OHLCV를 표시하고 같은 interval의 live update에서는 fitContent를 반복하지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_coordinate_space_change = vi.fn();
         const { rerender, unmount } = render(
             <LightweightChartSurface
@@ -571,12 +610,14 @@ describe('LightweightChartSurface', () => {
             />,
         );
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_harness.time_scale.fitContent).toHaveBeenCalledOnce();
         expect(chart_harness.candle_series.setData).toHaveBeenCalledOnce();
         expect(chart_harness.candle_series.update).toHaveBeenCalledOnce();
         expect(chart_harness.volume_series.setData).toHaveBeenCalledOnce();
         expect(chart_harness.volume_series.update).toHaveBeenCalledOnce();
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             chart_harness.emit_crosshair_move({
                 seriesData: new Map([
@@ -598,6 +639,7 @@ describe('LightweightChartSurface', () => {
 
         const candle_information = screen.getByLabelText('선택한 봉 정보');
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(candle_information).toHaveTextContent('2026.08.20 18:00 KST');
         expect(candle_information).toHaveTextContent('시가 100.00');
         expect(candle_information).toHaveTextContent('고가 120.00');
@@ -607,11 +649,14 @@ describe('LightweightChartSurface', () => {
         expect(candle_information).toHaveTextContent('변동폭 30.00%');
         expect(candle_information).toHaveTextContent('거래량(BTC) 4,567.8912');
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         act(() => {
             chart_harness.emit_crosshair_move({
                 seriesData: new Map(),
             } as unknown as MouseEventParams<Time>);
         });
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(candle_information).toHaveTextContent('시가 200.00');
 
         const crosshair_handler = chart_harness.chart.subscribeCrosshairMove.mock.calls[0]?.[0];
@@ -630,6 +675,7 @@ describe('LightweightChartSurface', () => {
     });
 
     it('초기 1000개는 최신 180개를 표시하고 과거 prepend 뒤에는 기존 시간 범위를 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_coordinate_space_change = vi.fn();
         const initial_candles = create_candles(1_000, INITIAL_OPEN_TIME);
         const { rerender } = render(
@@ -644,6 +690,7 @@ describe('LightweightChartSurface', () => {
             />,
         );
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_harness.time_scale.fitContent).not.toHaveBeenCalled();
         expect(chart_harness.time_scale.setVisibleLogicalRange).toHaveBeenCalledWith({
             from: 820,

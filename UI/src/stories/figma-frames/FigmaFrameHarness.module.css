@@ -1,81 +1,82 @@
+/* 시각 회귀 기준의 고정 화면 크기를 설정한다. */
 .frame {
-  width: 1440px;
-  min-height: 1024px;
-  overflow: hidden;
-  background: var(--color-bg-canvas);
+    width: 1440px;
+    min-height: 1024px;
+    overflow: hidden;
+    background: var(--color-bg-canvas);
 }
 
 /* Browser JPEG 색을 Figma에 가깝게 맞추되 흰 버튼 글자의 WCAG AA 대비는 낮추지 않는다. */
 :global(body:has([data-figma-frame])) {
-  --color-bg-canvas: #0f141e;
-  --color-bg-header: #0b0f14;
-  --color-bg-surface: #202f40;
-  --color-bg-surface-raised: #2b3848;
-  --color-bg-control: #2b3848;
-  --color-bg-control-strong: #1a2532;
-  --color-border-default: #4d5c70;
-  --color-status-negative-strong: #dd1f41;
-  --color-status-positive-strong: #05b280;
+    --color-bg-canvas: #0f141e;
+    --color-bg-header: #0b0f14;
+    --color-bg-surface: #202f40;
+    --color-bg-surface-raised: #2b3848;
+    --color-bg-control: #2b3848;
+    --color-bg-control-strong: #1a2532;
+    --color-border-default: #4d5c70;
+    --color-status-negative-strong: #dd1f41;
+    --color-status-positive-strong: #05b280;
 }
 
 :global(body:has([data-figma-frame]) [role='dialog']) {
-  --color-bg-surface-raised: #303e50;
-  --color-status-negative-strong: #ef4f63;
+    --color-bg-surface-raised: #303e50;
+    --color-status-negative-strong: #ef4f63;
 }
 
 /* Dashboard dialog의 notice surface는 Figma의 짙은 control tone을 사용한다. */
 :global(body:has([data-figma-route='dashboard']) [role='dialog']) {
-  --color-bg-control-strong: #181f2a;
+    --color-bg-control-strong: #181f2a;
 }
 
 /* REGIME guard는 경고 copy와 두 action의 PNG 기준색을 frame 전용 token으로 고정한다. */
 :global(body:has([data-figma-frame='regime-required']) [role='dialog']) {
-  --color-bg-control: #24323f;
-  --color-bg-control-strong: #19212c;
-  --color-bg-surface-raised: #313f4f;
-  --color-text-negative: #f34a67;
-  --color-status-info-strong: #005bbb;
+    --color-bg-control: #24323f;
+    --color-bg-control-strong: #19212c;
+    --color-bg-surface-raised: #313f4f;
+    --color-text-negative: #f34a67;
+    --color-status-info-strong: #005bbb;
 }
 
 /* Starting frame은 disabled action의 합성 뒤 색을 PNG의 neutral·positive 면과 맞춘다. */
 :global(body:has([data-figma-frame='start-loading']) [role='dialog']) {
-  --color-bg-control: #1d2b39;
-  --color-bg-control-strong: #19212c;
-  --color-bg-surface-raised: #313f4f;
-  --color-status-positive-strong: #00b076;
+    --color-bg-control: #1d2b39;
+    --color-bg-control-strong: #19212c;
+    --color-bg-surface-raised: #313f4f;
+    --color-status-positive-strong: #00b076;
 }
 
 /* History route는 table·CSV·calendar의 서로 다른 Figma surface를 selector token으로 분리한다. */
 :global(body:has([data-figma-route='trade_history'])) {
-  --color-bg-canvas: #0b0f14;
-  --color-bg-control-strong: #1a222e;
-  --color-bg-header: #0a0f14;
-  --color-bg-surface: #20303f;
-  --color-status-negative-strong: #dd1f41;
-  --color-status-positive-strong: #05b280;
-  --color-text-info: #72a9ff;
-  --color-text-negative: #ff8797;
-  --color-text-positive: #0eb77b;
-  --fixture-calendar-raised: #293745;
-  --fixture-date-control: var(--color-bg-surface);
-  --fixture-dialog-raised: #324050;
-  --fixture-neutral-control: var(--color-bg-surface);
-  --fixture-outline-control: #21314d;
-  --fixture-period-control: var(--color-bg-surface);
-  --fixture-period-selected: #176ace;
-  --fixture-table-even: #2b3846;
-  --fixture-table-header: #30404f;
+    --color-bg-canvas: #0b0f14;
+    --color-bg-control-strong: #1a222e;
+    --color-bg-header: #0a0f14;
+    --color-bg-surface: #20303f;
+    --color-status-negative-strong: #dd1f41;
+    --color-status-positive-strong: #05b280;
+    --color-text-info: #72a9ff;
+    --color-text-negative: #ff8797;
+    --color-text-positive: #0eb77b;
+    --fixture-calendar-raised: #293745;
+    --fixture-date-control: var(--color-bg-surface);
+    --fixture-dialog-raised: #324050;
+    --fixture-neutral-control: var(--color-bg-surface);
+    --fixture-outline-control: #21314d;
+    --fixture-period-control: var(--color-bg-surface);
+    --fixture-period-selected: #176ace;
+    --fixture-table-even: #2b3846;
+    --fixture-table-header: #30404f;
 }
 
 /* History의 작은 metric도 어두운 surface 위 WCAG AA 전경색을 유지한다. */
 .frame[data-figma-route='trade_history'] :global(section[aria-label='거래 요약']) {
-  --color-text-positive: #0eb77b;
+    --color-text-positive: #0eb77b;
 }
 
 /* 모든 Figma 기준 header의 얇은 외곽선을 JPEG 변환 후 기준색이 되도록 보정한다. */
 .frame > :global(header) {
-  border-bottom-color: #445a74;
-  box-shadow:
+    border-bottom-color: #445a74;
+    box-shadow:
     inset 0 1px 0 #445a74,
     inset 1px 0 0 #445a74,
     inset -1px 0 0 #445a74;
@@ -83,47 +84,49 @@
 
 /* Header action은 방향별 대비색과 2px 작은 우측 여백을 fixture에만 재현한다. */
 .frame > :global(header) > :global(div:last-child) {
-  transform: translateX(-2px);
+    transform: translateX(-2px);
 }
 
 .frame > :global(header) > :global(div:last-child) > :global(button:first-child) {
-  color: #fff;
+    color: #fff;
 }
 
 .frame > :global(header) > :global(div:last-child) > :global(button:last-child) {
-  color: var(--color-text-on-strong-status);
+    color: var(--color-text-on-strong-status);
 }
 
+/* 기준 프레임의 상단 바 아래 본문 위치를 맞춘다. */
 .dashboardBody {
-  min-height: calc(1024px - var(--header-height));
-  padding: 24px var(--content-padding) 32px;
+    min-height: calc(1024px - var(--header-height));
+    padding: 24px var(--content-padding) 32px;
 }
 
+/* 움직이는 강조 대신 고정 상태를 캡처하도록 한다. */
 .frozenHighlight :global(section[aria-labelledby='regime-panel-title']) {
-  animation: none;
-  border-color: var(--color-status-info);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-status-info) 35%, transparent), var(--shadow-control);
+    animation: none;
+    border-color: var(--color-status-info);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-status-info) 35%, transparent), var(--shadow-control);
 }
 
 /* Dashboard 기준은 거래 지원 badge가 추가되기 전의 두 줄 REGIME 버튼 상태를 고정한다. */
 .frame :global([aria-label='REGIME 타입 선택'] > button) {
-  gap: 1px;
-  height: 48px;
-  padding: 7px 5px 6px;
+    gap: 1px;
+    height: 48px;
+    padding: 7px 5px 6px;
 }
 
 .frame :global(section[aria-labelledby='regime-panel-title'] > div:first-child) {
-  transform: translateY(-2.5px);
+    transform: translateY(-2.5px);
 }
 
 .frame :global([aria-label='REGIME 타입 선택'] > button > span:last-child) {
-  display: none;
+    display: none;
 }
 
 /* Frame 01의 realtime-only 기준은 차트 편집 action이 노출되기 전 상태를 보존한다. */
 .frame[data-figma-frame='realtime-indicator'] :global([aria-label='차트 드로잉 모드']),
 .frame[data-figma-frame='realtime-indicator'] :global([aria-label='차트 전체화면']) {
-  display: none;
+    display: none;
 }
 
 /* History 기준은 Figma에 표시된 오늘·전체·매수·매도 네 control만 보존한다. */
@@ -131,251 +134,253 @@
 .frame :global([aria-label='기간 필터'] > button:nth-child(3)),
 .frame :global([aria-label='거래 구분 필터'] > button:first-child),
 .frame :global(section[aria-label='거래 내역 필터'] > span[aria-hidden='true']) {
-  display: none;
+    display: none;
 }
 
 /* 숨긴 filter 항목 자리 대신 Figma의 두 button group 간 10px 구획을 명시한다. */
 .frame[data-figma-route='trade_history'] :global([aria-label='기간 필터']) {
-  gap: 10px;
-  margin-right: 10px;
-  margin-left: 1px;
+    gap: 10px;
+    margin-right: 10px;
+    margin-left: 1px;
 }
 
 .frame[data-figma-route='trade_history'] :global([aria-label='거래 구분 필터']) {
-  gap: 10px;
+    gap: 10px;
 }
 
 /* Empty 기준 toolbar는 JPEG 합성 뒤 Figma와 같은 네 control 면색을 사용한다. */
 .frame[data-figma-frame='history-empty'] :global(
   [aria-label='기간 필터'] > button:nth-child(1)
 ) {
-  background: #155bbc;
+    background: #155bbc;
 }
 
 .frame[data-figma-frame='history-empty'] :global(
   [aria-label='기간 필터'] > button:nth-child(4)
 ) {
-  background: #354555;
+    background: #354555;
 }
 
 .frame[data-figma-frame='history-empty'] :global(
   [aria-label='거래 구분 필터'] > button:nth-child(2)
 ) {
-  background: #273f4a;
-  color: #0ebd7f; /* Figma에 가장 가까운 AA 통과색으로 작은 매수 label의 4.5:1을 지킨다. */
+    background: #273f4a;
+    color: #0ebd7f;
+
+    /* Figma에 가장 가까운 AA 통과색으로 작은 매수 label의 4.5:1을 지킨다. */
 }
 
 .frame[data-figma-frame='history-empty'] :global(
   [aria-label='거래 구분 필터'] > button:nth-child(3)
 ) {
-  background: #453446;
+    background: #453446;
 }
 
 /* Empty 기준 export outline은 JPEG 변환 후 Figma의 밝은 회청색 경계가 된다. */
 .frame[data-figma-frame='history-empty'] :global(
   section[aria-label='거래 내역 필터'] > button
 ) {
-  border-color: #bddfff;
+    border-color: #bddfff;
 }
 
 /* Summary의 네 숫자 baseline은 같은 card grid 안에서 서로 다른 수직 rhythm을 갖는다. */
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(1) > h2
 ) {
-  transform: translateX(8px);
+    transform: translateX(8px);
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(1) > p
 ) {
-  transform: translateY(-8px);
+    transform: translateY(-8px);
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(2) > div:nth-of-type(1) > p:first-child
 ) {
-  transform: translateY(2px) scaleX(0.92);
-  transform-origin: left center;
+    transform: translateY(2px) scaleX(0.92);
+    transform-origin: left center;
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(3) > p
 ) {
-  transform: translate(-6px, 5px) scaleX(0.97);
+    transform: translate(-6px, 5px) scaleX(0.97);
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(4) > p:first-of-type
 ) {
-  transform: translate(1px, 5px) scaleX(0.92);
-  transform-origin: left center;
+    transform: translate(1px, 5px) scaleX(0.92);
+    transform-origin: left center;
 }
 
 /* Empty frame의 짧은 placeholder 승률은 별도 폭으로 Figma dash glyph를 맞춘다. */
 .frame[data-figma-frame='history-empty'] :global(
   section[aria-label='거래 요약'] article:nth-child(2) > div:nth-of-type(1) > p:first-child
 ) {
-  transform: translate(-1px, 2px) scaleX(0.8);
+    transform: translate(-1px, 2px) scaleX(0.8);
 }
 
 /* History summary의 fixture copy는 8월 12일 Figma export 문구를 표시한다. */
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article h2
 ) {
-  font-size: 0;
+    font-size: 0;
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article h2::after
 ) {
-  font-size: 13px;
+    font-size: 13px;
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(1) h2::after
 ) {
-  content: '당일 전체 수익률';
+    content: '당일 전체 수익률';
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(2) h2::after
 ) {
-  content: '매도 성과';
+    content: '매도 성과';
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(3) h2::after
 ) {
-  content: '현재 ETH 보유 수량';
+    content: '현재 ETH 보유 수량';
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 요약'] article:nth-child(4) h2::after
 ) {
-  content: '당일 수수료';
+    content: '당일 수수료';
 }
 
 /* Empty 기준의 안내 묶음은 Figma table body의 광학 중심에 맞춘다. */
 .frame[data-figma-frame='history-empty'] :global(
   section[aria-label='거래 내역 표'] [aria-live='polite']
 ) {
-  transform: translateY(-22px);
+    transform: translateY(-22px);
 }
 
 /* History fixture는 OS overlay scrollbar와 무관한 thumb 및 마지막 행 fade를 고정한다. */
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 내역 표']
 ) {
-  position: relative;
+    position: relative;
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 내역 표'][data-history-empty='false']
 )::before {
-  position: absolute;
-  z-index: 3;
-  right: 1px;
-  bottom: 1px;
-  left: 1px;
-  height: 54px;
-  pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--color-bg-surface));
-  content: '';
+    position: absolute;
+    z-index: 3;
+    right: 1px;
+    bottom: 1px;
+    left: 1px;
+    height: 54px;
+    pointer-events: none;  /* 표시 전용 레이어가 포인터 입력을 가로채지 않게 한다. */
+    background: linear-gradient(to bottom, transparent, var(--color-bg-surface));
+    content: '';
 }
 
 .frame[data-figma-route='trade_history'] :global(
   section[aria-label='거래 내역 표']
 )::after {
-  position: absolute;
-  z-index: 4;
-  top: 56px;
-  right: 15px;
-  bottom: 19px;
-  width: 6px;
-  pointer-events: none;
-  background:
+    position: absolute;
+    z-index: 4;
+    top: 56px;
+    right: 15px;
+    bottom: 19px;
+    width: 6px;
+    pointer-events: none;  /* 표시 전용 레이어가 포인터 입력을 가로채지 않게 한다. */
+    background:
     linear-gradient(
       to bottom,
       #2b3744 0 8px,
       #9fb1c7 8px 195px,
       #2b3744 195px 100%
     );
-  border-radius: 3px;
-  content: '';
+    border-radius: 3px;
+    content: '';
 }
 
 /* Calendar fixture는 239px crop과 Figma의 navigation·weekday 기준선을 재현한다. */
 :global(body:has([data-figma-frame]) [data-calendar-popover='true']) {
-  height: 239px;
-  min-height: 239px;
-  overflow: hidden;
+    height: 239px;
+    min-height: 239px;
+    overflow: hidden;
 }
 
 :global(body:has([data-figma-frame]) [data-calendar-popover='true'] nav[aria-label='달력 월 이동']) {
-  grid-template-columns: 30px 82px 58px 20px;
-  gap: 8px;
-  justify-content: center;
-  height: 42px;
+    grid-template-columns: 30px 82px 58px 20px;
+    gap: 8px;
+    justify-content: center;
+    height: 42px;
 }
 
 :global(body:has([data-figma-frame]) [data-calendar-popover='true'] > div[aria-hidden='true']) {
-  height: 28px;
-  width: calc(100% + 4px);
-  transform: translate(4px, 2px);
+    height: 28px;
+    width: calc(100% + 4px);
+    transform: translate(4px, 2px);
 }
 
 :global(body:has([data-figma-frame]) [data-calendar-popover='true'] [role='grid']) {
-  width: calc(100% + 4px);
-  transform: translateX(4px);
+    width: calc(100% + 4px);
+    transform: translateX(4px);
 }
 
 :global(body:has([data-figma-frame]) [data-calendar-popover='true'] [role='grid'] button) {
-  font-size: 12px;
+    font-size: 12px;
 }
 
 /* Static CSV 기준은 시작일의 밝은 outline과 종료일의 짙은 선택 outline을 고정한다. */
 :global(body:has([data-figma-frame]) [data-calendar-target='START']) {
-  border-color: #b9d0fa;
+    border-color: #b9d0fa;
 }
 
 :global(body:has([data-figma-frame]) [data-calendar-target='END']) {
-  border-color: #173c7a;
+    border-color: #173c7a;
 }
 
 /* Custom 기간은 실제 date control을 유지하면서 Figma의 outlined 선택 affordance를 보존한다. */
 .frame[data-figma-route='trade_history'] :global(
   [aria-label='CSV 내보낼 기간'] > button:nth-child(4)
 ) {
-  border-color: color-mix(in srgb, var(--color-status-info) 50%, var(--color-text-primary));
-  color: var(--color-text-info);
+    border-color: color-mix(in srgb, var(--color-status-info) 50%, var(--color-text-primary));
+    color: var(--color-text-info);
 }
 
 /* History Figma frame의 route별 E glyph를 공통 header logo 위에 재현한다. */
 .frame[data-figma-route='trade_history'] :global(
   header [aria-label='ETH AUTO Binance Trading'] > span:first-child
 )::after {
-  position: relative;
-  z-index: 1;
-  color: var(--color-bg-canvas);
-  content: 'E';
-  font-family: var(--font-numeric);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 17px;
+    position: relative;
+    z-index: 1;
+    color: var(--color-bg-canvas);
+    content: 'E';
+    font-family: var(--font-numeric);
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 17px;
 }
 
 .frame[data-figma-route='trade_history'] :global(
   header [aria-label='ETH AUTO Binance Trading'] > span:first-child img:last-child
 ) {
-  display: none;
+    display: none;
 }
 
 /* Static Story capture는 browser auto-focus 윤곽과 CSV dim layer를 기준 이미지에서 제외한다. */
 :global(body:has([data-figma-frame]) :focus-visible) {
-  outline: none !important;
+    outline: none !important;
 }
 
 :global(body:has([data-figma-frame]) [data-testid='csv-export-overlay']) {
-  background: transparent;
-  backdrop-filter: none;
+    background: transparent;
+    backdrop-filter: none;
 }

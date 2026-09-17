@@ -6,6 +6,7 @@ import styles from './AssetCard.module.css';
 
 export type AssetCardProps = AssetSummaryViewModel;
 
+
 /**
  * 함수 이름: AssetCard()
  * 기능: 계좌가 제공한 quote 자산·ETH 보유값과 unavailable 평가 필드를 표시한다.
@@ -23,7 +24,9 @@ export function AssetCard({
     profitLoss,
     totalValue,
 }: AssetCardProps) {
+    // 대조 내역의 열림 상태만 컴포넌트가 보관하고 자산 수치는 전달받은 값을 표시한다.
     const [showDetails, setShowDetails] = useState(false);
+
     return (
         <article aria-label="보유 자산" className={styles.card}>
             <span className={styles.title}>보유 자산</span>

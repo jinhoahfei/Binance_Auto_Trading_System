@@ -1,3 +1,5 @@
+// 순수 STM과 Controller 사이의 데이터 기반 실행 요청·평가 입력·전이 결과를 정의한다.
+
 import type { CsvExportOptions, RegimeType, TradeHistoryQuery } from '../../shared/contracts';
 import type { UiApplicationSnapshot } from './uiApplicationTypes';
 

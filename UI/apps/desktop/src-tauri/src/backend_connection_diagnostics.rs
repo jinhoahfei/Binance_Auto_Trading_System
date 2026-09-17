@@ -60,6 +60,12 @@ pub struct ConnectionDiagnostic {
     last_received_monotonic_ms: Option<u64>,
 }
 
+
+/// 함수 이름: valid_origin()
+/// 기능: 진단 출처가 허용된 소스 파일과 숫자 행·열만 포함하는지 검사한다.
+/// 인자: origin -> 출처 문자열
+/// 반환값: 고정 출처 계약에 맞으면 true
+/// 작성 날짜: 2026/09/17
 fn valid_origin(origin: &str) -> bool {
     let parts: Vec<_> = origin.split(':').collect();
     parts.len() == 3 && matches!(parts[0], "BackendUiAdapter.ts" | "BackendUiAdapter.js"
@@ -69,6 +75,12 @@ fn valid_origin(origin: &str) -> bool {
         && parts[1..].iter().all(|part| !part.is_empty() && part.len() < 8 && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+
+/// 함수 이름: validate_record()
+/// 기능: 연결 진단의 식별자·코드·필드·상태 범위를 검사해 자유 문자열을 차단한다.
+/// 인자: record -> 수신한 진단 DTO
+/// 반환값: 모든 필드가 허용 계약에 맞으면 true
+/// 작성 날짜: 2026/09/17
 fn validate_record(record: &ConnectionDiagnostic) -> bool {
     [&record.session_id, &record.adapter_id, &record.renderer_id].iter().all(|id| crate::is_canonical_uuid(id))
         && record.incident_id.as_ref().is_none_or(|id| crate::is_canonical_uuid(id))
@@ -86,12 +98,22 @@ pub struct BackendConnectionDiagnosticsState(Mutex<Option<ChartLogWriter>>);
 
 #[cfg(feature = "background-liveness-smoke")]
 impl BackendConnectionDiagnosticsState {
+    /// 함수 이름: in_directory()
+    /// 기능: 검증 실행의 지정 디렉터리에 연결 진단 writer를 준비한다.
+    /// 인자: directory -> 검증 산출물 디렉터리
+    /// 반환값: writer를 보유한 BackendConnectionDiagnosticsState
+    /// 작성 날짜: 2026/09/17
     pub(crate) fn in_directory(directory: PathBuf) -> Self {
         Self(Mutex::new(Some(ChartLogWriter::new(directory, format!("connection_{}", std::process::id())))))
     }
 }
 
-/// main 창에서 온 고정 schema만 검증하고 append+sync가 성공한 뒤 수신 확인을 반환한다.
+
+/// 함수 이름: record_backend_connection_diagnostics()
+/// 기능: 신뢰한 main 창의 고정 schema batch만 저장하고 append·sync 성공 뒤 수신 확인을 반환한다.
+/// 인자: window -> 호출 창, app -> 앱 핸들, state -> writer 상태, sidecar -> 프로세스 식별자, records -> 진단 batch
+/// 반환값: 저장 성공 또는 고정 오류 코드
+/// 작성 날짜: 2026/09/17
 #[tauri::command]
 pub async fn record_backend_connection_diagnostics(
     window: WebviewWindow,
@@ -100,15 +122,20 @@ pub async fn record_backend_connection_diagnostics(
     sidecar: State<'_, crate::sidecar::SidecarProcessState>,
     records: Vec<ConnectionDiagnostic>,
 ) -> Result<(), &'static str> {
+    // 신뢰한 창과 크기 제한을 만족하는 고정 schema batch만 저장 경계로 전달한다.
     let url = window.url().map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_INVALID_WINDOW")?;
     if window.label() != "main" || !crate::sidecar::is_trusted_renderer_url(&url, tauri::is_dev())
         || records.is_empty() || records.len() > 32 || !records.iter().all(validate_record) {
         return Err("BACKEND_CONNECTION_DIAGNOSTIC_INVALID_BATCH");
     }
+
+    // 네이티브 시각과 프로세스 식별자를 붙여 통신 장애 중에도 사건을 구분한다.
     let now = SystemTime::now().duration_since(UNIX_EPOCH)
         .map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_CLOCK_FAILED")?.as_millis();
     let identity = sidecar.diagnostic_runtime_identity();
     let bytes = encode_records(records, now, identity, Some(&app.state::<crate::runtime_diagnostics::RuntimeDiagnosticsState>().0.native_run_id))?;
+
+    // 공유 writer를 한 번 준비하고 동시 저장을 직렬화한다.
     let mut writer = state.0.lock().map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_STATE_FAILED")?;
     if writer.is_none() {
         let directory = if cfg!(debug_assertions) {
@@ -122,8 +149,16 @@ pub async fn record_backend_connection_diagnostics(
         .map_err(|_| "BACKEND_CONNECTION_DIAGNOSTIC_WRITE_FAILED")
 }
 
+
+/// 함수 이름: encode_records()
+/// 기능: 검증한 진단에 네이티브·backend 식별자를 붙여 JSONL로 직렬화한다.
+/// 인자: records -> 진단 batch, now -> 저장 시각, identity -> backend PID·시작 ID, native_run_id -> 네이티브 실행 ID
+/// 반환값: JSONL 바이트 또는 고정 오류 코드
+/// 작성 날짜: 2026/09/17
 fn encode_records(records: Vec<ConnectionDiagnostic>, now: u128, identity: Option<(u32, String)>, native_run_id: Option<&str>) -> Result<Vec<u8>, &'static str> {
     let mut bytes = Vec::new();
+
+    // 각 행을 다시 검증한 뒤 자유 문자열 없이 JSONL envelope를 만든다.
     for record in records {
         if !validate_record(&record) { return Err("BACKEND_CONNECTION_DIAGNOSTIC_INVALID_BATCH"); }
         let envelope = serde_json::json!({"schema_version":2, "native_at_ms":now,
@@ -138,12 +173,24 @@ fn encode_records(records: Vec<ConnectionDiagnostic>, now: u128, identity: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 함수 이름: sample()
+    /// 기능: 허용된 최초 연결 오류를 재현할 고정 진단 fixture를 만든다.
+    /// 인자: 없음
+    /// 반환값: 검증용 진단 JSON
+    /// 작성 날짜: 2026/09/17
     fn sample() -> serde_json::Value {
         serde_json::json!({"event":"first_failure", "session_id":"00000000-0000-4000-8000-000000000001",
             "adapter_id":"00000000-0000-4000-8000-000000000002", "renderer_id":"00000000-0000-4000-8000-000000000003",
             "at_ms":1000, "sequence":1, "dropped_before":0, "generation":2, "last_sequence":100,
             "stage":"decode", "error_code":"MALFORMED_BACKEND_PAYLOAD", "error_type":"SyntaxError"})
     }
+
+    /// 함수 이름: rejects_free_text_and_accepts_fixed_failure_context()
+    /// 기능: 허용된 오류 문맥만 수락하고 비밀값·자유 문자열 필드를 거부하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 진단 입력 계약을 어기면 테스트 실패
+    /// 작성 날짜: 2026/09/17
     #[test]
     fn rejects_free_text_and_accepts_fixed_failure_context() {
         let value = sample();
@@ -163,6 +210,12 @@ mod tests {
             assert!(!validate_record(&serde_json::from_value(unsafe_value).unwrap()));
         }
     }
+
+    /// 함수 이름: persists_first_failure_with_native_and_backend_identity_without_backend_access()
+    /// 기능: backend 재접속 없이 최초 오류와 프로세스 식별자가 디스크에 보존되는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 저장한 envelope가 다르면 테스트 실패
+    /// 작성 날짜: 2026/09/17
     #[test]
     fn persists_first_failure_with_native_and_backend_identity_without_backend_access() {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -186,6 +239,8 @@ mod tests {
 }
 
 // 아래 허용 목록은 UI의 진단 코드 목록과 contract test에서 대조한다.
+
+// 오류 원문 대신 기록할 수 있는 고정 오류 코드만 허용한다.
 const ALLOWED_ERROR_CODES: &[&str] = &[
     "ADAPTER_STOPPED",
     "AUTHENTICATION_REQUIRED",
@@ -266,6 +321,7 @@ const ALLOWED_ERROR_CODES: &[&str] = &[
     "WEBSOCKET_UPGRADE_REQUIRED",
 ];
 
+// payload 내용 대신 실패한 계약 필드의 고정 이름만 기록한다.
 const ALLOWED_VALIDATION_FIELDS: &[&str] = &[
     "trading.last_risk_budget.projected_position_notional",
     "trading.last_risk_budget.current_position_notional",

@@ -145,7 +145,10 @@ async function wait_for_event_settlement() {
 }
 
 afterEach(() => {
+    // 화면 또는 실행 수명의 종료를 요청한다.
     actors.splice(0).forEach(actor => actor.stop());
+
+    // 테스트가 바꾼 전역 환경과 실행 자원을 정리한다.
     vi.useRealTimers();
 });
 
@@ -1435,9 +1438,11 @@ describe('182 event-action rows executed by the UI root', () => {
     });
 
     it('accounts for every one of the 182 original table IDs with executable behavior scenarios', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const table = readFileSync('../Design/UI/UI_Event_Action_Table.md', 'utf8');
         const expected = [...table.matchAll(/^\| ([A-Z]+\d*-\d+) \|/gm)].map(match => match[1]!);
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(expected).toHaveLength(182);
         expect([...covered_spec_ids].sort()).toEqual(expected.sort());
     });

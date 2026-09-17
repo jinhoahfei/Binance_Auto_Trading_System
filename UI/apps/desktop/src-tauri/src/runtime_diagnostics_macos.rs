@@ -27,6 +27,12 @@ thread_local! {
     static OBSERVERS: RefCell<Vec<Observer>> = const { RefCell::new(Vec::new()) };
 }
 
+
+/// 함수 이름: install()
+/// 기능: AppKit 메인 스레드에서 activity·OS 알림·WebView 정책 관찰을 등록한다.
+/// 인자: app -> 앱 핸들, shared -> 공유 진단 상태
+/// 반환값: 없음; 등록 실패는 진단으로 남김
+/// 작성 날짜: 2026/09/17
 pub fn install(app: AppHandle, shared: Arc<Shared>) {
     let handle = app.clone();
     let fallback = shared.clone();
@@ -52,6 +58,7 @@ pub fn install(app: AppHandle, shared: Arc<Shared>) {
                     "status":if actual==Some("disabled"){"verified"}else if actual.is_none(){"unsupported"}else{"mismatch"}}));
             });
         }
+        // 시스템·화면 잠자기 알림은 OS 복귀 시 renderer의 연결 재확인으로 이어진다.
         let workspace=NSWorkspace::sharedWorkspace();
         let center=workspace.notificationCenter();
         for (name,event) in unsafe {[(NSWorkspaceWillSleepNotification,"system_will_sleep"),
@@ -67,6 +74,7 @@ pub fn install(app: AppHandle, shared: Arc<Shared>) {
             let token=unsafe {center.addObserverForName_object_queue_usingBlock(Some(name),None,None,&block)};
             OBSERVERS.with(|v|v.borrow_mut().push((center.clone(),token)));
         }
+        // 앱 활성·전력·열 알림은 실행 정책을 바꾸지 않고 환경 관찰값만 기록한다.
         let center=NSNotificationCenter::defaultCenter();
         for (name,event) in unsafe {[(NSApplicationDidBecomeActiveNotification,"app_became_active"),
             (NSApplicationDidResignActiveNotification,"app_resigned_active"),
@@ -94,6 +102,12 @@ pub fn install(app: AppHandle, shared: Arc<Shared>) {
     }).is_err() { fallback.record(json!({"event":"platform_registration_failed"})); }
 }
 
+
+/// 함수 이름: observe_environment()
+/// 기능: 현재 OS 환경을 표본화하고 알림 종류와 함께 기록한 뒤 공유 상태를 갱신한다.
+/// 인자: app -> 앱 핸들, shared -> 진단 상태, event -> 고정 OS 알림 이름
+/// 반환값: 없음
+/// 작성 날짜: 2026/09/17
 fn observe_environment(app: &AppHandle, shared: &Shared, event: &str) {
     let mut environment = shared
         .environment
@@ -108,6 +122,12 @@ fn observe_environment(app: &AppHandle, shared: &Shared, event: &str) {
     }
 }
 
+
+/// 함수 이름: sample()
+/// 기능: 메인 스레드에서 활성·가림·최소화·전력·열 상태를 관찰한다.
+/// 인자: app -> 앱 핸들, env -> 관찰값을 채울 환경 객체
+/// 반환값: 없음; 메인 스레드가 아니면 갱신하지 않음
+/// 작성 날짜: 2026/09/17
 pub fn sample(app: &AppHandle, env: &mut Environment) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -131,10 +151,17 @@ pub fn sample(app: &AppHandle, env: &mut Environment) {
     }
 }
 
+
+/// 함수 이름: stop()
+/// 기능: 메인 스레드가 소유한 OS 알림 observer와 activity를 해제한다.
+/// 인자: 없음
+/// 반환값: 없음
+/// 작성 날짜: 2026/09/17
 pub fn stop() {
     if MainThreadMarker::new().is_none() {
         return;
     }
+    // 등록한 observer를 모두 해제한 뒤 이 실행에서 보유한 activity를 끝낸다.
     OBSERVERS.with(|list| {
         for (center, token) in list.borrow_mut().drain(..) {
             unsafe {

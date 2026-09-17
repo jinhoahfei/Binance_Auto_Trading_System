@@ -23,6 +23,7 @@ const DASHBOARD_ORDER_BY_ID = new Map(
     DEFAULT_DASHBOARD_PROPS.trader.orders.map((order) => [order.id, order]),
 );
 
+
 /**
  * 함수 이름: format_recent_trade_time()
  * 기능: actor의 ISO 체결 시각을 최근 체결 카드의 KST 시각으로 표시한다.
@@ -39,6 +40,7 @@ function format_recent_trade_time(occurred_at: string): string {
         timeZone: 'Asia/Seoul',
     }).format(new Date(occurred_at));
 }
+
 
 /**
  * 함수 이름: create_recent_order_view_model()
@@ -73,6 +75,7 @@ function create_recent_order_view_model(trade_record: TradeRecord): RecentOrderV
     };
 }
 
+
 /**
  * 함수 이름: handle_chart_intent()
  * 기능: PriceChart Boundary intent를 facade의 Event-Action intent로 변환한다.
@@ -85,6 +88,7 @@ function handle_chart_intent(
     view_model: AppViewModel,
     controller: UiApplicationController,
 ): void {
+    // 차트 조작의 종류를 구분해 기존 애플리케이션 intent로 전달한다.
     switch (intent.type) {
         case 'CHART_INTERVAL_REQUESTED':
             controller.dispatch({
@@ -153,6 +157,7 @@ function handle_chart_intent(
     }
 }
 
+
 /**
  * 함수 이름: handle_trader_panel_intent()
  * 기능: 트레이딩 패널 탭과 전체 보기 intent를 소유 actor 또는 route actor로 전달한다.
@@ -164,8 +169,10 @@ function handle_trader_panel_intent(
     intent: TraderPanelIntent,
     controller: UiApplicationController,
 ): void {
+    // 실시간 지표와 최근 주문 탭 선택을 해당 intent에 대응시킨다.
     if (intent.type === 'ALL_ORDERS_REQUESTED') {
         controller.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+
         return;
     }
 
@@ -175,6 +182,7 @@ function handle_trader_panel_intent(
             : 'REALTIME_INDICATORS_TAB_SELECTED',
     });
 }
+
 
 /**
  * 함수 이름: handle_regime_intent()
@@ -193,6 +201,7 @@ function handle_regime_intent(
     });
 }
 
+
 /**
  * 함수 이름: handle_split_order_intent()
  * 기능: 분할 매수·매도 Boundary intent를 해당 비율 actor event로 전달한다.
@@ -209,6 +218,7 @@ function handle_split_order_intent(
         percentage: intent.percentage,
     });
 }
+
 
 /**
  * 함수 이름: present_dashboard_props()

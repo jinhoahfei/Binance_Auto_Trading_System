@@ -36,14 +36,16 @@ export interface AppProps {
     readonly applicationFactory: UiApplicationFactory;
 }
 
+
 /**
  * 함수 이름: App()
- * 기능: Binance Auto Trader의 facade runtime, 상단 상태, 현재 route와 전역 modal host를 연결한다.
- * 인자: 없음
+ * 기능: Binance Auto Trader의 Controller 런타임, 상단 상태, 현재 route와 전역 modal host를 연결한다.
+ * 인자: applicationFactory -> production 또는 테스트 환경의 애플리케이션 생성 함수
  * 반환값: 애플리케이션 최상위 React 요소
  * 작성 날짜: 2026/08/20
  */
 export function App({ applicationFactory }: AppProps) {
+    // 앱 수명에 속하는 Controller와 서버·시세 구독을 연결한다.
     const { controller, view_model, environment, load_binance_connection_status } = use_ui_application(applicationFactory);
     const connection_details = use_binance_connection_status(
         load_binance_connection_status,
@@ -56,9 +58,12 @@ export function App({ applicationFactory }: AppProps) {
         symbol: 'ETHUSDT',
     });
     use_desktop_window_lifecycle(controller, view_model.app_exit.is_final);
+
+    // 동일한 화면 모델을 각 route의 표시 속성으로 변환한다.
     const dashboard_props = present_dashboard_props(view_model, controller, market_snapshot);
     const trade_history_props = present_trade_history_props(view_model, controller);
 
+    // 종료가 끝난 경우에는 조작 화면 대신 종료 안내를 표시한다.
     if (view_model.app_exit.is_final) {
         return (
             <main className={styles.finalState}>
@@ -68,6 +73,7 @@ export function App({ applicationFactory }: AppProps) {
         );
     }
 
+    // 상단 상태, 현재 route와 공통 모달을 하나의 앱 화면으로 조립한다.
     return (
         <div className={styles.application}>
             <AppHeader

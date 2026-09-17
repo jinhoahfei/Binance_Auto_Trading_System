@@ -15,6 +15,7 @@ export interface ChartToolbarProps {
     readonly onIntent?: ((intent: PriceChartIntent) => void) | undefined;
 }
 
+
 /**
  * 함수 이름: ChartToolbar()
  * 기능: 가격 차트 주기, 적용 전략 상태와 지표 설정 intent 컨트롤을 표시한다.

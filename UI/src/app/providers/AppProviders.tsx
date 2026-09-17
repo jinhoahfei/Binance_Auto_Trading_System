@@ -1,3 +1,5 @@
+// 서버 소유 snapshot을 위한 QueryClient를 애플리케이션 생명주기에 맞춰 제공한다.
+
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
@@ -5,6 +7,7 @@ import { useState } from 'react';
 export interface AppProvidersProps {
   children: ReactNode;
 }
+
 
 /**
  * 함수 이름: AppProviders()

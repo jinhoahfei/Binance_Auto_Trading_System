@@ -3,6 +3,7 @@ import styles from './StrategyCard.module.css';
 
 export type StrategyCardProps = StrategySummaryViewModel;
 
+
 /**
  * 함수 이름: StrategyCard()
  * 기능: 자동매매 전략의 작동 상태, 적용 상태와 상태 수익률을 표시한다.

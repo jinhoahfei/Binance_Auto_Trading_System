@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+
 /**
  * 함수 이름: get_tauri_arguments()
  * 기능: CLI의 마지막 config merge가 Windows platform override를 되돌리지 않게 선택한다.
@@ -17,8 +18,10 @@ export function get_tauri_arguments(command, platform) {
 
     // Tauri는 기본·OS 설정 다음 --config를 병합하므로 Windows에서는 OS 설정을 마지막에 유지한다.
     const configuration_name = platform === 'win32' ? 'tauri.windows.conf.json' : 'tauri.conf.json';
+
     return [command, '--config', `apps/desktop/src-tauri/${configuration_name}`];
 }
+
 
 /**
  * 함수 이름: main()

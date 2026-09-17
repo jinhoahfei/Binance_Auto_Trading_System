@@ -2,6 +2,7 @@ import { invoke as native_invoke, type InvokeArgs, type InvokeOptions } from '@t
 
 let descriptor_fault_pending = sessionStorage.getItem('binance-desktop-recovery-smoke-phase') !== 'reload';
 
+
 /**
  * 함수 이름: invoke()
  * 기능: 개발 검증의 main import에서만 최초 연결 정보 부재를 재현하고 나머지 IPC는 실제 native로 전달한다.
@@ -15,5 +16,6 @@ export async function invoke<T>(command: string, args?: InvokeArgs, options?: In
         descriptor_fault_pending = false;
         throw { code: 'BACKEND_DESCRIPTOR_UNAVAILABLE' };
     }
+
     return native_invoke<T>(command, args, options);
 }

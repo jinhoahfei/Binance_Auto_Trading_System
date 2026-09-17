@@ -1,7 +1,8 @@
+/* REGIME 선택과 판단 지표를 담는 영역을 구성한다. */
 .panel {
     position: relative;
     flex-shrink: 0;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 116px;
     padding: 15px 20px 15px 24px;
     overflow: hidden;
@@ -16,12 +17,15 @@
     background: #20303e;
 }
 
+/* 선택이 필요한 시점에 패널 테두리와 그림자를 강조한다. */
 .highlight {
     animation: regime-highlight 800ms ease-in-out 5;
 }
 
+/* REGIME 요약과 지표 영역을 구획한다. */
 .content {
     display: grid;
+
     /* 68px 타입 버튼 5개와 7px 간격 4개가 축소 없이 들어갈 너비를 보장한다. */
     grid-template-columns: minmax(170px, 206px) 1px minmax(368px, 376px) 1px minmax(250px, 272px);
     gap: 12px;
@@ -34,7 +38,7 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 86px;
 }
 
@@ -52,6 +56,7 @@
     letter-spacing: -0.17px;
 }
 
+/* 현재 상태와 확정된 적용값을 구분해 표시한다. */
 .currentState {
     display: flex;
     flex-direction: column;
@@ -91,6 +96,7 @@
     background: var(--color-border-default);
 }
 
+/* 수동 선택 안내와 조작을 한 묶음으로 배치한다. */
 .manualSelection {
     display: flex;
     flex-direction: column;
@@ -135,6 +141,7 @@
     white-space: nowrap;
 }
 
+/* REGIME 후보 버튼의 배치와 간격을 설정한다. */
 .options {
     display: flex;
     flex-shrink: 0;
@@ -143,10 +150,12 @@
     justify-content: center;
     min-width: 0;
     height: 52px;
+
     /* WebKit에서 가로 스크롤 막대가 버튼 높이를 줄여 세로 스크롤까지 만드는 것을 방지한다. */
     overflow: visible;
 }
 
+/* 판단 지표의 제목과 지표 격자를 구성한다. */
 .indicators {
     display: flex;
     flex-direction: column;
@@ -169,27 +178,31 @@
     gap: 5px 8px;
 }
 
+/* regime-highlight 애니메이션의 시작·종료 모양을 정의한다. */
 @keyframes regime-highlight {
     0%,
     100% {
         border-color: var(--color-border-default);
         box-shadow: var(--shadow-control);
     }
-
     50% {
         border-color: var(--color-focus);
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 42%, transparent), var(--shadow-control);
     }
 }
 
+/* 화면 조건 (max-width: 1320px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 1320px) {
+    /* REGIME 요약과 지표 영역을 구획한다. */
     .content {
         grid-template-columns: minmax(170px, 0.8fr) 1px minmax(368px, 1.5fr) 1px minmax(220px, 1fr);
         gap: 8px;
     }
 }
 
+/* 움직임 감소 설정에서는 반복 강조와 전환 시간을 줄인다. */
 @media (prefers-reduced-motion: reduce) {
+    /* 선택이 필요한 시점에 패널 테두리와 그림자를 강조한다. */
     .highlight {
         animation: none;
         border-color: var(--color-focus);

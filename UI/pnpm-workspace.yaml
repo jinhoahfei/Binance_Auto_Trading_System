@@ -1,3 +1,4 @@
+# UI의 의존성 배치 방식과 허용한 설치 시 빌드 작업을 설정한다.
 nodeLinker: hoisted
 
 allowBuilds:

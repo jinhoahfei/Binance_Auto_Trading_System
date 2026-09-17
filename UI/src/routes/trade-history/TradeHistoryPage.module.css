@@ -1,76 +1,82 @@
+/* 거래 내역 상세 페이지의 폭과 여백을 설정한다. */
 .page {
-  box-sizing: border-box;
-  min-width: 0;
-  min-height: calc(100vh - var(--header-height));
-  padding: 22px var(--content-padding) 32px;
-  background: var(--color-bg-canvas);
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
+    box-sizing: border-box;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
+    min-height: calc(100vh - var(--header-height));
+    padding: 22px var(--content-padding) 32px;
+    background: var(--color-bg-canvas);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
 }
 
+/* 돌아가기 조작과 페이지 제목을 묶는다. */
 .pageHeading {
-  height: 94px;
+    height: 94px;
 }
 
+/* 키보드와 포인터로 돌아가기 버튼을 식별할 수 있게 한다. */
 .backButton {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-info);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-info);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 18px;
 }
 
 .backButton:hover {
-  color: color-mix(in srgb, var(--color-status-info) 70%, var(--color-text-primary));
+    color: color-mix(in srgb, var(--color-status-info) 70%, var(--color-text-primary));
 }
 
 .backButton:focus-visible {
-  border-radius: 3px;
-  outline: 2px solid var(--color-focus);
-  outline-offset: 3px;
+    border-radius: 3px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 3px;
 }
 
 .pageHeading h1 {
-  margin: 4px 0 0;
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 34px;
-  letter-spacing: -0.28px;
+    margin: 4px 0 0;
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 34px;
+    letter-spacing: -0.28px;
 }
 
 .pageHeading p {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 18px;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 18px;
 }
 
+/* 요약·필터·표 사이의 세로 간격을 설정한다. */
 .summary {
-  margin-top: 22px;
+    margin-top: 22px;
 }
 
 .filters {
-  margin-top: 24px;
+    margin-top: 24px;
 }
 
 .table {
-  margin-top: 20px;
+    margin-top: 20px;
 }
 
+/* 화면 조건 (max-width: 1120px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 1120px) {
-  .pageHeading {
-    height: auto;
-  }
-
-  .summary {
-    margin-top: 24px;
-  }
+    /* 돌아가기 조작과 페이지 제목을 묶는다. */
+    .pageHeading {
+        height: auto;
+    }
+    /* 요약·필터·표 사이의 세로 간격을 설정한다. */
+    .summary {
+        margin-top: 24px;
+    }
 }

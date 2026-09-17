@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 use zeroize::{Zeroize, Zeroizing};
 
+
 /// 함수 이름: write_closed_ack()
 /// 기능: HTTP CLOSED barrier 뒤 parent의 exact CLOSED_ACK frame을 stdio에 전달한다.
 /// 인자: writer -> child stdin을 소유한 parent pipe
@@ -20,6 +21,7 @@ use zeroize::{Zeroize, Zeroizing};
 pub(in crate::sidecar) fn write_closed_ack(writer: &mut ControlWriter) -> io::Result<()> {
     framed::write_frame(writer, framed::CLOSED_ACK_PAYLOAD, 256) // Writer drop이 뒤이어 부모 EOF를 전달한다.
 }
+
 
 /// 함수 이름: available_pipe_bytes()
 /// 기능: anonymous pipe의 준비된 bytes를 block 없이 조회한다.
@@ -44,6 +46,7 @@ fn available_pipe_bytes(reader: &ReadyReader) -> io::Result<usize> {
     }
     Ok(available as usize)
 }
+
 
 /// 함수 이름: read_ready_descriptor()
 /// 기능: partial prefix/body를 timeout 사이에 보존하며 bounded secret-free READY를 검증한다.

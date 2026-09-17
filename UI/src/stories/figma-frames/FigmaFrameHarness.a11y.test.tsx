@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { FigmaFrameHarness } from './FigmaFrameHarness';
 import { FIGMA_FRAME_KEYS, type FigmaFrameKey } from './figmaFrameFixtures';
 
+
 /**
  * 함수 이름: format_accessibility_violations()
  * 기능: axe 위반 결과를 frame별 실패에서 바로 진단할 수 있는 짧은 문자열로 변환한다.
@@ -23,6 +24,7 @@ function format_accessibility_violations(violations: AxeResult[]): string {
     })
     .join('\n');
 }
+
 
 /**
  * 함수 이름: scan_frame_accessibility()
@@ -50,6 +52,7 @@ async function scan_frame_accessibility(frame_key: FigmaFrameKey): Promise<AxeRe
 
 describe('FigmaFrameHarness accessibility', () => {
   afterEach(() => {
+    // 테스트가 바꾼 전역 환경과 실행 자원을 정리한다.
     cleanup();
   });
 
@@ -58,6 +61,7 @@ describe('FigmaFrameHarness accessibility', () => {
       // 수동 ARIA assertion과 분리된 axe engine으로 16개 fixture를 모두 같은 규칙으로 검사한다.
       const violations = await scan_frame_accessibility(frame_key);
 
+      // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
       expect(
         violations,
         format_accessibility_violations(violations),

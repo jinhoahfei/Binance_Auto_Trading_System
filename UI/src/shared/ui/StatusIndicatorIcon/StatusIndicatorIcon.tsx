@@ -1,3 +1,5 @@
+// Figma 확인·경고 모달의 세 겹 상태 아이콘을 공통 규격으로 표시한다.
+
 import negative_icon_bg from '../../../assets/figma/modal-status-negative-bg.svg';
 import negative_icon_dot from '../../../assets/figma/modal-status-negative-dot.svg';
 import negative_icon_ring from '../../../assets/figma/modal-status-negative-ring.svg';
@@ -10,6 +12,7 @@ import styles from './StatusIndicatorIcon.module.css';
 export interface StatusIndicatorIconProps {
     readonly tone: 'negative' | 'positive';
 }
+
 
 /**
  * 함수 이름: StatusIndicatorIcon()

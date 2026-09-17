@@ -27,6 +27,7 @@ export interface CsvCalendarNavigation {
     show_previous_month(target: CalendarTarget): void;
 }
 
+
 /**
  * 함수 이름: get_month_from_date()
  * 기능: YYYY-MM-DD 선택일에서 달력이 표시할 연도와 월을 추출한다.
@@ -43,6 +44,7 @@ function get_month_from_date(selected_date: string): VisibleCalendarMonth {
     };
 }
 
+
 /**
  * 함수 이름: shift_calendar_month()
  * 기능: 달력 표시 연월을 이전 또는 다음 달로 안전하게 이동한다.
@@ -54,6 +56,7 @@ function shift_calendar_month(
     visible_month: VisibleCalendarMonth,
     month_offset: number,
 ): VisibleCalendarMonth {
+    // UTC의 월 넘김 계산을 이용해 연도 경계를 포함한 표시 월을 구한다.
     const shifted_date = new Date(Date.UTC(
         visible_month.year,
         visible_month.month - 1 + month_offset,
@@ -66,6 +69,7 @@ function shift_calendar_month(
     };
 }
 
+
 /**
  * 함수 이름: use_csv_calendar_navigation()
  * 기능: CSV 시작일·종료일 달력의 표시 월만 React local state로 관리한다.
@@ -74,11 +78,13 @@ function shift_calendar_month(
  * 작성 날짜: 2026/08/12
  */
 export function use_csv_calendar_navigation(): CsvCalendarNavigation {
+    // 시작일·종료일의 표시 월을 각각 보관한다.
     const [visible_months, set_visible_months] = useState<VisibleCalendarMonths>({
         START: { year: 2026, month: 8 },
         END: { year: 2026, month: 8 },
     });
 
+    // 달력을 열 때 선택 날짜가 있는 월로 표시 위치를 맞춘다.
     const prepare_calendar = useCallback((target: CalendarTarget, selected_date: string) => {
         set_visible_months((current_months) => ({
             ...current_months,
@@ -86,6 +92,7 @@ export function use_csv_calendar_navigation(): CsvCalendarNavigation {
         }));
     }, []);
 
+    // 이전·다음 이동에서는 지정한 달력의 표시 월만 바꾼다.
     const show_previous_month = useCallback((target: CalendarTarget) => {
         set_visible_months((current_months) => ({
             ...current_months,
@@ -100,6 +107,7 @@ export function use_csv_calendar_navigation(): CsvCalendarNavigation {
         }));
     }, []);
 
+    // 연도·월 선택과 선택 날짜의 표시 모델을 연결한다.
     const select_year = useCallback((target: CalendarTarget, year: number) => {
         set_visible_months((current_months) => ({
             ...current_months,

@@ -7,6 +7,7 @@ import type { AppViewModel } from '../control';
 import type { CsvCalendarNavigation } from '../hooks';
 import type { UiApplicationController } from '../runtime';
 
+
 /**
  * 함수 이름: map_csv_period_to_view()
  * 기능: actor CSV 기간 계약을 CSVExportDialog 표시 enum으로 변환한다.
@@ -26,6 +27,7 @@ function map_csv_period_to_view(
 
     return period_map[period];
 }
+
 
 /**
  * 함수 이름: map_view_period_to_csv()
@@ -47,6 +49,7 @@ function map_view_period_to_csv(
     return period_map[period];
 }
 
+
 /**
  * 함수 이름: map_calendar_target_to_view()
  * 기능: actor 달력 target을 CSVExportDialog 표시 target으로 변환한다.
@@ -67,6 +70,7 @@ function map_calendar_target_to_view(
     return null;
 }
 
+
 /**
  * 함수 이름: present_csv_export_dialog_props()
  * 기능: CSV actor draft와 validation 상태를 제어형 CSVExportDialog props로 투영한다.
@@ -79,6 +83,7 @@ export function present_csv_export_dialog_props(
     controller: UiApplicationController,
     calendar_navigation: CsvCalendarNavigation,
 ): CSVExportDialogProps {
+    // CSV draft와 달력 대상을 화면 표시용 값으로 준비한다.
     const csv_view_model = view_model.csv_export;
     const calendar_target = map_calendar_target_to_view(csv_view_model.calendar_target);
     const start_date = csv_view_model.start_date ?? '2026-08-12';
@@ -86,6 +91,7 @@ export function present_csv_export_dialog_props(
     const selected_calendar_date = calendar_target === 'START' ? start_date : end_date;
     const validation_errors = csv_view_model.validation_errors;
 
+    // 표시값과 사용자 입력 callback을 기존 Controller intent에 연결한다.
     return {
         open: csv_view_model.is_open,
         draft: {

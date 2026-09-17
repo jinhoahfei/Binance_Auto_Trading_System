@@ -9,9 +9,11 @@ import { TradeHistoryPage } from './index';
 
 describe('TradeHistoryPage', () => {
   it('라우트 본문을 조합하고 돌아가기 의도를 전달한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const user = userEvent.setup();
     const handle_back = vi.fn();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradeHistoryPage
         description="2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건"
@@ -26,14 +28,18 @@ describe('TradeHistoryPage', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByRole('heading', { level: 1, name: '거래 내역 상세' })).toBeInTheDocument();
     expect(screen.getByText('26/06/22 - 10:42:18')).toBeInTheDocument();
+
+    // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
     await user.click(screen.getByRole('button', { name: /돌아가기/ }));
-    expect(handle_back).toHaveBeenCalledTimes(1);
+    expect(handle_back).toHaveBeenCalledTimes(1);  // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
   });
 
   /** Communication Case 3 메시지 1.1.3·2.1.3의 empty/failure 교체를 검증한다. */
   it('test_trade_history_page_replaces_rows_with_empty_and_failure_states: 상태를 직접 렌더링한다', () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const common_props = {
       description: '오늘 · ETHUSDT · 전체',
       onBack: vi.fn(),
@@ -57,6 +63,7 @@ describe('TradeHistoryPage', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByText('거래 내역이 없습니다')).toBeInTheDocument();
     expect(screen.queryByText('26/06/22 - 10:42:18')).not.toBeInTheDocument();
 
@@ -79,11 +86,13 @@ describe('TradeHistoryPage', () => {
 
   /** Communication Case 3 메시지 2와 Case 4 메시지 1의 disabled 사용자 경계를 검증한다. */
   it('test_trade_history_disabled_filters_and_export_emit_nothing: 조회 중 입력을 차단한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const handle_export = vi.fn();
     const handle_period = vi.fn();
     const handle_side = vi.fn();
     const user = userEvent.setup();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <TradeHistoryPage
         description="조회 중"
@@ -106,6 +115,8 @@ describe('TradeHistoryPage', () => {
     await user.click(period_button);
     await user.click(side_button);
     await user.click(export_button);
+
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(period_button).toBeDisabled();
     expect(side_button).toBeDisabled();
     expect(export_button).toBeDisabled();

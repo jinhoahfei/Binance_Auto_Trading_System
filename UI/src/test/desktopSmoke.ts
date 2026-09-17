@@ -4,6 +4,7 @@ import type { BackendIndicatorSnapshot } from '../shared/contracts';
 const original_fetch = globalThis.fetch.bind(globalThis);
 let observed_indicator: BackendIndicatorSnapshot | null = null;
 
+
 /**
  * 함수 이름: observe_market_snapshot()
  * 기능: 실제 backend 응답을 변경하지 않고 최초 REGIME 지표만 검증용으로 보존한다.
@@ -18,10 +19,12 @@ async function observe_market_snapshot(input: RequestInfo | URL, init?: RequestI
         const payload = await response.clone().json();
         observed_indicator = payload?.data?.regime?.indicator ?? null;  // 계좌와 token은 관찰 대상에서 제외한다.
     }
+
     return response;
 }
 
 globalThis.fetch = observe_market_snapshot;
+
 
 /**
  * 함수 이름: report()
@@ -35,6 +38,7 @@ async function report(stage: string, details: Record<string, string> = {}): Prom
         method: 'POST',
     });
 }
+
 
 /**
  * 함수 이름: verify_mainnet_swing_metrics()
@@ -51,6 +55,7 @@ async function verify_mainnet_swing_metrics(): Promise<void> {
         || environment.getBoundingClientRect().width <= 0) {
         throw new Error('INVALID_RUNTIME_ENVIRONMENT');
     }
+
     const indicator = await wait_for(() => observed_indicator, 'INDICATOR_SNAPSHOT_TIMEOUT');
     const evaluation_time = Date.parse(indicator.calculated_at);
     const query = new URLSearchParams({
@@ -62,6 +67,7 @@ async function verify_mainnet_swing_metrics(): Promise<void> {
     if (!response.ok) {
         throw new Error('PUBLIC_MARKET_VERIFICATION_FAILED');
     }
+
     const rows: Array<Array<string | number>> = await response.json();
     const closed_rows = rows.filter((row) => Number(row[6]) < evaluation_time);
     const labels: Array<string> = [];
@@ -70,6 +76,7 @@ async function verify_mainnet_swing_metrics(): Promise<void> {
     for (const field_index of [3, 2]) {
         const prices = closed_rows.map((row) => {
             const [whole = '0', fraction = ''] = String(row[field_index]).split('.');
+
             return BigInt(`${whole}${fraction.padEnd(8, '0')}`);
         });
         const pivots = prices.filter((price, index) => index >= 2 && index < prices.length - 2
@@ -81,6 +88,7 @@ async function verify_mainnet_swing_metrics(): Promise<void> {
         if (previous === undefined || latest === undefined) {
             throw new Error('PUBLIC_SWING_POINTS_UNAVAILABLE');
         }
+
         const difference = (latest - previous) * 10_000n;
         const higher = difference >= previous * 30n;
         const lower = difference <= -previous * 30n;
@@ -91,6 +99,7 @@ async function verify_mainnet_swing_metrics(): Promise<void> {
         if (higher !== expected_higher || lower !== expected_lower) {
             throw new Error('BACKEND_MAINNET_SWING_MISMATCH');
         }
+
         const metric_id = field_index === 3 ? 'swingLow' : 'swingHigh';
         const metric = await wait_for(
             () => document.querySelector(`[data-metric-id="${metric_id}"] strong`),
@@ -105,6 +114,7 @@ async function verify_mainnet_swing_metrics(): Promise<void> {
     await report('market-parity', { swing_low: labels[0]!, swing_high: labels[1]! });
 }
 
+
 /**
  * 함수 이름: wait_for()
  * 기능: 실제 WebView에서 준비된 DOM을 기다리며 bootstrap 실패와 timeout을 구분한다.
@@ -117,20 +127,25 @@ async function wait_for<T>(
     code: string,
     timeout_ms = 90_000,
 ): Promise<T> {
+    // 지정된 deadline 안에서만 화면 조건을 기다린다.
     const deadline = Date.now() + timeout_ms;
     while (Date.now() < deadline) {
         const failure = document.querySelector('[data-bootstrap-status="failure"] small');
         if (failure !== null) {
             throw new Error(failure.textContent ?? 'BOOTSTRAP_FAILED');
         }
+
         const result = read();
         if (result !== null && result !== false) {
             return result;
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
+
+    // 시간이 지나도 조건이 맞지 않으면 해당 검증 코드를 오류로 반환한다.
     throw new Error(code);
 }
+
 
 /**
  * 함수 이름: run_desktop_smoke()
@@ -143,6 +158,7 @@ async function run_desktop_smoke(): Promise<void> {
     if (!('__TAURI_INTERNALS__' in window)) {
         throw new Error('TAURI_RUNTIME_REQUIRED');
     }
+
     const badge = await wait_for(
         () => document.querySelector<HTMLButtonElement>('button[aria-label="Binance 연결 상태: 연결됨"]'),
         'DASHBOARD_TIMEOUT',
@@ -154,12 +170,14 @@ async function run_desktop_smoke(): Promise<void> {
     badge.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
     const tooltip = await wait_for(() => {
         const element = document.querySelector<HTMLElement>('[role="tooltip"]');
+
         return element?.querySelectorAll('dd[data-state]').length === 3 ? element : null;
     }, 'TOOLTIP_STATUS_TIMEOUT');
     const states = [...tooltip.querySelectorAll('dd')].map((row) => row.dataset.state);
     if (states.some((state) => state !== 'online' && state !== 'offline')) {
         throw new Error('INVALID_CONNECTION_STATUS');
     }
+
     const labels = [...tooltip.querySelectorAll('dt')].map((row) => row.textContent);
     if (labels.join('|') !== 'API|시세 WebSocket|계좌 WebSocket'
         || getComputedStyle(tooltip).pointerEvents !== 'none'
@@ -179,6 +197,7 @@ async function run_desktop_smoke(): Promise<void> {
     badge.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
 
     await wait_for(() => document.querySelector('[role="tooltip"]') === null, 'TOOLTIP_DID_NOT_CLOSE', 1_000);
+
     // 초기 chart frame과 비동기 상태 갱신까지 관찰한 뒤 고정 성공 결과만 남긴다.
     await new Promise((resolve) => setTimeout(resolve, 5_000));
     if (runtime_error_observed) {
@@ -188,6 +207,15 @@ async function run_desktop_smoke(): Promise<void> {
 }
 
 let runtime_error_observed = false;
+
+
+/**
+ * 함수 이름: remember_runtime_error()
+ * 기능: smoke 실행 중 관찰한 runtime 오류 여부를 결과 판정에 남긴다.
+ * 인자: 없음
+ * 반환값: 없음
+ * 작성 날짜: 2026/09/17
+ */
 const remember_runtime_error = (): void => { runtime_error_observed = true; };
 window.addEventListener('error', remember_runtime_error);
 window.addEventListener('unhandledrejection', remember_runtime_error);

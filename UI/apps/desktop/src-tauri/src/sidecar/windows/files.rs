@@ -54,6 +54,7 @@ impl DerefMut for LockedRuntimeOwnershipFile {
     }
 }
 
+
 /// 함수 이름: local_app_data_directory()
 /// 기능: environment 대신 현재 사용자 native known-folder 경로를 조회한다.
 /// 인자: 없음
@@ -89,6 +90,7 @@ fn local_app_data_directory() -> Result<PathBuf, SidecarFailure> {
         .ok_or_else(SidecarFailure::startup)
 }
 
+
 /// 함수 이름: is_local_absolute_path()
 /// 기능: local drive absolute path만 허용해 UNC, device namespace와 traversal을 거부한다.
 /// 인자: path -> 경계 검증 대상
@@ -103,6 +105,7 @@ fn is_local_absolute_path(path: &Path) -> bool {
             .all(|component| !matches!(component, Component::ParentDir | Component::CurDir))
 }
 
+
 /// 함수 이름: resolve_app_data_directory()
 /// 기능: Tauri Roaming path 대신 Python과 같은 LocalAppData application 경로를 선택한다.
 /// 인자: 없음
@@ -111,6 +114,7 @@ fn is_local_absolute_path(path: &Path) -> bool {
 pub(in crate::sidecar) fn resolve_app_data_directory() -> Result<PathBuf, SidecarFailure> {
     Ok(local_app_data_directory()?.join(APPLICATION_DIRECTORY_NAME)) // 저장 위치는 environment로 덮어쓰지 않는다.
 }
+
 
 /// 함수 이름: file_information()
 /// 기능: opened handle의 reparse, link count와 volume/file identity를 조회한다.
@@ -124,6 +128,7 @@ fn file_information(file: &File) -> Result<BY_HANDLE_FILE_INFORMATION, SidecarFa
     }
     Ok(information) // Path를 다시 따라가지 않고 실제 handle identity를 반환한다.
 }
+
 
 /// 함수 이름: pin_directory_chain()
 /// 기능: drive root부터 leaf까지 no-reparse directory handle을 열어 rename/delete 교체를 차단한다.
@@ -157,6 +162,7 @@ fn pin_directory_chain(directory: &Path) -> Result<Vec<File>, SidecarFailure> {
     Ok(guards)
 }
 
+
 /// 함수 이름: ensure_private_app_data_directory()
 /// 기능: 현재 사용자 known-folder의 direct application directory만 no-reparse로 준비한다.
 /// 인자: directory -> Tauri caller가 사용할 canonical application directory
@@ -181,6 +187,7 @@ pub(in crate::sidecar) fn ensure_private_app_data_directory(
     let _directory_guards = pin_directory_chain(directory)?;
     Ok(())
 }
+
 
 /// 함수 이름: open_locked_runtime_ownership_artifact()
 /// 기능: locked non-reparse single-link artifact를 pinned parent 아래 읽고 exact wire를 검증한다.

@@ -1,3 +1,5 @@
+// 수량 문자열의 정밀도를 보존하면서 잔고 대조 payload의 필드·상태 일관성을 검사한다.
+
 import type { BackendBalanceReconciliation } from '../contracts';
 
 const QUANTITIES = ['position_quantity', 'residual_principal_quantity', 'earn_rewards_quantity',
@@ -11,11 +13,20 @@ const REASONS: Readonly<Record<string, string>> = {
     EARN_ACCOUNT_UNREACHABLE: '거래소 조회를 완료하지 못했습니다.',
 };
 
-/** 대조 수량은 부동소수로 바꾸지 않아 0.00000001 ETH까지 보존한다. */
+
+/**
+ * 함수 이름: is_balance_reconciliation()
+ * 기능: 수량 문자열의 정밀도를 보존하면서 잔고 대조 payload의 필드·상태 일관성을 검사한다.
+ * 인자: value -> 검증할 payload
+ * 반환값: BackendBalanceReconciliation 계약을 만족하면 true
+ * 작성 날짜: 2026/09/17
+ */
 export function is_balance_reconciliation(value: unknown): value is BackendBalanceReconciliation {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+
     const record = value as Record<string, unknown>;
     const keys = ['asset', 'status', ...QUANTITIES, 'checked_at', 'reason_code', 'retryable'];
+
     return Object.keys(record).length === keys.length && keys.every((key) => key in record)
         && record.asset === 'ETH' && ['verified', 'mismatch', 'unavailable', 'stale'].includes(String(record.status))
         && QUANTITIES.every((key) => typeof record[key] === 'string'
@@ -26,8 +37,17 @@ export function is_balance_reconciliation(value: unknown): value is BackendBalan
             : typeof record.reason_code === 'string' && record.reason_code in REASONS);
 }
 
+
+/**
+ * 함수 이름: balance_reconciliation_text()
+ * 기능: 잔고 대조 상태·수량·KST 확인 시각과 사유를 화면 안내로 변환한다.
+ * 인자: value -> 검증된 잔고 대조 결과
+ * 반환값: 줄바꿈으로 구분한 안내 문자열
+ * 작성 날짜: 2026/09/17
+ */
 export function balance_reconciliation_text(value: BackendBalanceReconciliation): string {
     const status = { verified: '일치 확인', mismatch: '차이 확인', unavailable: '조회 미완료', stale: '재확인 필요' }[value.status];
+
     return [
         `ETH 잔고 대조: ${status}`,
         `포지션 ${value.position_quantity} · 잔여 원금 ${value.residual_principal_quantity}`,

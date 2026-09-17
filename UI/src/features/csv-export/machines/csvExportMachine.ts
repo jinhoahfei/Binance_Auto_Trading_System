@@ -57,6 +57,7 @@ export type CsvExportMachineEvent =
     | { readonly type: 'CSV_EXPORT_ERROR_CONFIRMED' }
     | { readonly type: 'ACCEPT_CLOSE_ALL_POPUP' };
 
+
 /**
  * 함수 이름: shift_date()
  * 기능: ISO 로컬 날짜를 지정한 일수만큼 이동해 동일 형식으로 반환한다.
@@ -72,6 +73,7 @@ function shift_date(date: LocalDateString, day_offset: number): LocalDateString 
     return date_value.toISOString().slice(0, 10);
 }
 
+
 /**
  * 함수 이름: is_valid_file_name()
  * 기능: CSV 파일명에 공백만 있거나 파일 시스템 금지 문자가 포함되었는지 검사한다.
@@ -82,6 +84,7 @@ function shift_date(date: LocalDateString, day_offset: number): LocalDateString 
 function is_valid_file_name(file_name: string): boolean {
     return file_name.trim().length > 0 && !/[<>:"/\\|?*\u0000-\u001F]/u.test(file_name);
 }
+
 
 /**
  * 함수 이름: normalize_file_name()
@@ -98,6 +101,7 @@ function normalize_file_name(file_name: string): string {
         : `${trimmed_file_name}.csv`;
 }
 
+
 /**
  * 함수 이름: validate_csv_context()
  * 기능: CSV 내보내기 draft의 경로, 파일명과 날짜 범위를 한 번에 검증한다.
@@ -106,10 +110,12 @@ function normalize_file_name(file_name: string): string {
  * 작성 날짜: 2026/08/12
  */
 function validate_csv_context(context: CsvExportMachineContext): CsvValidationErrors {
+    // 날짜 범위의 완성 여부와 시작·종료 순서를 함께 검사한다.
     const has_complete_date_range = context.start_date !== null && context.end_date !== null;
     const is_ordered_date_range = has_complete_date_range
         && context.start_date <= context.end_date;
 
+    // 각 입력 항목별 오류를 계산해 수정할 필드를 화면에 알려준다.
     return {
         directory: context.directory === null || context.directory.trim().length === 0
             ? '저장 위치를 선택해주세요.'
@@ -122,6 +128,7 @@ function validate_csv_context(context: CsvExportMachineContext): CsvValidationEr
             : '시작일은 종료일보다 늦을 수 없습니다.',
     };
 }
+
 
 /**
  * 함수 이름: create_csv_export_machine()
@@ -142,10 +149,13 @@ export function create_csv_export_machine(
     };
 
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as CsvExportMachineContext,
             events: {} as CsvExportMachineEvent,
         },
+
+        // 입력 수락 조건을 순수 가드로 정의한다.
         guards: {
             is_csv_draft_valid: ({ context }) => {
                 const validation_errors = validate_csv_context(context);
@@ -170,6 +180,8 @@ export function create_csv_export_machine(
                     && event.output.trim().length > 0;
             },
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             reset_draft: assign(({ event }) => {
                 // 한 dialog open 경계에서 날짜를 한 번만 읽어 자정 전후 필드 drift를 막는다.
@@ -319,6 +331,8 @@ export function create_csv_export_machine(
     }).createMachine({
         id: 'csvExportMachine',
         initial: 'closed',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             today: options.today,
             directory: null,
@@ -333,6 +347,8 @@ export function create_csv_export_machine(
             command_error: null,
             receipt: null,
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             closed: {
                 meta: { spec_ids: ['TD4-01', 'TD4-02'] },

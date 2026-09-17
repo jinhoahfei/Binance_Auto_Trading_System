@@ -45,6 +45,7 @@ const DEFAULT_ASSET_SUMMARY: AssetSummaryViewModel = {
     totalValue: '₩ 0',
 };
 
+
 /**
  * 함수 이름: create_account_summary_machine()
  * 기능: backend가 계산한 투자 로직 상태와 계좌 자산 snapshot을 두 독립 표시 region에 투영한다.
@@ -54,10 +55,13 @@ const DEFAULT_ASSET_SUMMARY: AssetSummaryViewModel = {
  */
 export function create_account_summary_machine(options: AccountSummaryMachineOptions = {}) {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as AccountSummaryMachineContext,
             events: {} as AccountSummaryMachineEvent,
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             synchronize_account_summary: assign({
                 strategy: ({ context, event }) => {
@@ -89,6 +93,8 @@ export function create_account_summary_machine(options: AccountSummaryMachineOpt
     }).createMachine({
         id: 'accountSummaryMachine',
         type: 'parallel',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             strategy: options.strategy ?? DEFAULT_STRATEGY_SUMMARY,
             asset: options.asset ?? DEFAULT_ASSET_SUMMARY,
@@ -98,6 +104,8 @@ export function create_account_summary_machine(options: AccountSummaryMachineOpt
                 actions: 'synchronize_account_summary',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             trading_logic_status: {
                 initial: 'displayed',

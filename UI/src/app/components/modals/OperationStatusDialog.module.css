@@ -1,3 +1,4 @@
+/* 명령 진행 결과와 아이콘을 표시할 안내 영역을 구성한다. */
 .status {
     position: relative;
     display: flex;
@@ -12,6 +13,7 @@
     background: var(--color-bg-control-strong);
 }
 
+/* 진행·성공·실패 상태색을 공유하는 원형 아이콘을 배치한다. */
 .statusIcon {
     display: grid;
     width: 34px;
@@ -39,6 +41,7 @@
     overflow-wrap: anywhere;
 }
 
+/* 상태별 안내색을 진행·성공·실패로 구분한다. */
 .progress {
     color: var(--color-text-info);
 }
@@ -51,6 +54,7 @@
     color: var(--color-text-negative);
 }
 
+/* 처리 중임을 나타내는 막대를 안내 영역 하단에 표시한다. */
 .progressBar {
     position: absolute;
     right: 0;
@@ -61,6 +65,7 @@
     animation: status-progress 1.1s ease-in-out infinite;
 }
 
+/* 결과 확인 버튼을 오른쪽에 정렬한다. */
 .actions {
     display: flex;
     justify-content: flex-end;
@@ -70,9 +75,17 @@
     width: 136px;
 }
 
+/* status-progress 애니메이션의 시작·종료 모양을 정의한다. */
 @keyframes status-progress {
-    from { transform: translateX(-55%); }
-    to { transform: translateX(55%); }
+    from {
+        transform: translateX(-55%);
+    }
+    to {
+        transform: translateX(55%);
+    }
 }
 
-.status p { white-space: pre-line; overflow-wrap: anywhere; }
+.status p {
+    white-space: pre-line;  /* 안내 문구에 포함된 줄바꿈을 유지한다. */
+    overflow-wrap: anywhere;
+}

@@ -1,6 +1,7 @@
 import type { BackendBinanceConnectionStatus } from '../contracts';
 import { BackendContractError } from './backendEventMapper';
 
+
 /**
  * 함수 이름: validate_binance_connection_status()
  * 기능: 백엔드가 관측한 Binance 연결 상태 세 값을 엄격하게 검증한다.
@@ -9,6 +10,7 @@ import { BackendContractError } from './backendEventMapper';
  * 작성 날짜: 2026/09/05
  */
 export function validate_binance_connection_status(value: unknown): BackendBinanceConnectionStatus {
+    // 진단 응답의 객체·허용 필드·상태 값을 검증한다.
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Invalid Binance connection status');
     }
@@ -21,6 +23,7 @@ export function validate_binance_connection_status(value: unknown): BackendBinan
         throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'Invalid Binance connection status');
     }
 
+    // 검증을 마친 세 연결 상태와 조회 시각만 반환한다.
     return {
         api: record.api as BackendBinanceConnectionStatus['api'],
         market_stream: record.market_stream as BackendBinanceConnectionStatus['market_stream'],

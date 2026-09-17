@@ -19,6 +19,7 @@ pub(super) enum MacosExecutionProfile {
     LiveOrders,
 }
 
+
 /// 함수 이름: parse_profile()
 /// 기능: 없는 live profile은 비활성으로 유지하고 알려진 exact native 값만 허용한다.
 /// 인자: value -> Keychain profile bytes 또는 item 부재
@@ -33,6 +34,7 @@ fn parse_profile(value: Option<&[u8]>) -> Result<MacosExecutionProfile, SidecarF
         _ => Err(SidecarFailure::startup()),
     }
 }
+
 
 /// 함수 이름: selected_profile()
 /// 기능: 첫 native 조회 결과를 고정해 실행 중 profile 변경으로 owner 경로가 바뀌지 않게 한다.
@@ -54,6 +56,7 @@ pub(super) fn selected_profile() -> Result<MacosExecutionProfile, SidecarFailure
         })
         .clone()
 }
+
 
 /// 함수 이름: profile_directory()
 /// 기능: live의 history·pending·runtime owner를 기존 Testnet directory와 분리한다.
@@ -81,6 +84,7 @@ struct LiveBootstrapWire<'a> {
     live_confirmation: &'static str,
     policy_version: u32,
 }
+
 
 /// 함수 이름: serialize_profile_configuration()
 /// 기능: frozen native profile을 bounded secret wire로 직렬화한다.
@@ -149,6 +153,7 @@ mod tests {
             original
         );
     }
+
     /// 함수 이름: native_live_wire_binds_cap_and_readonly_namespace()
     /// 기능: live profile별 exact wire와 cap 결속을 canary만으로 검증한다.
     /// 인자: 없음

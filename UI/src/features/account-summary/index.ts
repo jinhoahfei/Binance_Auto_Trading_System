@@ -1,3 +1,5 @@
+// 계좌 요약 모듈의 공개 타입과 진입점을 한 경로로 재수출한다.
+
 export { AccountSection } from './components/AccountSection';
 export { AssetCard } from './components/AssetCard';
 export type { AssetCardProps } from './components/AssetCard';

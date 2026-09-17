@@ -15,14 +15,17 @@ const CHART_DATA = {
 
 describe('PriceChartPanel', () => {
     it('DC1-03, CR-18: 주기·드로잉·전체화면 intent를 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(<PriceChartPanel {...CHART_DATA} onIntent={handle_intent} />);
 
         fireEvent.click(screen.getByRole('button', { name: '4시간' }));
         fireEvent.click(screen.getByRole('button', { name: '차트 드로잉 모드' }));
         fireEvent.click(screen.getByRole('button', { name: '차트 전체화면' }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(handle_intent).toHaveBeenNthCalledWith(1, {
             type: 'CHART_INTERVAL_REQUESTED',
             interval: '4h',
@@ -32,8 +35,10 @@ describe('PriceChartPanel', () => {
     });
 
     it('CR-05: controlled 지표 팝오버에서 표시 변경 intent를 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <PriceChartPanel
                 {...CHART_DATA}
@@ -44,6 +49,8 @@ describe('PriceChartPanel', () => {
         );
 
         fireEvent.click(screen.getByRole('button', { name: '거래량(Volume) 표시하기' }));
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(handle_intent).toHaveBeenCalledWith({
             type: 'INDICATOR_VISIBILITY_REQUESTED',
             indicator: 'volume',
@@ -52,6 +59,7 @@ describe('PriceChartPanel', () => {
     });
 
     it('fixture는 차트 보조지표와 팝오버의 정적 OFF 표현을 독립적으로 유지한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { container } = render(
             <PriceChartPanel
                 {...CHART_DATA}
@@ -75,8 +83,10 @@ describe('PriceChartPanel', () => {
     });
 
     it('지표 팝오버 바깥을 누르면 닫기 intent를 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <PriceChartPanel
                 {...CHART_DATA}
@@ -86,16 +96,20 @@ describe('PriceChartPanel', () => {
             />,
         );
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.getByRole('button', { name: '지표 설정' })).toHaveAttribute(
             'aria-expanded',
             'true',
         );
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.pointerDown(document.body);
 
-        expect(handle_intent).toHaveBeenCalledWith({ type: 'INDICATOR_SETTINGS_CLOSED' });
+        expect(handle_intent).toHaveBeenCalledWith({ type: 'INDICATOR_SETTINGS_CLOSED' });  // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     });
 
     it('IP1~IP3: controlled 지표 표시 상태를 차트 렌더링에 반영한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { container } = render(
             <PriceChartPanel
                 {...CHART_DATA}
@@ -103,20 +117,24 @@ describe('PriceChartPanel', () => {
             />,
         );
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(container.querySelector('[data-indicator="ema9"]')).not.toBeInTheDocument();
         expect(container.querySelector('[data-indicator="bollinger-band"]')).not.toBeInTheDocument();
         expect(container.querySelector('[data-indicator="volume"]')).toBeInTheDocument();
     });
 
     it('CR-18, ER-17: 전체화면 상태에서 종료 control을 표시한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(<PriceChartPanel {...CHART_DATA} isFullscreen />);
 
-        expect(screen.getByRole('button', { name: '차트 전체화면 종료' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: '차트 전체화면 종료' })).toBeInTheDocument();  // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     });
 
     it('DC6-02~06: 저장된 선의 hover, context menu와 삭제 intent를 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <PriceChartPanel
                 {...CHART_DATA}
@@ -135,6 +153,7 @@ describe('PriceChartPanel', () => {
         fireEvent.contextMenu(drawing_line);
         fireEvent.click(screen.getByRole('menuitem', { name: '선 삭제' }));
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(handle_intent).toHaveBeenNthCalledWith(1, {
             type: 'DRAWING_LINE_HOVER_ENTERED',
             lineId: CHART_DRAWING_FIXTURE.id,
@@ -150,8 +169,10 @@ describe('PriceChartPanel', () => {
     });
 
     it('저장된 선의 context menu 바깥을 누르면 닫기 intent를 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
 
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <PriceChartPanel
                 {...CHART_DATA}
@@ -164,12 +185,15 @@ describe('PriceChartPanel', () => {
         );
 
         fireEvent.pointerDown(document.body);
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(handle_intent).toHaveBeenCalledWith({
             type: 'DRAWING_LINE_CONTEXT_MENU_CLOSED',
         });
     });
 
     it('실시간 symbol·연결 상태와 시장 데이터 오류를 차트에 표시한다', () => {
+        // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
         render(
             <PriceChartPanel
                 {...CHART_DATA}
@@ -180,23 +204,28 @@ describe('PriceChartPanel', () => {
             />,
         );
 
+        // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(screen.getByText('ETH/USDT · 2026.06.22 · 10:59 KST')).toBeInTheDocument();
         expect(screen.getByText('오프라인')).toBeInTheDocument();
         expect(screen.getByRole('alert')).toHaveTextContent('Binance 연결을 확인해주세요.');
     });
 
     it('DC5-03~05: 두 포인터 입력을 drawing 시작과 완료 intent로 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn();
         const { container } = render(
             <PriceChartPanel {...CHART_DATA} drawingActive onIntent={handle_intent} />,
         );
         const chart = container.querySelector('svg');
 
-        expect(chart).not.toBeNull();
+        expect(chart).not.toBeNull();  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.pointerDown(chart!, { clientX: 10, clientY: 20 });
         fireEvent.pointerMove(chart!, { clientX: 70, clientY: 80 });
         fireEvent.pointerDown(chart!, { clientX: 70, clientY: 80 });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(handle_intent).toHaveBeenNthCalledWith(1, { type: 'DRAWING_STARTED' });
         expect(handle_intent.mock.calls[1]?.[0]).toMatchObject({ type: 'DRAWING_FINISHED' });
     });

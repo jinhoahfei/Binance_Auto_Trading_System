@@ -1,80 +1,90 @@
+/* 매매 명령의 확인 내용과 보조 문구를 배치한다. */
 .notice {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  height: 64px;
-  margin: 10px 0 19px;
-  padding: 11px 12px 10px;
-  overflow: hidden;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-control-strong);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    height: 64px;
+    margin: 10px 0 19px;
+    padding: 11px 12px 10px;
+    overflow: hidden;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-control-strong);
 }
 
 .notice > span:first-child {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  line-height: 16px;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    line-height: 16px;
 }
 
 .notice strong {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 18px;
-  color: var(--color-text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 18px;
+    color: var(--color-text-primary);
 }
 
 .notice i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--notice-tone);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--notice-tone);
 }
 
+/* 시작·중지·안내 상태를 색으로 구분한다. */
 .positive {
-  --notice-tone: var(--color-status-positive);
+    --notice-tone: var(--color-status-positive);
 }
 
 .negative {
-  --notice-tone: var(--color-status-negative);
+    --notice-tone: var(--color-status-negative);
 }
 
 .info {
-  --notice-tone: var(--color-status-negative);
+    --notice-tone: var(--color-status-negative);
 }
 
 .info > span:first-child {
-  color: var(--color-text-negative);
+    color: var(--color-text-negative);
 }
 
+/* 명령 처리 중 상태를 반복되는 강조로 표시한다. */
 .progress {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 3px;
-  background: linear-gradient(90deg, var(--color-status-positive) 60%, transparent 60%);
-  animation: pulse 1.25s ease-in-out infinite alternate;
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--color-status-positive) 60%, transparent 60%);
+    animation: pulse 1.25s ease-in-out infinite alternate;
 }
 
+/* 명령 실패 사유를 표시한다. */
 .error {
-  margin: -10px 0 12px;
-  color: var(--color-text-negative);
-  font-size: 12px;
-  line-height: 18px;
+    margin: -10px 0 12px;
+    color: var(--color-text-negative);
+    font-size: 12px;
+    line-height: 18px;
 }
 
+/* 취소·확인 조작을 같은 행에 배치한다. */
 .actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
 }
 
+/* pulse 애니메이션의 시작·종료 모양을 정의한다. */
 @keyframes pulse {
-  from { opacity: 0.55; }
-  to { opacity: 1; }
+    from {
+        opacity: 0.55;
+    }
+    to {
+        opacity: 1;
+    }
 }

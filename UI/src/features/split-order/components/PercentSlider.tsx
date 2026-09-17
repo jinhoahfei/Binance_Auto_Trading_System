@@ -4,6 +4,7 @@ import styles from './PercentSlider.module.css';
 
 const PERCENTAGE_STEP = 10;
 
+
 /**
  * 함수 이름: clamp_percentage()
  * 기능: 분할 주문 비율을 0부터 100 사이의 10 단위 값으로 제한한다.
@@ -16,6 +17,7 @@ function clamp_percentage(percentage: number): number {
 
     return Math.max(0, Math.min(100, rounded_percentage));
 }
+
 
 /**
  * 함수 이름: PercentSlider()
@@ -31,6 +33,7 @@ export function PercentSlider({
     side,
     value,
 }: PercentSliderProps) {
+    // 현재 비율에서 증가·감소 조작과 range 입력을 같은 값 변경 경계에 연결한다.
     const safe_value = clamp_percentage(value);
 
     return (

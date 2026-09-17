@@ -1,4 +1,7 @@
+// 조건부로 마운트된 모달이 닫힐 때 모달을 열었던 요소로 키보드 초점을 복원한다.
+
 import { useEffect, useRef } from 'react';
+
 
 /**
  * 함수 이름: use_dialog_focus_return()
@@ -8,6 +11,7 @@ import { useEffect, useRef } from 'react';
  * 작성 날짜: 2026/08/12
  */
 export function use_dialog_focus_return() {
+  // 모달을 열기 직전의 초점 대상을 mount 시점에 보관한다.
   const return_focus_element_ref = useRef<HTMLElement | null>(
     typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -17,6 +21,7 @@ export function use_dialog_focus_return() {
   useEffect(() => () => {
     const return_focus_element = return_focus_element_ref.current;
 
+    // 교체 모달이 먼저 mount될 수 있도록 현재 정리가 끝난 뒤 초점을 복원한다.
     queueMicrotask(() => {
       const has_replacement_dialog = document.querySelector('[role="dialog"]') !== null;
 

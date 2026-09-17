@@ -16,6 +16,7 @@ export function derive_active_modal(snapshot: UiApplicationSnapshot): UiModalKin
     const regime_snapshot = feature_view(snapshot, 'regime');
     const csv_snapshot = feature_view(snapshot, 'csv_export');
 
+    // 종료 확인과 종료 복구 안내를 다른 기능의 모달보다 먼저 선택한다.
     if (exit_snapshot.matches('force_sell_exit_confirmation')) {
         return 'force_sell_exit_confirmation';
     }
@@ -40,6 +41,7 @@ export function derive_active_modal(snapshot: UiApplicationSnapshot): UiModalKin
         return 'exit_processing';
     }
 
+    // 매매 진입 조건과 명령 확인·진행 상태를 그 다음 우선순위로 선택한다.
     if (trading_snapshot.matches('select_regime_notice')) {
         return 'select_regime_notice';
     }
@@ -70,10 +72,12 @@ export function derive_active_modal(snapshot: UiApplicationSnapshot): UiModalKin
         return 'force_sell_stop_confirmation';
     }
 
+    // 매매·종료 모달이 없을 때 REGIME 확인을 표시한다.
     if (regime_snapshot.matches('type_change_confirmation') || regime_snapshot.matches('applying')) {
         return 'regime_change_confirmation';
     }
 
+    // 상위 모달이 없을 때 CSV의 진행·결과·편집 상태를 표시한다.
     if (csv_snapshot.matches('exporting')) {
         return 'csv_export_progress';
     }
@@ -90,5 +94,6 @@ export function derive_active_modal(snapshot: UiApplicationSnapshot): UiModalKin
         return 'csv_export';
     }
 
+    // 표시할 모달 상태가 없으면 화면을 가리지 않는다.
     return null;
 }

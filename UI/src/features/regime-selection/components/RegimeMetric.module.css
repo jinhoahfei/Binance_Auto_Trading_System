@@ -1,9 +1,10 @@
+/* REGIME 판단 지표의 항목명과 값을 함께 표시한다. */
 .metric {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 31px;
     padding: 3px 9px;
     overflow: hidden;
@@ -34,6 +35,7 @@
     line-height: 14px;
 }
 
+/* 지표 값의 긍정·부정·중립 상태색을 구분한다. */
 .positive {
     color: var(--color-text-positive);
 }

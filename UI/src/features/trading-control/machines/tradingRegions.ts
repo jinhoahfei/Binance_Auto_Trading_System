@@ -103,6 +103,7 @@ export function trading_regions(definition: AnyStateMachine): {
      * 작성 날짜: 2026/09/16
      */
     function remap_targets(value: any, scope: 'start' | 'stop'): any {
+        // 배열과 객체의 중첩 구조를 유지하며 전이 대상을 순회한다.
         if (Array.isArray(value)) {
             return value.map(item => remap_targets(item, scope));
         }
@@ -111,6 +112,7 @@ export function trading_regions(definition: AnyStateMachine): {
             return value;
         }
 
+        // 시작·중지 Region의 범위에 맞춰 문자열 target을 연결한다.
         return Object.fromEntries(Object.entries(value).map(([key, child]) => {
             if (key === 'target' && typeof child === 'string') {
                 const leading = child.startsWith('.') ? '.' : '';

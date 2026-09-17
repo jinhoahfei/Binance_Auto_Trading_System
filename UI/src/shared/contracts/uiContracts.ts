@@ -1,3 +1,5 @@
+// UI 기능과 Controller가 공유하는 데이터·이벤트·명령 결과의 타입을 정의한다.
+
 import type {
     BackendCsvExportReceipt,
     BackendCsvExportRequest,
@@ -9,7 +11,7 @@ import type {
 } from './backendContracts.generated';
 
 /**
- * UI와 제어 actor 사이에서 사용하는 소수 문자열이다.
+ * UI와 Controller 사이에서 사용하는 소수 문자열이다.
  */
 export type DecimalString = string;
 

@@ -2,6 +2,7 @@
 const original_fetch = globalThis.fetch.bind(globalThis);
 let shutdown_accepted = false;
 
+
 /**
  * 함수 이름: report_recovery_stage()
  * 기능: token·계좌·응답 본문 없이 고정된 실제 종료 검증 단계를 보고한다.
@@ -14,6 +15,7 @@ async function report_recovery_stage(stage: string, code?: string): Promise<void
         stage, ...(code === undefined ? {} : { code }),
     })}`, { method: 'POST' });
 }
+
 
 /**
  * 함수 이름: inject_malformed_dashboard_response()
@@ -34,8 +36,10 @@ async function inject_malformed_dashboard_response(
         if (payload?.ok !== true || indicator === null || typeof indicator !== 'object') {
             throw new Error('SMOKE_SNAPSHOT_UNAVAILABLE');
         }
+
         // Backend의 거래 상태는 변경하지 않으며 UI가 받는 복사본만 계속 malformed로 만든다.
         indicator.current_price = 'invalid';
+
         return new Response(JSON.stringify(payload), {
             status: response.status,
             headers: response.headers,
@@ -48,8 +52,10 @@ async function inject_malformed_dashboard_response(
         shutdown_accepted = true;
         await report_recovery_stage('recovery-shutdown-accepted');
     }
+
     return response;
 }
+
 
 /**
  * 함수 이름: run_recovery_shutdown_smoke()
@@ -62,6 +68,7 @@ async function run_recovery_shutdown_smoke(): Promise<void> {
     if (!('__TAURI_INTERNALS__' in window)) {
         throw new Error('TAURI_RUNTIME_REQUIRED');
     }
+
     const deadline = Date.now() + 90_000;
     while (Date.now() < deadline) {
         const failure = document.querySelector('[data-bootstrap-status="failure"] small');
@@ -69,6 +76,7 @@ async function run_recovery_shutdown_smoke(): Promise<void> {
             if (failure.textContent !== 'MALFORMED_BACKEND_PAYLOAD') {
                 throw new Error('UNEXPECTED_BOOTSTRAP_FAILURE');
             }
+
             const button = [...document.querySelectorAll<HTMLButtonElement>('button')]
                 .find((candidate) => candidate.textContent === '안전 종료' && !candidate.disabled);
             if (button !== undefined && button.getBoundingClientRect().width > 0) {
@@ -88,6 +96,7 @@ async function run_recovery_shutdown_smoke(): Promise<void> {
     if (!shutdown_accepted) {
         throw new Error('RECOVERY_SHUTDOWN_TIMEOUT');
     }
+
     // Code 0과 RELEASED는 실행 도구가 확인한다. 창이 계속 남으면 성공으로 처리하지 않는다.
     setTimeout(() => {
         void report_recovery_stage('failed', 'NATIVE_EXIT_TIMEOUT');

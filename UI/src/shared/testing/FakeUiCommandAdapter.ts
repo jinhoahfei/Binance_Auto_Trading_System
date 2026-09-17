@@ -30,6 +30,7 @@ export interface FakeCommandRecord {
     readonly payload: unknown;
 }
 
+
 /**
  * 클래스 이름: FakeUiCommandAdapter
  * 기능: backend가 없는 UI 개발과 상태 머신 테스트를 위해 결정적 명령 결과를 제공한다.
@@ -191,7 +192,7 @@ export class FakeUiCommandAdapter implements UiCommandPort {
         query: TradeHistoryQuery,
         signal?: AbortSignal,
     ): Promise<TradeHistoryDetails> {
-        void signal; // 즉시 완료하는 fake는 신호를 소비하지 않지만 production과 같은 port shape를 유지한다.
+        void signal;  // 즉시 완료하는 fake는 신호를 소비하지 않지만 production과 같은 port shape를 유지한다.
         this.record_command('load_trade_history', query);
         this.throw_queued_failure('load_trade_history');
 

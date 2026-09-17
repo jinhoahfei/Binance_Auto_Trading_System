@@ -61,6 +61,7 @@ const PROVEN_PRE_RUNTIME_ABORT_GRACE: Duration = Duration::from_millis(500);
 const DEFAULT_EXIT_TIMEOUT_MS: u64 = 30_000;
 const MAXIMUM_EXIT_TIMEOUT_MS: u64 = 120_000;
 
+
 /// 함수 이름: is_trusted_renderer_url()
 /// 기능: 현재 실행 환경의 메인 화면 origin만 navigation과 descriptor 요청에 허용한다.
 /// 인자: url -> 요청·이동 대상 URL, is_development -> 개발 서버 사용 여부
@@ -81,6 +82,7 @@ pub(crate) fn is_trusted_renderer_url(url: &tauri::Url, is_development: bool) ->
     }
 }
 
+
 /// 함수 이름: development_renderer_is_available()
 /// 기능: 실제 개발 화면의 HTML 응답을 확인해 서버 없는 흰 창 생성을 방지한다.
 /// 인자: 없음
@@ -89,6 +91,7 @@ pub(crate) fn is_trusted_renderer_url(url: &tauri::Url, is_development: bool) ->
 pub(crate) fn development_renderer_is_available() -> bool {
     probe_renderer_server(SocketAddr::from(([127, 0, 0, 1], 5173)))
 }
+
 
 /// 함수 이름: probe_renderer_server()
 /// 기능: credential 없는 bounded HEAD 요청으로 화면 서버의 HTTP 상태와 HTML 유형을 확인한다.
@@ -899,6 +902,7 @@ impl StaleRuntimeOwnershipAttestation {
     }
 }
 
+
 /// 함수 이름: inspect_stale_runtime_owner_in_directory()
 /// 기능: lock이 빈 ACTIVE/ORPHANED artifact와 PID 부재를 결합해 operator attestation 후보를 만든다.
 /// 인자: directory -> runtime ownership artifact를 가진 app-data directory,
@@ -929,6 +933,7 @@ where
     ))
 }
 
+
 /// 함수 이름: inspect_stale_runtime_owner()
 /// 기능: native startup 전 app-data에서 확정된 stale ACTIVE/ORPHANED owner만 operator surface에 공개한다.
 /// 인자: app_handle -> canonical per-user app-data path owner
@@ -945,6 +950,7 @@ pub fn inspect_stale_runtime_owner(
     ensure_private_app_data_directory(&app_data_directory)?;
     inspect_stale_runtime_owner_in_directory(&app_data_directory, runtime_process_exists)
 }
+
 
 /// 함수 이름: release_stale_runtime_owner_in_directory()
 /// 기능: operator가 확인한 exact stale identity를 다시 lock·PID 검증한 뒤 같은 inode에 RELEASED로 fsync한다.
@@ -1001,6 +1007,7 @@ where
     Ok(())
 }
 
+
 /// 함수 이름: release_stale_runtime_owner()
 /// 기능: native operator confirmation에 고정된 stale identity를 RELEASED로 전이한다.
 /// 인자: app_handle -> canonical per-user app-data path owner,
@@ -1022,6 +1029,7 @@ pub fn release_stale_runtime_owner(
     )
 }
 
+
 /// 함수 이름: build_connection_descriptor()
 /// 기능: strict READY와 zeroizing token을 복사 없이 native session descriptor로 이전한다.
 /// 인자: ready -> 검증된 FD4 wire, token -> CSPRNG token owner
@@ -1039,6 +1047,7 @@ fn build_connection_descriptor(
         token: transferred_token,
     }
 }
+
 
 /// 함수 이름: start_late_ready_recovery()
 /// 기능: initial READY timeout 뒤 FD4를 계속 drain하고 valid late READY면 descriptor/window startup을 복구한다.
@@ -1083,6 +1092,7 @@ pub fn start_late_ready_recovery(
 
     Ok(())
 }
+
 
 /// 함수 이름: publish_late_ready_descriptor()
 /// 기능: late READY와 preserved token을 main thread에서 session stage한 뒤에만 renderer window를 만든다.
@@ -1133,6 +1143,7 @@ fn publish_late_ready_descriptor(
     }
 }
 
+
 /// 함수 이름: schedule_late_ready_terminal_recovery()
 /// 기능: invalid/EOF로 framing 복구가 불가능한 live child를 kill하지 않고 native operator surface로 전환한다.
 /// 인자: app_handle -> native dialog dispatcher, process_state -> live child guard
@@ -1154,6 +1165,7 @@ fn schedule_late_ready_terminal_recovery(
         process_state.mark_late_ready_terminal();
     }
 }
+
 
 /// 함수 이름: abort_proven_pre_runtime_child()
 /// 기능: token/config 입력이 완성되지 않아 runtime 생성 불가가 증명된 child만 bounded grace 뒤 회수한다.
@@ -1180,6 +1192,7 @@ fn abort_proven_pre_runtime_child(mut child: Child, mut stop_writer: ControlWrit
     let _ = child.wait();
 }
 
+
 /// 함수 이름: select_startup_child_recovery_policy()
 /// 기능: runtime input publication 후 READY 관찰을 시작했다면 timeout/parse 실패에 timed kill을 금지한다.
 /// 인자: ready_observation_started -> token/config publication 후 ready wait 진입 여부
@@ -1194,6 +1207,7 @@ fn select_startup_child_recovery_policy(
         StartupChildRecoveryPolicy::AbortProvenPreRuntime
     }
 }
+
 
 /// 함수 이름: create_ready_main_window()
 /// 기능: ready port를 production CSP에 exact 주입하고 deferred main window를 처음 생성한다.
@@ -1267,6 +1281,7 @@ pub fn create_ready_main_window(
     Ok(())
 }
 
+
 /// 함수 이름: await_backend_sidecar_exit()
 /// 기능: renderer shutdown 202 뒤 native stop FD를 release하고 clean child exit를 bounded wait한다.
 /// 인자: state -> managed sidecar owner, timeout_ms -> optional wait timeout
@@ -1284,6 +1299,7 @@ pub async fn await_backend_sidecar_exit(
         .await
         .map_err(|_| SidecarFailure::state_unavailable())?
 }
+
 
 /// 함수 이름: arm_sidecar_exit_event_bridge()
 /// 기능: renderer exit listener를 armed로 publish하고 listener 전 recorded exit를 손실 없이 flush한다.
@@ -1307,6 +1323,7 @@ pub fn arm_sidecar_exit_event_bridge(
 
     Ok(BackendSidecarExitEventArmReceipt { armed: true })
 }
+
 
 /// 함수 이름: monitor_child_exit()
 /// 기능: child exit만 polling하고 exact expected/code event와 native wait condition을 publish한다.
@@ -1345,6 +1362,7 @@ fn monitor_child_exit(
     }
 }
 
+
 /// 함수 이름: build_history_path()
 /// 기능: app data directory 아래 고정 durable history path를 UTF-8 absolute string으로 만든다.
 /// 인자: app_data_directory -> Tauri identifier-scoped application data directory
@@ -1362,6 +1380,7 @@ fn build_history_path(app_data_directory: &Path) -> Result<String, SidecarFailur
         .ok_or_else(SidecarFailure::startup)
 }
 
+
 /// 함수 이름: serialize_bootstrap_configuration()
 /// 기능: exact read-only FD6 JSON을 bounded bytes로 직렬화한다.
 /// 인자: configuration -> native-only credential/config references
@@ -1378,6 +1397,7 @@ fn serialize_bootstrap_configuration(
 
     Ok(Zeroizing::new(payload))
 }
+
 
 /// 함수 이름: generate_session_token()
 /// 기능: launch마다 CSPRNG 32 bytes를 base64url no-padding 43자 token으로 만든다.
@@ -1400,6 +1420,7 @@ fn generate_session_token() -> Result<String, SidecarFailure> {
     Ok(token)
 }
 
+
 /// 함수 이름: select_allowed_origin()
 /// 기능: packaged macOS와 fixed Vite dev server를 별도 exact Origin으로 선택한다.
 /// 인자: is_development -> Tauri dev build 여부
@@ -1412,6 +1433,7 @@ fn select_allowed_origin(is_development: bool) -> &'static str {
         PRODUCTION_UI_ORIGIN
     }
 }
+
 
 /// 함수 이름: parse_ready_descriptor()
 /// 기능: unknown field와 invalid port/session/runtime identity/schema를 raw value 반사 없이 거부한다.
@@ -1462,6 +1484,7 @@ fn parse_ready_descriptor(payload: &[u8]) -> Result<ReadyDescriptorWire, Sidecar
     Ok(ready)
 }
 
+
 /// 함수 이름: replace_production_csp()
 /// 기능: production CSP의 두 sentinel을 validated random loopback origin으로 정확히 한 번 교체한다.
 /// 인자: csp -> Tauri가 nonce/hash를 보강한 CSP, assigned_port -> backend port
@@ -1483,6 +1506,7 @@ fn replace_production_csp(csp: &str, assigned_port: u16) -> Option<String> {
     )
 }
 
+
 /// 함수 이름: normalize_exit_timeout()
 /// 기능: 인자 없는 UI 호출에는 default를 적용하고 1ms~hard max 범위만 허용한다.
 /// 인자: timeout_ms -> optional renderer value
@@ -1496,6 +1520,7 @@ fn normalize_exit_timeout(timeout_ms: Option<u64>) -> Result<Duration, SidecarFa
     Ok(Duration::from_millis(selected_timeout))
 }
 
+
 /// 함수 이름: classify_expected_exit()
 /// 기능: native가 FD5 release intent를 먼저 publish한 exit만 expected로 분류한다.
 /// 인자: expected_exit_requested -> FD5 release 요청 publication 여부,
@@ -1505,6 +1530,7 @@ fn normalize_exit_timeout(timeout_ms: Option<u64>) -> Result<Duration, SidecarFa
 fn classify_expected_exit(expected_exit_requested: bool, _code: Option<i32>) -> bool {
     expected_exit_requested
 }
+
 
 /// 함수 이름: receipt_from_exit_record()
 /// 기능: expected clean code 0만 final window destroy를 허용하는 exact receipt로 변환한다.
@@ -1526,6 +1552,7 @@ fn receipt_from_exit_record(
         code: exit_record.code,
     })
 }
+
 
 /// 함수 이름: recover_child_lock()
 /// 기능: monitor-only Child mutex poison에서도 handle을 잃지 않고 process 관찰을 계속한다.
@@ -2438,6 +2465,7 @@ mod tests {
     }
 }
 
+
 /// 함수 이름: prepare_backend_sidecar()
 /// 기능: 현재 OS adapter의 credential·IPC 준비 결과를 공통 lifecycle에 전달한다.
 /// 인자: app_handle -> native app-data와 process owner
@@ -2448,6 +2476,7 @@ pub fn prepare_backend_sidecar(
 ) -> Result<BackendSidecarPreparation, SidecarFailure> {
     platform_prepare_backend_sidecar(app_handle) // OS 별 IPC 세부사항은 renderer에 노출하지 않는다.
 }
+
 
 /// 함수 이름: disable_process_core_dumps()
 /// 기능: 현재 OS의 process crash-report 보호를 credential 조회 전에 적용한다.

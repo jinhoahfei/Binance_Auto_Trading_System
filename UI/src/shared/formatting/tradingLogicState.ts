@@ -1,5 +1,6 @@
 import type { BackendTradingSnapshot } from '../contracts';
 
+
 /**
  * 함수 이름: format_trading_logic_state()
  * 기능: 실제 실행 STM의 Case와 대기 상태를 두 전략 표시 영역이 공유할 문구로 변환한다.
@@ -24,6 +25,7 @@ export function format_trading_logic_state(trading: BackendTradingSnapshot): str
         if (recovery?.phase === 'market' || recovery?.phase === 'account_orders') {
             return recovery.prolonged ? '자동 복구 지연 · 60초 이상' : '자동 복구 중';
         }
+
         return '주문 상태 확인 필요';
     }
     if (trading.status === 'stopping') {

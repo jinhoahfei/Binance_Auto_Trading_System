@@ -1,128 +1,135 @@
+/* 거래 내역의 필터와 CSV 내보내기 조작을 배치한다. */
 .toolbar {
-  display: flex;
-  box-sizing: border-box;
-  align-items: center;
-  width: 100%;
-  height: 64px;
-  padding: 14px 20px 14px 16px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 10px;
-  background: var(--color-bg-surface);
-  box-shadow: var(--shadow-control);
-  color: var(--color-text-primary);
+    display: flex;
+    box-sizing: border-box;
+    align-items: center;
+    width: 100%;
+    height: 64px;
+    padding: 14px 20px 14px 16px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 10px;
+    background: var(--color-bg-surface);
+    box-shadow: var(--shadow-control);
+    color: var(--color-text-primary);
 }
 
 .toolbarLabel {
-  flex: 0 0 auto;
-  width: 52px;
-  color: var(--color-text-secondary);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 16px;
+    flex: 0 0 auto;
+    width: 52px;
+    color: var(--color-text-secondary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 16px;
 }
 
+/* 같은 기준의 필터 버튼을 묶는다. */
 .group {
-  display: flex;
-  gap: 8px;
+    display: flex;
+    gap: 8px;
 }
 
+/* 필터·내보내기 버튼의 기본 표면과 입력 상태를 구성한다. */
 .filterButton,
 .exportButton {
-  box-sizing: border-box;
-  height: 34px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 8px;
-  background: var(--color-bg-control);
-  box-shadow: var(--shadow-control);
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 16px;
-  transition: border-color 140ms ease, background-color 140ms ease, filter 140ms ease;
+    box-sizing: border-box;
+    height: 34px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 8px;
+    background: var(--color-bg-control);
+    box-shadow: var(--shadow-control);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 16px;
+    transition: border-color 140ms ease, background-color 140ms ease, filter 140ms ease;
 }
 
 .filterButton {
-  min-width: 66px;
-  padding: 0 12px;
+    min-width: 66px;
+    padding: 0 12px;
 }
 
 .filterButton:hover:not(:disabled),
 .exportButton:hover:not(:disabled) {
-  filter: brightness(1.12);
+    filter: brightness(1.12);
 }
 
 .filterButton:focus-visible,
 .exportButton:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
 }
 
 .filterButton:disabled,
 .exportButton:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
+    cursor: not-allowed;
+    opacity: 0.48;
 }
 
+/* 선택된 기간을 강조하고 기간·방향 그룹의 경계를 표시한다. */
 .activePeriod {
-  border-color: var(--color-status-info);
-  background: var(--color-status-info-strong);
-  color: var(--color-text-primary);
+    border-color: var(--color-status-info);
+    background: var(--color-status-info-strong);
+    color: var(--color-text-primary);
 }
 
 .separator {
-  width: 1px;
-  height: 24px;
-  margin: 0 12px;
-  background: var(--color-border-default);
+    width: 1px;
+    height: 24px;
+    margin: 0 12px;
+    background: var(--color-border-default);
 }
 
+/* 매수·매도 필터의 기본색과 선택 상태를 구분한다. */
 .buy {
-  border-color: color-mix(in srgb, var(--color-status-positive) 65%, var(--color-border-default));
-  color: var(--color-text-positive);
+    border-color: color-mix(in srgb, var(--color-status-positive) 65%, var(--color-border-default));
+    color: var(--color-text-positive);
 }
 
 .sell {
-  border-color: color-mix(in srgb, var(--color-status-negative) 65%, var(--color-border-default));
-  color: var(--color-text-negative);
+    border-color: color-mix(in srgb, var(--color-status-negative) 65%, var(--color-border-default));
+    color: var(--color-text-negative);
 }
 
 /* 선택된 거래 구분은 진한 상태색으로 채워 기본 버튼과 명확하게 구분한다. */
 .buy.activeSide {
-  border-color: var(--color-status-positive);
-  background: var(--color-status-positive-strong);
-  color: var(--color-text-on-strong-status);  /* 진한 배경에서도 작은 버튼 글자의 대비를 확보한다. */
+    border-color: var(--color-status-positive);
+    background: var(--color-status-positive-strong);
+    color: var(--color-text-on-strong-status);  /* 진한 배경에서도 작은 버튼 글자의 대비를 확보한다. */
 }
 
 .sell.activeSide {
-  border-color: var(--color-status-negative);
-  background: var(--color-status-negative-strong);
-  color: var(--color-text-on-strong-status);  /* 매수와 동일한 선택 상태의 글자 대비를 유지한다. */
+    border-color: var(--color-status-negative);
+    background: var(--color-status-negative-strong);
+    color: var(--color-text-on-strong-status);  /* 매수와 동일한 선택 상태의 글자 대비를 유지한다. */
 }
 
+/* 내보내기 조작을 필터 그룹과 구분해 배치한다. */
 .exportButton {
-  min-width: 126px;
-  margin-left: auto;
-  padding: 0 18px;
-  border-color: color-mix(in srgb, var(--color-status-info) 42%, var(--color-text-primary));
-  background: var(--color-bg-surface);
-  color: var(--color-text-info);
+    min-width: 126px;
+    margin-left: auto;
+    padding: 0 18px;
+    border-color: color-mix(in srgb, var(--color-status-info) 42%, var(--color-text-primary));
+    background: var(--color-bg-surface);
+    color: var(--color-text-info);
 }
 
+/* 화면 조건 (max-width: 920px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 920px) {
-  .toolbar {
-    height: auto;
-    min-height: 64px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .separator {
-    display: none;
-  }
-
-  .exportButton {
-    margin-left: 0;
-  }
+    /* 거래 내역의 필터와 CSV 내보내기 조작을 배치한다. */
+    .toolbar {
+        height: auto;
+        min-height: 64px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .separator {
+        display: none;
+    }
+    /* 내보내기 조작을 필터 그룹과 구분해 배치한다. */
+    .exportButton {
+        margin-left: 0;
+    }
 }

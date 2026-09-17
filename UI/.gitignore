@@ -1,3 +1,4 @@
+# UI의 의존성·빌드 결과와 로컬 실행 파일을 버전 관리에서 제외한다.
 node_modules/
 .pnpm-store/
 dist/

@@ -1,166 +1,173 @@
+/* 날짜 선택 창의 크기와 표면을 설정한다. */
 .popover {
-  box-sizing: border-box;
-  width: 244px;
-  min-height: 239px;
-  padding: 12px 12px 11px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 10px;
-  background: var(--fixture-calendar-raised, var(--color-bg-surface-raised));
-  box-shadow: var(--shadow-modal);
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
+    box-sizing: border-box;
+    width: 244px;
+    min-height: 239px;
+    padding: 12px 12px 11px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 10px;
+    background: var(--fixture-calendar-raised, var(--color-bg-surface-raised));
+    box-shadow: var(--shadow-modal);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
 }
 
 .popover:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
 }
 
+/* 달력 아이콘과 선택 날짜를 머리말에 표시한다. */
 .header {
-  display: flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 4px;
-  font-size: 12px;
-  line-height: 18px;
+    display: flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 4px;
+    font-size: 12px;
+    line-height: 18px;
 }
 
 .calendarIcon {
-  margin-right: 6px;
-  color: var(--color-text-info);
-  font-size: 13px;
+    margin-right: 6px;
+    color: var(--color-text-info);
+    font-size: 13px;
 }
 
 .header strong {
-  font-weight: 600;
+    font-weight: 600;
 }
 
 .selectedDate {
-  margin-left: auto;
-  color: var(--color-text-info);
-  font-family: var(--font-numeric);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
+    margin-left: auto;
+    color: var(--color-text-info);
+    font-family: var(--font-numeric);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
 }
 
+/* 이전·다음 월 버튼과 연월 선택 입력을 한 행에 배치한다. */
 .navigation {
-  display: grid;
-  grid-template-columns: 30px 1fr 58px 30px;
-  gap: 7px;
-  align-items: center;
-  height: 38px;
+    display: grid;
+    grid-template-columns: 30px 1fr 58px 30px;
+    gap: 7px;
+    align-items: center;
+    height: 38px;
 }
 
 .navigation button,
 .navigation select {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  height: 30px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 6px;
-  background: var(--color-bg-control);
-  color: var(--color-text-primary);
-  font-size: 11px;
-  font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: 30px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 6px;
+    background: var(--color-bg-control);
+    color: var(--color-text-primary);
+    font-size: 11px;
+    font-weight: 600;
 }
 
 .navigation button {
-  padding: 0;
-  font-size: 18px;
+    padding: 0;
+    font-size: 18px;
 }
 
 .navigation select {
-  padding: 0 6px;
-  appearance: auto;
-  text-align: center;
+    padding: 0 6px;
+    appearance: auto;
+    text-align: center;
 }
 
 .navigation button:hover {
-  filter: brightness(1.12);
+    filter: brightness(1.12);
 }
 
 .navigation button:focus-visible,
 .navigation select:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 1px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 1px;
 }
 
+/* 요일과 날짜의 열 기준을 맞춘다. */
 .weekdays,
 .days {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
 }
 
 .weekdays {
-  height: 24px;
-  color: var(--color-text-secondary);
-  font-size: 10.5px;
-  font-weight: 600;
+    height: 24px;
+    color: var(--color-text-secondary);
+    font-size: 10.5px;
+    font-weight: 600;
 }
 
 .weekdays span {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .weekdays span:first-child {
-  color: var(--color-text-negative);
+    color: var(--color-text-negative);
 }
 
+/* 주별 행을 구성하고 각 주의 날짜를 일곱 열로 나눈다. */
 .days {
-  grid-template-columns: 1fr;
-  grid-auto-rows: 24px;
+    grid-template-columns: 1fr;
+    grid-auto-rows: 24px;
 }
 
 .week {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
 }
 
 .days button,
 .days span {
-  width: 100%;
-  height: 22px;
+    width: 100%;
+    height: 22px;
 }
 
 .days button {
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-text-primary);
-  font-family: var(--font-numeric);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-primary);
+    font-family: var(--font-numeric);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
 }
 
 .days button:hover:not(:disabled) {
-  background: var(--color-bg-control);
+    background: var(--color-bg-control);
 }
 
 .days button:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: -1px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: -1px;
 }
 
+/* 선택할 수 없는 날짜를 낮은 강조도로 표시한다. */
 .days button:disabled {
-  color: var(--color-text-tertiary);
-  opacity: 0.42;
+    color: var(--color-text-tertiary);
+    opacity: 0.42;
 }
 
+/* 요일별 표시색과 선택 날짜의 강조 상태를 구분한다. */
 .days button.sunday {
-  color: var(--color-text-negative);
+    color: var(--color-text-negative);
 }
 
 .days button.saturday {
-  color: var(--color-text-secondary);
+    color: var(--color-text-secondary);
 }
 
 .days button.selected {
-  background: var(--color-status-info-strong);
-  color: var(--color-text-primary);
-  font-weight: 700;
+    background: var(--color-status-info-strong);
+    color: var(--color-text-primary);
+    font-weight: 700;
 }

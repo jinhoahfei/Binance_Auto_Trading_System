@@ -13,6 +13,7 @@ import type { UiApplicationController } from '../runtime';
 import { present_dashboard_props } from './dashboardPresenter';
 import { present_trade_history_props } from './tradeHistoryPresenter';
 
+
 /**
  * 함수 이름: create_recording_controller()
  * 기능: presenter가 보낸 intent를 기록하면서 최신 ViewModel을 제공하는 테스트 controller를 생성한다.
@@ -31,12 +32,14 @@ function create_recording_controller(view_model: AppViewModel): {
         controller: {
             dispatch: (intent) => {
                 intents.push(intent);
+
                 return true;
             },
             get_view_model: () => view_model,
         },
     };
 }
+
 
 /**
  * 함수 이름: create_demo_view_model()
@@ -52,6 +55,7 @@ function create_demo_view_model(): AppViewModel {
 
     return application.facade.get_view_model();
 }
+
 
 /**
  * 함수 이름: create_market_kline()
@@ -84,6 +88,7 @@ function create_market_kline(
 
 describe('application presenters', () => {
     it('실제 매수 평균 체결가와 ETH·USDT 원 수수료를 반올림 없이 표시한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const source = create_backend_snapshot_fixture().recent_trades[0]!;
         const buy_source = {
             ...source, average_fill_price: '2444.04000000', entry_price: '2444.04000000',
@@ -98,9 +103,12 @@ describe('application presenters', () => {
         };
         const buy = map_trade_record(validate_trade_snapshot(buy_source));
         const sell = map_trade_record(validate_trade_snapshot(sell_source));
+
         const view_model = create_demo_view_model();
         const { controller } = create_recording_controller(view_model);
         const rows = present_trade_history_props({ ...view_model, trade_history: { ...view_model.trade_history, records: [buy, sell] } }, controller).rows;
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(rows).toMatchObject([
             { entryPrice: '2,444.04 USDT', executionPrice: '2,444.04 USDT', fee: '0.000004 ETH', feeNote: '≈ 0.00977616 USDT' },
             { entryPrice: '2,444.04 USDT', executionPrice: '2,421.86 USDT', fee: '0.00944525 USDT' },
@@ -117,6 +125,7 @@ describe('application presenters', () => {
     });
 
     it('아주 작은 BNB·혼합 수수료·실제 0 수수료의 단위를 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const { controller } = create_recording_controller(view_model);
         const source = create_backend_snapshot_fixture().recent_trades[0]!;
@@ -134,12 +143,14 @@ describe('application presenters', () => {
     });
 
     it('외부 수동 매도는 두 거래 화면에서 구분하고 모르는 판단 시세는 null로 유지한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const source = {
             ...create_backend_snapshot_fixture().recent_trades[0]!,
             side: 'SELL', client_order_id: 'web-manual-sell', exit_reason: 'EXTERNAL_MANUAL',
             market_price_at_decision: null, realized_pnl: '-0.10', realized_return_rate: '-1.10', allocated_cost_basis: '9.54',
         };
         const record = map_trade_record(validate_trade_snapshot(source));
+
         const view_model = create_demo_view_model();
         const updated: AppViewModel = {
             ...view_model,
@@ -147,6 +158,8 @@ describe('application presenters', () => {
             trade_history: { ...view_model.trade_history, records: [record] },
         };
         const { controller } = create_recording_controller(updated);
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(present_dashboard_props(updated, controller).trader.orders[0]?.strategy).toBe('외부 수동 매도');
         expect(present_trade_history_props(updated, controller).rows[0]?.strategy).toBe('외부 수동 매도');
         expect(record.market_price_at_decision).toBeNull();
@@ -157,6 +170,7 @@ describe('application presenters', () => {
     });
 
     it('최근 체결과 상세 거래의 ETH 수량은 4자리, 금액과 수익률은 2자리로 표시한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const buy_trade: TradeRecord = Object.freeze({
             id: 'live-buy',
@@ -193,6 +207,7 @@ describe('application presenters', () => {
         const dashboard_props = present_dashboard_props(live_view_model, controller);
         const history_props = present_trade_history_props(live_view_model, controller);
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(dashboard_props.trader.orders).toMatchObject([
             { price: '2,451.43 USDT', secondaryValue: '0.0042 ETH' },
             { price: '2,451.43 USDT', secondaryValue: '-0.38%' },
@@ -223,6 +238,7 @@ describe('application presenters', () => {
     });
 
     it('authoritative risk와 process ownership 상태를 계산 없이 TraderPanel 경계에 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const last_risk_budget = {
             policy_version: 4,
@@ -286,11 +302,13 @@ describe('application presenters', () => {
     });
 
     it('account와 history summary actor snapshot을 route props에 투영한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const { controller } = create_recording_controller(view_model);
         const dashboard_props = present_dashboard_props(view_model, controller);
         const history_props = present_trade_history_props(view_model, controller);
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(dashboard_props.account.asset).toEqual(view_model.account_summary.asset);
         expect(dashboard_props.account.strategy.profitAmount).toBe(
             DEFAULT_DASHBOARD_PROPS.account.strategy.profitAmount,
@@ -302,6 +320,7 @@ describe('application presenters', () => {
     });
 
     it('거래 내역 조회 실패를 오래된 행 대신 오류와 재시도 intent로 투영한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const failed_view_model: AppViewModel = {
             ...view_model,
@@ -318,6 +337,7 @@ describe('application presenters', () => {
         const { controller, intents } = create_recording_controller(failed_view_model);
         const history_props = present_trade_history_props(failed_view_model, controller);
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(history_props.description).toBe('오늘 · ETH/KRW · 전체 · 조회 실패');
         expect(history_props.rows).toEqual([]);
         expect(history_props.emptyState).toMatchObject({
@@ -331,6 +351,7 @@ describe('application presenters', () => {
     });
 
     it('거래 내역 loading을 오래된 행이나 empty CTA 없이 실제 busy props로 투영한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const loading_view_model: AppViewModel = {
             ...view_model,
@@ -343,6 +364,7 @@ describe('application presenters', () => {
         const { controller } = create_recording_controller(loading_view_model);
         const history_props = present_trade_history_props(loading_view_model, controller);
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(history_props.description).toBe('오늘 · ETH/KRW · 전체 · 조회 중');
         expect(history_props.rows).toEqual([]);
         expect(history_props.isLoading).toBe(true);
@@ -354,6 +376,7 @@ describe('application presenters', () => {
     });
 
     it('drawing hover·context-menu·delete intent를 facade 계약으로 모두 변환한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const { controller, intents } = create_recording_controller(view_model);
         const chart_props = present_dashboard_props(view_model, controller).chart;
@@ -368,6 +391,7 @@ describe('application presenters', () => {
         chart_props.onIntent?.({ type: 'DRAWING_LINE_DELETE_REQUESTED' });
         chart_props.onIntent?.({ type: 'DRAWING_LINE_CONTEXT_MENU_CLOSED' });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(intents).toEqual([
             { type: 'CHART_LINE_HOVER_ENTERED', line_id: 'line-1' },
             { type: 'CHART_LINE_HOVER_EXITED' },
@@ -378,6 +402,7 @@ describe('application presenters', () => {
     });
 
     it('실시간 MarketSnapshot에서 현재 봉과 EMA9·볼린저밴드·거래량을 투영한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const { controller } = create_recording_controller(view_model);
         const market_snapshot: RealtimeChartDataSnapshot = {
@@ -394,6 +419,7 @@ describe('application presenters', () => {
         };
         const chart_props = present_dashboard_props(view_model, controller, market_snapshot).chart;
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(view_model.chart.interval).toBe('30m');
         expect(chart_props.dataStatus).toBe('live');
         expect(chart_props.symbol).toBe('ETHUSDT');
@@ -406,6 +432,7 @@ describe('application presenters', () => {
     });
 
     it('현재 주기의 과거 봉 상태와 요청 callback을 차트 Boundary에 연결한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();
         const { controller } = create_recording_controller(view_model);
         const load_earlier_klines = vi.fn();
@@ -430,6 +457,7 @@ describe('application presenters', () => {
         };
         const chart_props = present_dashboard_props(view_model, controller, market_runtime).chart;
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(chart_props.historyLoading).toBe(true);
         expect(chart_props.historyExhausted).toBe(false);
 

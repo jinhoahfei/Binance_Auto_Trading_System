@@ -9,6 +9,7 @@ export const TEST_BACKEND_SESSION_ID = '3c73d583-c1c8-4830-8393-cc31639a40fd';
 export const TEST_BACKEND_EVENT_ID = 'c1394f5d-f728-47c0-8e0b-e8ef44bd96e8';
 export const TEST_BACKEND_TOKEN = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
+
 /**
  * 함수 이름: create_backend_account_fixture()
  * 기능: UI transport test에서 사용하는 ready ETH/USDT account DTO를 생성한다.
@@ -17,6 +18,7 @@ export const TEST_BACKEND_TOKEN = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
  * 작성 날짜: 2026/08/21
  */
 export function create_backend_account_fixture(): BackendAccountSnapshot {
+    // 지원 자산과 고정된 잔고·평가값으로 계좌 응답 fixture를 구성한다.
     return {
         valuation_asset: 'ETH',
         quote_asset: 'USDT',
@@ -41,6 +43,7 @@ export function create_backend_account_fixture(): BackendAccountSnapshot {
     };
 }
 
+
 /**
  * 함수 이름: create_backend_snapshot_fixture()
  * 기능: generated contract와 startup ready invariant를 모두 만족하는 coherent snapshot을 생성한다.
@@ -49,6 +52,7 @@ export function create_backend_account_fixture(): BackendAccountSnapshot {
  * 작성 날짜: 2026/08/21
  */
 export function create_backend_snapshot_fixture(): BackendSnapshot {
+    // 같은 session과 version에 속한 기능별 fixture를 전체 snapshot으로 묶는다.
     return {
         session_id: TEST_BACKEND_SESSION_ID,
         last_sequence: 9,
@@ -180,6 +184,7 @@ export function create_backend_snapshot_fixture(): BackendSnapshot {
         },
     };
 }
+
 
 /**
  * 함수 이름: create_backend_event_fixture()

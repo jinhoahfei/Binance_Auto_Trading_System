@@ -1,178 +1,186 @@
+/* CSV 창 뒤의 화면을 덮어 모달 영역을 구분한다. */
 .overlay {
-  position: fixed;
-  z-index: 80;
-  inset: 0;
-  background: var(--color-bg-overlay);
-  backdrop-filter: blur(1px);
+    position: fixed;
+    z-index: 80;
+    inset: 0;
+    background: var(--color-bg-overlay);
+    backdrop-filter: blur(1px);
 }
 
+/* CSV 옵션 창을 화면 중앙의 고정 크기로 배치한다. */
 .dialog {
-  position: fixed;
-  z-index: 81;
-  top: 50%;
-  left: 50%;
-  box-sizing: border-box;
-  width: 560px;
-  height: 408px;
-  min-height: 408px;
-  padding: 25px 27px 24px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 12px;
-  background: var(--fixture-dialog-raised, var(--color-bg-surface-raised));
-  box-shadow: var(--shadow-modal);
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
-  transform: translate(-50%, -50%);
+    position: fixed;
+    z-index: 81;
+    top: 50%;
+    left: 50%;
+    box-sizing: border-box;
+    width: 560px;
+    height: 408px;
+    min-height: 408px;
+    padding: 25px 27px 24px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 12px;
+    background: var(--fixture-dialog-raised, var(--color-bg-surface-raised));
+    box-shadow: var(--shadow-modal);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    transform: translate(-50%, -50%);
 }
 
 .dialog:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
 }
 
+/* 검증 오류 문구가 추가될 때 필요한 세로 공간을 확보한다. */
 .dialogWithErrors {
-  top: calc(50% + 6px);
-  height: 420px;
-  min-height: 420px;
+    top: calc(50% + 6px);
+    height: 420px;
+    min-height: 420px;
 }
 
+/* CSV 아이콘과 제목·설명을 하나의 머리말로 배치한다. */
 .heading {
-  display: flex;
-  gap: 6px;
-  height: 56px;
+    display: flex;
+    gap: 6px;
+    height: 56px;
 }
 
 .icon {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 50px;
-  height: 50px;
-  color: var(--color-bg-canvas);
-  font-family: var(--font-numeric);
-  font-size: 10px;
-  font-weight: 700;
-  transform: translateX(-2px);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 50px;
+    height: 50px;
+    color: var(--color-bg-canvas);
+    font-family: var(--font-numeric);
+    font-size: 10px;
+    font-weight: 700;
+    transform: translateX(-2px);
 }
 
 .icon img {
-  position: absolute;
-  width: 50px;
-  height: 50px;
-  inset: 0;
+    position: absolute;
+    width: 50px;
+    height: 50px;
+    inset: 0;
 }
 
 .icon strong {
-  position: relative;
-  z-index: 1;
-  font-size: 9px;
-  font-weight: 700;
+    position: relative;
+    z-index: 1;
+    font-size: 9px;
+    font-weight: 700;
 }
 
 .heading h2 {
-  margin: 1px 0 0;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 24px;
+    margin: 1px 0 0;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 24px;
 }
 
 .heading p {
-  margin: 2px 0 0;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
+    margin: 2px 0 0;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 18px;
 }
 
+/* 내보내기 옵션을 제목과 입력 영역 단위로 구분한다. */
 .section {
-  position: relative;
-  margin-top: 18px;
+    position: relative;
+    margin-top: 18px;
 }
 
 .section + .section {
-  margin-top: 22px;
+    margin-top: 22px;
 }
 
 .section h3 {
-  margin: 0 0 8px;
-  color: var(--color-text-primary);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 18px;
+    margin: 0 0 8px;
+    color: var(--color-text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 18px;
 }
 
+/* 폴더 경로와 위치 선택 버튼을 같은 행에 배치한다. */
 .locationRow {
-  display: grid;
-  grid-template-columns: 1fr 126px;
-  gap: 12px;
+    display: grid;
+    grid-template-columns: 1fr 126px;
+    gap: 12px;
 }
 
+/* 경로·날짜·파일명 입력의 공통 테두리와 배경을 설정한다. */
 .locationField,
 .dateField,
 .fileNameField {
-  box-sizing: border-box;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 8px;
-  background: var(--color-bg-control-strong);
+    box-sizing: border-box;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 8px;
+    background: var(--color-bg-control-strong);
 }
 
 .locationField {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  height: 46px;
-  padding: 6px 14px;
-  overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    height: 46px;
+    padding: 6px 14px;
+    overflow: hidden;
 }
 
 .locationField span,
 .dateField span,
 .fileNameField label {
-  color: var(--color-text-secondary);
-  font-size: 10.5px;
-  font-weight: 500;
-  line-height: 14px;
+    color: var(--color-text-secondary);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 14px;
 }
 
 .locationField strong,
 .dateField strong {
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    overflow: hidden;
+    color: var(--color-text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
+/* 내보내기 조작 버튼의 기본 표면과 글꼴을 통일한다. */
 .chooseButton,
 .periods button,
 .cancelButton,
 .exportButton {
-  border: 1px solid var(--color-border-strong);
-  border-radius: 7px;
-  background: var(--color-bg-control);
-  box-shadow: var(--shadow-control);
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 600;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 7px;
+    background: var(--color-bg-control);
+    box-shadow: var(--shadow-control);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
 }
 
 .chooseButton {
-  height: 46px;
-  border-color: color-mix(in srgb, var(--color-status-info) 50%, var(--color-text-primary));
-  background: var(--fixture-outline-control, var(--color-bg-control));
-  color: var(--color-text-info);
+    height: 46px;
+    border-color: color-mix(in srgb, var(--color-status-info) 50%, var(--color-text-primary));
+    background: var(--fixture-outline-control, var(--color-bg-control));
+    color: var(--color-text-info);
 }
 
 .chooseButton:hover:not(:disabled),
 .periods button:hover:not(:disabled),
 .cancelButton:hover:not(:disabled),
 .exportButton:hover:not(:disabled) {
-  filter: brightness(1.12);
+    filter: brightness(1.12);
 }
 
 .chooseButton:focus-visible,
@@ -181,195 +189,204 @@
 .cancelButton:focus-visible,
 .exportButton:focus-visible,
 .fileNameField input:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
 }
 
+/* 기간 선택 버튼과 현재 선택 상태를 표시한다. */
 .periods {
-  display: grid;
-  grid-template-columns: 88px 96px 104px 108px;
-  gap: 8px;
+    display: grid;
+    grid-template-columns: 88px 96px 104px 108px;
+    gap: 8px;
 }
 
 .periods button {
-  height: 34px;
-  padding: 0;
-  background: var(--fixture-period-control, var(--color-bg-control));
+    height: 34px;
+    padding: 0;
+    background: var(--fixture-period-control, var(--color-bg-control));
 }
 
 .periods button.selectedPeriod {
-  border-color: var(--color-status-info);
-  background: var(--fixture-period-selected, var(--color-status-info-strong));
+    border-color: var(--color-status-info);
+    background: var(--fixture-period-selected, var(--color-status-info-strong));
 }
 
+/* 시작일과 종료일 입력을 두 열로 배치한다. */
 .dateRow {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-top: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
 }
 
 .dialogWithErrors .dateRow {
-  margin-top: 24px;
+    margin-top: 24px;
 }
 
 .dateAnchor {
-  position: relative;
+    position: relative;
 }
 
+/* 날짜 표시와 달력 아이콘을 같은 입력 영역에 배치한다. */
 .dateField {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  flex-direction: column;
-  width: 100%;
-  height: 56px;
-  padding: 8px 38px 8px 14px;
-  background: var(--fixture-date-control, var(--color-bg-control-strong));
-  text-align: left;
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    flex-direction: column;
+    width: 100%;
+    height: 56px;
+    padding: 8px 38px 8px 14px;
+    background: var(--fixture-date-control, var(--color-bg-control-strong));
+    text-align: left;
 }
 
 .dateField:disabled {
-  cursor: default;
-  opacity: 0.6;
+    cursor: default;
+    opacity: 0.6;
 }
 
 .dateEnabled {
-  /* 활성화 여부는 중립 테두리로 표현하고 실제 열린 달력 대상만 blue focus를 사용한다. */
-  border-color: var(--color-border-strong);
-  cursor: pointer;
-  opacity: 1;
+    /* 활성화 여부는 중립 테두리로 표현하고 실제 열린 달력 대상만 blue focus를 사용한다. */
+    border-color: var(--color-border-strong);
+    cursor: pointer;
+    opacity: 1;
 }
 
 .dateOpen {
-  border-color: var(--color-focus);
+    border-color: var(--color-focus);
 }
 
 .dateIcon {
-  position: absolute;
-  top: 17px;
-  right: 14px;
-  color: var(--color-text-info) !important;
-  font-size: 18px !important;
+    position: absolute;
+    top: 17px;
+    right: 14px;
+    color: var(--color-text-info) !important;
+    font-size: 18px !important;
 }
 
+/* 각 날짜 입력 아래에 달력을 겹쳐 표시한다. */
 .startCalendar,
 .endCalendar {
-  position: absolute;
-  z-index: 3;
-  top: 68px;
+    position: absolute;
+    z-index: 3;
+    top: 68px;
 }
 
 .startCalendar {
-  left: 0;
+    left: 0;
 }
 
 .endCalendar {
-  right: 0;
+    right: 0;
 }
 
+/* 파일명·취소·내보내기 조작을 하단에 배치한다. */
 .footer {
-  display: grid;
-  grid-template-columns: 286px 92px 104px;
-  justify-content: space-between;
-  margin-top: 24px;
+    display: grid;
+    grid-template-columns: 286px 92px 104px;
+    justify-content: space-between;
+    margin-top: 24px;
 }
 
 .fileNameField {
-  position: relative;
-  height: 34px;
-  padding: 0 12px;
+    position: relative;
+    height: 34px;
+    padding: 0 12px;
 }
 
+/* 시각적 공간을 차지하지 않으면서 파일명 입력의 접근성 이름을 제공한다. */
 .fileNameField label {
-  position: absolute;
-  overflow: hidden;
-  width: 1px;
-  height: 1px;
-  clip-path: inset(50%);
-  white-space: nowrap;
+    position: absolute;
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
 
 .fileNameField input {
-  width: 100%;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-family: var(--font-numeric);
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
+    width: 100%;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-family: var(--font-numeric);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
 }
 
 .cancelButton,
 .exportButton {
-  height: 34px;
+    height: 34px;
 }
 
 .cancelButton {
-  background: var(--fixture-neutral-control, var(--color-bg-control));
+    background: var(--fixture-neutral-control, var(--color-bg-control));
 }
 
 .exportButton {
-  border-color: var(--color-status-info);
-  background: var(--color-status-info-strong);
-  color: var(--color-text-primary);
+    border-color: var(--color-status-info);
+    background: var(--color-status-info-strong);
+    color: var(--color-text-primary);
 }
 
+/* 처리 중 사용할 수 없는 입력의 시각적 상태를 통일한다. */
 .chooseButton:disabled,
 .periods button:disabled,
 .cancelButton:disabled,
 .exportButton:disabled,
 .fileNameField input:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
+    cursor: not-allowed;
+    opacity: 0.48;
 }
 
+/* 검증 오류가 있는 필드와 그 설명을 오류색으로 구분한다. */
 .invalid {
-  border-color: var(--color-status-negative);
+    border-color: var(--color-status-negative);
 }
 
 .error {
-  margin: 2px 0 -4px;
-  color: var(--color-text-negative);
-  font-size: 10.5px;
-  font-weight: 500;
-  line-height: 15px;
+    margin: 2px 0 -4px;
+    color: var(--color-text-negative);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 15px;
 }
 
 .section > .error {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 2px;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 2px;
 }
 
 .fileError,
 .exportError {
-  margin: 4px 0 0;
+    margin: 4px 0 0;
 }
 
+/* 화면 조건 (max-width: 640px)에서 기존 요소의 배치와 여백을 조정한다. */
 @media (max-width: 640px) {
-  .dialog {
-    width: calc(100vw - 32px);
-    padding-inline: 20px;
-  }
-
-  .locationRow,
+    /* CSV 옵션 창을 화면 중앙의 고정 크기로 배치한다. */
+    .dialog {
+        width: calc(100vw - 32px);
+        padding-inline: 20px;
+    }
+    .locationRow,
   .dateRow,
   .footer {
-    grid-template-columns: 1fr;
-  }
-
-  .periods {
-    flex-wrap: wrap;
-  }
-
-  .startCalendar,
+        grid-template-columns: 1fr;
+    }
+    /* 기간 선택 버튼과 현재 선택 상태를 표시한다. */
+    .periods {
+        flex-wrap: wrap;
+    }
+    /* 각 날짜 입력 아래에 달력을 겹쳐 표시한다. */
+    .startCalendar,
   .endCalendar {
-    right: auto;
-    left: 0;
-  }
+        right: auto;
+        left: 0;
+    }
 }

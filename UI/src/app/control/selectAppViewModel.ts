@@ -12,6 +12,7 @@ import { derive_active_modal } from './uiModalPolicy';
  * 작성 날짜: 2026/09/16
  */
 export function select_app_view_model(root_snapshot: UiApplicationSnapshot): AppViewModel {
+    // 병렬 Region의 상태를 기능별 표시 상태로 읽는다.
     const snapshot = select_feature_views(root_snapshot);
     const history_status = snapshot.trade_history.value as AppViewModel['trade_history']['status'];
     const csv_status = snapshot.csv_export.matches({
@@ -21,9 +22,12 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
     }) ? 'picking_directory' : typeof snapshot.csv_export.value === 'string' ? snapshot.csv_export.value : 'editing';
     const exit_status = snapshot.app_exit.value as AppViewModel['app_exit']['status'];
 
+    // 동일한 최종 snapshot에서 모든 표시값을 만들어 화면 간 상태가 섞이지 않게 한다.
     return {
         route: snapshot.shell.context.route,
         active_modal: derive_active_modal(root_snapshot),
+
+        // 연결 상태와 복구 진행을 상단 표시 계약으로 변환한다.
         connection: {
             status: snapshot.connection.context.status,
             is_online: snapshot.connection.matches('api_online'),
@@ -32,6 +36,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             error: snapshot.connection.context.last_error,
             recovery: snapshot.connection.context.recovery,
         },
+
+        // 서버 매매 상태·위험 제한과 명령 진행 여부를 함께 표시한다.
         trading: {
             command_enabled: snapshot.trading.context.command_enabled,
             risk_policy_availability: snapshot.trading.context.risk_policy_availability,
@@ -69,6 +75,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             unavailable_reason: snapshot.trading.context.unavailable_reason,
             error: snapshot.trading.context.error,
         },
+
+        // 추천·적용·후보 값과 선택 진행 상태를 분리해 표시한다.
         regime: {
             recommended: snapshot.regime.context.recommended_regime,
             applied: snapshot.regime.context.applied_regime,
@@ -79,6 +87,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             logic_coverage: snapshot.trading.context.logic_coverage,
             error: snapshot.regime.context.error,
         },
+
+        // 현재 주기와 표시 설정·드로잉 선택 상태를 같은 차트 모델로 묶는다.
         chart: {
             interval: snapshot.chart.context.interval,
             indicators: snapshot.chart.context.indicators,
@@ -97,6 +107,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             }) ? 'highlighted' : 'awaiting_selection',
             drawings: snapshot.chart.context.drawings[snapshot.chart.context.interval],
         },
+
+        // 선택한 탭에 필요한 최근 주문과 실시간 지표를 제공한다.
         trader_panel: {
             active_tab: snapshot.recent_orders.matches('trade_history_displayed') ? 'recent_orders' : 'realtime_indicators',
             trades: snapshot.recent_orders.context.trades,
@@ -104,6 +116,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             strategy_indicators: snapshot.recent_orders.context.strategy_indicators,
             strategy_indicators_received_at: snapshot.recent_orders.context.strategy_indicators_received_at,
         },
+
+        // 분할 주문 비율과 저장 상태를 계좌 영역에 전달한다.
         split_order: {
             scale_in_percentage: snapshot.split_order.context.scale_in_percentage,
             scale_out_percentage: snapshot.split_order.context.scale_out_percentage,
@@ -114,6 +128,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             strategy: snapshot.account_summary.context.strategy,
             asset: snapshot.account_summary.context.asset,
         },
+
+        // 현재 필터의 상세 행과 독립적인 계좌 요약을 함께 제공한다.
         trade_history: {
             symbol: snapshot.trade_history.context.symbol,
             period: snapshot.trade_history.context.period,
@@ -124,6 +140,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             error: snapshot.trade_history.context.error,
             summary: snapshot.trade_history_summary.context.summary,
         },
+
+        // 편집값·검증 오류·완료 경로를 CSV 창의 표시 계약으로 옮긴다.
         csv_export: {
             status: csv_status as AppViewModel['csv_export']['status'],
             is_open: !snapshot.csv_export.matches('closed'),
@@ -143,6 +161,8 @@ export function select_app_view_model(root_snapshot: UiApplicationSnapshot): App
             command_error: snapshot.csv_export.context.command_error,
             receipt_path: snapshot.csv_export.context.receipt?.file_path ?? null,
         },
+
+        // 정상 종료의 완료 상태와 진행·오류 상태를 구분한다.
         app_exit: {
             status: exit_status,
             is_pending: snapshot.app_exit.matches('shutting_down'),

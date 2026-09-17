@@ -10,6 +10,7 @@ export interface ExitConfirmationDialogProps {
     readonly onConfirm: () => void;
 }
 
+
 /**
  * 함수 이름: ExitConfirmationDialog()
  * 기능: OS 종료 요청을 포지션 유무에 따른 일반 종료 또는 강제 매도 후 종료 확인으로 표시한다.
@@ -24,6 +25,7 @@ export function ExitConfirmationDialog({
     onCancel,
     onConfirm,
 }: ExitConfirmationDialogProps) {
+    // 포지션 상태에 맞는 종료 안내와 확인·취소 조작을 공통 모달에 배치한다.
     return (
         <ModalSurface
             open={open}

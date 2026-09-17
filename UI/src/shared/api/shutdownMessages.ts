@@ -1,3 +1,12 @@
+// 종료 단계와 실패 코드를 고정된 사용자 안내 문구로 변환한다.
+
+/**
+ * 함수 이름: shutdown_step_message()
+ * 기능: 종료 준비 단계 코드를 사용자 안내 문구로 변환한다.
+ * 인자: step -> 현재 종료 준비 단계
+ * 반환값: 단계별 안내 또는 기본 종료 준비 문구
+ * 작성 날짜: 2026/09/17
+ */
 export const shutdown_step_message = (step?: string): string => ({
     workers: '진행 중인 작업을 정리하고 있습니다.',
     account: '잔고와 거래 기록을 확인하고 있습니다.',
@@ -7,6 +16,14 @@ export const shutdown_step_message = (step?: string): string => ({
     complete: '백엔드 프로세스 종료를 확인하고 있습니다.',
 }[step ?? ''] ?? '안전 종료를 준비하고 있습니다.');
 
+
+/**
+ * 함수 이름: shutdown_failure_message()
+ * 기능: 종료 실패 코드와 진행 단계에 맞는 복구 안내를 선택한다.
+ * 인자: code -> 실패 코드, step -> 실패한 종료 준비 단계
+ * 반환값: 실패 원인과 다음 확인을 설명하는 문구
+ * 작성 날짜: 2026/09/17
+ */
 export const shutdown_failure_message = (code: string, step?: string): string => ({
     SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED: '열린 포지션이 확인됐습니다. 청산 후 종료할지 확인해 주세요.',
     SHUTDOWN_ACCOUNT_UNREACHABLE: '거래소에서 잔고와 주문 상태를 확인하지 못했습니다. 연결 복구 후 다시 확인해 주세요.',

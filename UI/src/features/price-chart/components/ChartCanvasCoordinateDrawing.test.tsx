@@ -51,6 +51,7 @@ const CHART_DATA = {
     timestampLabel: '2026.08.20 · 18:00 KST',
 };
 
+
 /**
  * 함수 이름: create_coordinate_space_harness()
  * 기능: data 좌표와 pane 좌표 사이 변환을 관찰할 제어 좌표계를 만든다.
@@ -104,6 +105,7 @@ function create_coordinate_space_harness(
     };
 }
 
+
 /**
  * 함수 이름: publish_coordinate_space()
  * 기능: mock surface를 통해 ChartCanvas에 현재 좌표계를 전달한다.
@@ -125,6 +127,7 @@ function publish_coordinate_space(coordinate_space: ChartCoordinateSpace): void 
 
 describe('ChartCanvas canonical drawing coordinates', () => {
     it('time·price로 저장한 선을 축소·전체화면 좌표계에 재투영하고 x_ratio를 무시한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_intent = vi.fn<(intent: PriceChartIntent) => void>();
         const normal_harness = create_coordinate_space_harness(400, 200, 1, 1);
         const fullscreen_harness = create_coordinate_space_harness(1_200, 700, 3, 2);
@@ -141,9 +144,12 @@ describe('ChartCanvas canonical drawing coordinates', () => {
         const chart = screen.getByRole('img', { name: 'ETH 캔들 가격 차트' });
 
         vi.spyOn(chart, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 400, 200));
+
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.pointerDown(chart, { button: 0, clientX: 110, clientY: 70 });
         fireEvent.pointerDown(chart, { button: 0, clientX: 310, clientY: 170 });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(normal_harness.coordinate_to_time).toHaveBeenNthCalledWith(1, 100);
         expect(normal_harness.coordinate_to_time).toHaveBeenNthCalledWith(2, 300);
         expect(normal_harness.coordinate_to_price).toHaveBeenNthCalledWith(1, 50);
@@ -235,6 +241,7 @@ describe('ChartCanvas canonical drawing coordinates', () => {
     });
 
     it('왼쪽에 100개 미만이 남으면 현재 주기의 과거 페이지를 한 번만 요청한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const handle_load_earlier = vi.fn();
         const near_history_boundary = create_coordinate_space_harness(400, 200, 1, 1, 99);
         const { rerender } = render(
@@ -246,8 +253,9 @@ describe('ChartCanvas canonical drawing coordinates', () => {
 
         publish_coordinate_space(near_history_boundary.coordinate_space);
 
-        expect(handle_load_earlier).not.toHaveBeenCalled();
+        expect(handle_load_earlier).not.toHaveBeenCalled();  // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
 
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.wheel(screen.getByTestId('mock-lightweight-chart'), {
             deltaX: 0,
             deltaY: 120,
@@ -257,8 +265,9 @@ describe('ChartCanvas canonical drawing coordinates', () => {
             visible_from: BASE_OPEN_TIME + 1,
         });
 
-        expect(handle_load_earlier).not.toHaveBeenCalled();
+        expect(handle_load_earlier).not.toHaveBeenCalled();  // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
 
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.pointerDown(screen.getByTestId('mock-lightweight-chart'));
         publish_coordinate_space({
             ...near_history_boundary.coordinate_space,
@@ -269,6 +278,7 @@ describe('ChartCanvas canonical drawing coordinates', () => {
             visible_from: BASE_OPEN_TIME + 3,
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(handle_load_earlier).toHaveBeenCalledOnce();
 
         rerender(
@@ -291,12 +301,14 @@ describe('ChartCanvas canonical drawing coordinates', () => {
 
         expect(handle_load_earlier).toHaveBeenCalledOnce();
 
+        // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
         fireEvent.pointerDown(screen.getByTestId('mock-lightweight-chart'));
         publish_coordinate_space({
             ...near_history_boundary.coordinate_space,
             visible_from: BASE_OPEN_TIME + 4,
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(handle_load_earlier).toHaveBeenCalledTimes(2);
 
         rerender(

@@ -1,3 +1,5 @@
+// 거래 내역에서 사용하는 데이터 구조와 입력·표시 타입을 정의한다.
+
 import type { TradeHistorySummary } from '../../../shared/contracts';
 
 export type HistoryPeriod = 'TODAY' | 'WEEKLY' | 'MONTHLY' | 'ALL';

@@ -21,6 +21,7 @@ const FIXTURE_POPOVER_INDICATOR_SETTINGS = {
     volume: false,
 } as const;
 
+
 /**
  * 함수 이름: format_chart_symbol()
  * 기능: Binance symbol을 차트 부제에 사용할 거래쌍 표기로 변환한다.
@@ -35,6 +36,7 @@ function format_chart_symbol(symbol: string): string {
 
     return symbol;
 }
+
 
 /**
  * 함수 이름: PriceChartPanel()
@@ -78,10 +80,18 @@ export function PriceChartPanel({
             : styles.pendingStatus;
 
     useEffect(() => {
+        // 설정창이 열린 동안만 바깥 클릭을 관찰하고 닫히면 listener를 제거한다.
         if (!indicatorSettingsOpen) {
             return undefined;
         }
 
+        /**
+         * 함수 이름: handle_outside_pointer_down()
+         * 기능: 지표 설정창과 열기 버튼 바깥 클릭에서만 닫기 intent를 전달한다.
+         * 인자: event -> 문서 pointerdown 이벤트
+         * 반환값: 없음
+         * 작성 날짜: 2026/09/17
+         */
         const handle_outside_pointer_down = (event: PointerEvent) => {
             if (!(event.target instanceof Element)
                 || event.target.closest('[data-indicator-settings-popover]') !== null

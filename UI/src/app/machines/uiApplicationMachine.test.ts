@@ -83,15 +83,20 @@ function create_deferred_result<T>() {
 }
 
 afterEach(() => {
+    // 화면 또는 실행 수명의 종료를 요청한다.
     applications.splice(0).forEach(facade => facade.stop());
+
+    // 테스트가 바꾼 전역 환경과 실행 자원을 정리한다.
     vi.useRealTimers();
 });
 
 describe('one UI root: structure, history and command ownership', () => {
     it('executes all designed region levels in the real root snapshot', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { facade, send: dispatch_intent } = create_test_application();
         const system = value_at(facade.get_snapshot().value, ['ETIRE_UI_SYSTEM'])!;
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(Object.keys(system)).toEqual(['UPPER_STATUS_BAR', 'SCREEN', 'EXIT']);
         expect(Object.keys(value_at(facade.get_snapshot().value, upper_status_bar_path)!)).toEqual(['API_DISPLAY', 'STOP_BUTTON', 'START_BUTTON']);
 
@@ -112,8 +117,11 @@ describe('one UI root: structure, history and command ownership', () => {
         dispatch_intent({
             type: 'SHOW_TRADE_HISTORY',
         });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(Object.keys(value_at(facade.get_snapshot().value, details_screen_path)!)).toEqual(['ACCOUNT_DETAILS', 'PERIOD', 'SIDE', 'CSV_EXPORT']);
         expect(Object.keys(value_at(facade.get_snapshot().value, [...details_screen_path, 'ACCOUNT_DETAILS'])!)).toHaveLength(4);
 
@@ -121,6 +129,8 @@ describe('one UI root: structure, history and command ownership', () => {
             type: 'HISTORY_SIDE_SELECTED',
             side: 'sell',
         });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_event_settlement();
         dispatch_intent({
             type: 'HISTORY_PERIOD_SELECTED',
@@ -128,6 +138,7 @@ describe('one UI root: structure, history and command ownership', () => {
         });
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(value_at(facade.get_snapshot().value, [...details_screen_path, 'SIDE'])).toBe('sell');
         expect(value_at(facade.get_snapshot().value, [...details_screen_path, 'PERIOD', 'selection'])).toBe('last7days');
 
@@ -139,6 +150,7 @@ describe('one UI root: structure, history and command ownership', () => {
     });
 
     it('deep history restores chart paths and tabs but retains newer hidden server data', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { facade, send: dispatch_intent, view: read_view_model } = create_test_application();
 
         dispatch_intent({
@@ -173,6 +185,7 @@ describe('one UI root: structure, history and command ownership', () => {
             type: 'SHOW_TRADE_HISTORY',
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(dispatch_intent({
             type: 'CHART_INTERVAL_SELECTED',
             interval: '1m',
@@ -212,10 +225,12 @@ describe('one UI root: structure, history and command ownership', () => {
         expect(read_view_model().trader_panel.trades[0]?.id).toBe(TRADE_RECORD_FIXTURES[1]!.id);
         expect(read_view_model().regime.applied).toBe('type2');
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_event_settlement();
     });
 
     it('keeps submitted writes alive, applies hidden completion once and never resubmits on history entry', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const pending_result = create_deferred_result<void>();
         const write_command = vi.spyOn(command_adapter, 'update_split_order').mockReturnValue(pending_result.promise);
@@ -226,6 +241,7 @@ describe('one UI root: structure, history and command ownership', () => {
             percentage: 73,
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().split_order).toMatchObject({
             scale_in_percentage: 73,
             is_pending: true,
@@ -237,16 +253,22 @@ describe('one UI root: structure, history and command ownership', () => {
         dispatch_intent({
             type: 'SHOW_TRADE_HISTORY',
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         pending_result.resolve();
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().split_order.is_pending).toBe(false);
 
         dispatch_intent({
             type: 'BACK_TO_DASHBOARD',
         });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_event_settlement();
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(write_command).toHaveBeenCalledExactlyOnceWith('scale_in', 73);
         expect(value_at(facade.get_snapshot().value, [...main_screen_path, 'DISPLAY_ACCOUNT_INFO', 'SPLIT_ORDER', 'scale_in'])).toEqual({
             SCALE_IN_ORDER: 'ready',
@@ -255,6 +277,7 @@ describe('one UI root: structure, history and command ownership', () => {
     });
 
     it('preserves rapid split input and ignores an older successful response after the latest failure', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const first_result = create_deferred_result<void>();
         const latest_result = create_deferred_result<void>();
@@ -270,6 +293,7 @@ describe('one UI root: structure, history and command ownership', () => {
             percentage: 20,
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(write_command.mock.calls).toEqual([['scale_in', 60], ['scale_out', 20]]);
         expect(read_view_model().split_order).toMatchObject({
             scale_in_percentage: 60,
@@ -277,16 +301,19 @@ describe('one UI root: structure, history and command ownership', () => {
             is_pending: true,
         });
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         latest_result.reject(new Error('latest failed'));
         await wait_for_event_settlement();
         first_result.resolve();
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().split_order.error?.message).toBe('latest failed');
         expect(read_view_model().split_order.is_pending).toBe(false);
     });
 
     it('restores completed REGIME state without applying its candidate twice', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const pending_result = create_deferred_result<void>();
         const write_command = vi.spyOn(command_adapter, 'apply_regime').mockReturnValue(pending_result.promise);
@@ -304,9 +331,12 @@ describe('one UI root: structure, history and command ownership', () => {
         dispatch_intent({
             type: 'SHOW_TRADE_HISTORY',
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         pending_result.resolve();
         await wait_for_event_settlement();
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(read_view_model().regime.applied).toBe('type1');
 
         dispatch_intent({
@@ -322,6 +352,7 @@ describe('one UI root: structure, history and command ownership', () => {
     });
 
     it('a hidden authoritative REGIME update invalidates an older pending completion', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const pending_result = create_deferred_result<void>();
 
@@ -347,12 +378,15 @@ describe('one UI root: structure, history and command ownership', () => {
             version: 5,
             support_status: 'unsupported',
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         pending_result.resolve();
         await wait_for_event_settlement();
         dispatch_intent({
             type: 'BACK_TO_DASHBOARD',
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().regime).toMatchObject({
             applied: 'type2',
             candidate: null,
@@ -361,6 +395,7 @@ describe('one UI root: structure, history and command ownership', () => {
     });
 
     it('CSV completion survives screen departure without duplicate export', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const pending_result = create_deferred_result<typeof command_adapter.exported_receipt>();
         const write_command = vi.spyOn(command_adapter, 'export_csv').mockReturnValue(pending_result.promise);
@@ -375,6 +410,8 @@ describe('one UI root: structure, history and command ownership', () => {
         dispatch_intent({
             type: 'CSV_DIRECTORY_SELECT_CLICKED',
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         await wait_for_event_settlement();
         dispatch_intent({
             type: 'CSV_EXPORT_SUBMITTED',
@@ -382,6 +419,7 @@ describe('one UI root: structure, history and command ownership', () => {
         dispatch_intent({
             type: 'BACK_TO_DASHBOARD',
         });
+
         pending_result.resolve(command_adapter.exported_receipt);
         await wait_for_event_settlement();
         dispatch_intent({
@@ -389,10 +427,12 @@ describe('one UI root: structure, history and command ownership', () => {
         });
         await wait_for_event_settlement();
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(read_view_model().csv_export.status).toBe('complete');
         expect(write_command).toHaveBeenCalledOnce();
     });
     it.each([false, true])('highlight expiry continues while hidden (request started hidden=%s)', async is_initially_hidden => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         vi.useFakeTimers();
 
         const { send: dispatch_intent, view: read_view_model } = create_test_application();
@@ -410,6 +450,7 @@ describe('one UI root: structure, history and command ownership', () => {
             type: 'SELECT_REGIME_NOTICE_CONFIRMED',
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().regime.is_highlighted).toBe(true);
 
         if (!is_initially_hidden) {
@@ -418,8 +459,10 @@ describe('one UI root: structure, history and command ownership', () => {
             });
         }
 
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await vi.advanceTimersByTimeAsync(4100);
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().regime.is_highlighted).toBe(false);
 
         dispatch_intent({
@@ -431,6 +474,7 @@ describe('one UI root: structure, history and command ownership', () => {
     });
 
     it('cancels details reads on exit and ignores late results; preserves filters on reentry', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const previous_result = create_deferred_result<TradeHistoryDetails>();
         const current_result = create_deferred_result<TradeHistoryDetails>();
@@ -444,11 +488,14 @@ describe('one UI root: structure, history and command ownership', () => {
             type: 'BACK_TO_DASHBOARD',
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(load_history.mock.calls[0]![1]?.aborted).toBe(true);
 
         dispatch_intent({
             type: 'SHOW_TRADE_HISTORY',
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         current_result.resolve({
             records: [TRADE_RECORD_FIXTURES[0]!],
             summary: command_adapter.trade_history_summary,
@@ -460,12 +507,15 @@ describe('one UI root: structure, history and command ownership', () => {
         });
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().trade_history.records).toEqual([TRADE_RECORD_FIXTURES[0]!]);
 
         dispatch_intent({
             type: 'HISTORY_SIDE_SELECTED',
             side: 'sell',
         });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_event_settlement();
         dispatch_intent({
             type: 'HISTORY_PERIOD_SELECTED',
@@ -480,6 +530,7 @@ describe('one UI root: structure, history and command ownership', () => {
         });
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().trade_history).toMatchObject({
             period: 'last30days',
             side: 'sell',
@@ -487,6 +538,7 @@ describe('one UI root: structure, history and command ownership', () => {
     });
 
     it('ignores filters during loading and reloads once when a fill arrives during that read', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const first_result = create_deferred_result<TradeHistoryDetails>();
         const refreshed_result = create_deferred_result<TradeHistoryDetails>();
@@ -505,6 +557,7 @@ describe('one UI root: structure, history and command ownership', () => {
             period: 'last30days',
         });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().trade_history).toMatchObject({
             period: 'today',
             side: 'all',
@@ -516,12 +569,15 @@ describe('one UI root: structure, history and command ownership', () => {
             type: 'BUY_ORDER_EXECUTED',
             trade: TRADE_RECORD_FIXTURES[1]!,
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         first_result.resolve({
             records: [],
             summary: command_adapter.trade_history_summary,
         });
         await wait_for_event_settlement();
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(load_history).toHaveBeenCalledTimes(2);
         expect(load_history.mock.calls.map(call => call[0])).toEqual([
             {
@@ -534,16 +590,18 @@ describe('one UI root: structure, history and command ownership', () => {
             },
         ]);
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         refreshed_result.resolve({
             records: [TRADE_RECORD_FIXTURES[1]!],
             summary: command_adapter.trade_history_summary,
         });
         await wait_for_event_settlement();
 
-        expect(read_view_model().trade_history.records).toEqual([TRADE_RECORD_FIXTURES[1]!]);
+        expect(read_view_model().trade_history.records).toEqual([TRADE_RECORD_FIXTURES[1]!]);  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
     });
 
     it('protects newer summary events from an older query and refreshes at KST midnight', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-09-16T14:59:59.000Z'));
 
@@ -561,16 +619,20 @@ describe('one UI root: structure, history and command ownership', () => {
                 quantity: '99 ETH',
             },
         });
+
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         first_result.resolve({
             records: command_adapter.trade_history,
             summary: command_adapter.trade_history_summary,
         });
         await wait_for_event_settlement();
 
-        expect(read_view_model().trade_history.summary.position.quantity).toBe('99 ETH');
+        expect(read_view_model().trade_history.summary.position.quantity).toBe('99 ETH');  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
 
+        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
         await vi.advanceTimersByTimeAsync(1100);
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(load_history).toHaveBeenCalledTimes(2);
         expect(load_history.mock.calls[1]![0]).toEqual({
             period: 'today',
@@ -582,6 +644,7 @@ describe('one UI root: structure, history and command ownership', () => {
         ['SHUTDOWN_OUTCOME_AMBIGUOUS', 'shutdown_outcome_recovery'],
         ['SIDECAR_ABNORMAL_EXIT', 'sidecar_exit_failure'],
     ] as const)('preserves %s exit recovery and its cancel barrier', async (failure_code, expected_status) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
 
         command_adapter.queue_failure('shutdown_application', new BackendAdapterError(failure_code, failure_code, false));
@@ -594,8 +657,11 @@ describe('one UI root: structure, history and command ownership', () => {
         dispatch_intent({
             type: 'APP_EXIT_CONFIRMED',
         });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(read_view_model().app_exit.status).toBe(expected_status);
 
         dispatch_intent({
@@ -608,6 +674,7 @@ describe('one UI root: structure, history and command ownership', () => {
     });
 
     it('waits for native shutdown completion and enters root final with all owned jobs stopped', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         vi.useFakeTimers();
 
         const command_adapter = new FakeUiCommandAdapter();
@@ -629,14 +696,19 @@ describe('one UI root: structure, history and command ownership', () => {
         dispatch_intent({
             type: 'APP_EXIT_CONFIRMED',
         });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_snapshot().status).toBe('active');
         expect(read_view_model().app_exit.is_final).toBe(false);
 
+        // 대기 중인 작업의 성공·실패를 제어해 완료 순서를 재현한다.
         shutdown.resolve();
         await wait_for_event_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(facade.get_snapshot().value).toBe('UI_FINAL_STATE');
         expect(facade.get_snapshot().status).toBe('done');
         expect(vi.getTimerCount()).toBe(0);

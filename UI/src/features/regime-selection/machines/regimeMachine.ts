@@ -43,6 +43,7 @@ export type RegimeMachineEvent =
     | { readonly type: 'HIGHLIGHT_COMPLETED' }
     | { readonly type: 'REGIME_APPLIED'; readonly regime: RegimeType };
 
+
 /**
  * 함수 이름: to_regime_failure()
  * 기능: REGIME adapter 오류를 화면 표시용 실패 객체로 변환한다.
@@ -58,6 +59,7 @@ function to_regime_failure(error: unknown): UiCommandFailure {
     );
 }
 
+
 /**
  * 함수 이름: create_regime_machine()
  * 기능: 추천 REGIME, 확인 전 후보, 적용 REGIME, 패널 점멸과 비동기 적용 상태를 관리한다.
@@ -69,10 +71,13 @@ export function create_regime_machine(
     options: RegimeMachineOptions = {},
 ) {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as RegimeMachineContext,
             events: {} as RegimeMachineEvent,
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             synchronize_regime_snapshot: assign({
                 recommended_regime: ({ context, event }) => {
@@ -167,6 +172,8 @@ export function create_regime_machine(
     }).createMachine({
         id: 'regimeMachine',
         initial: 'type_selection',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             recommended_regime: options.recommended_regime ?? null,
             applied_regime: options.applied_regime ?? null,
@@ -194,6 +201,8 @@ export function create_regime_machine(
                 actions: 'synchronize_applied_regime',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             type_selection: {
                 meta: {

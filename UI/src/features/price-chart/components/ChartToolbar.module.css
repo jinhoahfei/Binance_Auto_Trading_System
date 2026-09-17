@@ -1,11 +1,13 @@
+/* 시간 주기 선택과 현재 상태·설정 조작을 정렬한다. */
 .toolbar {
     display: grid;
     grid-template-columns: auto minmax(180px, 244px) minmax(76px, 96px);
     gap: 24px;
     align-items: center;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
 }
 
+/* 시간 주기 버튼을 하나의 선택 그룹으로 배치한다. */
 .intervals {
     display: flex;
     gap: 8px;
@@ -31,6 +33,7 @@
     color: var(--color-text-primary);
 }
 
+/* 현재 선택한 시간 주기를 다른 버튼과 구분한다. */
 .activeInterval {
     min-width: 68px;
     background: var(--color-status-positive);
@@ -48,12 +51,13 @@
     padding: 0 12px;
 }
 
+/* 적용 중인 차트 상태와 상태 점을 표시한다. */
 .activeState {
     display: flex;
     gap: 8px;
     align-items: center;
     justify-content: center;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
     height: 32px;
     padding: 0 12px;
     overflow: hidden;

@@ -4,6 +4,7 @@ import { DEFAULT_TRADING_LOGIC_COVERAGE } from '../../../shared/contracts';
 import { FakeUiCommandAdapter } from '../../../shared/testing';
 import { create_trading_command_machine } from './tradingCommandMachine';
 
+
 /**
  * 함수 이름: wait_for_actor_settlement()
  * 기능: invoked Promise actor의 microtask 완료가 snapshot에 반영될 때까지 기다린다.
@@ -19,33 +20,54 @@ async function wait_for_actor_settlement(): Promise<void> {
 
 describe('tradingCommandMachine', () => {
     it.each(['running', 'reconciliation_required'] as const)('반복 %s snapshot이 중지 확인과 요청을 취소하지 않는다', async (lifecycle_status) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const port = new FakeUiCommandAdapter();
         let complete!: () => void;
         const completion = new Promise<void>((resolve) => { complete = resolve; });
         const stop = port.stop_trading.bind(port);
         port.stop_trading = async () => { await completion; return stop(); };
         const actor = create_feature_test_actor(create_trading_command_machine, port, { is_trading: true, lifecycle_status });
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         actor.start();
+
+        // 준비한 입력으로 결과를 계산하거나 현재 상태를 읽는다.
         const snapshot = { type: 'TRADING_SNAPSHOT_SYNCHRONIZED' as const, lifecycle_status,
             is_trading: true, has_open_position: false, selected_regime: 'type0' as const,
             logic_coverage: DEFAULT_TRADING_LOGIC_COVERAGE, command_enabled: lifecycle_status === 'running' };
+
+        // STOP_BUTTON_CLICKED 입력을 전달해 해당 전이를 실행한다.
         actor.send(snapshot);
         actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: false });
         actor.send(snapshot);
-        expect(actor.getSnapshot().matches('stop_confirmation')).toBe(true);
+        expect(actor.getSnapshot().matches('stop_confirmation')).toBe(true);  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
+
+        // STOP_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         actor.send({ type: 'STOP_CONFIRMED' });
         actor.send(snapshot);
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('stopping')).toBe(true);
         complete();
+
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         await wait_for_actor_settlement();
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('stopped')).toBe(true);
         expect(port.command_records.filter((record) => record.name === 'stop_trading')).toHaveLength(1);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('종료·재연결 snapshot에도 잔여 자산과 미실현 원가를 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const actor = create_feature_test_actor(create_trading_command_machine, new FakeUiCommandAdapter());
+
+        // TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
+
         // 재연결은 거래 명령 없이 별도 장부의 원본 Decimal 상태를 복원한다.
         actor.send({
             type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED',
@@ -53,81 +75,107 @@ describe('tradingCommandMachine', () => {
             command_enabled: false, is_trading: false, lifecycle_status: 'not_started',
             has_open_position: false, residual_quantity: '0.000096', residual_cost_basis: '0.24024024024024024024024024024024',
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(actor.getSnapshot().context.residual_quantity).toBe('0.000096');
         expect(actor.getSnapshot().context.residual_cost_basis).toBe('0.24024024024024024024024024024024');
         expect(actor.getSnapshot().context.has_open_position).toBe(false);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('U3-03/VR-01: REGIME 미선택 시작은 명령 없이 안내 상태로 전이한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
+        // START_BUTTON_CLICKED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: null, is_online: true });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('select_regime_notice')).toBe(true);
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('U3-05: 확인된 온라인 시작은 한 번만 호출하고 실행 상태가 된다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
         });
 
+        // START_BUTTON_CLICKED → START_CONFIRMED → START_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
         actor.send({ type: 'START_CONFIRMED', is_online: true });
         actor.send({ type: 'START_CONFIRMED', is_online: true });
         await wait_for_actor_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('running')).toBe(true);
         expect(command_adapter.command_records).toEqual([
             { name: 'start_trading', payload: { regime_type: 'type0' } },
         ]);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('Phase 6: 미지원 REGIME은 선택을 보존하고 시작 명령을 보내지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
         });
 
+        // START_BUTTON_CLICKED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type3', is_online: true });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('trading_unavailable_notice')).toBe(true);
         expect(actor.getSnapshot().context.selected_regime).toBe('type3');
         expect(actor.getSnapshot().context.unavailable_reason).toBe('unsupported_logic');
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('Phase 6: 지원 REGIME도 command가 비활성화되면 시작 명령을 보내지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
+        // START_BUTTON_CLICKED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('trading_unavailable_notice')).toBe(true);
         expect(actor.getSnapshot().context.unavailable_reason).toBe('command_disabled');
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('Phase 6: 시작 확인 중 resync로 command가 닫히면 stale 확인을 차단한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
         });
 
+        // START_BUTTON_CLICKED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
-        expect(actor.getSnapshot().matches('start_confirmation')).toBe(true);
+        expect(actor.getSnapshot().matches('start_confirmation')).toBe(true);  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
 
         // 확인 modal을 유지한 채 최신 backend gate를 반영해 오래된 확인을 재검증한다.
         actor.send({
@@ -141,15 +189,20 @@ describe('tradingCommandMachine', () => {
         });
         actor.send({ type: 'START_CONFIRMED', is_online: true });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('trading_unavailable_notice')).toBe(true);
         expect(actor.getSnapshot().context.unavailable_reason).toBe('command_disabled');
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('Phase 13: configured-unbounded 정책 값을 문자열·null 그대로 actor context에 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const actor = create_feature_test_actor(create_trading_command_machine, new FakeUiCommandAdapter());
 
+        // TRADING_SNAPSHOT_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
 
         // Explicit null 상한은 unavailable로 축약하지 않고 configured provenance와 함께 동기화한다.
@@ -190,6 +243,7 @@ describe('tradingCommandMachine', () => {
             lifecycle_status: 'not_started',
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(actor.getSnapshot().context).toMatchObject({
             risk_policy_availability: 'CONFIGURED',
             configured_risk_policy_version: 4,
@@ -237,43 +291,57 @@ describe('tradingCommandMachine', () => {
             has_open_position: false,
             lifecycle_status: 'not_started',
         });
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(actor.getSnapshot().context).toMatchObject({
             configured_risk_policy_version: 5,
             manual_kill_behavior: 'BLOCK_NEW_ORDERS',
             manual_kill_activation_behavior: 'CANCEL_AND_LIQUIDATE',
             manual_kill_activation_policy_version: 4,
         });
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('Phase 9: 정지 상태의 복구 Position은 새 자동매매 시작을 차단한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             command_enabled: true,
             has_open_position: true,
         });
 
+        // START_BUTTON_CLICKED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('stopped')).toBe(true);
         expect(actor.getSnapshot().context.has_open_position).toBe(true);
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('Phase 9: 복구 Position 확인은 recovery 전용 Operation만 호출한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             has_open_position: true,
         });
 
+        // STOP_BUTTON_CLICKED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
+
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches(
             'recovered_position_liquidation_confirmation',
         )).toBe(true);
 
+        // RECOVERED_POSITION_LIQUIDATION_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         actor.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
         await wait_for_actor_settlement();
 
@@ -283,28 +351,36 @@ describe('tradingCommandMachine', () => {
         ]);
         expect(actor.getSnapshot().matches('stopped')).toBe(true);
         expect(actor.getSnapshot().context.has_open_position).toBe(false);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('Phase 9: 복구 Position 청산 취소는 Position을 보존하고 명령을 보내지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter, {
             has_open_position: true,
         });
 
+        // STOP_BUTTON_CLICKED → RECOVERED_POSITION_LIQUIDATION_CANCELED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
         actor.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CANCELED' });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('stopped')).toBe(true);
         expect(actor.getSnapshot().context.has_open_position).toBe(true);
         expect(command_adapter.command_records).toHaveLength(0);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it.each(['stopping', 'reconciliation_required'] as const)(
         'Phase 9: 복구 청산 receipt가 %s이면 authoritative terminal snapshot을 기다린다',
         async (liquidation_status) => {
+            // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
             const command_adapter = new FakeUiCommandAdapter();
             command_adapter.recovered_position_liquidation_receipt = {
                 status: liquidation_status,
@@ -315,11 +391,13 @@ describe('tradingCommandMachine', () => {
                 has_open_position: true,
             });
 
+            // STOP_BUTTON_CLICKED → RECOVERED_POSITION_LIQUIDATION_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
             actor.start();
             actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
             actor.send({ type: 'RECOVERED_POSITION_LIQUIDATION_CONFIRMED' });
             await wait_for_actor_settlement();
 
+            // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
             expect(actor.getSnapshot().matches(
                 'awaiting_recovered_position_liquidation_completion',
             )).toBe(true);
@@ -329,6 +407,7 @@ describe('tradingCommandMachine', () => {
                 has_open_position: true,
             });
 
+            // TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
             actor.send({
                 type: 'TRADING_SNAPSHOT_CONTEXT_SYNCHRONIZED',
                 selected_regime: 'type0',
@@ -338,7 +417,7 @@ describe('tradingCommandMachine', () => {
                 has_open_position: true,
                 lifecycle_status: liquidation_status,
             });
-            expect(actor.getSnapshot().context.is_trading).toBe(false);
+            expect(actor.getSnapshot().context.is_trading).toBe(false);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
 
             // Backend nonterminal snapshot의 일반 is_trading=true 해석도 recovery 상태를 되살리지 않는다.
             actor.send({
@@ -352,6 +431,7 @@ describe('tradingCommandMachine', () => {
             });
             actor.send({ type: 'START_BUTTON_CLICKED', regime: 'type0', is_online: true });
 
+            // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
             expect(actor.getSnapshot().matches(
                 'awaiting_recovered_position_liquidation_completion',
             )).toBe(true);
@@ -364,6 +444,7 @@ describe('tradingCommandMachine', () => {
                 { name: 'liquidate_recovered_position', payload: null },
             ]);
 
+            // TRADING_SNAPSHOT_SYNCHRONIZED 입력을 전달해 해당 전이를 실행한다.
             actor.send({
                 type: 'TRADING_SNAPSHOT_SYNCHRONIZED',
                 selected_regime: 'type0',
@@ -373,49 +454,65 @@ describe('tradingCommandMachine', () => {
                 has_open_position: false,
                 lifecycle_status: 'terminated',
             });
+
+            // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
             expect(actor.getSnapshot().matches('stopped')).toBe(true);
             expect(actor.getSnapshot().context.is_recovery_liquidation).toBe(false);
+
+            // 화면 또는 실행 수명의 종료를 요청한다.
             actor.stop();
         },
     );
 
     it('U2-03/U2-09: 강제 매도 실패는 확인 상태로 돌아가고 실행 상태를 유지한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         command_adapter.queue_failure('force_sell_and_stop', new Error('test sell failure'));
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
+        // BACKEND_TRADING_STARTED → STOP_BUTTON_CLICKED → FORCE_SELL_AND_STOP_CONFIRMED 입력을 전달해 해당 전이를 실행한다.
         actor.start();
         actor.send({ type: 'BACKEND_TRADING_STARTED' });
         actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
         actor.send({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' });
         await wait_for_actor_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('force_sell_confirmation')).toBe(true);
         expect(actor.getSnapshot().context.is_trading).toBe(true);
         expect(actor.getSnapshot().context.has_open_position).toBe(true);
         expect(actor.getSnapshot().context.error?.message).toBe('test sell failure');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('U2-03/U2-10: 강제 매도 중지 취소 후에도 backend 포지션 snapshot을 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         actor.start();
         actor.send({ type: 'BACKEND_TRADING_STARTED' });
         actor.send({ type: 'POSITION_UPDATED', has_open_position: true });
         actor.send({ type: 'STOP_BUTTON_CLICKED', has_open_position: true });
         actor.send({ type: 'FORCE_SELL_AND_STOP_CANCELED' });
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('running')).toBe(true);
         expect(actor.getSnapshot().context.has_open_position).toBe(true);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it('U2-08: 강제 매도 후 중지가 성공한 경우에만 포지션 snapshot을 비운다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();
         const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
+        // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
         actor.start();
         actor.send({ type: 'BACKEND_TRADING_STARTED' });
         actor.send({ type: 'POSITION_UPDATED', has_open_position: true });
@@ -423,14 +520,18 @@ describe('tradingCommandMachine', () => {
         actor.send({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' });
         await wait_for_actor_settlement();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(actor.getSnapshot().matches('stopped')).toBe(true);
         expect(actor.getSnapshot().context.has_open_position).toBe(false);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         actor.stop();
     });
 
     it.each(['stopping', 'reconciliation_required'] as const)(
         'Phase 7: stop receipt가 %s이면 완료로 오표시하지 않고 authoritative 종료를 기다린다',
         async (stop_status) => {
+            // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
             const command_adapter = new FakeUiCommandAdapter();
             command_adapter.stop_trading_receipt = {
                 status: stop_status,
@@ -439,6 +540,7 @@ describe('tradingCommandMachine', () => {
             };
             const actor = create_feature_test_actor(create_trading_command_machine, command_adapter);
 
+            // 입력을 전달하고 후속 이벤트 처리가 반영되도록 실행한다.
             actor.start();
             actor.send({ type: 'BACKEND_TRADING_STARTED' });
             actor.send({ type: 'POSITION_UPDATED', has_open_position: true });
@@ -446,6 +548,7 @@ describe('tradingCommandMachine', () => {
             actor.send({ type: 'FORCE_SELL_AND_STOP_CONFIRMED' });
             await wait_for_actor_settlement();
 
+            // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
             expect(actor.getSnapshot().matches('awaiting_stop_completion')).toBe(true);
             expect(actor.getSnapshot().context.is_trading).toBe(true);
             expect(actor.getSnapshot().context.has_open_position).toBe(true);
@@ -461,9 +564,12 @@ describe('tradingCommandMachine', () => {
                 lifecycle_status: 'terminated',
             });
 
+            // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
             expect(actor.getSnapshot().matches('stopped')).toBe(true);
             expect(actor.getSnapshot().context.is_trading).toBe(false);
             expect(actor.getSnapshot().context.has_open_position).toBe(false);
+
+            // 화면 또는 실행 수명의 종료를 요청한다.
             actor.stop();
         },
     );

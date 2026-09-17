@@ -21,6 +21,7 @@ import {
 
 const TEST_REQUEST_ID = 'f5a4f621-25f8-4dd2-bfb7-1b80e9561423';
 
+
 /**
  * 함수 이름: create_unsupported_btc_product_snapshot()
  * 기능: wire shape는 유효하지만 ADR-003의 ETHUSDT 상품을 BTCUSDT로 바꾼 snapshot을 만든다.
@@ -61,6 +62,7 @@ function create_unsupported_btc_product_snapshot(): BackendSnapshot {
     };
 }
 
+
 /**
  * 함수 이름: create_snapshot_with_logic_coverage()
  * 기능: runtime validation 실패 경계를 검증하도록 trading coverage wire 값만 교체한다.
@@ -79,6 +81,7 @@ function create_snapshot_with_logic_coverage(logic_coverage: unknown): unknown {
         },
     };
 }
+
 
 /**
  * 함수 이름: create_snapshot_with_trading_patch()
@@ -100,6 +103,7 @@ function create_snapshot_with_trading_patch(
         },
     };
 }
+
 
 /**
  * 함수 이름: create_configured_unbounded_snapshot()
@@ -145,6 +149,7 @@ function create_configured_unbounded_snapshot(): BackendSnapshot {
 
 describe('backend runtime contract validation', () => {
     it('실시간 시장 갱신 뒤에도 마지막 4시간봉 REGIME 평가 snapshot을 읽을 수 있다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const live_snapshot = {
             ...snapshot,
@@ -155,15 +160,17 @@ describe('backend runtime contract validation', () => {
             },
         };
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(validate_backend_snapshot(live_snapshot)).toBe(live_snapshot);
         expect(live_snapshot.regime.indicator?.source_market_version).toBe(snapshot.market.version);
         expect(live_snapshot.regime.indicator?.current_price).toBe(snapshot.market.current_price);
     });
 
     it('ready coherent snapshot의 UUID, Decimal, UTC와 required aggregate를 검증한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
 
-        expect(validate_backend_snapshot(snapshot)).toBe(snapshot);
+        expect(validate_backend_snapshot(snapshot)).toBe(snapshot);  // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
     });
 
     it.each([
@@ -184,6 +191,7 @@ describe('backend runtime contract validation', () => {
             patch: { session_id: 'session-1' },
         },
     ])('Phase 7 trading snapshot의 $name을 fail closed한다', ({ patch }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const malformed_snapshot = {
             ...snapshot,
@@ -193,6 +201,7 @@ describe('backend runtime contract validation', () => {
             },
         };
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => validate_backend_snapshot(malformed_snapshot)).toThrowError(
             expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
         );
@@ -278,6 +287,7 @@ describe('backend runtime contract validation', () => {
             patch: { process_ownership_ambiguous: 'true' },
         },
     ])('Phase 13 trading risk snapshot의 $name을 fail closed한다', ({ patch }) => {
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => validate_backend_snapshot(
             create_snapshot_with_trading_patch(patch),
         )).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
@@ -305,8 +315,10 @@ describe('backend runtime contract validation', () => {
             patch: { manual_kill_behavior: 'IGNORE' },
         },
     ])('configured risk 세부 field의 $name을 fail closed한다', ({ patch }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_configured_unbounded_snapshot();
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => validate_backend_snapshot({
             ...snapshot,
             trading: {
@@ -338,6 +350,7 @@ describe('backend runtime contract validation', () => {
             patch: { raw_exchange_detail: 'must-not-enter-facade' },
         },
     ])('risk budget의 $name을 fail closed한다', ({ patch }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_configured_unbounded_snapshot();
 
         // 정상 budget의 한 field만 변조해 Decimal·version·합계 경계를 각각 검증한다.
@@ -354,6 +367,7 @@ describe('backend runtime contract validation', () => {
     });
 
     it('risk decision과 budget의 nullable lifecycle이 다르면 fail closed한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_configured_unbounded_snapshot();
 
         // 허용·차단 결과만 있고 계산 근거가 없는 publication을 거부한다.
@@ -367,14 +381,17 @@ describe('backend runtime contract validation', () => {
     });
 
     it('configured-unbounded와 unavailable을 서로 다른 coherent wire 상태로 허용한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const configured_snapshot = create_configured_unbounded_snapshot();
         const unavailable_snapshot = create_backend_snapshot_fixture();
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(validate_backend_snapshot(configured_snapshot)).toBe(configured_snapshot);
         expect(validate_backend_snapshot(unavailable_snapshot)).toBe(unavailable_snapshot);
     });
 
     it('malformed risk reason을 거부할 때 credential/raw payload를 오류에 포함하지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const secret_marker = 'credential-raw-secret-marker';
 
         try {
@@ -437,6 +454,7 @@ describe('backend runtime contract validation', () => {
             ],
         },
     ])('$name TradingSTM coverage를 fail closed한다', ({ logic_coverage }) => {
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => validate_backend_snapshot(
             create_snapshot_with_logic_coverage(logic_coverage),
         )).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
@@ -455,6 +473,7 @@ describe('backend runtime contract validation', () => {
             name: 'not-ready connection',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     connection: { ...snapshot.connection, ready: false },
@@ -466,6 +485,7 @@ describe('backend runtime contract validation', () => {
             name: 'partial market',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     market: { ...snapshot.market, current_price: null },
@@ -477,6 +497,7 @@ describe('backend runtime contract validation', () => {
             name: 'missing recommendation',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     regime: { ...snapshot.regime, recommended: null },
@@ -488,6 +509,7 @@ describe('backend runtime contract validation', () => {
             name: 'partial account',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     account: { ...snapshot.account, valuation: null },
@@ -496,6 +518,7 @@ describe('backend runtime contract validation', () => {
             code: 'BACKEND_NOT_READY',
         },
     ])('$name snapshot을 fail closed한다', ({ mutate, code }) => {
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => validate_backend_snapshot(mutate())).toThrowError(
             expect.objectContaining({ code }),
         );
@@ -510,6 +533,7 @@ describe('backend runtime contract validation', () => {
             name: 'indicator symbol cross mismatch',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     regime: {
@@ -526,6 +550,7 @@ describe('backend runtime contract validation', () => {
             name: 'account base asset mismatch',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     account: { ...snapshot.account, valuation_asset: 'BTC' },
@@ -536,6 +561,7 @@ describe('backend runtime contract validation', () => {
             name: 'recent trade product mismatch',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     recent_trades: snapshot.recent_trades.map((trade) => ({
@@ -549,6 +575,7 @@ describe('backend runtime contract validation', () => {
             name: 'indicator source version mismatch',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     regime: {
@@ -565,6 +592,7 @@ describe('backend runtime contract validation', () => {
             name: 'indicator current price mismatch',
             mutate: () => {
                 const snapshot = create_backend_snapshot_fixture();
+
                 return {
                     ...snapshot,
                     regime: {
@@ -578,12 +606,14 @@ describe('backend runtime contract validation', () => {
             },
         },
     ])('$name snapshot을 product contract 위반으로 거부한다', ({ mutate }) => {
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => validate_backend_snapshot(mutate())).toThrowError(
             expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
         );
     });
 
     it('ETH balance row가 없으면 unavailable holdings 의미를 위해 snapshot을 허용한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const snapshot_without_eth_balance = {
             ...snapshot,
@@ -595,14 +625,17 @@ describe('backend runtime contract validation', () => {
             },
         };
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(validate_backend_snapshot(snapshot_without_eth_balance)).toBe(
             snapshot_without_eth_balance,
         );
     });
 
     it('HTTP envelope의 unknown schema와 request UUID mismatch를 fail closed한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => decode_backend_http_envelope(
             {
                 schema_version: 1,
@@ -628,6 +661,7 @@ describe('backend runtime contract validation', () => {
 
 describe('backend snapshot and event mapping', () => {
     it('거래 요약과 실시간 성과 갱신에 동일한 소수점 표시 규칙을 적용한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const performance = {
             ...create_backend_snapshot_fixture().performance,
             daily_return_rate: '-0.04275529',
@@ -638,6 +672,7 @@ describe('backend snapshot and event mapping', () => {
         };
         const summary = map_trade_history_summary(performance, '1.00000000');
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(summary).toMatchObject({
             dailyReturn: { value: '-0.04%' },
             sellPerformance: {
@@ -659,11 +694,13 @@ describe('backend snapshot and event mapping', () => {
     });
 
     it('USDT와 nullable/unavailable 의미를 보존하고 금액 값을 JS Number로 계산하지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const mapped = map_backend_snapshot(
             create_backend_snapshot_fixture(),
             '2026-08-21',
         );
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(mapped.facade_options.recommended_regime).toBe('type2');
         expect(mapped.facade_options.applied_regime).toBeNull();
         expect(mapped.facade_options.trading_symbol).toBe('ETH/USDT');
@@ -735,6 +772,7 @@ describe('backend snapshot and event mapping', () => {
             entry_price: '4321.50',
             total: '432.150',
         });
+
         // EMA9의 수치·단위와 스윙의 확정 구조 판정이 같은 snapshot에서 표시되는지 확인한다.
         expect(mapped.server_snapshot.regime_metrics.map((metric) => metric.value)).toEqual([
             '0.12% / 4H', '4,242.42 USDT', 'HL', 'HH',
@@ -764,7 +802,7 @@ describe('backend snapshot and event mapping', () => {
                 [field_name]: [field_name === 'market_data' ? 'mainnet' : 'testnet'],
             },
         };
-        expect(() => validate_backend_snapshot(malformed_snapshot)).toThrow(BackendContractError);
+        expect(() => validate_backend_snapshot(malformed_snapshot)).toThrow(BackendContractError);  // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
     });
 
     it('실제 시세와 Testnet 주문 활성의 모순된 환경 정보를 거부한다', () => {
@@ -775,10 +813,11 @@ describe('backend snapshot and event mapping', () => {
             trading: { ...snapshot.trading, mode: 'testnet' },
             environment: { market_data: 'mainnet', account: 'testnet', orders_enabled: true },
         };
-        expect(() => validate_backend_snapshot(conflicting_snapshot)).toThrow(BackendContractError);
+        expect(() => validate_backend_snapshot(conflicting_snapshot)).toThrow(BackendContractError);  // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
     });
 
     it('configured-unbounded 정책을 null 상한과 typed provenance 그대로 facade에 전달한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const mapped = map_backend_snapshot(
             create_configured_unbounded_snapshot(),
             '2026-08-29',
@@ -815,6 +854,7 @@ describe('backend snapshot and event mapping', () => {
     });
 
     it('hot-swap configured policy와 활성 manual-kill epoch provenance를 별도로 보존한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const configured_snapshot = create_configured_unbounded_snapshot();
         const hot_swapped_snapshot: BackendSnapshot = {
             ...configured_snapshot,
@@ -833,6 +873,7 @@ describe('backend snapshot and event mapping', () => {
         // Configured policy 교체가 이미 활성화된 cleanup provenance를 덮어쓰지 않아야 한다.
         const mapped = map_backend_snapshot(hot_swapped_snapshot, '2026-08-29');
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(mapped.facade_options).toMatchObject({
             configured_risk_policy_version: 5,
             manual_kill_behavior: 'BLOCK_NEW_ORDERS',
@@ -847,6 +888,7 @@ describe('backend snapshot and event mapping', () => {
     });
 
     it('running session의 status/version/ratio/position/session을 authoritative UI 상태로 투영한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const base_snapshot = create_backend_snapshot_fixture();
         const running_snapshot = {
             ...base_snapshot,
@@ -866,6 +908,7 @@ describe('backend snapshot and event mapping', () => {
         const validated_snapshot = validate_backend_snapshot(running_snapshot);
         const mapped = map_backend_snapshot(validated_snapshot, '2026-08-21');
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(mapped.facade_options).toMatchObject({
             command_enabled: true,
             is_trading: true,
@@ -888,6 +931,7 @@ describe('backend snapshot and event mapping', () => {
     });
 
     it('known ACCOUNT_UPDATED를 facade intent로 mapping하고 unknown event와 readiness signal은 ignore한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const account_event = create_backend_event_fixture(10, 'ACCOUNT_UPDATED', {
             account: create_backend_snapshot_fixture().account,
         });
@@ -896,6 +940,7 @@ describe('backend snapshot and event mapping', () => {
             application_version: 1,
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(map_backend_event_to_intents(account_event)).toEqual([
             expect.objectContaining({ type: 'ACCOUNT_ASSETS_UPDATED' }),
             {
@@ -908,6 +953,7 @@ describe('backend snapshot and event mapping', () => {
     });
 
     it('ACCOUNT_UPDATED에 ETH balance가 없으면 Account.get_holdings 계약대로 summary를 0 ETH로 갱신한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const account = create_backend_snapshot_fixture().account;
         const account_event = create_backend_event_fixture(10, 'ACCOUNT_UPDATED', {
             account: {
@@ -916,6 +962,7 @@ describe('backend snapshot and event mapping', () => {
             },
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(map_backend_event_to_intents(account_event)).toContainEqual({
             type: 'TRADE_HISTORY_HOLDINGS_UPDATED',
             position: { quantity: '0.0000 ETH' },
@@ -923,18 +970,21 @@ describe('backend snapshot and event mapping', () => {
     });
 
     it('ACCOUNT_UPDATED envelope와 payload의 account version 불일치를 fail closed한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const account = create_backend_snapshot_fixture().account;
         const account_event = {
             ...create_backend_event_fixture(10, 'ACCOUNT_UPDATED', { account }),
             aggregate_version: account.version + 1,
         };
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => map_backend_event_to_intents(account_event)).toThrowError(
             expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
         );
     });
 
     it('TRADING_SESSION_UPDATED를 version/ratio/position을 보존한 lifecycle intent로 mapping한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const trading_event = {
             ...create_backend_event_fixture(10, 'TRADING_SESSION_UPDATED', {
@@ -953,6 +1003,7 @@ describe('backend snapshot and event mapping', () => {
             aggregate_version: 8,
         };
 
+        // 전이 완료 상태와 화면 모델이 기대값을 유지하는지 검증한다.
         expect(map_backend_event_to_intents(trading_event)).toEqual([{
             type: 'TRADING_SESSION_SYNCHRONIZED',
             strategy_indicators: null,
@@ -1003,6 +1054,8 @@ describe('backend snapshot and event mapping', () => {
                 has_open_position: true,
                 position_average_entry_price: invalid_average_entry_price,
             };
+
+            // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
             expect(() => validate_backend_snapshot({ ...snapshot, trading })).toThrow(BackendContractError);
             expect(() => map_backend_event_to_intents({
                 ...create_backend_event_fixture(1, 'TRADING_SESSION_UPDATED', { trading }),
@@ -1032,6 +1085,7 @@ describe('backend snapshot and event mapping', () => {
         support_status,
         aggregate_version,
     }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const event = {
             ...create_backend_event_fixture(10, 'REGIME_SELECTED', {
                 selected: 'type0',
@@ -1041,14 +1095,17 @@ describe('backend snapshot and event mapping', () => {
             aggregate_version,
         };
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(() => map_backend_event_to_intents(event)).toThrowError(
             expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }),
         );
     });
 
     it('unknown event type은 연결 가능한 event로 parse하지만 unknown schema와 malformed UUID는 거부한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const event = create_backend_event_fixture(10, 'FUTURE_EVENT', {});
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(parse_backend_web_socket_message(JSON.stringify(event))).toEqual({
             kind: 'event',
             event,
@@ -1065,6 +1122,7 @@ describe('backend snapshot and event mapping', () => {
     });
 
     it('contract error message에는 raw payload가 포함되지 않는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const secret_marker = 'secret-marker-that-must-not-leak';
 
         try {

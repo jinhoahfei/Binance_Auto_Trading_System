@@ -4,6 +4,7 @@ const ema9_period = 9;
 const bollinger_period = 20;
 const bollinger_standard_deviations = 2;
 
+
 /**
  * 함수 이름: create_kline_key()
  * 기능: symbol, interval, open time을 결합해 kline의 유일 key를 만든다.
@@ -14,6 +15,7 @@ const bollinger_standard_deviations = 2;
 function create_kline_key(kline: NormalizedKline): string {
     return `${kline.symbol}\u0000${kline.interval}\u0000${kline.open_time}`;
 }
+
 
 /**
  * 함수 이름: compare_klines()
@@ -34,6 +36,7 @@ function compare_klines(
     return create_kline_key(left_kline).localeCompare(create_kline_key(right_kline));
 }
 
+
 /**
  * 함수 이름: merge_klines()
  * 기능: REST 기준 kline과 신규 WebSocket kline을 key로 병합하고 최신 개수로 제한한다.
@@ -48,10 +51,12 @@ export function merge_klines(
     incoming_klines: ReadonlyArray<NormalizedKline>,
     max_size = 1000,
 ): ReadonlyArray<NormalizedKline> {
+    // 보관할 봉 개수가 유효한 양수인지 확인한다.
     if (!Number.isInteger(max_size) || max_size < 1) {
         throw new Error('Kline max_size must be a positive integer.');
     }
 
+    // 같은 심볼·주기·시각의 기존 봉을 새 수신값으로 덮어쓴다.
     const klines_by_key = new Map<string, NormalizedKline>();
 
     existing_klines.forEach((kline) => {
@@ -61,10 +66,12 @@ export function merge_klines(
         klines_by_key.set(create_kline_key(kline), kline);
     });
 
+    // 봉을 정렬한 뒤 최신 구간만 요청 개수만큼 보관한다.
     const sorted_klines = Array.from(klines_by_key.values()).sort(compare_klines);
 
     return sorted_klines.slice(Math.max(0, sorted_klines.length - max_size));
 }
+
 
 /**
  * 함수 이름: calculate_average()
@@ -77,6 +84,7 @@ function calculate_average(values: ReadonlyArray<number>): number {
     return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
+
 /**
  * 함수 이름: validate_indicator_klines()
  * 기능: 지표 계산 입력이 단일 series의 시간순 유한 close 값인지 확인한다.
@@ -85,6 +93,7 @@ function calculate_average(values: ReadonlyArray<number>): number {
  * 작성 날짜: 2026/08/20
  */
 function validate_indicator_klines(klines: ReadonlyArray<NormalizedKline>): void {
+    // 지표 계산 전에 각 봉의 수치와 시계열 순서가 유효한지 검사한다.
     klines.forEach((kline, index) => {
         if (!Number.isFinite(kline.close)) {
             throw new Error(`Kline at index ${index} must have a finite close value.`);
@@ -110,6 +119,7 @@ function validate_indicator_klines(klines: ReadonlyArray<NormalizedKline>): void
     });
 }
 
+
 /**
  * 함수 이름: calculate_kline_indicators()
  * 기능: kline 시간축에 맞춰 EMA9과 20-period 2σ 볼린저밴드를 계산한다.
@@ -120,12 +130,14 @@ function validate_indicator_klines(klines: ReadonlyArray<NormalizedKline>): void
 export function calculate_kline_indicators(
     klines: ReadonlyArray<NormalizedKline>,
 ): ReadonlyArray<KlineIndicatorPoint> {
+    // 입력 봉을 검증하고 EMA 계산에 필요한 종가와 이전 값을 준비한다.
     validate_indicator_klines(klines);
 
     const close_values = klines.map((kline) => kline.close);
     const ema_multiplier = 2 / (ema9_period + 1);
     let previous_ema: number | null = null;
 
+    // 각 봉의 warmup 길이에 따라 EMA와 볼린저 밴드를 계산한다.
     return klines.map((kline, index) => {
         let ema9: number | null = null;
 

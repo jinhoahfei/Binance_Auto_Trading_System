@@ -1,7 +1,8 @@
+// UI 제어 계층과 외부 호출자가 주고받는 데이터의 형태를 정의한다.
 /**
  * 파일 역할: UI 제어 계층과 외부 호출자가 주고받는 데이터의 형태를 정의한다.
  * Facade 생성 옵션, 서버 snapshot, 사용자 입력·서버 통지 intent, 화면 모델을 모은다.
- * 실제 이벤트 처리와 화면 모델 계산은 Facade·입력 router·selector에서 수행한다.
+ * 실제 이벤트 처리와 화면 모델 계산은 Controller·입력 router·selector에서 수행한다.
  */
 
 import type { BackendBalanceReconciliation } from '../../shared/contracts';

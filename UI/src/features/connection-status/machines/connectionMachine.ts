@@ -17,6 +17,7 @@ export type ConnectionMachineEvent =
     | { readonly type: 'RECONNECT_FAILED'; readonly reason: string }
     | { readonly type: 'BACKEND_CONNECTION_STATUS'; readonly status: BackendConnectionStatus };
 
+
 /**
  * 함수 이름: create_connection_machine()
  * 기능: API 연결, 재연결 진행, 온라인 및 오프라인 표시 상태를 관리하는 XState actor logic을 생성한다.
@@ -26,10 +27,13 @@ export type ConnectionMachineEvent =
  */
 export function create_connection_machine() {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as ConnectionMachineContext,
             events: {} as ConnectionMachineEvent,
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             mark_connecting: assign({
                 status: 'connecting',
@@ -67,6 +71,8 @@ export function create_connection_machine() {
         id: 'connectionMachine',
         initial: 'api_offline',
         on: { BACKEND_CONNECTION_STATUS: { actions: assign({ recovery: ({ event }) => event.status }) } },
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             recovery: null,
             status: 'offline',
@@ -74,6 +80,8 @@ export function create_connection_machine() {
             last_sequence: null,
             last_error: null,
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             api_offline: {
                 meta: {

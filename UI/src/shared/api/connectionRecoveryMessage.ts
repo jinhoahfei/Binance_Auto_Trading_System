@@ -6,6 +6,7 @@
  * 작성 날짜: 2026/09/15
  */
 export function connection_recovery_message(code: string | null | undefined): string {
+    // 허용한 오류 코드만 정해진 안내 문구에 대응시키고 알 수 없는 값에는 공통 안내를 사용한다.
     switch (code) {
         case 'UI_STATE_PUBLICATION_FAILED':
             return '받은 정보를 화면에 반영하지 못했습니다.';

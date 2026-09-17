@@ -26,6 +26,7 @@ export type SplitOrderMachineEvent =
     | { readonly type: 'RETRY_SPLIT_ORDER_CHANGE' }
     | { readonly type: 'DISMISS_SPLIT_ORDER_ERROR' };
 
+
 /**
  * 함수 이름: clamp_percentage()
  * 기능: slider에서 전달된 비율을 0부터 100 사이의 정수로 정규화한다.
@@ -36,6 +37,7 @@ export type SplitOrderMachineEvent =
 function clamp_percentage(percentage: number): number {
     return Math.min(100, Math.max(0, Math.round(percentage)));
 }
+
 
 /**
  * 함수 이름: create_split_order_machine()
@@ -48,10 +50,13 @@ export function create_split_order_machine(
     options: SplitOrderMachineOptions = {},
 ) {
     return setup({
+        // 내부 context와 이벤트의 타입 계약을 연결한다.
         types: {
             context: {} as SplitOrderMachineContext,
             events: {} as SplitOrderMachineEvent,
         },
+
+        // 상태 데이터 변경과 실행 요청을 Action 정의로 묶는다.
         actions: {
             synchronize_split_order: assign({
                 scale_in_percentage: ({ context, event }) => {
@@ -123,6 +128,8 @@ export function create_split_order_machine(
     }).createMachine({
         id: 'splitOrderMachine',
         initial: 'ready',
+
+        // 외부 작업을 실행하지 않고 기능의 초기 데이터를 구성한다.
         context: {
             scale_in_percentage: options.scale_in_percentage ?? 50,
             scale_out_percentage: options.scale_out_percentage ?? 50,
@@ -136,6 +143,8 @@ export function create_split_order_machine(
                 actions: 'synchronize_split_order',
             },
         },
+
+        // 상태 계층과 이벤트별 전이·복귀 규칙을 정의한다.
         states: {
             ready: {
                 meta: {

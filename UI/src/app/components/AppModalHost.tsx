@@ -23,6 +23,7 @@ export interface AppModalHostProps {
     readonly viewModel: AppViewModel;
 }
 
+
 /**
  * 함수 이름: AppModalHost()
  * 기능: shell actor의 단일 modal slot을 구체적인 거래·REGIME·CSV·종료 Dialog Boundary로 연결한다.

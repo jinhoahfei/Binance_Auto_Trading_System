@@ -3,6 +3,7 @@ const current_phase = sessionStorage.getItem(phase_key) ?? 'retry';
 const original_fetch = globalThis.fetch.bind(globalThis);
 let shutdown_accepted = false;
 
+
 /**
  * 함수 이름: report_recovery_stage()
  * 기능: 연결 정보와 계좌 값 없이 실제 복구·종료 검증의 고정 단계만 기록한다.
@@ -15,6 +16,7 @@ async function report_recovery_stage(stage: string, code?: string): Promise<void
         stage, ...(code === undefined ? {} : { code }),
     })}`, { method: 'POST' });
 }
+
 
 /**
  * 함수 이름: observe_shutdown_response()
@@ -34,8 +36,10 @@ async function observe_shutdown_response(input: RequestInfo | URL, init?: Reques
         sessionStorage.removeItem(phase_key);  // 다음 실행에 검증 단계가 남지 않게 한다.
         await report_recovery_stage('recovery-shutdown-accepted');
     }
+
     return response;
 }
+
 
 /**
  * 함수 이름: wait_for_element()
@@ -56,6 +60,7 @@ async function wait_for_element<T>(read: () => T | null | false, code: string): 
     throw new Error(code);
 }
 
+
 /**
  * 함수 이름: run_recovery_reload_smoke()
  * 기능: 연결 재시도 성공, 같은 backend로 전체 화면 재로딩, 연결 없는 화면의 안전 종료를 차례로 검증한다.
@@ -70,6 +75,7 @@ async function run_recovery_reload_smoke(): Promise<void> {
         if (failure?.textContent !== 'BACKEND_DESCRIPTOR_UNAVAILABLE') {
             throw new Error('UNEXPECTED_BOOTSTRAP_FAILURE');
         }
+
         const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')];
         const retry = buttons.find((button) => button.textContent === '연결 다시 확인');
         const shutdown = buttons.find((button) => button.textContent === '안전 종료');
@@ -81,8 +87,10 @@ async function run_recovery_reload_smoke(): Promise<void> {
     }
     if (current_phase === 'shutdown') {
         await wait_for_element(() => shutdown_accepted, 'RECOVERY_SHUTDOWN_TIMEOUT');
+
         // HTTP 202는 중간 결과다. 실행 도구가 실제 process code 0과 RELEASED까지 확인한다.
         setTimeout(() => { void report_recovery_stage('failed', 'NATIVE_EXIT_TIMEOUT'); }, 30_000);
+
         return;
     }
 
@@ -91,6 +99,7 @@ async function run_recovery_reload_smoke(): Promise<void> {
         'RELOADED_DASHBOARD_TIMEOUT',
     );
     await report_recovery_stage(current_phase === 'retry' ? 'recovery-retry-passed' : 'renderer-reload-passed');
+
     // 저장소에는 공개된 시험 단계만 넣으며 token·descriptor·backend snapshot은 보관하지 않는다.
     sessionStorage.setItem(phase_key, current_phase === 'retry' ? 'reload' : 'shutdown');
     window.location.reload();

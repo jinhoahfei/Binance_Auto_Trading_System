@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { CSVExportDialog, DEFAULT_CSV_EXPORT_DRAFT } from './index';
 import type { CSVExportDialogProps } from './CSVExportDialog';
 
+
 /**
  * 함수 이름: create_dialog_props()
  * 기능: CSV 내보내기 팝업 테스트에 사용할 제어형 기본 속성과 이벤트 감시 함수를 만든다.
@@ -37,19 +38,24 @@ function create_dialog_props() {
 
 describe('CSVExportDialog', () => {
   it('저장 위치, 기간, 파일명과 내보내기 의도를 전달한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const user = userEvent.setup();
     const { handlers, props } = create_dialog_props();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(<CSVExportDialog {...props} />);
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByRole('dialog', { name: 'CSV 내보내기' })).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: /달력/ })).not.toBeInTheDocument();
 
+    // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
     await user.click(screen.getByRole('button', { name: '위치 선택' }));
     await user.click(screen.getByRole('button', { name: '최근 30일' }));
     fireEvent.change(screen.getByLabelText('파일 이름'), { target: { value: 'history.csv' } });
     await user.click(screen.getByRole('button', { name: '내보내기' }));
 
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(handlers.onChooseLocation).toHaveBeenCalledTimes(1);
     expect(handlers.onPeriodChange).toHaveBeenCalledWith('MONTHLY');
     expect(handlers.onFileNameChange).toHaveBeenLastCalledWith('history.csv');
@@ -57,9 +63,11 @@ describe('CSVExportDialog', () => {
   });
 
   it('시작일 달력에서 날짜와 월 이동 의도를 대상과 함께 전달한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const user = userEvent.setup();
     const { handlers, props } = create_dialog_props();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <CSVExportDialog
         {...props}
@@ -69,6 +77,7 @@ describe('CSVExportDialog', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByRole('dialog', { name: '시작일 선택 달력' })).toBeInTheDocument();
     const calendar_rows = within(
       screen.getByRole('dialog', { name: '시작일 선택 달력' }),
@@ -78,10 +87,13 @@ describe('CSVExportDialog', () => {
     for (const calendar_row of calendar_rows) {
       expect(within(calendar_row).getAllByRole('gridcell')).toHaveLength(7);
     }
+
+    // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
     await user.click(screen.getByRole('gridcell', { name: '2026년 8월 12일 선택' }));
     await user.click(screen.getByRole('button', { name: '다음 달' }));
     await user.selectOptions(screen.getByRole('combobox', { name: '달력 월' }), '6');
 
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(handlers.onCalendarDateSelect).toHaveBeenCalledWith('START', '2026-08-12');
     expect(handlers.onCalendarNextMonth).toHaveBeenCalledWith('START');
     expect(handlers.onCalendarMonthChange).toHaveBeenCalledWith('START', 6);
@@ -89,8 +101,10 @@ describe('CSVExportDialog', () => {
 
   /** Static Figma 강조가 실제 custom date의 제어·접근성 상태를 훼손하지 않는지 검증한다. */
   it('fixture 기간 강조와 달력 header 날짜를 선택 원과 독립적으로 표시한다', () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const { props } = create_dialog_props();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <CSVExportDialog
         {...props}
@@ -122,6 +136,7 @@ describe('CSVExportDialog', () => {
   });
 
   it('달력이 열린 동안 배경을 누르면 달력만 닫고 이후에는 모달을 닫는다', () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const { handlers, props } = create_dialog_props();
     const { rerender } = render(
       <CSVExportDialog
@@ -132,18 +147,25 @@ describe('CSVExportDialog', () => {
       />,
     );
 
+    // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
     fireEvent.mouseDown(screen.getByTestId('csv-export-overlay'));
+
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(handlers.onCalendarDismiss).toHaveBeenCalledTimes(1);
     expect(handlers.onDismiss).not.toHaveBeenCalled();
 
     rerender(<CSVExportDialog {...props} calendarTarget={null} />);
+
+    // 사용자 조작을 수행하고 그에 따른 비동기 반영을 기다린다.
     fireEvent.mouseDown(screen.getByTestId('csv-export-overlay'));
-    expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
+    expect(handlers.onDismiss).toHaveBeenCalledTimes(1);  // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
   });
 
   it('저장 위치와 날짜 오류를 각각 경고로 표시한다', () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const { props } = create_dialog_props();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <CSVExportDialog
         {...props}
@@ -154,6 +176,7 @@ describe('CSVExportDialog', () => {
       />,
     );
 
+    // 화면의 표시 내용과 입력 가능 상태를 검증한다.
     expect(screen.getByText(/저장 위치를 선택해야 합니다/)).toHaveAttribute('role', 'alert');
     expect(screen.getByText(/시작일이 종료일보다 늦을 수 없습니다/)).toHaveAttribute('role', 'alert');
     expect(screen.getByRole('button', { name: /시작일 선택/ })).toHaveAttribute('aria-invalid', 'true');
@@ -162,8 +185,10 @@ describe('CSVExportDialog', () => {
 
   /** Static Figma presentation이 날짜 검증의 접근성 의미를 없애지 않는지 검증한다. */
   it('fixture는 invalid border만 중립화하고 오류 의미를 유지한다', () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const { props } = create_dialog_props();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(
       <CSVExportDialog
         {...props}
@@ -179,9 +204,11 @@ describe('CSVExportDialog', () => {
 
   /** Communication Case 4 메시지 2·3·4의 중복 입력 차단 경계를 검증한다. */
   it('test_exporting_dialog_disables_picker_edits_and_duplicate_confirm: 진행 중 입력을 무시한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const user = userEvent.setup();
     const { handlers, props } = create_dialog_props();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(<CSVExportDialog {...props} exporting />);
 
     // Exporting 상태의 모든 mutation control은 native disabled라 callback을 만들 수 없다.
@@ -194,6 +221,7 @@ describe('CSVExportDialog', () => {
     await user.type(file_name_input, 'mutated.csv');
     await user.click(export_button);
 
+    // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
     expect(location_button).toBeDisabled();
     expect(period_button).toBeDisabled();
     expect(file_name_input).toBeDisabled();
@@ -206,8 +234,10 @@ describe('CSVExportDialog', () => {
 
   /** Communication Case 4 메시지 4.1.3a가 valid 상태에 남지 않는지 검증한다. */
   it('test_valid_csv_dialog_has_no_validation_error_surface: 유효 상태는 오류를 표시하지 않는다', () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const { props } = create_dialog_props();
 
+    // 준비한 의존성을 주입해 화면 또는 hook을 실행한다.
     render(<CSVExportDialog {...props} errors={{}} />);
 
     // 오류가 없는 draft에는 validation alert와 invalid attribute를 만들지 않는다.
@@ -216,6 +246,7 @@ describe('CSVExportDialog', () => {
   });
 
   it('모달이 제거되면 모달을 열었던 요소로 초점을 복원한다', async () => {
+    // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
     const { props } = create_dialog_props();
     const trigger = document.createElement('button');
 
@@ -227,6 +258,7 @@ describe('CSVExportDialog', () => {
 
     unmount();
 
+    // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     await waitFor(() => expect(trigger).toHaveFocus());
     trigger.remove();
   });

@@ -1,303 +1,313 @@
+/* 거래 내역 표의 경계와 스크롤 영역을 구성한다. */
 .card {
-  box-sizing: border-box;
-  width: 100%;
-  height: 564px;
-  overflow: hidden;
-  border: 1px solid var(--color-border-default);
-  border-radius: 10px;
-  background: var(--color-bg-surface);
-  box-shadow: var(--shadow-control);
+    box-sizing: border-box;
+    width: 100%;
+    height: 564px;
+    overflow: hidden;
+    border: 1px solid var(--color-border-default);
+    border-radius: 10px;
+    background: var(--color-bg-surface);
+    box-shadow: var(--shadow-control);
 }
 
 .scrollArea {
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  outline: none;
-  scrollbar-color: color-mix(in srgb, var(--color-text-secondary) 76%, var(--color-bg-control)) var(--color-bg-control);
-  scrollbar-width: thin;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    outline: none;
+    scrollbar-color: color-mix(in srgb, var(--color-text-secondary) 76%, var(--color-bg-control)) var(--color-bg-control);
+    scrollbar-width: thin;
 }
 
 .scrollArea:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: -2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: -2px;
 }
 
+/* 표 내부 스크롤바의 크기와 명암을 설정한다. */
 .scrollArea::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+    width: 6px;
+    height: 6px;
 }
 
 .scrollArea::-webkit-scrollbar-track {
-  border-radius: 3px;
-  background: var(--color-bg-control);
+    border-radius: 3px;
+    background: var(--color-bg-control);
 }
 
 .scrollArea::-webkit-scrollbar-thumb {
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--color-text-secondary) 76%, var(--color-bg-control));
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--color-text-secondary) 76%, var(--color-bg-control));
 }
 
+/* 거래 내역의 표 배치와 열 너비를 고정한다. */
 .table {
-  width: 100%;
-  min-width: 1342px;
-  border-spacing: 0;
-  border-collapse: separate;
-  table-layout: fixed;
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
-  font-size: 12px;
+    width: 100%;
+    min-width: 1342px;
+    border-spacing: 0;
+    border-collapse: separate;
+    table-layout: fixed;
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: 12px;
 }
 
+/* 시각·매매 방향·전략·수치 항목의 열 너비를 정의한다. */
 .timeColumn {
-  width: 159px;
+    width: 159px;
 }
 
 .sideColumn {
-  width: 104px;
+    width: 104px;
 }
 
 .regimeColumn {
-  width: 94px;
+    width: 94px;
 }
 
 .strategyColumn {
-  width: 137px;
+    width: 137px;
 }
 
 .entryColumn {
-  width: 131px;
+    width: 131px;
 }
 
 .executionColumn {
-  width: 115px;
+    width: 115px;
 }
 
 .quantityColumn {
-  width: 111px;
+    width: 111px;
 }
 
 .amountColumn {
-  width: 106px;
+    width: 106px;
 }
 
 .feeColumn {
-  width: 122px;
+    width: 122px;
 }
 
 .returnColumn {
-  width: 127px;
+    width: 127px;
 }
 
 .pnlColumn {
-  width: 136px;
+    width: 136px;
 }
 
+/* 스크롤 중에도 헤더의 표시와 셀 정렬을 유지한다. */
 .table thead {
-  position: sticky;
-  z-index: 2;
-  top: 0;
+    position: sticky;
+    z-index: 2;
+    top: 0;
 }
 
 .table th {
-  box-sizing: border-box;
-  height: 43px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--color-border-default);
-  background: var(--fixture-table-header, var(--color-bg-surface-raised));
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-  white-space: nowrap;
+    box-sizing: border-box;
+    height: 43px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--color-border-default);
+    background: var(--fixture-table-header, var(--color-bg-surface-raised));
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+    white-space: nowrap;
 }
 
 .table th:first-child,
 .table th:nth-child(4) {
-  padding-left: 18px;
-  text-align: left;
+    padding-left: 18px;
+    text-align: left;
 }
 
 .table td {
-  box-sizing: border-box;
-  height: 58px;
-  overflow: hidden;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--color-border-default);
-  background: var(--color-bg-surface);
-  font-weight: 500;
-  line-height: 16px;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    box-sizing: border-box;
+    height: 58px;
+    overflow: hidden;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    font-weight: 500;
+    line-height: 16px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Figma column center와 값은 column width를 유지하면서 header와 body 문자의 광학 중심을 맞춘다. */
 .table th:nth-child(2),
 .table td:nth-child(2) {
-  padding-right: 20px;
+    padding-right: 20px;
 }
 
 .table th:nth-child(5),
 .table td:nth-child(5) {
-  padding-right: 16px;
+    padding-right: 16px;
 }
 
 .table th:nth-child(6),
 .table td:nth-child(6) {
-  padding-left: 15px;
+    padding-left: 15px;
 }
 
 .table th:nth-child(7),
 .table td:nth-child(7) {
-  padding-right: 15px;
+    padding-right: 15px;
 }
 
 .table th:nth-child(8),
 .table td:nth-child(8) {
-  padding-left: 28px;
+    padding-left: 28px;
 }
 
 .table th:nth-child(9),
 .table td:nth-child(9),
 .table th:nth-child(10),
 .table td:nth-child(10) {
-  padding-right: 14px;
+    padding-right: 14px;
 }
 
 .table th:nth-child(11),
 .table td:nth-child(11) {
-  padding-right: 44px;
+    padding-right: 44px;
 }
 
+/* 행 구분과 마지막 행의 테두리를 조정한다. */
 .table tbody tr:nth-child(even) td {
-  background: var(
+    background: var(
     --fixture-table-even,
     color-mix(in srgb, var(--color-bg-surface) 84%, var(--color-bg-surface-raised))
   );
 }
 
 .table tbody tr:last-child td {
-  border-bottom: 0;
+    border-bottom: 0;
 }
 
 .table td.time,
 .table td.strategy {
-  padding-left: 18px;
-  text-align: left;
+    padding-left: 18px;
+    text-align: left;
 }
 
+/* 시각·숫자·REGIME 값의 글꼴과 넘침 처리를 맞춘다. */
 .time,
 .numeric,
 .regime {
-  font-family: var(--font-numeric);
-  font-variant-numeric: tabular-nums;
+    font-family: var(--font-numeric);
+    font-variant-numeric: tabular-nums;
 }
 
 .regime,
 .strategy {
-  color: color-mix(in srgb, var(--color-text-primary) 82%, var(--color-text-secondary));
-  font-weight: 600;
+    color: color-mix(in srgb, var(--color-text-primary) 82%, var(--color-text-secondary));
+    font-weight: 600;
 }
 
+/* 매수·매도 표식과 손익 표시색을 구성한다. */
 .sideValue {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  min-width: 58px;
-  font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-width: 58px;
+    font-weight: 600;
 }
 
 .sideDot {
-  width: 10px;
-  height: 10px;
-  border-radius: 5px;
-  background: currentColor;
+    width: 10px;
+    height: 10px;
+    border-radius: 5px;
+    background: currentColor;
 }
 
 .buy,
 .positive {
-  color: var(--color-text-positive);
+    color: var(--color-text-positive);
 }
 
 .sell,
 .negative {
-  color: var(--color-text-negative);
+    color: var(--color-text-negative);
 }
 
 .secondary {
-  color: var(--color-text-secondary);
+    color: var(--color-text-secondary);
 }
 
+/* 수수료와 강조·보조 수치의 표시 위계를 구분한다. */
 .table td.fee {
-  white-space: normal;
+    white-space: normal;
 }
 
 .emphasized {
-  font-weight: 600;
+    font-weight: 600;
 }
 
 .muted {
-  color: var(--color-text-tertiary);
-  font-weight: 600;
+    color: var(--color-text-tertiary);
+    font-weight: 600;
 }
 
+/* 조회 결과가 없거나 재시도가 필요할 때의 안내를 배치한다. */
 .emptyRow td {
-  height: 519px;
-  background: var(--color-bg-surface);
+    height: 519px;
+    background: var(--color-bg-surface);
 }
 
 .emptyContent {
-  position: relative;
-  top: 1px;
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  justify-content: center;
-  height: 100%;
-  color: var(--color-text-secondary);
-  font-family: var(--font-ui);
-  text-align: center;
-  white-space: normal;
+    position: relative;
+    top: 1px;
+    display: flex;
+    align-items: center;
+    flex-direction: column;
+    justify-content: center;
+    height: 100%;
+    color: var(--color-text-secondary);
+    font-family: var(--font-ui);
+    text-align: center;
+    white-space: normal;
 }
 
 .emptyContent strong {
-  margin-bottom: 16px;
-  color: color-mix(in srgb, var(--color-text-primary) 42%, var(--color-text-secondary));
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 24px;
+    margin-bottom: 16px;
+    color: color-mix(in srgb, var(--color-text-primary) 42%, var(--color-text-secondary));
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 24px;
 }
 
 .emptyContent p {
-  margin: 0;
-  color: var(--color-text-tertiary);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
+    margin: 0;
+    color: var(--color-text-tertiary);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 20px;
 }
 
 .emptyContent button {
-  height: 40px;
-  margin-top: 19px;
-  padding: 0 29px;
-  border: 1px solid var(--color-status-positive);
-  border-radius: 8px;
-  background: var(--color-status-positive-strong);
-  box-shadow: var(--shadow-control);
-  color: var(--color-text-primary);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 600;
+    height: 40px;
+    margin-top: 19px;
+    padding: 0 29px;
+    border: 1px solid var(--color-status-positive);
+    border-radius: 8px;
+    background: var(--color-status-positive-strong);
+    box-shadow: var(--shadow-control);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
 }
 
 .emptyContent button:hover {
-  filter: brightness(1.08);
+    filter: brightness(1.08);
 }
 
 .emptyContent button:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
 }

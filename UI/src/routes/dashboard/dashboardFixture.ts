@@ -1,3 +1,5 @@
+// 대시보드의 차트·계좌·REGIME·트레이더 패널에 사용할 고정 표시값을 제공한다.
+
 import type { DashboardPageProps } from './DashboardPage';
 
 export const DEFAULT_DASHBOARD_PROPS: DashboardPageProps = {

@@ -1,3 +1,4 @@
+/* REGIME 선택 버튼의 기본 배치와 입력 상태를 구성한다. */
 .button {
     position: relative;
     display: flex;
@@ -28,6 +29,7 @@
     opacity: 0.48;
 }
 
+/* 후보의 상태색과 확정된 선택 표시를 구분한다. */
 .positive {
     --button-tone: var(--color-status-positive);
 }
@@ -47,6 +49,7 @@
     background: var(--button-tone);
 }
 
+/* 확정 전 후보임을 별도의 표시로 구분한다. */
 .candidate::after {
     position: absolute;
     inset: 2px;
@@ -54,9 +57,10 @@
     border-radius: calc(var(--radius-sm) - 2px);
     content: '';
     opacity: 0.85;
-    pointer-events: none;
+    pointer-events: none;  /* 표시 전용 레이어가 포인터 입력을 가로채지 않게 한다. */
 }
 
+/* REGIME 타입과 이름의 글자 위계를 설정한다. */
 .type {
     width: 58px;
     font-family: var(--font-numeric);
@@ -74,6 +78,7 @@
     text-align: center;
 }
 
+/* 거래 지원 여부를 선택 표시와 함께 구분한다. */
 .supportBadge {
     min-width: 32px;
     padding: 0 4px;

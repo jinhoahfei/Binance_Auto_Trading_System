@@ -12,6 +12,7 @@ export interface RegimeChangeDialogProps {
   onConfirm: () => void;
 }
 
+
 /**
  * 함수 이름: RegimeChangeDialog()
  * 기능: REGIME 후보를 실제 투자 기준으로 적용하기 전에 확인을 요청한다.

@@ -1,3 +1,4 @@
+/* 지표 표시 설정 팝오버의 표면과 여백을 구성한다. */
 .popover {
     position: absolute;
     z-index: 4;
@@ -37,6 +38,7 @@
     line-height: 16px;
 }
 
+/* 지표별 색상·설명·토글을 반복되는 행으로 배치한다. */
 .rows {
     display: flex;
     flex-direction: column;
@@ -62,6 +64,7 @@
     border-radius: var(--radius-xs);
 }
 
+/* EMA·볼린저 밴드·거래량의 식별색을 구분한다. */
 .ema9 {
     background: var(--color-focus);
 }
@@ -74,10 +77,11 @@
     background: color-mix(in srgb, var(--color-status-warning) 62%, var(--color-status-negative));
 }
 
+/* 지표 이름과 보조 설명의 글자 위계를 설정한다. */
 .copy {
     display: flex;
     flex-direction: column;
-    min-width: 0;
+    min-width: 0;  /* 내용 길이가 격자나 flex 항목의 최소 폭을 늘리지 않게 한다. */
 }
 
 .copy strong {
@@ -95,6 +99,7 @@
     line-height: 16px;
 }
 
+/* 토글의 꺼짐·켜짐 상태와 손잡이 위치를 표현한다. */
 .toggleOff,
 .toggleOn {
     position: relative;

@@ -63,6 +63,7 @@ export interface UseRealtimeChartDataOptions {
     readonly web_socket_factory?: WebSocketFactory;
 }
 
+
 /**
  * 함수 이름: create_idle_history_load_state()
  * 기능: 아직 과거 페이지를 요청하지 않은 단일 주기의 초기 상태를 만든다.
@@ -77,6 +78,7 @@ function create_idle_history_load_state(): ChartHistoryLoadState {
         is_loading: false,
     };
 }
+
 
 /**
  * 함수 이름: create_history_load_state_by_interval()
@@ -94,6 +96,7 @@ function create_history_load_state_by_interval(): ChartHistoryLoadStateByInterva
     };
 }
 
+
 /**
  * 함수 이름: create_empty_klines_by_interval()
  * 기능: UI가 지원하는 네 주기의 빈 시장 snapshot을 만든다.
@@ -109,6 +112,7 @@ function create_empty_klines_by_interval(): KlinesByInterval {
         '1d': [],
     };
 }
+
 
 /**
  * 함수 이름: create_buffer_by_interval()
@@ -126,6 +130,7 @@ function create_buffer_by_interval(): Record<ChartInterval, Array<NormalizedKlin
     };
 }
 
+
 /**
  * 함수 이름: get_error_message()
  * 기능: 알 수 없는 오류를 사용자에게 표시할 안전한 메시지로 변환한다.
@@ -136,6 +141,7 @@ function create_buffer_by_interval(): Record<ChartInterval, Array<NormalizedKlin
 function get_error_message(error: unknown): string {
     return error instanceof Error ? error.message : '알 수 없는 시장 데이터 오류가 발생했습니다.';
 }
+
 
 /**
  * 함수 이름: is_abort_error()
@@ -148,6 +154,7 @@ function is_abort_error(error: unknown): boolean {
     return (error instanceof Error || error instanceof DOMException) && error.name === 'AbortError';
 }
 
+
 /**
  * 함수 이름: has_any_klines()
  * 기능: 시장 snapshot에 하나 이상의 주기 데이터가 있는지 확인한다.
@@ -159,6 +166,7 @@ function has_any_klines(klines_by_interval: KlinesByInterval): boolean {
     return Object.values(klines_by_interval).some((klines) => klines.length > 0);
 }
 
+
 /**
  * 함수 이름: create_default_web_socket()
  * 기능: 브라우저 기본 WebSocket으로 Binance combined stream 연결을 만든다.
@@ -169,6 +177,7 @@ function has_any_klines(klines_by_interval: KlinesByInterval): boolean {
 function create_default_web_socket(url: string): WebSocket {
     return new WebSocket(url);
 }
+
 
 /**
  * 함수 이름: merge_klines_without_truncation()
@@ -189,6 +198,7 @@ function merge_klines_without_truncation(
     );
 }
 
+
 /**
  * 함수 이름: merge_live_kline()
  * 기능: 현재 진행 봉 교체와 새 봉 append를 정렬 전체 재계산 없이 처리하고 예외 순서만 공통 병합한다.
@@ -201,11 +211,14 @@ function merge_live_kline(
     existing_klines: ReadonlyArray<NormalizedKline>,
     incoming_kline: NormalizedKline,
 ): ReadonlyArray<NormalizedKline> {
+    // 비어 있는 시계열은 첫 수신 봉으로 시작한다.
     const latest_kline = existing_klines.at(-1);
 
     if (latest_kline === undefined) {
         return [incoming_kline];
     }
+
+    // 마지막 봉의 갱신과 새 봉 추가를 먼저 처리한다.
     if (latest_kline.symbol === incoming_kline.symbol
         && latest_kline.interval === incoming_kline.interval
         && latest_kline.open_time === incoming_kline.open_time) {
@@ -215,8 +228,10 @@ function merge_live_kline(
         return [...existing_klines, incoming_kline];
     }
 
+    // 순서가 늦게 온 봉은 전체 키 병합으로 반영한다.
     return merge_klines_without_truncation(existing_klines, [incoming_kline]);
 }
+
 
 /**
  * 함수 이름: create_history_abort_controllers()
@@ -233,6 +248,7 @@ function create_history_abort_controllers(): Record<ChartInterval, AbortControll
         '1d': null,
     };
 }
+
 
 /**
  * 함수 이름: use_realtime_chart_data()
@@ -291,6 +307,7 @@ export function use_realtime_chart_data(
                 symbol,
                 updated_at: null,
             });
+
             return undefined;
         }
 
@@ -383,6 +400,7 @@ export function use_realtime_chart_data(
          * 작성 날짜: 2026/08/20
          */
         async function load_earlier_klines_for_interval(interval: ChartInterval): Promise<void> {
+            // 현재 페이지 경계와 중복 조회·소진·연결 상태를 확인한다.
             const current_history_state = history_load_state_ref.current[interval];
             const current_snapshot = snapshot_ref.current;
             const oldest_kline = current_snapshot.klines_by_interval[interval][0];
@@ -395,6 +413,7 @@ export function use_realtime_chart_data(
                 return;
             }
 
+            // 조회 시작 시 연결 세대와 취소 신호를 고정하고 진행 상태를 표시한다.
             const request_abort_controller = new AbortController();
             const request_connection_version = connection_version;
             const before_open_time = oldest_kline.open_time;
@@ -406,6 +425,7 @@ export function use_realtime_chart_data(
                 is_loading: true,
             });
 
+            // 이전 봉을 조회하고 완료 시점에도 현재 연결에 속하는 결과만 반영한다.
             try {
                 const older_klines = await load_older_klines(
                     symbol,
@@ -449,6 +469,7 @@ export function use_realtime_chart_data(
                         };
 
                         snapshot_ref.current = next_snapshot;
+
                         return next_snapshot;
                     });
                 }
@@ -509,6 +530,7 @@ export function use_realtime_chart_data(
 
             reconnect_attempt += 1;
             record_diagnostic({ event: 'reconnect_scheduled', attempt: reconnect_attempt, delay_ms: reconnect_delay });
+
             // 실패한 세대의 늦은 REST·socket callback이 LIVE를 되살릴 수 없게 즉시 폐기한다.
             connection_version += 1;
             active_abort_controller?.abort();
@@ -593,6 +615,7 @@ export function use_realtime_chart_data(
                 const ready = historical_data_is_ready && socket_is_open
                     && supported_chart_intervals.every((interval) => {
                         const received_at = last_received_monotonic[interval];
+
                         return received_at !== undefined && performance.now() - received_at < 15_000;
                     });
                 if (ready && !ready_was_recorded) {
@@ -600,6 +623,7 @@ export function use_realtime_chart_data(
                     reconnect_attempt = 0;
                     record_diagnostic({ event: 'connection_ready', elapsed_ms: Math.round(performance.now() - connection_started_at) });
                 }
+
                 return ready;
             }
 
@@ -621,9 +645,11 @@ export function use_realtime_chart_data(
                         try {
                             const incoming_kline = parse_combined_kline_message(event.data);
                             if (incoming_kline.symbol !== symbol) throw new Error('Unexpected chart symbol');
+
                             const received_at = Date.now();
                             observe_renderer_connection({ last_chart_received_at_ms: received_at });
                             const previous = interval_diagnostics.find((entry) => entry.interval === incoming_kline.interval)!;
+
                             // 이전 세대/봉의 역행 tick으로 화면이나 수신 시각을 되돌리지 않는다.
                             if (previous.open_time_ms !== null && incoming_kline.open_time < previous.open_time_ms) return;
                             if (previous.event_time_ms !== null && incoming_kline.event_time !== undefined
@@ -638,8 +664,10 @@ export function use_realtime_chart_data(
                                 buffered_klines[incoming_kline.interval] = [...merge_klines(
                                     buffered_klines[incoming_kline.interval], [incoming_kline], limit,
                                 )];
+
                                 return;
                             }
+
                             const live = is_live();
                             set_snapshot((current_snapshot) => ({
                                 ...current_snapshot, data_status: live ? 'live' : 'reconnecting',
@@ -671,6 +699,7 @@ export function use_realtime_chart_data(
                 } catch {
                     record_diagnostic({ event: 'socket_error' });
                     schedule_reconnect('Binance WebSocket을 시작하지 못했습니다.');
+
                     return;
                 }
             }
@@ -711,6 +740,7 @@ export function use_realtime_chart_data(
                             .map((entry) => [entry.interval, entry.received_at_ms!])),
                     };
                     snapshot_ref.current = next_snapshot;
+
                     return next_snapshot;
                 });
             } catch (error: unknown) {
@@ -723,12 +753,15 @@ export function use_realtime_chart_data(
         /**
          * 함수 이름: check_connection_health()
          * 기능: 연결 무응답과 주기별 수신 정지를 감지하고 정기 수신 요약을 남긴다.
-         * 인자: 없음
+         * 인자: resumed_from_sleep -> 절전 복귀 시 실제 경과 시간도 수신 지연 판정에 사용할지 여부
          * 반환값: 없음
          * 작성 날짜: 2026/09/11
          */
         function check_connection_health(resumed_from_sleep = false): void {
+            // 이미 폐기되었거나 복구를 예약한 연결은 중복 검사하지 않는다.
             if (is_disposed || reconnect_timer !== null || web_socket_factory === null) return;
+
+            // 단조 시각으로 정기 생존 기록과 연결 수립 지연을 확인한다.
             const current_time = performance.now();
             if (current_time >= next_heartbeat_at) {
                 next_heartbeat_at = current_time + 30_000;
@@ -739,8 +772,11 @@ export function use_realtime_chart_data(
                     record_diagnostic({ event: 'connect_timeout' });
                     schedule_reconnect('차트 시세 연결 응답이 지연되고 있습니다.');
                 }
+
                 return;
             }
+
+            // 주기별 수신 지연을 찾고 절전 복귀 시 실제 경과 시간도 반영한다.
             const stale_interval = supported_chart_intervals.find((interval) =>
                 Math.max(current_time - (last_received_monotonic[interval] ?? socket_opened_at!),
                     resumed_from_sleep ? Date.now() - (interval_diagnostics.find((entry) => entry.interval === interval)?.received_at_ms ?? socket_opened_wall!) : 0) >= 15_000);

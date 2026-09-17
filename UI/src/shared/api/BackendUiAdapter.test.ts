@@ -33,6 +33,7 @@ const CSV_EXPORT_OPTIONS: CsvExportOptions = {
     timezone: 'Asia/Seoul',
 };
 
+
 /**
  * 클래스 이름: FakeBackendWebSocket
  * 기능: adapter test에서 first frame, server event와 close lifecycle을 수동 제어한다.
@@ -46,6 +47,13 @@ class FakeBackendWebSocket implements BackendWebSocket {
     onclose: ((event: CloseEvent) => void) | null = null;
     onerror: ((event: Event) => void) | null = null;
 
+    /**
+     * 함수 이름: FakeBackendWebSocket.constructor()
+     * 기능: 테스트 WebSocket이 연결할 URL을 보관한다.
+     * 인자: url -> 연결 요청 URL
+     * 반환값: 생성된 FakeBackendWebSocket
+     * 작성 날짜: 2026/09/17
+     */
     constructor(readonly url: string) {}
 
     /**
@@ -109,6 +117,7 @@ class FakeBackendWebSocket implements BackendWebSocket {
     }
 }
 
+
 /**
  * 함수 이름: create_descriptor()
  * 기능: 모든 adapter test가 공유할 valid loopback launch descriptor를 만든다.
@@ -125,6 +134,7 @@ function create_descriptor() {
     } as const;
 }
 
+
 /**
  * 함수 이름: create_uuid_factory()
  * 기능: HTTP request와 idempotency header에 쓸 결정적 UUID sequence를 반환한다.
@@ -139,9 +149,11 @@ function create_uuid_factory(): () => string {
     return () => {
         const next_id = ids[index % ids.length];
         index += 1;
+
         return next_id!;
     };
 }
+
 
 /**
  * 함수 이름: create_success_response()
@@ -162,6 +174,7 @@ function create_success_response(
         data,
     }), { status });
 }
+
 
 /**
  * 함수 이름: create_failure_response()
@@ -191,6 +204,7 @@ function create_failure_response(
     }), { status });
 }
 
+
 /**
  * 함수 이름: request_headers()
  * 기능: fake fetch RequestInit에서 string record header를 안전하게 추출한다.
@@ -201,6 +215,7 @@ function create_failure_response(
 function request_headers(init: RequestInit | undefined): Record<string, string> {
     return init?.headers as Record<string, string>;
 }
+
 
 /**
  * 함수 이름: create_abortable_fetch_mock()
@@ -219,7 +234,15 @@ function create_abortable_fetch_mock(
         }
 
         received_signals.push(signal);
+
         return new Promise<Response>((_resolve, reject) => {
+            /**
+             * 함수 이름: reject_aborted_request()
+             * 기능: 실제 읽기와 같이 취소 신호에 테스트 HTTP Promise를 거부한다.
+             * 인자: 없음
+             * 반환값: 없음
+             * 작성 날짜: 2026/09/17
+             */
             const reject_aborted_request = () => {
                 reject(new DOMException('Backend request aborted', 'AbortError'));
             };
@@ -227,12 +250,14 @@ function create_abortable_fetch_mock(
             // 이미 중단된 signal과 이후 중단되는 signal을 같은 fetch 실패 경로로 수렴시킨다.
             if (signal.aborted) {
                 reject_aborted_request();
+
                 return;
             }
             signal.addEventListener('abort', reject_aborted_request, { once: true });
         });
     }) as unknown as typeof fetch;
 }
+
 
 /**
  * 함수 이름: create_callbacks()
@@ -249,6 +274,7 @@ function create_callbacks(): BackendUiAdapterCallbacks {
         on_failure: vi.fn(),
     };
 }
+
 
 /**
  * 함수 이름: create_trade_details_fixture()
@@ -280,6 +306,7 @@ function create_trade_details_fixture() {
 
 describe('BackendUiAdapter HTTP contract', () => {
     it('Binance 진단은 loopback backend에서 API와 두 WebSocket 상태를 독립적으로 읽는다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const connection_status = { api: 'online', market_stream: 'offline', account_stream: 'online' };
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(request_headers(init)['X-Request-Id']!, connection_status);
@@ -289,6 +316,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await expect(adapter.load_binance_connection_status()).resolves.toEqual(connection_status);
         expect(fetch_mock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:42123/v1/binance/connection-status');
         expect(fetch_mock.mock.calls[0]?.[1]?.method).toBe('GET');
@@ -300,6 +328,7 @@ describe('BackendUiAdapter HTTP contract', () => {
         { api: 'online', market_stream: 'online' },
         { api: 'online', market_stream: 'online', account_stream: 'online', extra: true },
     ])('잘못된 Binance 연결 진단을 정상 연결로 표시하지 않는다: %j', async (payload) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const adapter = new BackendUiAdapter(create_descriptor(), {
             fetch: vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
                 return create_success_response(request_headers(init)['X-Request-Id']!, payload);
@@ -307,12 +336,14 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.load_binance_connection_status()).rejects.toMatchObject({
             code: 'MALFORMED_BACKEND_PAYLOAD',
         });
     });
 
     it('test_show_trade_details_adapter_contract: combined query와 generated composite 응답을 UI details로 변환한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(
                 request_headers(init)['X-Request-Id']!,
@@ -324,6 +355,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await expect(adapter.load_trade_history({
             period: 'today',
             side: 'all',
@@ -346,6 +378,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('test_trade_history_filter_adapter_contract: all query의 concrete LocalDate range를 허용한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const trade_details = create_trade_details_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(request_headers(init)['X-Request-Id']!, {
@@ -363,6 +396,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         await expect(adapter.load_trade_history({
             period: 'all',
             side: 'sell',
@@ -370,6 +404,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('trade-history caller signal을 내부 timeout/stop signal과 합성하고 HTTP read를 중단한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const received_signals: Array<AbortSignal> = [];
         const caller_abort_controller = new AbortController();
         const adapter = new BackendUiAdapter(create_descriptor(), {
@@ -381,6 +416,8 @@ describe('BackendUiAdapter HTTP contract', () => {
             period: 'today',
             side: 'all',
         }, caller_abort_controller.signal);
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(received_signals).toHaveLength(1);
         expect(received_signals[0]).not.toBe(caller_abort_controller.signal);
 
@@ -394,6 +431,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('adapter stop이 caller signal과 독립적으로 진행 중 trade-history read를 중단한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const received_signals: Array<AbortSignal> = [];
         const adapter = new BackendUiAdapter(create_descriptor(), {
             fetch: create_abortable_fetch_mock(received_signals),
@@ -404,10 +442,12 @@ describe('BackendUiAdapter HTTP contract', () => {
             period: 'today',
             side: 'all',
         });
-        expect(received_signals).toHaveLength(1);
+        expect(received_signals).toHaveLength(1);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
 
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(request_promise).rejects.toMatchObject({
             code: 'ADAPTER_STOPPED',
             retryable: false,
@@ -416,6 +456,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('caller 취소가 없으면 기존 timeout이 진행 중 trade-history read를 중단한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         vi.useFakeTimers();
         try {
             const received_signals: Array<AbortSignal> = [];
@@ -510,6 +551,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             },
         },
     ])('trade details strict validator가 $label payload를 fail closed한다', async ({ mutate }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const trade_details = create_trade_details_fixture();
         mutate(trade_details);
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -523,6 +565,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.load_trade_history({
             period: 'today',
             side: 'all',
@@ -544,11 +587,13 @@ describe('BackendUiAdapter HTTP contract', () => {
         native_result,
         expected_result,
     }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const picker_mock = vi.fn(async (): Promise<unknown> => native_result);
         const adapter = new BackendUiAdapter(create_descriptor(), {
             pick_csv_directory: picker_mock,
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await expect(adapter.pick_csv_directory()).resolves.toBe(expected_result);
         expect(picker_mock).toHaveBeenCalledTimes(1);
     });
@@ -559,16 +604,19 @@ describe('BackendUiAdapter HTTP contract', () => {
         { directory: '/Users/oscar/Exports' },
         ['/Users/oscar/Exports'],
     ])('native picker의 string/null 외 결과 %j를 fail closed한다', async (native_result) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const adapter = new BackendUiAdapter(create_descriptor(), {
             pick_csv_directory: vi.fn(async (): Promise<unknown> => native_result),
         });
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.pick_csv_directory()).rejects.toMatchObject({
             code: 'MALFORMED_NATIVE_PICKER_RESULT',
         });
     });
 
     it('native picker typed failure를 변형하거나 경로를 추가하지 않고 전파한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const native_failure = {
             code: 'CSV_EXPORT_DIRECTORY_INVALID',
             message: 'The selected CSV export directory is invalid.',
@@ -577,10 +625,11 @@ describe('BackendUiAdapter HTTP contract', () => {
             pick_csv_directory: vi.fn(async () => Promise.reject(native_failure)),
         });
 
-        await expect(adapter.pick_csv_directory()).rejects.toBe(native_failure);
+        await expect(adapter.pick_csv_directory()).rejects.toBe(native_failure);  // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
     });
 
     it('CSV option 전체와 schema version을 POST하고 strict success receipt를 반환한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const receipt = {
             file_path: '/Users/oscar/Exports/binance_trades_2026-08-23.csv',
             exported_row_count: 17,
@@ -593,6 +642,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await expect(adapter.export_csv(CSV_EXPORT_OPTIONS)).resolves.toEqual(receipt);
         expect(fetch_mock.mock.calls[0]?.[0]).toBe(
             'http://127.0.0.1:42123/v1/csv-exports',
@@ -641,6 +691,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             },
         },
     ])('CSV receipt의 $label를 fail closed한다', async ({ receipt }) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(request_headers(init)['X-Request-Id']!, receipt);
         });
@@ -649,12 +700,14 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.export_csv(CSV_EXPORT_OPTIONS)).rejects.toMatchObject({
             code: 'MALFORMED_BACKEND_PAYLOAD',
         });
     });
 
     it('CSV backend typed failure를 receipt로 오인하지 않고 보존한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_failure_response(
                 request_headers(init)['X-Request-Id']!,
@@ -668,6 +721,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.export_csv(CSV_EXPORT_OPTIONS)).rejects.toMatchObject({
             code: 'DESTINATION_EXISTS',
             retryable: false,
@@ -675,6 +729,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('CSV export는 일반 timeout을 적용하지 않고 adapter stop에서만 중단한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         vi.useFakeTimers();
         try {
             const received_signals: Array<AbortSignal> = [];
@@ -704,6 +759,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('Bearer/X-Request-Id와 command Idempotency-Key를 보내고 typed failure를 보존한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             const headers = request_headers(init);
@@ -717,6 +773,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             create_uuid: create_uuid_factory(),
         });
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.load_snapshot()).resolves.toEqual(snapshot);
         await expect(adapter.apply_regime('type2')).rejects.toBeInstanceOf(
             BackendCommandError,
@@ -742,6 +799,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('응답이 불명인 동일 command retry에는 Idempotency-Key를 재사용한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         let command_attempt = 0;
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -754,6 +812,7 @@ describe('BackendUiAdapter HTTP contract', () => {
             if (command_attempt === 1) {
                 throw new TypeError('simulated connection loss after send');
             }
+
             return create_success_response(request_id, {
                 selected: 'type0',
                 support_status: 'supported',
@@ -773,6 +832,8 @@ describe('BackendUiAdapter HTTP contract', () => {
         });
 
         await adapter.load_snapshot();
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
             code: 'BACKEND_UNREACHABLE',
         });
@@ -789,6 +850,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('retryable backend 실패 뒤 동일 command가 같은 Idempotency-Key로 복구한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         let command_attempt = 0;
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -806,6 +868,7 @@ describe('BackendUiAdapter HTTP contract', () => {
                     503,
                 );
             }
+
             return create_success_response(request_id, {
                 selected: 'type0',
                 support_status: 'supported',
@@ -825,6 +888,8 @@ describe('BackendUiAdapter HTTP contract', () => {
         });
 
         await adapter.load_snapshot();
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
             code: 'CONNECTION_NOT_READY',
             retryable: true,
@@ -842,6 +907,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('snapshot version을 이어 regime/start/split/authoritative stop DTO를 손실 없이 보낸다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
             const request_id = request_headers(init)['X-Request-Id']!;
@@ -890,6 +956,7 @@ describe('BackendUiAdapter HTTP contract', () => {
         await adapter.update_split_order('scale_out', 25);
         await adapter.force_sell_and_stop();
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(fetch_mock.mock.calls.slice(1).map((call) => ({
             path: new URL(call[0].toString()).pathname,
             method: call[1]?.method,
@@ -939,6 +1006,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('Phase 9: 복구 Position 청산을 전용 endpoint와 현재 version으로 요청한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const base_snapshot = create_backend_snapshot_fixture();
         const recovered_snapshot = {
             ...base_snapshot,
@@ -989,6 +1057,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('selection 응답이 요청 REGIME과 다르면 local selection/version을 전진시키지 않는다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             const request_id = request_headers(init)['X-Request-Id']!;
@@ -1007,6 +1076,8 @@ describe('BackendUiAdapter HTTP contract', () => {
         });
 
         await adapter.load_snapshot();
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
             code: 'MALFORMED_BACKEND_PAYLOAD',
         });
@@ -1017,6 +1088,7 @@ describe('BackendUiAdapter HTTP contract', () => {
     });
 
     it('selection 응답의 support 상태가 canonical coverage와 다르면 fail closed한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             const request_id = request_headers(init)['X-Request-Id']!;
@@ -1035,6 +1107,8 @@ describe('BackendUiAdapter HTTP contract', () => {
         });
 
         await adapter.load_snapshot();
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.apply_regime('type0')).rejects.toMatchObject({
             code: 'MALFORMED_BACKEND_PAYLOAD',
         });
@@ -1043,6 +1117,13 @@ describe('BackendUiAdapter HTTP contract', () => {
 });
 
 describe('BackendUiAdapter backend-owned shutdown', () => {
+    /**
+     * 함수 이름: fixture()
+     * 기능: 종료 상태·준비·수락·네이티브 완료를 교체할 수 있는 adapter 검증 환경을 만든다.
+     * 인자: options -> 시나리오별 종료 응답과 완료 callback
+     * 반환값: 종료 검증용 adapter·호출 기록·테스트 대역
+     * 작성 날짜: 2026/09/17
+     */
     function fixture(options: {
         state?: unknown;
         prepare?: (init: RequestInit) => unknown | Promise<unknown>;
@@ -1066,12 +1147,16 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
         const adapter = new BackendUiAdapter(create_descriptor(), { fetch: fetch_mock as typeof fetch,
             create_uuid: () => crypto.randomUUID(), wait_for_sidecar_exit: wait,
             shutdown_poll_interval_ms: 1, shutdown_wait_timeout_ms: 100 });
+
         return { adapter, paths, fetch_mock, wait };
     }
 
     it.each(['normal', 'recovery'])('%s exit uses the same narrow APIs without dashboard or stream', async (mode) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture();
         await (mode === 'normal' ? f.adapter.shutdown_application() : f.adapter.shutdown_recovery_application());
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(f.paths).toEqual(['/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
         expect(JSON.parse(String(f.fetch_mock.mock.calls[1]![1]!.body))).toEqual({
             schema_version: BACKEND_SCHEMA_VERSION, expected_version: 0, liquidation_confirmed: false });
@@ -1081,27 +1166,34 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
     });
 
     it('coalesces clicks and publishes order/account/history progress before final exit', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const stages = [shutdown_preparation_fixture({ phase: 'settling_orders', step: 'orders' }),
             shutdown_preparation_fixture({ phase: 'checking', step: 'account' }),
             shutdown_preparation_fixture({ phase: 'checking', step: 'history' }), shutdown_preparation_fixture()];
         const f = fixture({ prepare: () => stages.shift()! });
         const progress = vi.fn(); f.adapter.set_shutdown_progress_listener(progress);
         await Promise.all([f.adapter.shutdown_application(), f.adapter.shutdown_application()]);
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(progress.mock.calls.map(([step]) => step)).toEqual(['orders', 'account', 'history', 'complete']);
         expect(f.fetch_mock.mock.calls.filter(([input, init]) => String(input).endsWith('/prepare') && init?.method === 'POST')).toHaveLength(1);
         expect(f.wait).toHaveBeenCalledOnce();
     });
 
     it('a publication error does not prevent safe backend completion', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture(); f.adapter.set_shutdown_progress_listener(() => { throw Error('UI fault'); });
         await f.adapter.shutdown_application(); expect(f.wait).toHaveBeenCalledOnce();
     });
 
     it('lost prepare response reuses the exact body and key before polling its operation', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         let count = 0;
         const f = fixture({ prepare: () => { if (++count === 1) throw new TypeError('lost response'); return shutdown_preparation_fixture(); } });
         await f.adapter.shutdown_application();
         const calls = f.fetch_mock.mock.calls.filter(([input]) => String(input).endsWith('/prepare'));
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(calls).toHaveLength(2);
         expect(calls[0]![1]!.body).toBe(calls[1]![1]!.body);
         expect(request_headers(calls[0]![1])['Idempotency-Key']).toBe(request_headers(calls[1]![1])['Idempotency-Key']);
@@ -1109,41 +1201,58 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
     });
 
     it.each(['SHUTDOWN_BALANCE_MISMATCH', 'SHUTDOWN_ORDER_UNRESOLVED', 'SHUTDOWN_ACCOUNT_UNREACHABLE', 'SHUTDOWN_HISTORY_SAVE_FAILED', 'SHUTDOWN_PREPARATION_TIMEOUT'])('%s keeps the process and gives a concrete reason', async (code) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ prepare: () => shutdown_preparation_fixture({ phase: 'blocked', step: 'account', reason_code: code, retryable: true }) });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code, retryable: true });
         expect(f.wait).not.toHaveBeenCalled(); expect(f.adapter.is_disposed).toBe(false);
         expect(f.paths).not.toContain('/v1/shutdown'); f.adapter.stop();
     });
 
     it('automatically finishes with a verified Earn reward receipt on repeated clicks', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ prepare: () => shutdown_preparation_fixture({ balance_reconciliation: earned_balance_fixture }) });
         await Promise.all([f.adapter.shutdown_application(), f.adapter.shutdown_application()]);
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(f.paths.filter((path) => path === '/v1/shutdown')).toHaveLength(1);
         expect(f.wait).toHaveBeenCalledOnce();
     });
 
     it('a real difference displays its exact quantities and reason', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ prepare: () => shutdown_preparation_fixture({ phase: 'blocked', step: 'account',
             reason_code: 'SHUTDOWN_BALANCE_MISMATCH', balance_reconciliation: { ...earned_balance_fixture,
                 status: 'mismatch', reason_code: 'BALANCE_UNEXPLAINED', difference_quantity: '0.00000001', exchange_spot_quantity: '0.00009602' } }) });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({
             code: 'SHUTDOWN_BALANCE_MISMATCH', message: expect.stringContaining('차이 0.00000001 ETH'),
         });
         expect(f.paths).not.toContain('/v1/shutdown');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         f.adapter.stop();
     });
 
     it('rejects malformed reward details before final shutdown', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ prepare: () => ({ ...shutdown_preparation_fixture(),
             balance_reconciliation: { ...earned_balance_fixture, earn_rewards_quantity: 0.00000001 } }) });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'MALFORMED_BACKEND_PAYLOAD' });
         expect(f.paths).not.toContain('/v1/shutdown'); f.adapter.stop();
     });
 
     it('requires explicit liquidation consent and starts a fresh job after confirmation', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ prepare: (init) => JSON.parse(String(init.body)).liquidation_confirmed
             ? shutdown_preparation_fixture()
             : shutdown_preparation_fixture({ phase: 'blocked', step: 'account', reason_code: 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED' }) });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED' });
         expect(f.wait).not.toHaveBeenCalled();
         await f.adapter.shutdown_application(true);
@@ -1158,39 +1267,53 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
         { session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'unknown' },
         { session_id: TEST_BACKEND_SESSION_ID, version: 0, status: 'not_started', force: true },
     ])('rejects malformed shutdown state %j', async (state) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ state }); await expect(f.adapter.shutdown_recovery_application()).rejects.toBeDefined();
         expect(f.paths).toEqual(['/v1/shutdown/state']); expect(f.wait).not.toHaveBeenCalled(); f.adapter.stop();
     });
 
     it('rejects a changed operation ID and cannot finalize', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         let count = 0;
         const f = fixture({ prepare: () => ++count === 1
             ? shutdown_preparation_fixture({ phase: 'checking', step: 'account' })
             : shutdown_preparation_fixture({ operation_id: SECOND_EVENT_ID }) });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'MALFORMED_BACKEND_PAYLOAD' });
         expect(f.wait).not.toHaveBeenCalled(); f.adapter.stop();
     });
 
     it('refreshes a stale prepare version without resending any order', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         let count = 0;
         const f = fixture({ prepare: () => ++count === 1
             ? shutdown_preparation_fixture({ phase: 'blocked', reason_code: 'STALE_CONTEXT_VERSION', step: 'workers', retryable: true })
             : shutdown_preparation_fixture() });
         await f.adapter.shutdown_application();
+
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(f.paths.filter((path) => path === '/v1/shutdown/state')).toHaveLength(2);
         expect(f.wait).toHaveBeenCalledOnce();
     });
 
     it.each([-1, 1])('does not trust a final receipt with wrong version %s', async (version) => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ finish: (init) => create_success_response(request_headers(init)['X-Request-Id']!, { accepted: true, status: 'accepted', version }, 202) });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_OUTCOME_AMBIGUOUS' });
         expect(f.wait).not.toHaveBeenCalled(); expect(f.adapter.is_disposed).toBe(false); f.adapter.stop();
     });
 
     it('lost final response preserves the exact final request and bypasses preparation on retry', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         let attempts = 0;
         const f = fixture({ finish: (init) => { if (++attempts === 1) throw new TypeError('lost');
+
             return create_success_response(request_headers(init)['X-Request-Id']!, { accepted: true, status: 'accepted', version: 0 }, 202); } });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_OUTCOME_AMBIGUOUS' });
         await expect(f.adapter.apply_regime('type0')).rejects.toBeDefined();
         await f.adapter.shutdown_application();
@@ -1202,8 +1325,11 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
     });
 
     it('after accepted shutdown only retries native wait, retaining the token until actual exit', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         let attempts = 0;
         const f = fixture({ wait: async () => { if (++attempts === 1) throw { code: 'BACKEND_SIDECAR_EXIT_TIMEOUT' }; return { exited: true, code: 0 }; } });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SIDECAR_EXIT_TIMEOUT' });
         expect(f.adapter.is_disposed).toBe(false); await f.adapter.shutdown_application();
         expect(f.paths.filter((path) => path === '/v1/shutdown')).toHaveLength(1);
@@ -1211,7 +1337,10 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
     });
 
     it('nonzero native exit is not treated as another wait timeout', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const f = fixture({ wait: async () => { throw { code: 'BACKEND_SIDECAR_EXIT_FAILED' }; } });
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SIDECAR_ABNORMAL_EXIT', retryable: false });
         expect(f.adapter.is_disposed).toBe(false); f.adapter.stop();
     });
@@ -1219,6 +1348,7 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
 
 describe('BackendUiAdapter WebSocket lifecycle', () => {
     it('WebSocket constructor의 일시 실패는 token을 보존하고 재연결한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const callbacks = create_callbacks();
         const adapter = new BackendUiAdapter(create_descriptor(), {
             fetch: vi.fn() as unknown as typeof fetch,
@@ -1235,12 +1365,16 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         expect(callbacks.on_failure).not.toHaveBeenCalled();
         expect(callbacks.on_reconnecting).toHaveBeenCalledWith('EVENT_STREAM_CONNECTION_FAILED');
         expect(adapter.is_disposed).toBe(false);
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
-        expect(JSON.stringify(adapter)).not.toContain(TEST_BACKEND_TOKEN);
+        expect(JSON.stringify(adapter)).not.toContain(TEST_BACKEND_TOKEN);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it('URL/subprotocol 없이 연결하고 onopen의 첫 AUTHENTICATE frame에만 token을 넣는다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
+
         const snapshot = create_backend_snapshot_fixture();
         const adapter = new BackendUiAdapter(create_descriptor(), {
             fetch: vi.fn() as unknown as typeof fetch,
@@ -1248,12 +1382,15 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
 
         adapter.start_live_events(snapshot, create_callbacks());
         const socket = sockets[0]!;
+
+        // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
         expect(socket.url).toBe('ws://127.0.0.1:42123/v1/events');
         expect(socket.url).not.toContain(TEST_BACKEND_TOKEN);
         expect(socket.sent_frames).toEqual([]);
@@ -1269,13 +1406,16 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         });
         expect(JSON.stringify(adapter)).not.toContain(TEST_BACKEND_TOKEN);
 
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
-        expect(socket.close_calls).toEqual([{ code: 1000, reason: 'client stop' }]);
+        expect(socket.close_calls).toEqual([{ code: 1000, reason: 'client stop' }]);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
     it('duplicate/older sequence를 적용하지 않고 unknown type sequence 뒤 exact-next를 적용한다', () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
+
         const snapshot = create_backend_snapshot_fixture();
         const adapter = new BackendUiAdapter(create_descriptor(), {
             fetch: vi.fn() as unknown as typeof fetch,
@@ -1283,6 +1423,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
@@ -1309,6 +1450,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             THIRD_EVENT_ID,
         ));
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(callbacks.on_event).toHaveBeenCalledTimes(3);
         expect(callbacks.on_event).toHaveBeenNthCalledWith(
             2,
@@ -1316,12 +1458,16 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             expect.objectContaining({ type: 'FUTURE_EVENT', sequence: 12 }),
         );
         expect(callbacks.on_reconnecting).not.toHaveBeenCalled();
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
     });
 
     it('TRADING_SESSION_UPDATED의 version과 ratio를 다음 command DTO 기준으로 사용한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
+
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(request_headers(init)['X-Request-Id']!, {
@@ -1336,6 +1482,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
@@ -1362,6 +1509,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         });
         await adapter.update_split_order('scale_in', 25);
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(callbacks.on_event).toHaveBeenCalledWith([
             expect.objectContaining({
                 type: 'TRADING_SESSION_SYNCHRONIZED',
@@ -1375,12 +1523,16 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             scale_out: '0.6',
             expected_version: 8,
         });
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
     });
 
     it('요청 중 더 높은 WS version이 오면 늦은 HTTP command 응답을 적용하지 않는다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
+
         const snapshot = create_backend_snapshot_fixture();
         let command_attempt = 0;
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1406,12 +1558,14 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
                     ),
                     aggregate_version: 8,
                 });
+
                 return create_success_response(request_id, {
                     version: 7,
                     scale_in: '0.25',
                     scale_out: '0.5',
                 });
             }
+
             return create_success_response(request_id, {
                 version: 9,
                 scale_in: '0.4',
@@ -1424,11 +1578,14 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
 
         adapter.start_live_events(snapshot, callbacks);
+
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(adapter.update_split_order('scale_in', 25)).rejects.toMatchObject({
             code: 'STALE_BACKEND_RESPONSE',
         });
@@ -1440,12 +1597,16 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             scale_out: '0.3',
             expected_version: 8,
         });
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
     });
 
     it('REGIME_SELECTED의 selection/version을 다음 start command 기준으로 사용한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
+
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(request_headers(init)['X-Request-Id']!, {
@@ -1460,6 +1621,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
@@ -1475,6 +1637,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         });
         await adapter.start_trading('type0');
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(callbacks.on_event).toHaveBeenCalledWith([{
             type: 'REGIME_SELECTION_SYNCHRONIZED',
             selected: 'type0',
@@ -1485,10 +1648,13 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             schema_version: BACKEND_SCHEMA_VERSION,
             expected_version: 1,
         });
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
     });
 
     it('sequence gap에서 새 full snapshot을 먼저 적용한 뒤 그 last_sequence로 재연결한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
         const resync_snapshot = {
@@ -1507,6 +1673,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
@@ -1518,6 +1685,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             { account: create_backend_account_fixture() },
         ));
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await waitFor(() => {
             expect(callbacks.on_full_resync).toHaveBeenCalledWith(resync_snapshot);
             expect(sockets).toHaveLength(2);
@@ -1528,12 +1696,16 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         };
         expect(authentication.after_sequence).toBe(20);
         expect(callbacks.on_reconnecting).toHaveBeenCalledWith('SEQUENCE_GAP');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
     });
 
     it('RESYNC_REQUIRED와 session change에서 cache를 잇지 않고 descriptor session만 다시 받는다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
+
         const snapshot = create_backend_snapshot_fixture();
         const fetch_mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             return create_success_response(request_headers(init)['X-Request-Id']!, snapshot);
@@ -1544,6 +1716,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
@@ -1557,6 +1730,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             last_sequence: 12,
         });
 
+        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         await waitFor(() => expect(sockets).toHaveLength(2));
         sockets[1]!.emit_message(create_backend_event_fixture(
             10,
@@ -1570,10 +1744,13 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
         expect(callbacks.on_full_resync).toHaveBeenCalledTimes(2);
         expect(callbacks.on_reconnecting).toHaveBeenNthCalledWith(1, 'REPLAY_GAP');
         expect(callbacks.on_reconnecting).toHaveBeenNthCalledWith(2, 'SESSION_CHANGED');
+
+        // 화면 또는 실행 수명의 종료를 요청한다.
         adapter.stop();
     });
 
     it('full resync snapshot이 launch descriptor session과 다르면 적용 없이 fail closed한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
         const changed_session_snapshot = {
@@ -1592,6 +1769,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
@@ -1603,6 +1781,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             { account: create_backend_account_fixture() },
         ));
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await waitFor(() => {
             expect(callbacks.on_failure).toHaveBeenCalledWith(expect.objectContaining({
                 code: 'SESSION_MISMATCH',
@@ -1614,6 +1793,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
     });
 
     it('unknown schema frame은 fail closed하고 token 참조와 socket을 제거한다', async () => {
+        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const sockets: Array<FakeBackendWebSocket> = [];
         const callbacks = create_callbacks();
         const adapter = new BackendUiAdapter(create_descriptor(), {
@@ -1622,6 +1802,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             create_web_socket: (url) => {
                 const socket = new FakeBackendWebSocket(url);
                 sockets.push(socket);
+
                 return socket;
             },
         });
@@ -1632,6 +1813,7 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             schema_version: 1,
         });
 
+        // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         expect(callbacks.on_failure).toHaveBeenCalledWith(expect.objectContaining({
             code: 'UNSUPPORTED_SCHEMA_VERSION',
         }));

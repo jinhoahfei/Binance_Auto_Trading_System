@@ -34,6 +34,7 @@ interface DialogCopy {
   tone: 'positive' | 'negative' | 'info';
 }
 
+
 /**
  * 함수 이름: get_dialog_copy()
  * 기능: 자동매매 상태별 Figma 문구와 버튼 역할을 반환한다.
@@ -47,6 +48,7 @@ function get_dialog_copy(
   regimeLabel: string,
   unavailableReason: TradingUnavailableReason | null,
 ): DialogCopy {
+  // 명령 종류와 포지션 상태에 맞는 제목·설명·확인 문구를 선택한다.
   const copies: Record<TradingDialogKind, DialogCopy> = {
     start: {
       title: '자동매매를 시작할까요?',
@@ -135,6 +137,7 @@ function get_dialog_copy(
   return copies[kind];
 }
 
+
 /**
  * 함수 이름: TradingConfirmationDialog()
  * 기능: 시작, 중지, 복구 Position 청산, REGIME 및 연결 guard 결과를 표시한다.
@@ -145,7 +148,7 @@ function get_dialog_copy(
 export function TradingConfirmationDialog({
   open,
   kind,
-  regimeLabel = '미선택 REGIME', // 호출 누락을 TYPE_0 선택으로 표시하지 않는다.
+  regimeLabel = '미선택 REGIME',  // 호출 누락을 TYPE_0 선택으로 표시하지 않는다.
   pending = false,
   error,
   unavailableReason = null,
@@ -155,6 +158,7 @@ export function TradingConfirmationDialog({
   const copy = get_dialog_copy(kind, regimeLabel, unavailableReason);
   const is_pending = pending || kind === 'starting';
   const icon_tone = copy.tone === 'positive' ? 'positive' : 'negative';
+
   // Starting fixture와 실제 연결 단계는 상태별 확정 문구를 generic 처리 문구보다 우선한다.
   const pending_confirmation_label = kind === 'starting' ? copy.confirmLabel : '처리 중…';
 
