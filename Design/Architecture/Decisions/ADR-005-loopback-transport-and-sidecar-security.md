@@ -208,6 +208,16 @@ backend는 최근 10,000개 또는 15분 중 먼저 도달하는 범위의 event
   cache를 이어 붙이지 않고 새 snapshot부터 다시 시작한다.
 - snapshot은 생성 시점까지의 일관된 상태와 그 상태에 포함된 `last_sequence`를
   원자적으로 반환한다.
+- 인증과 replay 검증 직후, 이후 30초마다 server는 `STREAM_HEARTBEAT` text control을
+  실제 전송한다. `schema_version`, `session_id`, 해당 연결에 전송 완료한 `last_sequence`를
+  포함하며 거래 event sequence나 replay buffer는 소비하지 않는다. 단순 진단 로그는
+  화면 연결의 생존 증거로 사용하지 않는다.
+- UI는 같은 세션과 같은 cursor의 heartbeat를 정상 수신으로 처리한다. 정지·종료 준비로
+  거래 이벤트가 없어도 화면 연결을 유지하며, cursor가 다르면 snapshot부터 재확인한다.
+  heartbeat는 계좌·전략 상태나 주문을 변경하지 않는다.
+- 종료가 수락되기 전에 준비가 실패하면 UI는 끊어 둔 구독을 즉시 snapshot-first 방식으로
+  복구한다. 기존 복구 중이었어도 읽기 재시도를 다시 예약한다. 종료 수락 후 또는 수락 여부가
+  불명확한 상태에서는 연결을 다시 열지 않으며, 화면 복구가 전략 재개나 청산 재요청을 수행하지 않는다.
 
 ## 7. Host, Origin, CORS와 resource 제한
 

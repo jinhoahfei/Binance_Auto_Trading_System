@@ -70,6 +70,7 @@ _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _WEBSOCKET_AUTH_TIMEOUT_SECONDS = 2.0
 _WEBSOCKET_LIVE_WAIT_SECONDS = 0.1
 _WEBSOCKET_SEND_TIMEOUT_SECONDS = 5.0
+_WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS = 30.0
 _MAX_REQUEST_TARGET_LENGTH = 8_192
 _MAX_IDEMPOTENCY_RECORDS = 10_000
 _SESSION_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -1697,7 +1698,7 @@ class LoopbackTransportServer:
         current_sequence = 0
         sent_count = 0
         client_connection_id = None
-        next_heartbeat = monotonic() + 30
+        next_heartbeat = monotonic()
         self._record_transport("ui_stream_opened", connection_id=connection_id)
         try:
             authentication_deadline = (
@@ -1752,9 +1753,18 @@ class LoopbackTransportServer:
                     return
 
                 if monotonic() >= next_heartbeat:
+                    # 인증과 replay 검증 뒤 실제 text frame으로 idle 연결의 생존을 알린다.
+                    # 새 event sequence를 만들거나 아직 전송하지 않은 최신 cursor를 광고하지 않는다.
+                    stage = "send"
+                    websocket.send_text_object({
+                        "schema_version": SCHEMA_VERSION,
+                        "session_id": self._event_stream.session_id,
+                        "type": "STREAM_HEARTBEAT",
+                        "last_sequence": current_sequence,
+                    })
                     self._record_transport("ui_stream_heartbeat", connection_id=connection_id,
                                            last_sequence=current_sequence, sent_count=sent_count)
-                    next_heartbeat = monotonic() + 30
+                    next_heartbeat = monotonic() + _WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS
                 stage = "receive"
                 readable_sockets, _, _ = select.select(
                     [websocket.socket],

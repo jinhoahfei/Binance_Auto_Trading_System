@@ -419,3 +419,10 @@ export interface BackendResyncRequired {
     readonly reason: BackendResyncReason;
     readonly last_sequence: number;
 }
+
+export interface BackendStreamHeartbeat {
+    readonly schema_version: typeof BACKEND_SCHEMA_VERSION;
+    readonly session_id: string;
+    readonly type: 'STREAM_HEARTBEAT';
+    readonly last_sequence: number;
+}

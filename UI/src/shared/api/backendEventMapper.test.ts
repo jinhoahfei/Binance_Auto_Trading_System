@@ -1157,4 +1157,18 @@ describe('backend snapshot and event mapping', () => {
             expect(String(error)).not.toContain(secret_marker);
         }
     });
+
+    it('validates heartbeat session, schema and cursor without treating it as a trading event', () => {
+        const control = { schema_version: BACKEND_SCHEMA_VERSION, session_id: TEST_BACKEND_SESSION_ID,
+            type: 'STREAM_HEARTBEAT', last_sequence: 0 };
+        expect(parse_backend_web_socket_message(JSON.stringify(control))).toEqual({ kind: 'heartbeat', control });
+        for (const last_sequence of [-1, 1.5, '9', true, null, Number.MAX_SAFE_INTEGER + 1]) {
+            expect(() => parse_backend_web_socket_message(JSON.stringify({ ...control, last_sequence })))
+                .toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
+        }
+        expect(() => parse_backend_web_socket_message(JSON.stringify({ ...control, session_id: 'invalid' })))
+            .toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
+        expect(() => parse_backend_web_socket_message(JSON.stringify({ ...control, schema_version: 1 })))
+            .toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_SCHEMA_VERSION' }));
+    });
 });

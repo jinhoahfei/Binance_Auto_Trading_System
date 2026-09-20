@@ -46,6 +46,18 @@ class Socket implements BackendWebSocket {
      * 작성 날짜: 2026/09/17
      */
     open() { this.onopen?.(new Event('open')); }
+
+    /**
+     * 함수 이름: heartbeat()
+     * 기능: 거래 이벤트 순번을 소비하지 않는 인증된 연결 확인 프레임을 전달한다.
+     * 인자: last_sequence -> 서버가 이 연결에 전송한 마지막 이벤트 순번
+     * 반환값: 없음
+     * 작성 날짜: 2026/09/20
+     */
+    heartbeat(last_sequence = 9) {
+        this.onmessage?.({ data: JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION,
+            session_id: TEST_BACKEND_SESSION_ID, type: 'STREAM_HEARTBEAT', last_sequence }) } as MessageEvent);
+    }
 }
 
 const descriptor = { port: 42123, schema_version: BACKEND_SCHEMA_VERSION, session_id: TEST_BACKEND_SESSION_ID, token: TEST_BACKEND_TOKEN };
@@ -156,6 +168,83 @@ describe('long-running backend connection recovery', () => {
         // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
         expect(sockets).toHaveLength(1);
         expect(callbacks.on_reconnecting).not.toHaveBeenCalled();
+    });
+
+    it('an authenticated idle stream recovers without new trading events and stays connected', async () => {
+        const { sockets, callbacks, logs } = setup();
+        sockets[0]!.disconnect();
+        await vi.advanceTimersByTimeAsync(0);
+        sockets[1]!.open();
+        sockets[1]!.heartbeat();
+        expect(callbacks.on_ready).toHaveBeenCalledOnce();
+        expect(callbacks.on_connection_status).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'live', attempt: 0 }));
+        expect(callbacks.on_event).not.toHaveBeenCalled();
+        for (let tick = 0; tick < 30; tick++) {
+            await vi.advanceTimersByTimeAsync(30_000);
+            sockets[1]!.heartbeat();
+        }
+        expect(sockets).toHaveLength(2);
+        expect(logs.some((record) => record.error_code === 'EVENT_STREAM_STALE')).toBe(false);
+        expect(callbacks.on_failure).not.toHaveBeenCalled();
+        // heartbeat가 cursor를 소비하지 않아 실제 다음 이벤트를 한 번만 반영한다.
+        sockets[1]!.receive(10);
+        expect(callbacks.on_event).toHaveBeenCalledOnce();
+    });
+
+    it('a heartbeat with a different cursor cannot hide missing events', async () => {
+        const { sockets, callbacks } = setup();
+        sockets[0]!.open(); sockets[0]!.heartbeat(11);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(callbacks.on_reconnecting).toHaveBeenCalledWith('SEQUENCE_GAP');
+        expect(callbacks.on_ready).not.toHaveBeenCalled();
+        expect(callbacks.on_event).not.toHaveBeenCalled();
+        expect(callbacks.on_full_resync).toHaveBeenCalledOnce();
+    });
+
+    it('missing heartbeats still time out after an idle recovery succeeds', async () => {
+        const { sockets, logs } = setup();
+        sockets[0]!.open(); sockets[0]!.heartbeat();
+        await vi.advanceTimersByTimeAsync(75_000);
+        expect(logs.some((record) => record.error_code === 'EVENT_STREAM_STALE')).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(sockets).toHaveLength(2);
+    });
+
+    it('a heartbeat from a different session triggers resync without marking the connection ready', async () => {
+        const { sockets, callbacks } = setup();
+        sockets[0]!.open();
+        sockets[0]!.onmessage?.({ data: JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION,
+            session_id: crypto.randomUUID(), type: 'STREAM_HEARTBEAT', last_sequence: 9 }) } as MessageEvent);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(callbacks.on_reconnecting).toHaveBeenCalledWith('SESSION_CHANGED');
+        expect(callbacks.on_ready).not.toHaveBeenCalled();
+        expect(callbacks.on_event).not.toHaveBeenCalled();
+        expect(callbacks.on_full_resync).toHaveBeenCalledOnce();
+    });
+
+    it.each([false, true])('rejected shutdown restores display reads even when already recovering (%s)', async (recovering) => {
+        const paths: string[] = [];
+        const { adapter, sockets, callbacks } = setup(async (input, init) => {
+            const path = new URL(String(input)).pathname; paths.push(path);
+            if (path === '/v1/snapshot') return response(init, create_backend_snapshot_fixture());
+            if (path === '/v1/shutdown/state') return response(init, { session_id: TEST_BACKEND_SESSION_ID, status: 'reconciliation_required', version: 42 });
+            if (path === '/v1/shutdown/prepare') return response(init, shutdown_preparation_fixture({
+                phase: 'blocked', step: 'account', reason_code: 'SHUTDOWN_ORDER_UNRESOLVED', retryable: true }), 202);
+            throw new Error(`unexpected command: ${path}`);
+        });
+        sockets[0]!.open(); sockets[0]!.receive();
+        if (recovering) sockets[0]!.onerror?.(new Event('error'));
+        await expect(adapter.shutdown_application(true)).rejects.toMatchObject({ code: 'SHUTDOWN_ORDER_UNRESOLVED' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(paths).toEqual(['/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/snapshot']);
+        expect(sockets).toHaveLength(2);
+        sockets[1]!.open(); sockets[1]!.heartbeat();
+        expect(callbacks.on_connection_status).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'live', attempt: 0 }));
+        expect(adapter.is_disposed).toBe(false);
+        await vi.advanceTimersByTimeAsync(30_000);
+        sockets[1]!.heartbeat();
+        expect(sockets).toHaveLength(2);
+        expect(vi.getTimerCount()).toBe(1);
     });
 
     it('invalidates the old socket callbacks and a late snapshot on explicit disposal', async () => {

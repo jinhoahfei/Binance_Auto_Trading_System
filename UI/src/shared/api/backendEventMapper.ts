@@ -12,6 +12,7 @@ import type {
     BackendPerformanceSnapshot,
     BackendRegimeType,
     BackendResyncRequired,
+    BackendStreamHeartbeat,
     BackendRiskBudgetSnapshot,
     BackendRiskBlockReason,
     BackendRiskPolicyAvailability,
@@ -136,6 +137,7 @@ export interface MappedBackendSnapshot {
  */
 export type ParsedBackendWebSocketMessage =
     | { readonly kind: 'event'; readonly event: BackendEventEnvelope }
+    | { readonly kind: 'heartbeat'; readonly control: BackendStreamHeartbeat }
     | { readonly kind: 'resync_required'; readonly control: BackendResyncRequired };
 
 
@@ -1419,7 +1421,7 @@ export class BackendCommandError extends Error {
 
 /**
  * 함수 이름: parse_backend_web_socket_message()
- * 기능: WebSocket JSON frame을 event 또는 RESYNC_REQUIRED control로 검증한다.
+ * 기능: WebSocket JSON frame을 event, 연결 확인 또는 RESYNC_REQUIRED control로 검증한다.
  * 인자: frame_data -> WebSocket text frame
  * 반환값: 검증된 event/control 구분값
  * 작성 날짜: 2026/08/21
@@ -1449,6 +1451,15 @@ export function parse_backend_web_socket_message(
     const message = assert_record(parsed_value, 'event');
     assert_schema_version(message.schema_version);
     const session_id = assert_uuid(message.session_id, 'event.session_id');
+
+    if (message.type === 'STREAM_HEARTBEAT') {
+        assert_safe_integer(message.last_sequence, 'event.last_sequence');
+
+        return {
+            kind: 'heartbeat',
+            control: message as unknown as BackendStreamHeartbeat,
+        };
+    }
 
     if (message.type === 'RESYNC_REQUIRED') {
         if (message.reason !== 'REPLAY_GAP' && message.reason !== 'SEQUENCE_AHEAD') {

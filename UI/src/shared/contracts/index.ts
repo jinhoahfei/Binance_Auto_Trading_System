@@ -59,6 +59,7 @@ export type {
     BackendRegimeType,
     BackendResyncRequired,
     BackendResyncReason,
+    BackendStreamHeartbeat,
     BackendRiskBudgetSnapshot,
     BackendRiskBlockReason,
     BackendRiskPolicyAvailability,

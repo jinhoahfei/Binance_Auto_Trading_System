@@ -10,6 +10,7 @@ import struct
 from time import monotonic, sleep
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from binance_auto_trader.transport import BackendEventStream, LoopbackTransportServer
 
@@ -235,6 +236,13 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
             self.assertEqual(event_value["sequence"], 1)
             self.assertEqual(event_value["type"], "ACCOUNT_UPDATED")
 
+            heartbeat_opcode, heartbeat_payload = _receive_server_frame(client_socket)
+            self.assertEqual(heartbeat_opcode, 0x1)
+            self.assertEqual(json.loads(heartbeat_payload), {
+                "schema_version": 3, "session_id": self.event_stream.session_id,
+                "type": "STREAM_HEARTBEAT", "last_sequence": 1,
+            })
+
             ping_payload = b"health"
             client_socket.sendall(_create_masked_frame(0x9, ping_payload))
             pong_opcode, pong_payload = _receive_server_frame(client_socket)
@@ -273,11 +281,50 @@ class LoopbackWebSocketServerTests(unittest.TestCase):
                     "after_sequence": 0,
                 },
             )
+            heartbeat_opcode, heartbeat_payload = _receive_server_frame(client_socket)
+            self.assertEqual(heartbeat_opcode, 0x1)
+            self.assertEqual(json.loads(heartbeat_payload)["type"], "STREAM_HEARTBEAT")
             client_socket.sendall(_create_masked_frame(0x8, b""))
             close_opcode, _ = _receive_server_frame(client_socket)
             self.assertEqual(close_opcode, 0x8)
         finally:
             client_socket.close()
+
+    def test_authenticated_idle_stream_sends_periodic_control_without_consuming_events(self) -> None:
+        """
+        함수 이름: test_authenticated_idle_stream_sends_periodic_control_without_consuming_events()
+        기능: 이벤트가 없는 인증 연결도 실제 heartbeat를 받고 이후 거래 이벤트의 순번을 보존하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/20
+        """
+        with patch("binance_auto_trader.transport.app._WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS", 0.01):
+            client_socket, _ = _open_websocket(self.server)
+            try:
+                self.assertEqual(select.select([client_socket], [], [], 0.02)[0], [])
+                _send_json_text(client_socket, {
+                    "schema_version": 3, "type": "AUTHENTICATE", "token": self.token,
+                    "after_sequence": 0,
+                })
+                for _ in range(3):
+                    opcode, payload = _receive_server_frame(client_socket)
+                    self.assertEqual(opcode, 0x1)
+                    self.assertEqual(json.loads(payload), {
+                        "schema_version": 3, "session_id": self.event_stream.session_id,
+                        "type": "STREAM_HEARTBEAT", "last_sequence": 0,
+                    })
+                self.assertEqual(self.event_stream.last_sequence, 0)
+                published = self.event_stream.publish("ACCOUNT_UPDATED", {"account": {"version": 1}})
+                while True:
+                    opcode, payload = _receive_server_frame(client_socket)
+                    value = json.loads(payload)
+                    if value["type"] != "STREAM_HEARTBEAT":
+                        break
+                    self.assertEqual(value["last_sequence"], 0)
+                self.assertEqual(value["event_id"], published.event_id)
+                self.assertEqual(value["sequence"], 1)
+            finally:
+                client_socket.close()
 
     def test_sequence_ahead_sends_resync_control_before_close(self) -> None:
         """

@@ -1581,8 +1581,9 @@ export class BackendUiAdapter implements UiCommandPort {
             this.#shutdown_task = null;
             this.#shutdown_requested = false;
             if (!this.#is_stopped && !this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
-                try { this.publish_connection_status('blocked'); }
-                catch (error) { this.record_failure(error, 'publish', { error_code: 'UI_STATE_PUBLICATION_FAILED' }); }
+                // 종료가 수락되지 않았으면 중단한 화면 구독을 즉시 복구한다.
+                // 읽기와 연결만 재개하며 청산 재요청이나 전략 재개는 수행하지 않는다.
+                void this.full_resynchronize(this.#first_failure_code ?? 'EVENT_STREAM_CLOSED');
             }
         }
     }
@@ -2133,6 +2134,19 @@ export class BackendUiAdapter implements UiCommandPort {
             }
             if (parsed_message.kind === 'resync_required') {
                 void this.full_resynchronize(parsed_message.control.reason);
+
+                return;
+            }
+
+            if (parsed_message.kind === 'heartbeat') {
+                if (parsed_message.control.last_sequence !== this.#last_sequence) {
+                    void this.full_resynchronize('SEQUENCE_GAP');
+
+                    return;
+                }
+                // 인증된 같은 세션·cursor의 확인 신호는 거래 데이터를 변경하지 않는다.
+                stage = 'publish';
+                this.mark_event_stream_ready();
 
                 return;
             }

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { BACKEND_SCHEMA_VERSION } from '../../shared/contracts';
 import type { BackendWebSocket } from '../../shared/api';
+import { shutdown_preparation_fixture } from '../../shared/api/shutdownTestFixtures';
 import {
     create_backend_snapshot_fixture,
     TEST_BACKEND_SESSION_ID,
@@ -93,6 +94,59 @@ function create_snapshot_fetch(snapshot: unknown): typeof fetch {
 }
 
 describe('create_live_ui_application', () => {
+    it('종료 준비 실패 후 idle 연결만 복구하고 포지션과 전략 중단 상태를 유지한다', async () => {
+        const base = create_backend_snapshot_fixture();
+        const snapshot = { ...base, trading: { ...base.trading, status: 'reconciliation_required',
+            session_id: TEST_BACKEND_SESSION_ID, version: 42, command_enabled: false, has_open_position: true } };
+        const paths: string[] = [];
+        const sockets: BootstrapFakeWebSocket[] = [];
+        const application = await create_live_ui_application(create_descriptor(), {
+            adapter_dependencies: {
+                fetch: async (input, init) => {
+                    const path = new URL(String(input)).pathname; paths.push(path);
+                    let data: unknown = snapshot;
+                    let status = 200;
+                    if (path === '/v1/shutdown/state') data = { session_id: TEST_BACKEND_SESSION_ID,
+                        status: 'reconciliation_required', version: 42 };
+                    else if (path === '/v1/shutdown/prepare') {
+                        data = shutdown_preparation_fixture({ phase: 'blocked', step: 'account',
+                            reason_code: 'SHUTDOWN_ORDER_UNRESOLVED', retryable: true });
+                        status = 202;
+                    } else expect(path).toBe('/v1/snapshot');
+
+                    return new Response(JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION,
+                        request_id: new Headers(init?.headers).get('X-Request-Id'), ok: true, data }), { status });
+                },
+                create_web_socket: () => {
+                    const socket = new BootstrapFakeWebSocket(); sockets.push(socket);
+
+                    return socket;
+                },
+            },
+        });
+        application.activate();
+        try {
+            application.facade.dispatch({ type: 'APP_EXIT_CLICKED' });
+            application.facade.dispatch({ type: 'FORCE_SELL_EXIT_CONFIRMED' });
+            await waitFor(() => expect(sockets).toHaveLength(2));
+            sockets[1]!.onopen?.(new Event('open'));
+            sockets[1]!.onmessage?.(new MessageEvent('message', { data: JSON.stringify({
+                schema_version: BACKEND_SCHEMA_VERSION, session_id: TEST_BACKEND_SESSION_ID,
+                type: 'STREAM_HEARTBEAT', last_sequence: snapshot.last_sequence,
+            }) }));
+            const view = application.facade.get_view_model();
+            expect(view.connection.is_online).toBe(true);
+            expect(view.connection.recovery?.phase).toBe('live');
+            expect(view.trading.command_enabled).toBe(false);
+            expect(view.trading.lifecycle_status).toBe('reconciliation_required');
+            expect(view.trading.has_open_position).toBe(true);
+            expect(view.app_exit.error?.code).toBe('SHUTDOWN_ORDER_UNRESOLVED');
+            expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/snapshot']);
+        } finally {
+            application.deactivate();
+        }
+    });
+
     it('snapshot을 먼저 받은 뒤 StrictMode App에 실제 USDT 상태를 render한다', async () => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const lifecycle_order: Array<string> = [];
