@@ -943,13 +943,15 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
         def recover_account_stream(
             selected_controller: TradingController,
             *,
-            recovery_commit_observer: Callable[[], object] | None = None,
+            reconcile_market: Callable[[], object],
+            publish_evaluation: Callable[[], object],
+            publish_commit: Callable[[], object] | None = None,
         ) -> _StubSubscription:
             """
             함수 이름: recover_account_stream()
             기능: test barrier 뒤 gate commit과 observer가 같은 application lock을 쓰는지 검증한다.
             인자: selected_controller -> runtime worker가 호출한 TradingController
-                recovery_commit_observer -> Controller commit 직후 호출할 application hook
+                publish_commit -> Controller commit 직후 호출할 application hook
             반환값: 복구 성공을 나타내는 fake subscription
             작성 날짜: 2026/08/22
             """
@@ -990,9 +992,9 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
                     raise AssertionError(
                         "recovery commit and publication must share one lock"
                     )
-                if recovery_commit_observer is None:
+                if publish_commit is None:
                     raise AssertionError("recovery commit observer is required")
-                recovery_commit_observer()
+                publish_commit()
             recovery_completed.set()  # Gate와 publication이 모두 끝난 뒤 worker 성공을 알린다.
 
             return _StubSubscription()
@@ -1000,7 +1002,7 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
         try:
             with patch.object(
                 TradingController,
-                "reconnect_account_stream_after_reconciliation",
+                "recover_interrupted_trading_session",
                 autospec=True,
                 side_effect=recover_account_stream,
             ):
@@ -1125,30 +1127,32 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
         def commit_recovery_with_observer_failure(
             selected_controller: TradingController,
             *,
-            recovery_commit_observer: Callable[[], object] | None = None,
+            reconcile_market: Callable[[], object],
+            publish_evaluation: Callable[[], object],
+            publish_commit: Callable[[], object] | None = None,
         ) -> _StubSubscription:
             """
             함수 이름: commit_recovery_with_observer_failure()
             기능: 열린 gate와 실패하는 application observer를 같은 Controller lock 구간으로 재현한다.
             인자: selected_controller -> runtime TradingController
-                recovery_commit_observer -> 복구 성공 publication hook
+                publish_commit -> 복구 성공 publication hook
             반환값: 도달하지 않는 fake subscription
             작성 날짜: 2026/08/24
             """
             if selected_controller is not runtime.trading_controller:
                 raise AssertionError("unexpected TradingController identity")
-            if recovery_commit_observer is None:
+            if publish_commit is None:
                 raise AssertionError("recovery commit observer is required")
 
             # 실제 Controller처럼 gate commit과 observer callback을 같은 application RLock에 둔다.
             with runtime.application_lock:
-                recovery_commit_observer()
+                publish_commit()
             return _StubSubscription()
 
         try:
             with patch.object(
                 TradingController,
-                "reconnect_account_stream_after_reconciliation",
+                "recover_interrupted_trading_session",
                 autospec=True,
                 side_effect=commit_recovery_with_observer_failure,
             ):
@@ -1190,13 +1194,15 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
         def recover_account_stream(
             selected_controller: TradingController,
             *,
-            recovery_commit_observer: Callable[[], object] | None = None,
+            reconcile_market: Callable[[], object],
+            publish_evaluation: Callable[[], object],
+            publish_commit: Callable[[], object] | None = None,
         ) -> _StubSubscription:
             """
             함수 이름: recover_account_stream()
             기능: runtime close의 join과 중복 병합을 관찰할 때까지 단일 복구 호출을 유지한다.
             인자: selected_controller -> worker가 호출한 runtime TradingController
-                recovery_commit_observer -> gate commit과 같은 lock에서 실행할 application hook
+                publish_commit -> gate commit과 같은 lock에서 실행할 application hook
             반환값: release 이후 fake subscription
             작성 날짜: 2026/08/22
             """
@@ -1205,10 +1211,10 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
             recovery_calls.append("recovery")
             recovery_started.set()
             release_recovery.wait(timeout=1.0)  # Close thread가 join에서 대기할 시간을 만든다.
-            if recovery_commit_observer is None:
+            if publish_commit is None:
                 raise AssertionError("recovery commit observer is required")
             with runtime.application_lock:
-                recovery_commit_observer()  # 실제 Controller의 atomic commit callback 경계를 재현한다.
+                publish_commit()  # 실제 Controller의 atomic commit callback 경계를 재현한다.
 
             return _StubSubscription()
 
@@ -1226,7 +1232,7 @@ class AccountStreamRecoveryRuntimeTests(unittest.TestCase):
         try:
             with patch.object(
                 TradingController,
-                "reconnect_account_stream_after_reconciliation",
+                "recover_interrupted_trading_session",
                 autospec=True,
                 side_effect=recover_account_stream,
             ):

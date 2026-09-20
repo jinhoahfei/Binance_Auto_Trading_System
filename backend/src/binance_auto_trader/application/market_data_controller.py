@@ -154,6 +154,14 @@ class MarketDataStreamStateError(RuntimeError):
     """
 
 
+class MarketStreamUnavailableError(MarketDataStreamStateError, ConnectionError):
+    """
+    클래스 이름: MarketStreamUnavailableError
+    기능: 정합성 오류와 구별되는 일시적인 live 연결 상실을 나타낸다.
+    작성 날짜: 2026/09/20
+    """
+
+
 class MarketDataController:
     """
     클래스 이름: MarketDataController
@@ -263,6 +271,7 @@ class MarketDataController:
         self._market_stream_recovery_requester = (
             market_stream_recovery_requester
         )
+        self._latest_strategy_evaluation = None
         self._initialization_lock = RLock()
         self._stream_lock = RLock()
         self._collecting_initial_buffer = False
@@ -325,6 +334,7 @@ class MarketDataController:
             self._collecting_initial_buffer = True
             self._initial_buffer = []
             self._initialized = False
+            self._latest_strategy_evaluation = None
             self._market_available = False
             self._live_subscription = None
             self._deferred_live_klines.clear()
@@ -430,7 +440,7 @@ class MarketDataController:
 
                 # 새 handle과 same-version 평가가 모두 준비된 시점에만 거래 effect gate를 다시 연다.
                 if not self._web_socket_gateway.kline_live_ready:
-                    raise MarketDataStreamStateError(
+                    raise MarketStreamUnavailableError(
                         "Kline stream disconnected during market evaluation"
                     )
                 state_observer = self._market_stream_state_observer
@@ -478,6 +488,39 @@ class MarketDataController:
         """
         # 자동 worker도 최초 startup과 동일한 검증·병합 Operation만 재사용한다.
         return self.initialize_market_data(self._market_snapshot.symbol)
+
+    def publish_recovery_evaluation(self) -> None:
+        """
+        함수 이름: publish_recovery_evaluation()
+        기능: 새 full snapshot 또는 복구 중 도착한 최신 실제 시세의 평가를 게시한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/20
+        """
+        with self._stream_lock:
+            if not self._market_available or not self._web_socket_gateway.kline_live_ready:
+                raise MarketStreamUnavailableError("recovery market stream is unavailable")
+            builder = self._market_evaluation_builder
+            observer = self._trading_market_observer
+            if builder is None or observer is None:
+                raise MarketDataStreamStateError("recovery evaluation collaborators are missing")
+            version = self._market_snapshot.version
+            if self._market_snapshot.update_source_klines:
+                cached = self._latest_strategy_evaluation
+                if cached is None or cached[0] != version:
+                    return  # 닫힌 봉의 다음 OPEN 대기는 기존 source 규칙을 따른다.
+                cached_version, evaluation, source_id = cached
+            else:
+                evaluation = builder.build_recovery_evaluation(self._market_snapshot)
+                source_id = f"recovery-snapshot:{version}"
+            for message_id, event_type in (("1L.1", "KLINE_OBSERVED"), ("1L.2", "MARKET_EVALUATED")):
+                observer.observe_public_market_boundary(
+                    message_id=message_id, event_type=event_type,
+                    source_event_id=source_id, market_version=version,
+                )
+            self._diagnostics.record("recovery_market_evaluation_published",
+                market_version=version, source_event_id=source_id)
+            observer.observe_market_evaluation(evaluation, source_event_id=source_id, market_version=version)
 
     def mark_market_stream_reconciliation_required(
         self,
@@ -1590,6 +1633,7 @@ class MarketDataController:
                 market_version=self._market_snapshot.version,
             )
         # 구체 MarketEvaluationSnapshot 검증은 계층 경계를 소유한 공개 TradingController가 수행한다.
+        self._latest_strategy_evaluation = (self._market_snapshot.version, market_evaluation, source_event_id)
         market_observer.observe_market_evaluation(
             market_evaluation,
             source_event_id=source_event_id,

@@ -56,6 +56,14 @@ class WebSocketSubscriptionError(RuntimeError):
     """
 
 
+class WebSocketConnectionError(WebSocketSubscriptionError, ConnectionError):
+    """
+    클래스 이름: WebSocketConnectionError
+    기능: 일시적 연결·startup timeout을 구독 계약·내부 처리 오류와 구별한다.
+    작성 날짜: 2026/09/20
+    """
+
+
 class _WebSocketApplication(Protocol):
     """
     클래스 이름: _WebSocketApplication
@@ -361,7 +369,7 @@ class _ConnectionLifecycle:
         작성 날짜: 2026/08/22
         """
         if not self._startup_event.wait(timeout_seconds):
-            raise WebSocketSubscriptionError(
+            raise WebSocketConnectionError(
                 "Binance WebSocket subscription startup timed out"
             )
 
@@ -369,7 +377,7 @@ class _ConnectionLifecycle:
             if self._startup_failure is not None:
                 raise self._startup_failure
             if not self._established or self._owner_closed:
-                raise WebSocketSubscriptionError(
+                raise WebSocketConnectionError(
                     "Binance WebSocket subscription closed during startup"
                 )
 
@@ -417,7 +425,7 @@ class _SocketWorker:
             return
 
         self._lifecycle.record_transport_failure(
-            WebSocketSubscriptionError(
+            WebSocketConnectionError(
                 "Binance WebSocket run loop ended unexpectedly"
             )
         )
@@ -900,7 +908,7 @@ class BinanceSpotWebSocketClient:
             작성 날짜: 2026/08/22
             """
             lifecycle.record_transport_failure(
-                WebSocketSubscriptionError(
+                WebSocketConnectionError(
                     "public Kline transport failed: "
                     f"{type(error).__name__}"
                 )
@@ -921,7 +929,7 @@ class BinanceSpotWebSocketClient:
             작성 날짜: 2026/08/22
             """
             lifecycle.record_transport_failure(
-                WebSocketSubscriptionError(
+                WebSocketConnectionError(
                     "public Kline transport disconnected"
                 )
             )
@@ -1033,7 +1041,7 @@ class BinanceSpotWebSocketClient:
             작성 날짜: 2026/08/22
             """
             lifecycle.record_transport_failure(
-                WebSocketSubscriptionError(
+                WebSocketConnectionError(
                     "account stream transport failed: "
                     f"{type(error).__name__}"
                 )
@@ -1054,7 +1062,7 @@ class BinanceSpotWebSocketClient:
             작성 날짜: 2026/08/22
             """
             lifecycle.record_transport_failure(
-                WebSocketSubscriptionError(
+                WebSocketConnectionError(
                     "account stream transport disconnected"
                 )
             )

@@ -289,16 +289,14 @@ ID는 처음 관찰된 뒤 `None`으로 후퇴할 수 없고 terminal fill·dura
 Reconciliation으로 들어가는 production origin은 credential·ID·filter value·balance·price·
 exception repr 없이 account stream unknown/external execution, prepare filter/cap reject,
 event worker/runtime failure, market stream failure, order/persistence ambiguity, process ownership
-ambiguity의 여섯 category로 축약한다. Controller의 process-lifetime latch는 최초 원인만
-`EXACT`로 보존한다. 두 번째 같은 category는 `DUPLICATE`, 다른 category는 `CONFLICT`로
-영구 잠그고 category를 숨기며, 기록 전은 `MISSING`이다. 공개 snapshot은 같은 session
-lock에서 현재 `reconciliation_required`와 latch status/category를 함께 복사한다. 복구 가능한
-일반 account disconnect·app-prefix unknown과 market/prepare/order blocker가 해소돼 bool이 `false`로
-바뀐 뒤에도 latch는 보존되므로 이 origin의 `false + EXACT + category`는 유효하다. Prefixless
-external execution은 app-owned recovery로 귀속할 수 없어 worker wake와 direct reconnect를 모두
-차단하는 process-lifetime flag를 세운다. 이 별도의 prefixless-external flag, event-runtime과
-process-ownership만 process-lifetime blocker이므로 concrete `false`와 결합하지 않는다. 결합
-category 자체는 일반 disconnect와 app-prefix unknown도 포함하므로 영구 blocker로 해석하지 않는다.
+ambiguity 등의 category로 축약한다. 과거 단일 원인 latch의 `MISSING/EXACT/DUPLICATE/CONFLICT`
+값은 호환성을 유지한다. 2026-09-20부터 단일 자동 복구 워커를 연결한 production에서는
+오류 종류와 관련 주문 ID별 내부 장애 기록을 사용한다. 반복 callback은 동일 기록의 횟수만
+늘리고 `DUPLICATE/CONFLICT`로 바꾸지 않는다. 공개 category는 마지막 관측 원인을 나타내며,
+서로 다른 미해결 원인은 내부 기록에 각각 남겨 전체 검증 전까지 gate를 닫는다.
+Prefixless external execution, event-runtime failure와 process-ownership ambiguity는 별도의
+process-lifetime flag로 자동 재개를 차단한다. Account stream category 자체는 일반 단절과
+app-prefix unknown도 포함하므로 영구 차단으로 해석하지 않는다.
 
 2026-09-10 보완: 새 process는 [ADR-007](ADR-007-external-manual-sell-recovery.md)에 따라
 열린 앱 Position 이후의 외부 SELL을 전체 체결·반복 잔고 조회로 검증하고 내구 이력에 복구한다.
@@ -429,6 +427,16 @@ version mismatch 또는 평가 실패는 completion을 게시하지 않고 새 �
 pending을 끝내고 Context를 IDLE로 바꿔도 공개 status, `commandEnabled`와
 `reconciliationRequired`는 계속 fail closed다. 단, exposure를 늘리지 않는 same-ID cancel/query와
 history reconciliation은 중단 provenance 아래에서도 계속 허용한다.
+
+2026-09-20 보완: 계좌·시장·주문·저장 복구는 동일 워커를 공유하며 전략 평가의 실행 여부와
+독립적으로 재시도한다. 즉시 시도 후 1/2/4/8/16/30/60초, 이후 최대 60초 간격을 유지하고
+거래소의 더 긴 대기 요구를 따른다. Same-ID 조회 및 저장 복구, durable 이력, 보유량·잔여 수량,
+미결 주문, 두 스트림과 새 시장 generation의 검증이 모두 통과해야 동일 실행 세션을 재개한다.
+정지·종료·긴급 정지와 영구 불일치는 재개를 취소한다. 새 프로세스의 자동 전략 시작은 허용하지
+않는다. Case C 기준·보유/반등 기준 시각은 보존하며 중단 시간도 기존 전략의 제한시간에
+포함한다. 재개 후 청산 조건이 충족됐다면 기존 전략의 매도 경로를 사용한다. 새 UI/API 계약
+없이 기존 recovery snapshot을 사용하며, `resumed`와 완료 로그는 최신 실제 시세의 첫 전략
+평가가 끝난 뒤에만 기록한다. 세부 재시도·중복 방지는 [ADR-002 §3.3](ADR-002-order-retry-and-reconciliation.md)을 따른다.
 
 Fault fixture는 credential 없는 canonical JSON과 expected digest를 가진다. wall clock, random UUID,
 PID와 port는 명시 규칙으로 정규화한다. 같은 입력을 여러 번 replay해 state, order mutation count,

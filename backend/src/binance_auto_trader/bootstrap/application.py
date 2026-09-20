@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 import os
@@ -39,6 +39,7 @@ from binance_auto_trader.application.market_evaluation_builder import (
 from binance_auto_trader.application.trade_history_controller import (
     TradeHistoryRepositoryPort,
 )
+from binance_auto_trader.application.session_recovery import recovery_retry_after
 from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
 from binance_auto_trader.bootstrap.diagnostics import create_runtime_diagnostics
 from binance_auto_trader.domain.history import Performance, Trade, TradeHistory
@@ -406,7 +407,7 @@ class _AccountStreamRecoveryWorker:
     작성 날짜: 2026/08/22
     """
 
-    _BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
+    _BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 60.0)
 
     def __init__(
         self,
@@ -414,6 +415,7 @@ class _AccountStreamRecoveryWorker:
         recovery_allowed: Callable[[], bool],
         *,
         retry_waiter: Callable[[float], bool] | None = None,
+        retry_observer: Callable[[float, BaseException], None] | None = None,
         worker_name: str = "binance-account-stream-recovery",
         diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
@@ -435,6 +437,8 @@ class _AccountStreamRecoveryWorker:
             raise TypeError("recovery_allowed must be callable")
         if retry_waiter is not None and not callable(retry_waiter):
             raise TypeError("retry_waiter must be callable")
+        if retry_observer is not None and not callable(retry_observer):
+            raise TypeError("retry_observer must be callable")
         if not isinstance(worker_name, str):
             raise TypeError("worker_name must be a string")
         if not worker_name or worker_name != worker_name.strip():
@@ -445,6 +449,7 @@ class _AccountStreamRecoveryWorker:
         # Worker 상태 lock은 application RLock과 분리해 callback과 종료의 lock 순서를 단순화한다.
         self._recovery_operation = recovery_operation
         self._recovery_allowed = recovery_allowed
+        self._retry_observer = retry_observer
         self._state_lock = Lock()
         self._stop_event = Event()
         self._retry_waiter = (
@@ -517,7 +522,7 @@ class _AccountStreamRecoveryWorker:
     def _run(self) -> None:
         """
         함수 이름: _run()
-        기능: full reconciliation을 실행해 transient 실패만 최대 30초 간격으로 재시도한다.
+        기능: full reconciliation을 실행해 transient 실패만 최대 60초 간격으로 재시도한다.
         인자: 없음
         반환값: 성공, readiness 상실 또는 종료 요청 시 없음
         작성 날짜: 2026/08/22
@@ -538,7 +543,7 @@ class _AccountStreamRecoveryWorker:
                 # 실제 Controller Operation은 worker/application lock을 보유하지 않은 채 호출한다.
                 self._diagnostics.record("stream_recovery_started", worker=self._worker_name, retry_index=retry_index)
                 try:
-                    self._recovery_operation()
+                    recovery_completed = self._recovery_operation()
                 except AccountStreamRecoveryBlockedError as error:
                     self._diagnostics.record_exception("stream_recovery_blocked", error, worker=self._worker_name)
                     # 동일 runtime에서 개선될 수 없는 blocker는 latch와 후속 자동 시도를 영구 차단한다.
@@ -548,7 +553,9 @@ class _AccountStreamRecoveryWorker:
                         self._active_thread = None
                     return
                 except Exception as error:
-                    retry_delay = self._BACKOFF_SECONDS[retry_index]
+                    retry_delay = max(self._BACKOFF_SECONDS[retry_index], recovery_retry_after(error))
+                    if self._retry_observer is not None:
+                        self._retry_observer(retry_delay, error)
                     self._diagnostics.record_exception("stream_recovery_retry", error, worker=self._worker_name, retry_delay_seconds=str(retry_delay))
                     retry_index = min(
                         retry_index + 1,
@@ -558,7 +565,8 @@ class _AccountStreamRecoveryWorker:
                         return  # Runtime close가 backoff를 즉시 깨우면 추가 요청을 보내지 않는다.
                     continue
 
-                self._diagnostics.record("stream_recovery_completed", worker=self._worker_name)
+                if recovery_completed is not False:
+                    self._diagnostics.record("stream_recovery_completed", worker=self._worker_name)
 
                 # 성공과 pending rerun 소비를 원자화해 완료 직전 disconnect를 유실하지 않는다.
                 with self._state_lock:
@@ -1544,18 +1552,6 @@ def create_application_runtime(
                         trading_controller,
                         selected_execution_mode,
                     )
-                recovery_can_start = (
-                    selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
-                    and application_state_store.state.status
-                    is ApplicationStatus.READY
-                    and trading_controller.startup_reconciliation_complete
-                and not trading_controller._shutdown_preparing
-                    and not (
-                        trading_controller.external_execution_reconciliation_required
-                    )
-                )
-            else:
-                recovery_can_start = False
             if (
                 result_accepted
                 and trading_session_update_observer is not None
@@ -1564,13 +1560,6 @@ def create_application_runtime(
                     trading_controller,
                     selected_execution_mode,
                 )  # 수락 결과만 여기서 게시하고 unknown app-order는 공통 reconciliation 경로가 게시한다.
-
-        # App-prefix unknown만 callback lock 밖의 bounded worker에서 REST full-resync를 시작한다.
-        if (
-            recovery_can_start
-            and account_stream_recovery_worker is not None
-        ):
-            account_stream_recovery_worker.request_recovery()
 
         return result_accepted
 
@@ -1598,23 +1587,6 @@ def create_application_runtime(
                     trading_controller,
                     selected_execution_mode,
                 )  # 모든 stream 장애의 authoritative fail-close를 recovery 시작 전에 정확히 한 번 게시한다.
-            recovery_can_start = (
-                selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
-                and application_state_store.state.status
-                is ApplicationStatus.READY
-                and trading_controller.startup_reconciliation_complete
-                and not trading_controller._shutdown_preparing
-                and not (
-                    trading_controller.external_execution_reconciliation_required
-                )
-            )
-
-        # Blocking REST/WS는 callback thread에서 실행하지 않고 runtime worker에만 요청한다.
-        if (
-            recovery_can_start
-            and account_stream_recovery_worker is not None
-        ):
-            account_stream_recovery_worker.request_recovery()
 
     web_socket_gateway = WebSocketGateway(
         web_socket_client,
@@ -1683,6 +1655,8 @@ def create_application_runtime(
         """
         if trading_controller.check_market_liveness():
             request_market_stream_recovery()
+        if trading_controller.session_recovery_pending and account_stream_recovery_worker is not None:
+            account_stream_recovery_worker.request_recovery()
         # 관측 실패는 기존 거래 cycle의 실행 결과나 fail-close 판단을 바꾸지 않는다.
         try:
             diagnostics.liveness.observe("exchange_observed", {
@@ -1736,27 +1710,6 @@ def create_application_runtime(
             diagnostics=diagnostics,
         )
 
-    def account_stream_recovery_allowed() -> bool:
-        """
-        함수 이름: account_stream_recovery_allowed()
-        기능: worker 재시도 직전에 testnet runtime의 READY와 startup reconciliation을 재검사한다.
-        인자: 없음
-        반환값: 자동 account stream 복구가 계속 허용되면 True
-        작성 날짜: 2026/08/22
-        """
-        # Lifecycle publication과 Controller readiness를 같은 application RLock에서 읽는다.
-        with application_lock:
-            return (
-                selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
-                and application_state_store.state.status
-                is ApplicationStatus.READY
-                and trading_controller.startup_reconciliation_complete
-                and not trading_controller._shutdown_preparing
-                and not (
-                    trading_controller.external_execution_reconciliation_required
-                )
-            )
-
     def publish_account_stream_recovery_success() -> None:
         """
         함수 이름: publish_account_stream_recovery_success()
@@ -1797,21 +1750,6 @@ def create_application_runtime(
                 "account stream recovery publication failed"
             ) from error
 
-    def recover_account_stream() -> object:
-        """
-        함수 이름: recover_account_stream()
-        기능: worker thread에서 full REST reconciliation을 실행하고 복구 snapshot을 게시한다.
-        인자: 없음
-        반환값: 새 account stream subscription
-        작성 날짜: 2026/08/22
-        """
-        # Worker는 lock을 선점하지 않고 Controller가 commit hook까지 동일한 session RLock로 소유한다.
-        return trading_controller.reconnect_account_stream_after_reconciliation(
-            recovery_commit_observer=(
-                publish_account_stream_recovery_success
-            ),
-        )  # UI가 Account와 열린 gate를 관찰한 뒤에만 Controller Operation이 반환한다.
-
     def request_market_stream_recovery() -> bool:
         """
         함수 이름: request_market_stream_recovery()
@@ -1846,64 +1784,32 @@ def create_application_runtime(
 
         return recovery_worker.request_recovery()
 
-    def market_stream_recovery_allowed() -> bool:
+    def session_recovery_allowed() -> bool:
         """
-        함수 이름: market_stream_recovery_allowed()
-        기능: 재시도 직전에 READY Testnet과 미완료 시장 blocker를 같은 lock에서 재검사한다.
+        함수 이름: session_recovery_allowed()
+        기능: READY 상태와 재시도 가능한 미해결 장애를 함께 확인한다.
         인자: 없음
-        반환값: 자동 시장 full-resync를 계속 허용하면 True
-        작성 날짜: 2026/08/25
+        반환값: 복구 허용 여부
+        작성 날짜: 2026/09/20
         """
-        # 종료·복구 완료·ownership 상실 뒤에는 대기 중인 worker가 새 public I/O를 시작하지 않는다.
         with application_lock:
-            return (
-                selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
-                and application_state_store.state.status
-                is ApplicationStatus.READY
-                and trading_controller.startup_reconciliation_complete
-                and not trading_controller._shutdown_preparing
-                and (trading_controller.market_stream_reconciliation_required
-                     or trading_controller.market_session_recovery_pending)
-                and not trading_controller.process_ownership_ambiguous
-            )
+            return (application_state_store.state.status is ApplicationStatus.READY
+                    and trading_controller.session_recovery_pending)
 
-    def recover_market_stream() -> MarketSnapshot:
+    def recover_session() -> bool:
         """
-        함수 이름: recover_market_stream()
-        기능: 새 Kline 세대·REST 전체 병합·same-version REGIME 평가 후 거래 상태를 게시한다.
+        함수 이름: recover_session()
+        기능: 단일 워커에서 주문·계좌·시장 전체 검증을 수행한다.
         인자: 없음
-        반환값: 성공한 full-resync의 동일 MarketSnapshot
-        작성 날짜: 2026/08/25
+        반환값: 최신 평가 완료 전 False
+        작성 날짜: 2026/09/20
         """
-        # MarketDataController가 gate 재개까지 원자 검증하고 bootstrap은 성공 publication만 덧붙인다.
-        market_result = (market_data_controller.reconcile_market_stream()
-                         if trading_controller.market_stream_reconciliation_required
-                         else market_snapshot)
-        if application_state_store.state.status is ApplicationStatus.READY:
-            trading_controller.recover_interrupted_market_session()
-        with application_lock:
-            if (
-                application_state_store.state.status
-                is not ApplicationStatus.READY
-            ):
-                return market_result
-            try:
-                publish_trading_session_update()
-            except Exception as error:
-                trading_controller.mark_event_runtime_failed()
-                raise AccountStreamRecoveryBlockedError(
-                    "market stream recovery publication failed"
-                ) from error
-
-        return market_result
-
-    # 실제 authenticated stream을 사용하는 testnet에만 자동 복구 owner를 조립한다.
-    if selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE):
-        account_stream_recovery_worker = _AccountStreamRecoveryWorker(
-            recover_account_stream,
-            account_stream_recovery_allowed,
-            diagnostics=diagnostics,
+        return trading_controller.recover_interrupted_trading_session(
+            reconcile_market=market_data_controller.reconcile_market_stream,
+            publish_evaluation=market_data_controller.publish_recovery_evaluation,
+            publish_commit=publish_account_stream_recovery_success,
         )
+
     regime_controller = RegimeController(
         regime_stm,
         market_snapshot,
@@ -1927,13 +1833,25 @@ def create_application_runtime(
         diagnostics=diagnostics,
     )
     if selected_execution_mode in (ExecutionMode.TESTNET, ExecutionMode.LIVE):
-        # 실제 주문 effect가 가능한 Testnet에만 public market 자동 복구 owner를 추가한다.
-        market_stream_recovery_worker = _AccountStreamRecoveryWorker(
-            recover_market_stream,
-            market_stream_recovery_allowed,
-            worker_name="binance-market-stream-recovery",
-            diagnostics=diagnostics,
+        account_stream_recovery_worker = _AccountStreamRecoveryWorker(
+            recover_session, session_recovery_allowed,
+            retry_observer=lambda delay, error: trading_controller.note_session_recovery_retry(timedelta(seconds=delay), error),
+            worker_name="binance-session-recovery", diagnostics=diagnostics,
         )
+        market_stream_recovery_worker = account_stream_recovery_worker
+        def request_session_recovery() -> bool:
+            """
+            함수 이름: request_session_recovery()
+            기능: 정상 시작 뒤에만 복구 요청을 단일 워커로 전달한다.
+            인자: 없음
+            반환값: 요청 수락 여부
+            작성 날짜: 2026/09/20
+            """
+            if (application_state_store.state.status is not ApplicationStatus.READY
+                    or not trading_controller.startup_reconciliation_complete):
+                return False
+            return account_stream_recovery_worker.request_recovery()
+        trading_controller.configure_session_recovery(request_session_recovery)
 
     # Startup command와 runtime은 앞서 만든 not-ready state store identity를 공유한다.
     startup_command_id = f"startup-{uuid4().hex}"

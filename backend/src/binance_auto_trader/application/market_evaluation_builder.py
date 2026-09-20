@@ -327,7 +327,35 @@ class ThirtyMinuteMarketEvaluationBuilder:
         if not should_evaluate:
             return None  # 정상 rollover 대기에는 Trading event나 stream 복구를 만들지 않는다.
 
+        return self._build_evaluation(market_snapshot, observed_kline)
+
+    def build_recovery_evaluation(self, market_snapshot: MarketSnapshot) -> MarketEvaluationSnapshot:
+        """
+        함수 이름: build_recovery_evaluation()
+        기능: 검증된 full snapshot을 기존 계산으로 즉시 평가한다.
+        인자: market_snapshot -> 방금 재동기화한 실제 시세 기준선
+        반환값: 동일 version의 시장 평가
+        작성 날짜: 2026/09/20
+        """
+        if (not market_snapshot.ready or market_snapshot.version != self._last_market_version
+                or market_snapshot.update_source_klines):
+            raise MarketEvaluationCalculationError("recovery requires the rebased full snapshot")
+        latest = market_snapshot.klines_by_interval[Interval.THIRTY_MINUTES][-1]
+        if latest.closed:
+            raise MarketEvaluationCalculationError("recovery requires the current open Kline")
+        return self._build_evaluation(market_snapshot, latest)
+
+    def _build_evaluation(
+        self, market_snapshot: MarketSnapshot, observed_kline: Kline,
+    ) -> MarketEvaluationSnapshot:
         # 모든 금융 계산은 유효숫자 34와 HALF_EVEN context에서 중간 quantize 없이 수행한다.
+        """
+        함수 이름: _build_evaluation()
+        기능: 기존 지표·조건·유지시간 계산을 공통 적용한다.
+        인자: market_snapshot, observed_kline -> 검증된 시세와 봉
+        반환값: 불변 시장 평가
+        작성 날짜: 2026/09/20
+        """
         with localcontext() as decimal_context:
             decimal_context.prec = DECIMAL_PRECISION
             decimal_context.rounding = ROUND_HALF_EVEN

@@ -269,3 +269,61 @@ class AccountStreamRecoveryWorkerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionRecoveryBackoffTests(unittest.TestCase):
+    def test_indefinite_backoff_and_exchange_wait_survive_duplicate_callbacks(self):
+        from datetime import timedelta
+        from binance_auto_trader.application.session_recovery import SessionRecoveryRetry
+        attempts, delays, notifications = [], [], []
+        done = Event()
+        worker = None
+        def recover():
+            attempts.append(len(attempts))
+            if len(attempts) == 11:
+                done.set()
+                return False
+            for repeat in range(5):
+                worker.request_recovery()
+            raise SessionRecoveryRetry("query pending", retry_after=timedelta(seconds=120) if len(attempts) == 9 else None)
+        def wait(delay):
+            delays.append(delay)
+            return False
+        worker = _AccountStreamRecoveryWorker(recover, lambda: not done.is_set(), retry_waiter=wait,
+            retry_observer=lambda delay, error: notifications.append(delay))
+        try:
+            self.assertTrue(worker.request_recovery())
+            self.assertTrue(done.wait(1))
+        finally:
+            worker.close()
+        self.assertEqual(delays, [1, 2, 4, 8, 16, 30, 60, 60, 120, 60])
+        self.assertEqual(notifications, delays)
+        self.assertEqual(len(attempts), 11)
+
+    def test_stop_cancels_pending_retry_before_another_operation(self):
+        attempts = []
+        allowed = [True]
+        completed = Event()
+        def recover():
+            attempts.append("query")
+            raise TimeoutError("connection unavailable")
+        def wait(delay):
+            allowed[0] = False
+            completed.set()
+            return False
+        worker = _AccountStreamRecoveryWorker(recover, lambda: allowed[0], retry_waiter=wait)
+        try:
+            worker.request_recovery()
+            self.assertTrue(completed.wait(1))
+        finally:
+            worker.close()
+        self.assertEqual(attempts, ["query"])
+
+    def test_connection_timeouts_retry_but_processing_and_auth_errors_stay_blocked(self):
+        from binance_auto_trader.application.session_recovery import is_transient_recovery_error
+        from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
+        from binance_auto_trader.adapters.binance.spot_websocket_client import WebSocketConnectionError, WebSocketSubscriptionError
+        for error in (WebSocketConnectionError("connect timed out"), TimeoutError(), BinanceAPIError(status_code=429, api_code=-1003, retry_after=None)):
+            self.assertTrue(is_transient_recovery_error(error))
+        for error in (WebSocketSubscriptionError("invalid subscription frame"), TypeError("internal error"), BinanceAPIError(status_code=401, api_code=-2015, retry_after=None)):
+            self.assertFalse(is_transient_recovery_error(error))
