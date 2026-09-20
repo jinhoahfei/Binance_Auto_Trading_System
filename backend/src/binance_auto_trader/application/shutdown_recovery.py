@@ -7,6 +7,7 @@ from time import monotonic, sleep
 from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
 from binance_auto_trader.application.balance_reconciliation import BalanceObservationChangedError
+from binance_auto_trader.application.session_recovery import SessionRecoveryRetry
 from binance_auto_trader.application.trade_history_controller import TradeHistoryPersistencePendingError
 from binance_auto_trader.domain.trading.action_requests import CancelPendingOrder, patch
 from binance_auto_trader.domain.trading.position import Position
@@ -65,11 +66,13 @@ def prepare_shutdown_cycle(controller, operation) -> None:
     c._shutdown_cleanup_check = check_cleanup
     c._shutdown_liquidation_allowed = operation.liquidation_confirmed
     try:
-        _verify_history(c._require_trade_history_controller())
-        _clear_unsubmitted_intent(c)
         while True:
             operation.progress("settling_orders", "orders", c.context.version)
             operation.check()
+            # 종료는 자동 복구 worker를 닫은 뒤 진행하므로 동일 주문의 저장 복구도 직접 소유한다.
+            # 완료 주문의 잔여 marker를 먼저 검증해야 재연결이 삭제된 journal을 다시 쓰지 않는다.
+            _recover_order_storage(c, operation)
+            _clear_unsubmitted_intent(c)
             open_orders = c._api_gateway.list_all_open_order_results("ETHUSDT")
             if not open_orders and (c._api_gateway.has_any_exchange_open_orders() or c._api_gateway.has_any_exchange_open_order_lists()):
                 raise ShutdownPreparationBlocked("SHUTDOWN_UNEXPLAINED_ORDER")
@@ -170,6 +173,38 @@ def prepare_shutdown_cycle(controller, operation) -> None:
         c._shutdown_cleanup_owner = None
         c._shutdown_cleanup_check = None
         c._shutdown_liquidation_allowed = False
+
+
+def _recover_order_storage(c, operation) -> None:
+    """
+    함수 이름: _recover_order_storage()
+    기능: 종료 owner가 기존 동일 주문 저장 복구를 수행하고 검증 실패는 종료 차단으로 보존한다.
+    인자: c -> 거래 담당자, operation -> 종료 기한과 진행 상태
+    반환값: 검증·저장 복구 성공 시 없음
+    작성 날짜: 2026/09/20
+    """
+    from .trading_controller import AccountStreamRecoveryBlockedError
+    operation.check()
+    pending_ids = tuple(state.order.client_order_id for state in c._order_states_by_client_id.values()
+        if state.pending_recovery_pending or state.persistence_pending)
+    try:
+        # 신규 주문이나 전략 재개 없이 체결·파일·journal 증거가 일치하는 상태만 정리한다.
+        c._recover_session_order_storage()
+    except (AccountStreamRecoveryBlockedError, ValueError) as error:
+        c._diagnostics.record_exception("shutdown_order_storage_recovery", error)
+        raise ShutdownPreparationBlocked("SHUTDOWN_HISTORY_MISMATCH") from error
+    except TradeHistoryPersistencePendingError as error:
+        c._diagnostics.record_exception("shutdown_order_storage_recovery", error)
+        raise ShutdownPreparationBlocked("SHUTDOWN_HISTORY_SAVE_FAILED", True) from error
+    except (SessionRecoveryRetry, OSError) as error:
+        c._diagnostics.record_exception("shutdown_order_storage_recovery", error)
+        raise ShutdownPreparationBlocked("SHUTDOWN_ORDER_UNRESOLVED", True) from error
+    operation.check()
+    recovered_ids = tuple(client_id for client_id in pending_ids
+        if not c._order_states_by_client_id[client_id].pending_recovery_pending
+        and not c._order_states_by_client_id[client_id].persistence_pending)
+    if recovered_ids:
+        c._record_diagnostic("shutdown_order_storage_recovered", client_order_ids=recovered_ids)
 
 
 def _clear_unsubmitted_intent(c) -> None:

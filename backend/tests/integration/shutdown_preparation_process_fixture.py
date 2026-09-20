@@ -1,5 +1,6 @@
 """실계좌 접근 없이 가격 준비 실패와 실제 sidecar 정상 종료를 재현한다."""
 import os
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,8 @@ from tests.integration.test_buy_sell_flow import _execute_case_b_buy
 from tests.integration.test_earn_shutdown import seed_residual_history, redeemed_evidence
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
 from binance_auto_trader.adapters.persistence.residual_repository import ResidualRepository
+from binance_auto_trader.application.trading_controller import OrderExecutionFailureCode
+from tests.integration.test_shutdown_preparation import ShutdownExchange, _submit_case_b_buy
 
 
 def create_factory(configuration):
@@ -26,6 +29,14 @@ def create_factory(configuration):
         client.has_any_exchange_open_order_lists = lambda: False
         client.get_order_submission_attempt_evidence = lambda **_: None
         earn = os.environ.get('SHUTDOWN_FIXTURE_EARN') == '1'
+        stale_order = os.environ.get('SHUTDOWN_FIXTURE_STALE_ORDER') == '1'
+        if stale_order:
+            exchange = ShutdownExchange()
+            for method in ('get_account', 'prepare_order', 'submit_order', 'sell_all_position',
+                           'query_order_result', 'list_open_order_results', 'list_all_open_order_results',
+                           'list_recent_order_results', 'has_any_exchange_open_orders',
+                           'has_any_exchange_open_order_lists', 'get_order_submission_attempt_evidence'):
+                setattr(client, method, getattr(exchange, method))
         if earn:
             source = seed_residual_history(f.history_path.resolve())
             for balance in client.account_payload['balances']:
@@ -38,7 +49,19 @@ def create_factory(configuration):
         c = f.runtime.trading_controller
         selected = f.runtime.regime_controller.set_regime_type(RegimeType.TYPE_0, command_id='select-fixture', expected_version=c.context.version)
         c.start_trading(command_id='start-fixture', expected_version=selected.version)
-        if not earn:
+        if stale_order:
+            # 실제 runtime에 완료 BUY와 제거된 journal 뒤의 stale marker를 남긴다.
+            f.runtime._trading_event_runtime_worker.close()
+            if f.runtime._account_stream_recovery_worker is not None:
+                f.runtime._account_stream_recovery_worker.close()
+            c._enqueue_order_outcomes(_submit_case_b_buy(c, intent_id='completed-buy-before-exit'))
+            asyncio.run(c.drain_events())
+            state = c._order_states_by_client_id[exchange.result.client_order_id]
+            assert len(f.runtime.trade_history.trades) == 1
+            assert not f.runtime.trade_history_controller.get_pending_order_recovery_records()
+            state.pending_recovery_pending = True
+            c._enter_order_reconciliation(state, OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED, message_id=None)
+        elif not earn:
             with patch.object(c._api_gateway, 'prepare_order', side_effect=BnbValuationInvalidError('fixture candle')):
                 _execute_case_b_buy(SimpleNamespace(controller=c), 'unsubmitted-fixture-price-intent')
         c.mark_event_runtime_failed()

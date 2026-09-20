@@ -22,12 +22,16 @@ class ShutdownPreparationProcessTests(unittest.TestCase):
     def test_earn_rewards_with_failed_worker_exit_actual_process(self):
         self.exercise_shutdown(True)
 
-    def exercise_shutdown(self, earn):
+    def test_held_position_with_stale_completed_order_liquidates_and_exits_actual_process(self):
+        self.exercise_shutdown(False, stale_order=True)
+
+    def exercise_shutdown(self, earn, stale_order=False):
         backend_root = Path(__file__).resolve().parents[3]
         token = secrets.token_urlsafe(32)
         with TemporaryDirectory() as directory:
             environment = {'PYTHONPATH': os.pathsep.join((str(backend_root/'src'),str(backend_root))), 'PYTHONUNBUFFERED':'1','PYTHONDONTWRITEBYTECODE':'1'}
             if earn: environment['SHUTDOWN_FIXTURE_EARN'] = '1'
+            if stale_order: environment['SHUTDOWN_FIXTURE_STALE_ORDER'] = '1'
             if os.name=='nt': environment['SystemRoot']=os.environ['SystemRoot']
             child = subprocess.Popen([sys.executable,'-m','tests.integration.shutdown_preparation_process_fixture'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=directory,env=environment)
             try:
@@ -36,6 +40,7 @@ class ShutdownPreparationProcessTests(unittest.TestCase):
                     'api_key':'fixture-key','api_secret':'fixture-secret','allow_testnet_orders':False,'max_notional':None}})
                 descriptor=read_json_frame(child.stdout,maximum_bytes=4096)
                 self.assertIsNotNone(descriptor)
+                self.assertIn('port', descriptor, descriptor)
                 request=framed_fixture.FramedSidecarProcessTests()._request
                 denied,_,=request(descriptor,secrets.token_urlsafe(32),'GET','/v1/shutdown/prepare')
                 self.assertEqual(denied,401)
@@ -44,7 +49,7 @@ class ShutdownPreparationProcessTests(unittest.TestCase):
                 self.assertEqual(basis['data']['status'],'reconciliation_required')
                 malformed,_=request(descriptor,token,'POST','/v1/shutdown/prepare',{'schema_version':3,'expected_version':basis['data']['version'],'liquidation_confirmed':'false'})
                 self.assertEqual(malformed,400)
-                prepare_body = {'schema_version':3,'expected_version':basis['data']['version'],'liquidation_confirmed':False}
+                prepare_body = {'schema_version':3,'expected_version':basis['data']['version'],'liquidation_confirmed':stale_order}
                 with patch.object(framed_fixture, 'uuid4', return_value=uuid4()):
                     status,accepted=request(descriptor,token,'POST','/v1/shutdown/prepare',prepare_body)
                     repeated_status,repeated=request(descriptor,token,'POST','/v1/shutdown/prepare',prepare_body)
@@ -72,6 +77,9 @@ class ShutdownPreparationProcessTests(unittest.TestCase):
                 self.assertEqual(child.wait(timeout=5),0)
                 ownership=json.loads((Path(directory)/'.backend-runtime.lock').read_text())
                 self.assertEqual(ownership['owner_state'],'RELEASED')
+                if stale_order:
+                    trades = [json.loads(line) for line in (Path(directory)/'deterministic-case2.jsonl').read_text().splitlines()]
+                    self.assertEqual([trade['side'] for trade in trades], ['BUY', 'SELL'])
             finally:
                 _terminate_fixture_process_tree(child)
                 for pipe in (child.stdin,child.stdout,child.stderr):
