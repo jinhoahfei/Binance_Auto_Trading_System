@@ -3,6 +3,47 @@ import { vi } from 'vitest';
 import { TraderPanel } from './TraderPanel';
 
 describe('TraderPanel', () => {
+    it('잔여 ETH·조정 금액·KST 판정 시각을 과거 기록으로 구분한다', () => {
+        render(<TraderPanel activeTab="recent" indicatorGroups={[]} orders={[]}
+            manual_kill_active={false} last_risk_decision_allowed={false}
+            risk_block_reason="RISK_BUY_BUDGET_INSUFFICIENT"
+            max_position_notional="999"
+            last_risk_budget={{
+                policy_version: 1, market_version: 68808, account_version: 2, context_version: 17896,
+                current_position_notional: '0.23485728', reserved_buy_notional: '0',
+                candidate_order_notional: '9.541077', projected_position_notional: '9.77593428',
+                daily_realized_pnl: '0', unrealized_pnl: '0', daily_loss: '0', manual_kill_active: false,
+                evaluated_at: '2026-09-18T01:06:32.574328Z', strategy_position_notional: '0',
+                residual_position_notional: '0.23485728', remaining_position_notional: '9.76514272',
+                requested_order_notional: '10', max_position_notional: '10',
+            }} />);
+        const region = screen.getByRole('region', { name: '최근 매수 판정' });
+        expect(region).toHaveTextContent('10:06:32 KST');
+        expect(region).toHaveTextContent('판정 당시의 값');
+        expect(within(region).getByText('전략 포지션').parentElement).toHaveTextContent('0.00 USDT');
+        expect(within(region).getByText('잔여 ETH 평가액').parentElement).toHaveTextContent('0.23 USDT');
+        expect(within(region).getByText('총 보유 한도').parentElement).toHaveTextContent('10.00 USDT');
+        expect(within(region).getByText('남은 총 보유 예산').parentElement).toHaveTextContent('9.77 USDT');
+        expect(within(region).getByText('조정 후 후보 주문').parentElement).toHaveTextContent('9.54 USDT');
+        expect(region).toHaveTextContent('보류');
+        expect(screen.getByRole('status')).toHaveTextContent('자동 재평가');
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('이전 판정의 미관측 값은 0이나 현재 한도로 대체하지 않는다', () => {
+        render(<TraderPanel activeTab="recent" indicatorGroups={[]} orders={[]}
+            max_position_notional="10" last_risk_decision_allowed
+            last_risk_budget={{ policy_version: 1, market_version: 1, account_version: 1, context_version: 1,
+                current_position_notional: '1', reserved_buy_notional: '0', candidate_order_notional: '2',
+                projected_position_notional: '3', daily_realized_pnl: '0', unrealized_pnl: '0',
+                daily_loss: '0', manual_kill_active: false }} />);
+        const region = screen.getByRole('region', { name: '최근 매수 판정' });
+        expect(region).toHaveTextContent('판정 시각: 확인 불가');
+        for (const label of ['전략 포지션', '잔여 ETH 평가액', '총 보유 한도', '남은 총 보유 예산', '조정 전 주문 금액']) {
+            expect(within(region).getByText(label).parentElement).toHaveTextContent('확인 불가');
+        }
+    });
+
     it('authoritative risk 입력이 없거나 명시적으로 해제됐으면 운영자 경고를 표시하지 않는다', () => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const { rerender } = render(
@@ -126,7 +167,7 @@ describe('TraderPanel', () => {
         );
 
         const budget_section = screen.getByRole('region', {
-            name: '마지막 BUY 위험 예산',
+            name: '최근 매수 판정',
         });
 
         // Decimal은 JS number 계산 없이 정밀도와 USDT 단위를 그대로 보존한다.
@@ -139,7 +180,7 @@ describe('TraderPanel', () => {
         expect(budget_section).toHaveTextContent(
             'policy v4 · market v7 · account v3 · context v9',
         );
-        expect(budget_section).toHaveTextContent('판정 시 안전 차단 비활성');
+        expect(budget_section).toHaveTextContent('판정 시 수동 긴급정지 비활성');
     });
 
     it('차단 판정만 전달된 불완전 component 입력도 성공으로 오인하지 않는다', () => {
@@ -176,11 +217,12 @@ describe('TraderPanel', () => {
             />,
         );
 
-        const notice = screen.getByRole('alert', { name: '운영자 확인 필요' });
+        const notice = screen.getByRole('status', { name: '최근 매수 판정 사유' });
 
         // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(within(notice).getByText(summary)).toBeInTheDocument();
-        expect(within(notice).getByText(/^운영자 조치:/u)).toBeInTheDocument();
+        expect(within(notice).getByText(/마지막 주문 평가 당시/u)).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     it('manual kill과 process ownership 모호성을 하나의 접근 가능한 운영자 surface에 표시한다', () => {
@@ -271,7 +313,7 @@ describe('TraderPanel', () => {
             />,
         );
 
-        const notice = screen.getByRole('alert', { name: '운영자 확인 필요' });
+        const notice = screen.getByRole('status', { name: '최근 매수 판정 사유' });
 
         // 화면의 표시 내용과 입력 가능 상태를 검증한다.
         expect(within(notice).getByText('백엔드 위험 보호 장치가 신규 매수를 차단했습니다.'))

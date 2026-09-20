@@ -262,6 +262,37 @@ def _order_result_accounting_confirms_trade(
     )  # REST FULL fallback 시각과 stream T가 달라도 동일한 재무 effect만 멱등 후보가 된다.
 
 
+def _order_result_replays_applied_fills(result: OrderResult, order: Order) -> bool:
+    """완료 주문의 과거 부분 체결이 이미 반영한 fill의 부분집합인지 확인한다."""
+    if (
+        result.status is not OrderStatus.PARTIALLY_FILLED
+        or order.status not in TERMINAL_ORDER_STATUSES
+        or result.symbol != order.symbol
+        or result.client_order_id != order.client_order_id
+        or result.exchange_order_id != order.exchange_order_id
+        or not result.fills
+        or order.unapplied_fills
+    ):
+        return False
+
+    applied_fills = {fill.key: fill for fill in order.fills}
+    for incoming in result.fills:
+        applied = applied_fills.get(incoming.key)
+        if applied is None:
+            return False
+        # REST FULL 시각과 stream T의 차이만 허용하며 체결 및 수수료 평가 근거는 보존한다.
+        if (
+            incoming.quantity != applied.quantity
+            or incoming.price != applied.price
+            or incoming.fee_amount != applied.fee_amount
+            or incoming.fee_asset != applied.fee_asset
+            or incoming.fee_quote_amount != applied.fee_quote_amount
+            or incoming.fee_valuation != applied.fee_valuation
+        ):
+            return False
+    return True
+
+
 def _wait_for_order_retry_delay(delay: timedelta) -> None:
     """
     함수 이름: _wait_for_order_retry_delay()
@@ -549,6 +580,7 @@ class OrderExecutionFailureCode(str, Enum):
     RISK_ORDER_NOTIONAL_EXCEEDED = "RISK_ORDER_NOTIONAL_EXCEEDED"
     RISK_DAILY_LOSS_EXCEEDED = "RISK_DAILY_LOSS_EXCEEDED"
     RISK_POSITION_NOTIONAL_EXCEEDED = "RISK_POSITION_NOTIONAL_EXCEEDED"
+    RISK_BUY_BUDGET_INSUFFICIENT = "RISK_BUY_BUDGET_INSUFFICIENT"
 
 
 class OrderExecutionTraceResult(str, Enum):
@@ -1022,6 +1054,21 @@ class _EventDrivenScheduler:
         return len(self._scheduled)
 
 
+@dataclass(slots=True)
+class _BuyBudgetWait:
+    """클래스 이름: _BuyBudgetWait
+    기능: 전략별 최근 보류 하나와 제한된 필터 재확인 시각만 보존한다.
+    작성 날짜: 2026/09/18
+    """
+
+    reason: RiskBlockReason
+    fingerprint: tuple[object, ...]
+    retry_at: datetime
+    quantity: Decimal
+    preview_quantity: Decimal | None
+    suppressed_count: int = 0
+
+
 class TradingController:
     """
     클래스 이름: TradingController
@@ -1216,6 +1263,7 @@ class TradingController:
         )
         self._manual_kill_control_persistence_ambiguous = False
         self._last_risk_decision: RiskDecision | None = None
+        self._buy_budget_waits: dict[StrategyType, _BuyBudgetWait] = {}
         self._order_retry_jitter = (
             order_retry_jitter or _unit_order_retry_jitter_factor
         )  # Phase 8 fake는 factor 1.0, 실거래는 동일 경계에 난수 provider를 주입한다.
@@ -2519,14 +2567,14 @@ class TradingController:
                 else self._position_snapshot.is_open
             )
 
-            # 보유 여부와 같은 lock에서 기존 평단가를 읽고 종료된 포지션은 표시하지 않는다.
+            # 표시 평단가는 수수료 제외 체결가이며, 손익용 평균 원가는 Position에 유지한다.
             position_average_entry_price = None
             if has_open_position:
                 position_average_entry_price = (
-                    position_state.average_entry_price
+                    position_state.average_fill_price
                     if position_state is not None
                     else self._position_snapshot.entry_price
-                )  # UI 표시를 위해 수수료 포함 원가를 다시 계산하거나 반올림하지 않는다.
+                )  # 종료된 포지션은 null, 열린 포지션은 반올림 전 Decimal을 공개한다.
 
             # Configured policy의 nullable 상한과 운영 enum을 unavailable 상태와 섞지 않고 공개한다.
             configured_risk_policy = (
@@ -4398,8 +4446,18 @@ class TradingController:
             last = max(self._liveness_started_at, self._last_strategy_evaluation_at or self._liveness_started_at)
             if (now - last).total_seconds() < 60:
                 return False
-            self._record_diagnostic("strategy_evaluation_stalled", level="WARNING", last_evaluated_at=last)
-            self.mark_market_stream_reconciliation_required("market_evaluation_stalled")
+            input_last = self._last_market_input_at or self._liveness_started_at
+            input_age = (now - input_last).total_seconds()
+            evaluation_age = (now - last).total_seconds()
+            reason = "market_input_stalled" if input_age >= 60 else "market_evaluation_stalled"
+            self._record_diagnostic("strategy_evaluation_stalled", level="WARNING", reason=reason,
+                                    last_evaluated_at=self._last_strategy_evaluation_at,
+                                    last_market_input_at=self._last_market_input_at,
+                                    market_input_age_seconds=(input_age if self._last_market_input_at is not None else None),
+                                    evaluation_age_seconds=((now - self._last_strategy_evaluation_at).total_seconds()
+                                        if self._last_strategy_evaluation_at is not None else None),
+                                    evaluation_stall_elapsed_seconds=evaluation_age)
+            self.mark_market_stream_reconciliation_required(reason)
             return True
 
     def _block_market_auto_resume(self, reason: str, *, error: BaseException | None = None) -> None:
@@ -6281,6 +6339,18 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/09/05
         """
+        for strategy in tuple(self._buy_budget_waits):
+            current = self._context.snapshot()
+            current = replace(current, market=self._enrich_market_evaluation_elapsed(current.market, self._clock()))
+            runtime = current.runtime
+            expired = (
+                not runtime.signal_created or not condition_met("b_signal_age", current)
+                if strategy is StrategyType.CASE_B else
+                not runtime.allow_new_case_c_setup or runtime.case_c_consumed_for_event
+                or runtime.timer_base_time is None or not condition_met("c_recovery_window", current)
+            )
+            if expired:
+                self._clear_buy_budget_wait(strategy, "signal_expired")
         # 종료 cleanup 이후에도 입력·전이·최종 runtime을 남겨 마지막 청산까지 복원할 수 있게 한다.
         if self._diagnostics.enabled:
             self._record_diagnostic(
@@ -6328,12 +6398,16 @@ class TradingController:
             self._context.open_lower_event(action)
             return ()
         if isinstance(action, CloseLowerEvent):
+            for strategy in tuple(self._buy_budget_waits):
+                self._clear_buy_budget_wait(strategy, "lower_event_closed")
             self._context.close_lower_event(action)
             return ()
         if isinstance(action, ResetCaseBContext):
+            self._clear_buy_budget_wait(StrategyType.CASE_B, "signal_reset")
             self._context.reset_case_b_context(action)
             return ()
         if isinstance(action, ResetCaseCContext):
+            self._clear_buy_budget_wait(StrategyType.CASE_C, "signal_reset")
             self._context.reset_case_c_context(action)
             return ()
         if isinstance(action, ScheduleReevaluation):
@@ -6725,6 +6799,23 @@ class TradingController:
             selected_override,
             force_sell=force_sell,
         )
+        requested_order_notional = None
+        if action.side is OrderSide.BUY:
+            with localcontext() as decimal_context:
+                decimal_context.prec = 34
+                decimal_context.rounding = ROUND_HALF_EVEN
+                requested_order_notional = requested_quantity * market_price
+            requested_quantity = self._limit_buy_quantity(requested_quantity, market_price)
+            budget = self._build_buy_risk_budget(market_price, requested_quantity,
+                                                requested_order_notional=requested_order_notional)
+            preliminary = evaluate_buy_risk(self._risk_policy_state, budget)
+            if preliminary.allowed and requested_quantity <= Decimal("0"):
+                preliminary = RiskDecision(False, budget, RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT)
+            if not preliminary.allowed:
+                return self._block_buy_budget(action, provisional_client_id, preliminary, requested_quantity, market_price)
+            if self._defer_buy_budget_preparation(action.strategy, requested_quantity, market_price):
+                return self._block_buy_budget(action, provisional_client_id,
+                    RiskDecision(False, budget, RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT), requested_quantity, market_price)
         if requested_quantity <= Decimal("0"):
             self._append_order_trace_values(
                 "5",
@@ -6772,6 +6863,19 @@ class TradingController:
         try:
             order = self._api_gateway.prepare_order(order)
         except Exception as error:
+            # 정상적인 최소 주문 미달만 보류한다. 인증·규칙 불일치 등은 기존 오류 처리로 남긴다.
+            self._api_gateway.discard_unsubmitted_preparation(order)
+            if (order.side is OrderSide.BUY and isinstance(error, SymbolFilterError)
+                    and str(error) in {
+                        "FILTER_MARKET_QUANTITY_ZERO", "FILTER_LOT_SIZE_MINIMUM",
+                        "FILTER_MARKET_LOT_SIZE_MINIMUM", "FILTER_MIN_NOTIONAL_MINIMUM",
+                        "FILTER_NOTIONAL_MINIMUM",
+                    }):
+                budget = self._build_buy_risk_budget(market_price, requested_quantity,
+                                                    requested_order_notional=requested_order_notional)
+                return self._block_buy_budget(action, provisional_client_id,
+                    RiskDecision(False, budget, RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT),
+                    requested_quantity, market_price, prepared=True)
             transient = isinstance(error, (BnbValuationUnavailableError, OSError, TimeoutError)) or (
                 isinstance(error, BinanceAPIError) and (error.status_code >= 500 or error.status_code in (418, 429))
             )
@@ -6852,41 +6956,18 @@ class TradingController:
 
         # 모든 production BUY는 filter 뒤 실제 제출 수량으로 같은 cumulative risk gate를 통과한다.
         if order.side is OrderSide.BUY:
-            risk_decision = self._evaluate_buy_order_risk(order)
+            risk_decision = self._evaluate_buy_order_risk(order, requested_order_notional=requested_order_notional)
             if not risk_decision.allowed:
-                risk_block_reason = risk_decision.block_reason
-                if risk_block_reason is None:
-                    raise RuntimeError("blocked risk decision requires a reason")
-                self._append_order_trace(
-                    order,
-                    "5.1",
-                    context_version,
-                    failure_code=OrderExecutionFailureCode(
-                        risk_block_reason.value
-                    ),
-                )
-                return (
-                    TradingEvent(
-                        event_type=TradingEventType.BUY_RISK_BLOCKED,
-                        occurred_at=self._clock(),
-                        priority=EventPriority.ORDER_OUTCOME,
-                        event_id=(
-                            f"{order.client_order_id}:risk:"
-                            f"{risk_block_reason.value}"
-                        ),
-                        lower_event_id=self._context.runtime.lower_event_id,
-                        order_id=order.client_order_id,
-                        payload=BuyRiskBlockedPayload(
-                            strategy=order.strategy,
-                            reason=risk_block_reason,
-                        ),
-                    ),
-                )  # PREPARED journal과 REST POST 전에 STM에 typed feedback만 전달한다.
+                self._api_gateway.discard_unsubmitted_preparation(order)
+                return self._block_buy_budget(action, provisional_client_id, risk_decision,
+                                              order.submitted_quantity, market_price, prepared=True, evaluated=True)
+            self._clear_buy_budget_wait(action.strategy, "budget_available")
             self._append_order_trace(order, "5.1", context_version)
 
         # 준비 조회 중 도착한 종료 요청도 journal 및 실제 전송보다 먼저 반영한다.
         if self._shutdown_preparing and not (force_sell and self._shutdown_liquidation_allowed and self._shutdown_cleanup_owner == get_ident()):
             self._unsubmitted_preparation_intent = action.idempotency_key
+            self._api_gateway.discard_unsubmitted_preparation(order)
             return ()
         if self._shutdown_cleanup_check is not None:
             self._shutdown_cleanup_check()
@@ -7012,25 +7093,173 @@ class TradingController:
 
         return self._handle_order_result(state, result, initial=True)
 
-    def _evaluate_buy_order_risk(self, order: Order) -> RiskDecision:
+    def _buy_wait_fingerprint(self, strategy: StrategyType) -> tuple[object, ...]:
+        """
+        함수 이름: _buy_wait_fingerprint()
+        기능: 시세 틱마다 바뀌는 version을 제외하고 예산·신호 변경만 식별한다.
+        인자: strategy -> 매수 전략
+        반환값: 보류 재평가 기준
+        작성 날짜: 2026/09/18
+        """
+        runtime = self._context.runtime
+        return (self._risk_policy_state, self._session_risk_policy_version, self._account.version,
+                self._get_effective_free_balance(_QUOTE_ASSET), self._buy_exposure(Decimal("1")),
+                self._manual_kill_active, runtime.lower_event_id,
+                runtime.signal_time if strategy is StrategyType.CASE_B else
+                (runtime.last_case_c_setup_candle_id, runtime.timer_base_time))
+
+    def _defer_buy_budget_preparation(self, strategy: StrategyType, quantity: Decimal, price: Decimal) -> bool:
+        """
+        함수 이름: _defer_buy_budget_preparation()
+        기능: 최소 주문 미달의 동일 조건은 30초까지 준비 조회를 억제한다.
+        인자: strategy, quantity, price -> 현재 로컬 후보
+        반환값: 이번 준비를 생략할지 여부
+        작성 날짜: 2026/09/18
+        """
+        wait = self._buy_budget_waits.get(strategy)
+        if (wait is None or wait.reason is not RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT
+                or wait.fingerprint != self._buy_wait_fingerprint(strategy)
+                or self._clock() >= wait.retry_at or wait.quantity <= 0):
+            return False
+        preview = self._api_gateway.preview_cached_buy_quantity(quantity, price)
+        # 가격 변화로 수량 격자가 커지거나 최소 금액을 넘으면 30초를 기다리지 않는다.
+        return not (preview is not None and preview > (wait.preview_quantity or Decimal("0")))
+
+    def _block_buy_budget(self, action: SubmitOrder, client_id: str, decision: RiskDecision,
+                          quantity: Decimal, price: Decimal, *, prepared: bool = False,
+                          evaluated: bool = False) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _block_buy_budget()
+        기능: 미전송 BUY를 정상 감시로 돌리고 반복 사유 로그를 합산한다.
+        인자: action/client_id -> 후보, decision -> 차단 판정, quantity/price -> 크기,
+            prepared -> 이번 실제 준비 수행 여부, evaluated -> 이미 판정 기록 여부
+        반환값: 제출 예산을 소비하지 않는 BUY_RISK_BLOCKED feedback
+        작성 날짜: 2026/09/18
+        """
+        reason = decision.block_reason
+        if decision.allowed or reason is None:
+            raise ValueError("a blocked buy decision is required")
+        fingerprint = self._buy_wait_fingerprint(action.strategy)
+        wait = self._buy_budget_waits.get(action.strategy)
+        changed = wait is None or wait.reason is not reason or wait.fingerprint != fingerprint
+        if changed:
+            self._clear_buy_budget_wait(action.strategy, "conditions_changed")
+            wait = _BuyBudgetWait(reason, fingerprint, self._clock() + timedelta(seconds=30),
+                                 quantity, self._api_gateway.preview_cached_buy_quantity(quantity, price))
+            self._buy_budget_waits[action.strategy] = wait
+            if not evaluated:
+                self._record_diagnostic("risk_evaluated", decision=decision)
+            self._record_diagnostic("buy_budget_wait_started", strategy=action.strategy, reason=reason,
+                                    retry_at=wait.retry_at)
+            self._append_order_trace_values("5.1", action.idempotency_key, client_id, None,
+                                            self._context.version, failure_code=OrderExecutionFailureCode(reason.value))
+        else:
+            wait.suppressed_count += 1
+            if prepared:
+                self._record_diagnostic("buy_budget_wait_rechecked", strategy=action.strategy,
+                                        reason=reason, suppressed_count=wait.suppressed_count)
+                wait.retry_at = self._clock() + timedelta(seconds=30)
+                wait.quantity = quantity
+                wait.preview_quantity = self._api_gateway.preview_cached_buy_quantity(quantity, price)
+        self._last_risk_decision = decision
+        self._unsubmitted_preparation_intent = None
+        self._preparation_retry_attempt = 0
+        self._preparation_retry_due_at = None
+        self._preparation_retry_intent = None
+        return (TradingEvent(
+            event_type=TradingEventType.BUY_RISK_BLOCKED, occurred_at=self._clock(),
+            priority=EventPriority.ORDER_OUTCOME,
+            event_id=f"{client_id}:risk:{reason.value}:{self._context.version}",
+            lower_event_id=self._context.runtime.lower_event_id, order_id=client_id,
+            payload=BuyRiskBlockedPayload(strategy=action.strategy, reason=reason),
+        ),)
+
+    def _clear_buy_budget_wait(self, strategy: StrategyType, reason: str) -> None:
+        """
+        함수 이름: _clear_buy_budget_wait()
+        기능: 해소·만료·종료 때 보류 한 건을 정리하고 억제 합계를 기록한다.
+        인자: strategy -> 정리 전략, reason -> 고정 종료 원인
+        반환값: 없음
+        작성 날짜: 2026/09/18
+        """
+        wait = self._buy_budget_waits.pop(strategy, None)
+        if wait is not None:
+            self._record_diagnostic("buy_budget_wait_finished", strategy=strategy, reason=reason,
+                                    suppressed_count=wait.suppressed_count)
+
+    def _buy_exposure(self, decision_price: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+        """
+        함수 이름: _buy_exposure()
+        기능: 수량 제한과 최종 위험 검사에 같은 전략·잔여·미체결 노출을 제공한다.
+        인자: decision_price -> 동일 시장 평가에서 고정한 가격
+        반환값: 전략 평가액, 잔여 평가액, 미체결 BUY 예약액
+        작성 날짜: 2026/09/18
+        """
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            reserved = Decimal("0")
+            for state in self._order_states_by_client_id.values():
+                order = state.order
+                if order.side is OrderSide.BUY and not order.is_terminal:
+                    reserved += max(Decimal("0"), order.submitted_quantity - order.filled_quantity) * order.market_price_at_decision
+            return (self._require_position().quantity * decision_price,
+                    self.residual_totals[0] * decision_price, reserved)
+
+    def _limit_buy_quantity(self, quantity: Decimal, price: Decimal) -> Decimal:
+        """
+        함수 이름: _limit_buy_quantity()
+        기능: 기존 주문 희망량을 정책 단건 상한과 잔여 누적 예산 이하로 내린다.
+        인자: quantity -> 잔고·분할·기존 단건 상한으로 계산한 수량, price -> 결정 가격
+        반환값: 필터 적용 전 수량 또는 소진된 예산의 0
+        작성 날짜: 2026/09/18
+        """
+        policy = self._risk_policy_state
+        if not isinstance(policy, RiskPolicy):
+            return quantity  # 정책 부재는 preflight 위험 검사가 구분한다.
+        strategy, residual, reserved = self._buy_exposure(price)
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            remaining = None if policy.max_position_notional is None else max(
+                Decimal("0"), policy.max_position_notional - (strategy + residual) - reserved,
+            )
+            decimal_context.rounding = ROUND_DOWN
+            for limit in (policy.max_order_notional, remaining):
+                if limit is not None:
+                    quantity = min(quantity, limit / price)
+            return quantity
+
+    def _evaluate_buy_order_risk(self, order: Order, *, requested_order_notional: Decimal | None = None) -> RiskDecision:
         """
         함수 이름: _evaluate_buy_order_risk()
-        기능: filter 뒤 BUY와 current Position·예약·KST 손실을 한 RiskBudgetSnapshot으로 평가한다.
-        인자: order -> 아직 journal이나 Gateway에 전달하지 않은 BUY Order
-        반환값: 순수 RiskPolicy gate가 만든 RiskDecision
-        작성 날짜: 2026/08/24
+        기능: 필터 후 실제 수량을 재검사하고 판정 시점의 예산을 보존한다.
+        인자: order -> journal 이전 BUY, requested_order_notional -> 예산 조정 전 금액
+        반환값: 최종 불변 위험 판정
+        작성 날짜: 2026/09/18
         """
-        # Journal 이전 gate는 exact BUY Order만 받아 다른 side의 cleanup 경로를 방해하지 않는다.
-        if not isinstance(order, Order):
-            raise TypeError("order must be an Order")
-        if order.side is not OrderSide.BUY:
-            raise ValueError("risk evaluation is available only for BUY orders")
+        if not isinstance(order, Order) or order.side is not OrderSide.BUY:
+            raise ValueError("risk evaluation requires a BUY Order")
+        budget = self._build_buy_risk_budget(order.market_price_at_decision, order.submitted_quantity,
+                                            requested_order_notional=requested_order_notional)
+        decision = evaluate_buy_risk(self._risk_policy_state, budget)
+        self._last_risk_decision = decision
+        self._record_diagnostic("risk_evaluated", order=order, decision=decision)
+        return decision
 
+    def _build_buy_risk_budget(self, decision_price: Decimal, quantity: Decimal,
+                               *, requested_order_notional: Decimal | None = None) -> RiskBudgetSnapshot:
+        """
+        함수 이름: _build_buy_risk_budget()
+        기능: 주문 객체가 없는 예산 부족도 같은 시각·노출·손실 산식으로 설명한다.
+        인자: decision_price -> 결정 가격, quantity -> 후보 수량, requested_order_notional -> 조정 전 금액
+        반환값: 위험 예산 스냅샷
+        작성 날짜: 2026/09/18
+        """
         # Position·history·market 값은 session RLock을 보유한 caller의 동일 원자 snapshot에서 읽는다.
         position = self._require_position()
         history_controller = self._require_trade_history_controller()
         position_state = position.get_snapshot()
-        decision_price = order.market_price_at_decision
         current_time = self._clock()
         if not isinstance(current_time, datetime):
             raise TypeError("clock result must be a datetime")
@@ -7040,21 +7269,7 @@ class TradingController:
             raise ValueError("clock result must use UTC")
         current_kst_date = current_time.astimezone(_KOREA_TIME_ZONE).date()
 
-        # Active·UNKNOWN·PREPARED BUY의 미체결 수량만 후보 외 예약 예산으로 합산한다.
-        reserved_buy_notional = Decimal("0")
-        for state in self._order_states_by_client_id.values():
-            reserved_order = state.order
-            if reserved_order.side is not OrderSide.BUY or reserved_order.is_terminal:
-                continue
-            remaining_quantity = (
-                reserved_order.submitted_quantity
-                - reserved_order.filled_quantity
-            )
-            if remaining_quantity > Decimal("0"):
-                reserved_buy_notional += (
-                    remaining_quantity
-                    * reserved_order.market_price_at_decision
-                )
+        strategy_notional, residual_notional, reserved_buy_notional = self._buy_exposure(decision_price)
 
         # Durable KST 당일 SELL만 실현손익에 포함하고 BUY/null field는 계산 대상에서 제외한다.
         daily_realized_pnl = Decimal("0")
@@ -7072,12 +7287,9 @@ class TradingController:
         # Decimal128 계산 context로 ambient precision과 무관한 누적 exposure·PnL을 고정한다.
         with localcontext() as decimal_context:
             decimal_context.prec = 34
-            current_position_notional = (
-                (position_state.quantity + self.residual_totals[0]) * decision_price
-            )
-            candidate_order_notional = (
-                order.submitted_quantity * decision_price
-            )
+            decimal_context.rounding = ROUND_HALF_EVEN
+            current_position_notional = strategy_notional + residual_notional
+            candidate_order_notional = quantity * decision_price
             projected_position_notional = (
                 current_position_notional
                 + reserved_buy_notional
@@ -7099,7 +7311,14 @@ class TradingController:
                 scoped_pnl += unrealized_pnl
             daily_loss = max(-scoped_pnl, Decimal("0"))
 
-        budget = RiskBudgetSnapshot(
+        maximum_position = policy_state.max_position_notional if isinstance(policy_state, RiskPolicy) else None
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            remaining_position = None if maximum_position is None else max(
+                Decimal("0"), maximum_position - current_position_notional - reserved_buy_notional,
+            )
+        return RiskBudgetSnapshot(
             policy_version=self._session_risk_policy_version,
             market_version=(
                 self._latest_market_evaluation_version
@@ -7116,11 +7335,13 @@ class TradingController:
             unrealized_pnl=unrealized_pnl,
             daily_loss=daily_loss,
             manual_kill_active=self._manual_kill_active,
+            evaluated_at=current_time,
+            strategy_position_notional=strategy_notional,
+            residual_position_notional=residual_notional,
+            remaining_position_notional=remaining_position,
+            requested_order_notional=requested_order_notional,
+            max_position_notional=maximum_position,
         )
-        decision = evaluate_buy_risk(policy_state, budget)
-        self._last_risk_decision = decision
-        self._record_diagnostic("risk_evaluated", order=order, decision=decision)
-        return decision  # frozen decision은 UI publication과 fault trace가 같은 budget을 재사용한다.
 
     def _calculate_order_quantity(
         self,
@@ -7350,6 +7571,7 @@ class TradingController:
         version_before = self._context.version
         completed_durable_terminal_replay = False
         completed_durable_stale_no_fill_replay = False
+        completed_durable_partial_replay = False
 
         # Testnet reset의 숫자 order ID 재사용은 새 client execution을 Position에 적용하기 전에 막는다.
         if result.exchange_order_id is not None:
@@ -7398,6 +7620,15 @@ class TradingController:
                 and result.client_order_id == durable_trade.client_order_id
                 and result.symbol == durable_trade.symbol
             )
+            if completed_durable_state and result.status is OrderStatus.PARTIALLY_FILLED:
+                completed_durable_partial_replay = _order_result_replays_applied_fills(result, order)
+                if not completed_durable_partial_replay:
+                    self._enter_order_reconciliation(
+                        state,
+                        OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                        message_id=message_id,
+                    )
+                    return ()  # 알 수 없거나 변경된 fill은 완료 Order와 삭제된 journal을 변경하지 않는다.
             if (
                 durable_trade is not None
                 and result.status in TERMINAL_ORDER_STATUSES
@@ -7416,9 +7647,10 @@ class TradingController:
         if (
             completed_durable_terminal_replay
             or completed_durable_stale_no_fill_replay
+            or completed_durable_partial_replay
         ):
-            # REST FULL이 먼저 끝난 뒤 도착한 같은 주문의 과거 NEW와 terminal replay는 durable 사실을 되돌리지 않는다.
-            return ()  # 회계 불일치 terminal과 fill이 있는 비terminal 결과는 위 보수적 재조정 경계를 유지한다.
+            # History와 REMOVE가 완료된 주문의 중복 알림은 Order·Position·journal을 다시 갱신하지 않는다.
+            return ()  # 검증된 과거 부분 체결도 다음 시장 평가와 보유 관리를 중단시키지 않는다.
         try:
             if initial:
                 order.apply_order_result(result)
@@ -9224,6 +9456,9 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        for strategy in tuple(self._buy_budget_waits):
+            self._clear_buy_budget_wait(strategy, "session_closed")
+
         # close callback이 Controller에 재진입해도 같은 자원을 두 번 정리하지 않는다.
         if self._cleanup_in_progress:
             return

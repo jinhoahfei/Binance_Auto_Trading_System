@@ -41,6 +41,7 @@ from .mappers import (
     SymbolFilterError,
     SymbolTradingRules,
     format_decimal_parameter,
+    floor_market_quantity,
     map_fill_payloads,
     map_order_result,
     parse_account_relevant_filters,
@@ -48,6 +49,7 @@ from .mappers import (
     parse_symbol_trading_rules,
     prepare_market_order,
     validate_account_relevant_filters,
+    validate_market_notional,
 )
 
 
@@ -1040,6 +1042,44 @@ class BinanceSpotRESTClient:
             self._local_time_milliseconds()
             + self._server_time_offset_milliseconds
         )  # API key·secret·signature 없이 정수 timestamp만 외부에 제공한다.
+
+    def preview_cached_buy_quantity(self, *, symbol: str, quantity: Decimal, price: Decimal) -> Decimal | None:
+        """
+        함수 이름: preview_cached_buy_quantity()
+        기능: 보류 재확인 필요성만 로컬 규칙으로 판단하며 제출 권한을 만들지 않는다.
+        인자: symbol -> 종목, quantity -> 예산 제한 수량, price -> 최신 전략 가격
+        반환값: 최소 조건을 충족한 내림 수량, 미달 0, 규칙 미관측 None
+        작성 날짜: 2026/09/18
+        """
+        rules = self._symbol_rules_by_symbol.get(symbol)
+        if rules is None:
+            return None
+        if quantity <= Decimal("0"):
+            return Decimal("0")
+        try:
+            floored = floor_market_quantity(quantity, rules)
+            validate_market_notional(floored, price, rules)
+            return floored
+        except SymbolFilterError:
+            return Decimal("0")  # 실제 준비는 항상 fresh reference와 전체 필터를 다시 검사한다.
+
+    def discard_unsubmitted_preparation(self, *, order: Order) -> bool:
+        """
+        함수 이름: discard_unsubmitted_preparation()
+        기능: journal 이전에 포기한 주문의 메모리 준비 자료만 멱등 정리한다.
+        인자: order -> Controller가 아직 기록·전송하지 않은 동일 주문
+        반환값: 정리 여부; 전송 흔적 또는 다른 객체이면 False
+        작성 날짜: 2026/09/18
+        """
+        client_id = order.client_order_id
+        if client_id in self._submission_attempt_evidence_by_client_id:
+            return False
+        fingerprint = self._prepared_orders_by_client_id.get(client_id)
+        if fingerprint is not None and fingerprint.object_identity != id(order):
+            return False
+        self._prepared_orders_by_client_id.pop(client_id, None)
+        self._preparation_filter_evidence_by_client_id.pop(client_id, None)
+        return True
 
     def prepare_order(self, order: Order) -> Order:
         """

@@ -20,6 +20,7 @@ _STREAM_REASONS = frozenset({
     "market_stream_initializing", "market_stream_initialization_failed", "kline_stream_closed",
     "kline_stream_disconnected", "kline_stream_invalid", "account_stream_disconnected",
     "account_stream_closed", "account_stream_processing_failed",
+    "market_input_stalled", "market_evaluation_stalled",
 })
 # 2026/09/09 Binance 공식 User Data Stream의 Order Reject Reason 표를 확인한 고정 값이다.
 # https://developers.binance.com/en/docs/products/spot/user-data-stream#order-reject-reason

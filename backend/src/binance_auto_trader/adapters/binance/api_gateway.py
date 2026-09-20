@@ -1452,6 +1452,32 @@ class APIGateway:
         result = submit_order(order=order)
         return self._validate_order_result(order, result)
 
+    def preview_cached_buy_quantity(self, quantity: Decimal, price: Decimal) -> Decimal | None:
+        """
+        함수 이름: preview_cached_buy_quantity()
+        기능: 보류 중 실제 준비를 다시 할 필요가 있는지 캐시만 조회한다.
+        인자: quantity -> 예산 제한 수량, price -> 결정 가격
+        반환값: 최소 조건 통과 수량 또는 0/None
+        작성 날짜: 2026/09/18
+        """
+        preview = getattr(self._rest_client, "preview_cached_buy_quantity", None)
+        result = preview(symbol="ETHUSDT", quantity=quantity, price=price) if callable(preview) else None
+        if result is not None and (not isinstance(result, Decimal) or not result.is_finite() or result < 0):
+            raise ValueError("invalid cached buy quantity")
+        return result
+
+    def discard_unsubmitted_preparation(self, order: Order) -> None:
+        """
+        함수 이름: discard_unsubmitted_preparation()
+        기능: 아직 journal에 넣지 않은 준비 객체의 로컬 자원만 해제한다.
+        인자: order -> 전송하지 않은 주문
+        반환값: 없음
+        작성 날짜: 2026/09/18
+        """
+        discard = getattr(self._rest_client, "discard_unsubmitted_preparation", None)
+        if callable(discard):
+            discard(order=order)
+
     def prepare_order(self, order: Order) -> Order:
         """
         함수 이름: prepare_order()

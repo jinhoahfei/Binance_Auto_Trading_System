@@ -30,7 +30,8 @@ export type BackendRiskBlockReason =
     | 'MANUAL_KILL_SWITCH_ACTIVE'
     | 'RISK_ORDER_NOTIONAL_EXCEEDED'
     | 'RISK_DAILY_LOSS_EXCEEDED'
-    | 'RISK_POSITION_NOTIONAL_EXCEEDED';
+    | 'RISK_POSITION_NOTIONAL_EXCEEDED'
+    | 'RISK_BUY_BUDGET_INSUFFICIENT';
 
 export interface BackendConnectionSnapshot {
     readonly status: 'online';
@@ -118,6 +119,12 @@ export interface BackendTradingLogicCoverage {
 }
 
 export interface BackendRiskBudgetSnapshot {
+    readonly evaluated_at?: string | null;
+    readonly strategy_position_notional?: BackendDecimalString | null;
+    readonly residual_position_notional?: BackendDecimalString | null;
+    readonly remaining_position_notional?: BackendDecimalString | null;
+    readonly requested_order_notional?: BackendDecimalString | null;
+    readonly max_position_notional?: BackendDecimalString | null;
     readonly policy_version: number | null;
     readonly market_version: number;
     readonly account_version: number;

@@ -1115,6 +1115,12 @@ def map_risk_budget_snapshot(risk_budget: object | None) -> JsonObject | None:
     return normalize_json_object(
         {
             "policy_version": getattr(risk_budget, "policy_version"),
+            "evaluated_at": getattr(risk_budget, "evaluated_at", None),
+            "strategy_position_notional": getattr(risk_budget, "strategy_position_notional", None),
+            "residual_position_notional": getattr(risk_budget, "residual_position_notional", None),
+            "remaining_position_notional": getattr(risk_budget, "remaining_position_notional", None),
+            "requested_order_notional": getattr(risk_budget, "requested_order_notional", None),
+            "max_position_notional": getattr(risk_budget, "max_position_notional", None),
             "market_version": getattr(risk_budget, "market_version"),
             "account_version": getattr(risk_budget, "account_version"),
             "context_version": getattr(risk_budget, "context_version"),
@@ -1521,7 +1527,8 @@ export type BackendRiskBlockReason =
     | 'MANUAL_KILL_SWITCH_ACTIVE'
     | 'RISK_ORDER_NOTIONAL_EXCEEDED'
     | 'RISK_DAILY_LOSS_EXCEEDED'
-    | 'RISK_POSITION_NOTIONAL_EXCEEDED';
+    | 'RISK_POSITION_NOTIONAL_EXCEEDED'
+    | 'RISK_BUY_BUDGET_INSUFFICIENT';
 
 export interface BackendConnectionSnapshot {{
     readonly status: 'online';
@@ -1609,6 +1616,12 @@ export interface BackendTradingLogicCoverage {{
 }}
 
 export interface BackendRiskBudgetSnapshot {{
+    readonly evaluated_at?: string | null;
+    readonly strategy_position_notional?: BackendDecimalString | null;
+    readonly residual_position_notional?: BackendDecimalString | null;
+    readonly remaining_position_notional?: BackendDecimalString | null;
+    readonly requested_order_notional?: BackendDecimalString | null;
+    readonly max_position_notional?: BackendDecimalString | null;
     readonly policy_version: number | null;
     readonly market_version: number;
     readonly account_version: number;

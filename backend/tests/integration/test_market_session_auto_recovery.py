@@ -138,12 +138,21 @@ class MarketSessionAutoRecoveryTests(unittest.TestCase):
                 clock = MutableUtcClock(controller._clock())
                 controller._clock = clock
                 controller._market_stream_recovery_enabled = True
+                controller._last_strategy_evaluation_at = clock()
+                from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
+                records = []
+                controller._diagnostics = RuntimeDiagnostics(records.append)
                 self.assertFalse(controller.check_market_liveness())
                 clock.set(clock() + timedelta(seconds=59))
                 controller.note_market_input()
                 self.assertFalse(controller.check_market_liveness())
                 clock.set(clock() + timedelta(seconds=1))
                 self.assertTrue(controller.check_market_liveness())
+                failure = next(record for record in records if record['event'] == 'strategy_evaluation_stalled')
+                self.assertEqual(failure['details']['reason'], 'market_evaluation_stalled')
+                self.assertEqual(failure['details']['market_input_age_seconds'], 1)
+                self.assertEqual(failure['details']['evaluation_age_seconds'], 60)
+                self.assertNotIn('UNCLASSIFIED_STREAM_REASON', str(records))
                 self.assertFalse(controller.check_market_liveness())
                 clock.set(clock() + timedelta(seconds=60))
                 self.assertTrue(controller.market_recovery_snapshot()['prolonged'])
@@ -155,3 +164,35 @@ class MarketSessionAutoRecoveryTests(unittest.TestCase):
                 self.assertEqual(client.submit_count, 0)
             finally:
                 controller.close_session_resources()
+
+    def test_missing_market_input_is_classified_with_both_observation_times(self):
+        """입력이 60초 끊긴 경우 평가 중단과 구분해 실제 시각과 경과 시간을 남긴다."""
+        from datetime import timedelta
+        from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
+        from tests.integration.test_order_reconciliation_flow import MutableUtcClock
+        with TemporaryDirectory() as directory:
+            client = _FilledSubmissionTestnetRESTClient()
+            controller, _, _ = _create_recovery_controller(Path(directory) / 'history.jsonl', client, command_gate=True)
+            self.addCleanup(controller.close_session_resources)
+            controller.reconcile_startup_state()
+            selected = controller.commit_regime_selection(RegimeType.TYPE_0, controller.fetch_selected_trading_logic(RegimeType.TYPE_0), command_id='select', expected_version=0)
+            controller.start_trading(command_id='start', expected_version=selected.version)
+            clock = MutableUtcClock(controller._clock())
+            controller._clock = clock
+            controller._market_stream_recovery_enabled = True
+            controller._last_strategy_evaluation_at = clock() - timedelta(seconds=5)
+            records = []
+            controller._diagnostics = RuntimeDiagnostics(records.append)
+            controller.note_market_input()
+            self.assertFalse(controller.check_market_liveness())
+            clock.set(clock() + timedelta(seconds=60))
+            self.assertTrue(controller.check_market_liveness())
+            failure = next(record for record in records if record['event'] == 'strategy_evaluation_stalled')
+            self.assertEqual(failure['details']['reason'], 'market_input_stalled')
+            self.assertEqual(failure['details']['market_input_age_seconds'], 60)
+            self.assertEqual(failure['details']['evaluation_age_seconds'], 65)
+            self.assertEqual(failure['details']['evaluation_stall_elapsed_seconds'], 60)
+            self.assertIsNotNone(failure['details']['last_market_input_at'])
+            self.assertIsNotNone(failure['details']['last_evaluated_at'])
+            self.assertNotIn('UNCLASSIFIED_STREAM_REASON', str(records))
+            self.assertEqual(client.submit_count, 0)

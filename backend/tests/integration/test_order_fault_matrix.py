@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import asyncio
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from pathlib import Path
@@ -40,6 +41,7 @@ from binance_auto_trader.domain.trading.events import (
     TradingEvent,
     TradingEventType,
 )
+from binance_auto_trader.domain.trading.context import MarketEvaluationSnapshot
 from binance_auto_trader.domain.trading.order import (
     Fill,
     Order,
@@ -116,6 +118,7 @@ class FillSpecification:
     price: Decimal
     fee_amount: Decimal
     executed_at: datetime
+    fee_asset: str = "USDT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,8 +164,12 @@ class OrderResultSpecification:
                         quantity=fill_quantity,
                         price=fill_specification.price,
                         fee_amount=fill_specification.fee_amount,
-                        fee_asset="USDT",
-                        fee_quote_amount=fill_specification.fee_amount,
+                        fee_asset=fill_specification.fee_asset,
+                        fee_quote_amount=(
+                            fill_specification.fee_amount * fill_specification.price
+                            if fill_specification.fee_asset == "ETH"
+                            else fill_specification.fee_amount
+                        ),
                         executed_at=fill_specification.executed_at,
                     )
                 )
@@ -504,6 +511,114 @@ class OrderFaultMatrixIntegrationTests(unittest.TestCase):
             fixture.controller.reconciliation_cause_snapshot.status,
             ReconciliationCauseStatus.MISSING,
         )  # 과거 NEW replay는 완료된 주문의 process-lifetime cause를 오염시키지 않는다.
+
+    def _completed_split_fill_pipeline(self) -> tuple[PipelineFixture, OrderResult]:
+        """운영 장애와 같은 ETH 수수료의 2회 체결을 history/REMOVE까지 완료한다."""
+        terminal = OrderResultSpecification(
+            "104", OrderStatus.FILLED, MARKET_UPDATED_AT,
+            (
+                FillSpecification("104-a", Decimal("0.5"), Decimal("2622.21"), Decimal("0.000001"), MARKET_UPDATED_AT, "ETH"),
+                FillSpecification("104-b", None, Decimal("2622.21"), Decimal("0.000001"), MARKET_UPDATED_AT, "ETH"),
+            ),
+        )
+        fixture = self._create_pipeline(
+            submit_specifications=(terminal,), pending_order_recovery_enabled=True,
+        )
+        self._execute_actions(fixture.controller, self._entry_actions(fixture, sequence_number=104))
+        self.assertEqual((), fixture.history_controller.get_pending_orders())
+        self.assertIs(fixture.controller.status, TradingSessionStatus.RUNNING)
+        return fixture, terminal.build(fixture.rest_client.submitted_orders[0])
+
+    def test_late_partial_fill_replays_preserve_running_strategy_and_durable_state(self) -> None:
+        """REST 전량 체결 뒤 NEW→부분 체결→전량 체결이 와도 다음 시세를 평가한다."""
+        fixture, terminal = self._completed_split_fill_pipeline()
+        controller = fixture.controller
+        order = fixture.rest_client.submitted_orders[0]
+        state = controller._order_states_by_client_id[order.client_order_id]
+        initial_position = fixture.position.get_snapshot()
+        initial_version = controller.context.version
+        history_before = fixture.storage_path.read_bytes()
+        pending_path = fixture.storage_path.with_name(fixture.storage_path.name + ".pending-orders.jsonl")
+        pending_before = pending_path.read_bytes()
+        for delay_ms in (0, 1):
+            shifted = replace(
+                terminal,
+                processed_at=terminal.processed_at + timedelta(milliseconds=delay_ms),
+                fills=tuple(replace(f, executed_at=f.executed_at + timedelta(milliseconds=delay_ms)) for f in terminal.fills),
+            )
+            replays = (
+                replace(shifted, status=OrderStatus.NEW, fills=()),
+                replace(shifted, status=OrderStatus.PARTIALLY_FILLED, fills=shifted.fills[:1]),
+                replace(shifted, status=OrderStatus.PARTIALLY_FILLED, fills=shifted.fills[:1]),
+                replace(shifted, status=OrderStatus.PARTIALLY_FILLED, fills=shifted.fills[1:]),
+                replace(shifted, status=OrderStatus.PARTIALLY_FILLED),
+                shifted,
+            )
+            for replay in replays:
+                self.assertTrue(controller.observe_order_result(replay))
+                self.assertIs(controller.status, TradingSessionStatus.RUNNING)
+                self.assertFalse(controller.reconciliation_required)
+                self.assertFalse(state.pending_recovery_pending)
+                self.assertIs(state.recovery_lifecycle, PendingOrderRecoveryLifecycle.HISTORY_COMMITTED)
+                self.assertIs(order.status, OrderStatus.FILLED)
+                self.assertEqual(initial_position, fixture.position.get_snapshot())
+                self.assertEqual(initial_version, controller.context.version)
+                self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+                self.assertEqual(history_before, fixture.storage_path.read_bytes())
+                self.assertEqual(pending_before, pending_path.read_bytes())
+        market = MarketEvaluationSnapshot(
+            realtime_price=Decimal("2622.20"), lower_band=Decimal("2500"),
+            upper_band=Decimal("2700"), realtime_pct_b=Decimal("0.611"),
+        )
+        event = controller.observe_market_evaluation(
+            market, source_event_id="after-late-partial",
+            market_version=controller._market_snapshot.version,
+        )
+        self.assertIsNotNone(event)
+        self.assertIsNotNone(asyncio.run(controller.process_next_event()))
+        self.assertEqual(market, controller.context.market)
+        self.assertIs(controller.status, TradingSessionStatus.RUNNING)
+        self.assertEqual(1, len(fixture.rest_client.submitted_orders))
+
+    def test_late_partial_with_unknown_or_changed_fills_reconciles_without_reapplying(self) -> None:
+        """완료 주문과 다른 체결·수수료·identity는 중복으로 숨기지 않는다."""
+        for changed in ("trade_id", "quantity", "price", "fee", "fee_asset", "client_id", "exchange_id", "empty"):
+            with self.subTest(changed=changed), TemporaryDirectory() as directory:
+                # 각 반례의 durable history와 controller를 독립적으로 만든다.
+                with mock_patch.object(self, "_temporary_directory") as temporary:
+                    temporary.name = directory
+                    fixture, terminal = self._completed_split_fill_pipeline()
+                fill = terminal.fills[0]
+                if changed == "trade_id":
+                    fill = replace(fill, trade_id="unknown-trade")
+                elif changed == "quantity":
+                    fill = replace(fill, quantity=fill.quantity / 2)
+                elif changed == "price":
+                    fill = replace(fill, price=Decimal("2623"), fee_quote_amount=fill.fee_amount * Decimal("2623"))
+                elif changed == "fee":
+                    fill = replace(fill, fee_amount=fill.fee_amount * 2, fee_quote_amount=fill.fee_quote_amount * 2)
+                elif changed == "fee_asset":
+                    fill = replace(fill, fee_asset="USDT", fee_amount=fill.fee_quote_amount)
+                elif changed == "exchange_id":
+                    fill = replace(fill, exchange_order_id="999")
+                result = replace(
+                    terminal, status=OrderStatus.PARTIALLY_FILLED,
+                    fills=() if changed == "empty" else (fill,),
+                    client_order_id="bat-other-client" if changed == "client_id" else terminal.client_order_id,
+                    exchange_order_id="999" if changed == "exchange_id" else terminal.exchange_order_id,
+                )
+                initial_position = fixture.position.get_snapshot()
+                initial_fills = fixture.rest_client.submitted_orders[0].fills
+                fixture.controller.observe_order_result(result)
+                self.assertTrue(fixture.controller.reconciliation_required)
+                self.assertEqual(initial_position, fixture.position.get_snapshot())
+                self.assertEqual(initial_fills, fixture.rest_client.submitted_orders[0].fills)
+                self.assertEqual(1, len(fixture.history_controller.trade_history.trades))
+                self.assertEqual((), fixture.history_controller.get_pending_orders())
+                self.assertIs(
+                    fixture.controller.order_execution_trace[-1].failure_code,
+                    OrderExecutionFailureCode.ORDER_RESULT_INVALID,
+                )
 
     def test_late_terminal_stream_replay_with_accounting_drift_reconciles(
         self,

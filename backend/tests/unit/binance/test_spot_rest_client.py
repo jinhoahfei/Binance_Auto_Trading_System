@@ -1010,6 +1010,43 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         self.assertEqual(order.submitted_quantity, Decimal("1.234"))
         self.assertEqual(len(transport.requests), 6)
 
+    def test_discard_unsubmitted_preparation_is_bounded_and_identity_checked(self) -> None:
+        """미전송 31개 후보는 즉시 정리하고 같은 ID의 다른 객체는 삭제 권한을 갖지 않는다."""
+        transport = QueueHTTPTransport([
+            response for index in range(31)
+            for response in _preparation_responses(include_server_time=index == 0)
+        ])
+        client = _client(transport)
+        for index in range(31):
+            order = client.prepare_order(_order(client_order_id=f"discard-{index}"))
+            other = _order(client_order_id=order.client_order_id)
+            self.assertFalse(client.discard_unsubmitted_preparation(order=other))
+            self.assertTrue(client.discard_unsubmitted_preparation(order=order))
+            self.assertTrue(client.discard_unsubmitted_preparation(order=order))
+            self.assertEqual(client._prepared_orders_by_client_id, {})
+            self.assertEqual(client._preparation_filter_evidence_by_client_id, {})
+        self.assertTrue(all(request["method"] == "GET" for request in transport.requests))
+
+    def test_discard_preserves_sent_and_unknown_order_recovery_evidence(self) -> None:
+        """실제 POST 경계를 지난 주문은 체결 또는 결과 불명 모두 준비·전송 근거를 보존한다."""
+        for response, status in (
+            (_json_response(_filled_order_payload()), OrderStatus.FILLED),
+            (_json_response({"code": -2010, "msg": "Duplicate order sent."}, status_code=400), OrderStatus.UNKNOWN),
+        ):
+            with self.subTest(status=status):
+                transport = QueueHTTPTransport([*_preparation_responses(), response])
+                client = _client(transport)
+                order = client.prepare_order(_order())
+                result = client.submit_order(order=order)
+                self.assertIs(result.status, status)
+                preparation = client.get_order_preparation_filter_evidence(client_order_id=order.client_order_id)
+                submission = client.get_order_submission_attempt_evidence(client_order_id=order.client_order_id)
+                self.assertFalse(client.discard_unsubmitted_preparation(order=order))
+                self.assertIsNotNone(preparation)
+                self.assertIsNotNone(submission)
+                self.assertIs(client.get_order_preparation_filter_evidence(client_order_id=order.client_order_id), preparation)
+                self.assertIs(client.get_order_submission_attempt_evidence(client_order_id=order.client_order_id), submission)
+
     def test_duplicate_prepare_rejects_expired_cached_evidence(self) -> None:
         """
         함수 이름: test_duplicate_prepare_rejects_expired_cached_evidence()

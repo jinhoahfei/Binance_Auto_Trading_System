@@ -289,22 +289,23 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
             map_trading_snapshot(controller, "disabled")["position_average_entry_price"],
         )
 
-        # 실제 체결 aggregate를 연결해 quote 수수료 포함 원가가 추가 매수 시 그대로 갱신되는지 본다.
+        # 표시 평단가는 수수료를 제외하고, 손익용 원가는 수수료를 계속 포함한다.
         position = Position()
         controller._position = position  # Fake 실행 결과만 적용하므로 외부 주문을 호출하지 않는다.
         position.apply_execution(_execution_summary(
             side=OrderSide.BUY, quantity="1", price="2400", fee_quote_amount="1",
         ))
         initial_snapshot = controller.snapshot_session()
-        self.assertEqual(Decimal("2401"), initial_snapshot.position_average_entry_price)
+        self.assertEqual(Decimal("2400"), initial_snapshot.position_average_entry_price)
+        self.assertEqual(Decimal("2401"), position.average_entry_price)
         position.apply_execution(_execution_summary(
             side=OrderSide.BUY, quantity="1", price="2500", exchange_order_id="2",
         ))
         self.assertEqual(
-            "2450.5",
+            "2450",
             map_trading_snapshot(controller, "disabled")["position_average_entry_price"],
         )
-        self.assertEqual(Decimal("2401"), initial_snapshot.position_average_entry_price)
+        self.assertEqual(Decimal("2400"), initial_snapshot.position_average_entry_price)
 
         # 전량 매도 후에는 과거 entry 값이 아닌 명시적 null을 wire로 전달한다.
         position.apply_execution(_execution_summary(
@@ -314,6 +315,23 @@ class TradingSessionSelectionAndStartTests(unittest.TestCase):
         closed_snapshot = map_trading_snapshot(controller, "disabled")
         self.assertFalse(closed_snapshot["has_open_position"])
         self.assertIsNone(closed_snapshot["position_average_entry_price"])
+
+    def test_position_price_publication_excludes_eth_commission(self) -> None:
+        """실제 문제의 ETH 수수료 사례를 표시값과 손익 원가 양쪽에서 검증한다."""
+        controller, _, _ = _create_ready_controller()
+        position = Position()
+        controller._position = position
+        position.apply_execution(_execution_summary(
+            side=OrderSide.BUY, quantity="0.0037", price="2622.21",
+            fee_asset="ETH", fee_amount="0.00000370", fee_quote_amount="0.009702177",
+        ))
+        self.assertEqual(
+            "2622.21",
+            map_trading_snapshot(controller, "disabled")["position_average_entry_price"],
+        )
+        self.assertEqual(Decimal("0.00369630"), position.quantity)
+        self.assertEqual(Decimal("9.702177"), position.cost_basis)
+        self.assertEqual(Decimal("2624.83"), position.average_entry_price.quantize(Decimal("0.01")))
 
     def test_market_observation_updates_context_and_opens_lower_event(
         self,

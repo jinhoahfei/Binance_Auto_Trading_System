@@ -1280,27 +1280,25 @@ class BuySellFlowIntegrationTests(unittest.TestCase):
             self.assertEqual((), first_outcomes)
             self.assertEqual(1, len(fixture.rest_client.submitted_orders))
 
-            # 두 번째 BUY 단건은 60 이하이지만 예약 합계가 75를 넘으므로 REST 전에 차단된다.
+            # 첫 예약을 뺀 남은 25만 사용하고, 최종 누적 금액은 75를 넘지 않는다.
             second_outcomes = _execute_case_b_buy(
                 fixture,
                 "intent-reserved-second",
             )
-            self.assertEqual(1, len(second_outcomes))
-            self.assertEqual(
-                RiskBlockReason.RISK_POSITION_NOTIONAL_EXCEEDED,
-                second_outcomes[0].payload.reason,
-            )
-            self.assertEqual(1, len(fixture.rest_client.submitted_orders))
+            self.assertEqual((), second_outcomes)
+            self.assertEqual(2, len(fixture.rest_client.submitted_orders))
             decision = fixture.controller.last_risk_decision
             self.assertIsNotNone(decision)
             self.assertGreater(
                 decision.budget.reserved_buy_notional,
                 Decimal("0"),
             )
-            self.assertGreater(
+            self.assertEqual(
                 decision.budget.projected_position_notional,
                 policy.max_position_notional,
             )
+            self.assertTrue(decision.allowed)
+            self.assertEqual(Decimal("25"), decision.budget.candidate_order_notional)
 
 
 if __name__ == "__main__":

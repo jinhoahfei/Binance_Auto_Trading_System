@@ -11,6 +11,19 @@ import type {
 import { format_quote_amount } from '../../../shared/formatting';
 import styles from './TraderPanel.module.css';
 
+/** 판정 시각을 한국 시간으로 표시하고 이전 데이터의 미관측 상태를 보존한다. */
+function format_risk_time(value: string | null | undefined): string {
+    if (!value || Number.isNaN(Date.parse(value))) return '확인 불가';
+    return new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'medium', hourCycle: 'h23',
+    }).format(new Date(value)) + ' KST';
+}
+
+/** 관측하지 않은 금액을 0으로 보이지 않게 한다. */
+function format_risk_amount(value: string | null | undefined): string {
+    return value == null ? '확인 불가' : format_quote_amount(value, 'USDT');
+}
+
 const TAB_OPTIONS: ReadonlyArray<{ readonly tab: TraderPanelTab; readonly label: string }> = [
     { tab: 'recent', label: '체결 내역' },
     { tab: 'realtime', label: '실시간 지표' },
@@ -48,10 +61,15 @@ const RISK_OPERATOR_NOTICE_BY_REASON: Readonly<Record<string, RiskOperatorNotice
         summary: '오늘의 누적 손실이 승인된 위험 한도에 도달했습니다.',
         action: '당일 손익과 거래 내역을 조정한 뒤 다음 거래 가능 시점을 확인하세요.',
     },
+    RISK_BUY_BUDGET_INSUFFICIENT: {
+        id: 'risk-buy-budget-insufficient',
+        summary: '남은 예산으로 거래소 최소 주문 조건을 충족하지 못해 매수를 보류했습니다.',
+        action: '실행 중에는 신호와 예산을 자동 재평가하며, 조건이 충족되면 매수를 다시 시도합니다.',
+    },
     RISK_POSITION_NOTIONAL_EXCEEDED: {
         id: 'risk-position-notional-exceeded',
         summary: '예상 포지션 금액이 승인된 누적 위험 한도를 초과했습니다.',
-        action: '현재 포지션과 미체결 매수 예약을 조정한 뒤 다시 확인하세요.',
+        action: '실행 중에는 보유액과 미체결 매수 예약을 반영해 가능한 매수 수량을 자동 재평가합니다.',
     },
 };
 
@@ -88,8 +106,7 @@ const MANUAL_KILL_BEHAVIOR_LABEL_BY_VALUE: Readonly<Record<string, string>> = {
 /**
  * 함수 이름: create_risk_operator_notices()
  * 기능: authoritative risk 상태를 raw payload가 없는 allowlist 경고와 운영자 조치로 변환한다.
- * 인자: risk_block_reason -> backend typed 차단 사유 또는 null/미수신
- *      risk_policy_availability -> 승인 policy의 authoritative availability 또는 미수신
+ * 인자: risk_policy_availability -> 승인 policy의 authoritative availability 또는 미수신
  *      configured_risk_policy_version -> 현재 승인 policy version 또는 null/미수신
  *      max_order_notional -> 단건 BUY 상한 Decimal 문자열, 명시적 무제한 null 또는 미수신
  *      max_position_notional -> 누적 Position 상한 Decimal 문자열, 명시적 무제한 null 또는 미수신
@@ -97,7 +114,6 @@ const MANUAL_KILL_BEHAVIOR_LABEL_BY_VALUE: Readonly<Record<string, string>> = {
  *      daily_loss_scope -> configured policy의 일일 손실 계산 범위 또는 null/미수신
  *      manual_kill_behavior -> configured policy의 수동 안전 차단 동작 또는 null/미수신
  *      session_risk_policy_version -> session이 고정한 policy version 또는 null/미수신
- *      last_risk_decision_allowed -> 마지막 BUY risk 판정 또는 null/미수신
  *      manual_kill_active -> manual kill의 authoritative 활성 상태 또는 미수신
  *      manual_kill_cleanup_complete -> activation 뒤 주문 정리·청산 완료 여부 또는 미수신
  *      manual_kill_activation_behavior -> 현재 활성 epoch에 고정된 동작 또는 null/미수신
@@ -107,7 +123,6 @@ const MANUAL_KILL_BEHAVIOR_LABEL_BY_VALUE: Readonly<Record<string, string>> = {
  * 작성 날짜: 2026/08/25
  */
 function create_risk_operator_notices(
-    risk_block_reason: string | null | undefined,
     risk_policy_availability: TraderPanelRiskPolicyAvailability | undefined,
     configured_risk_policy_version: number | null | undefined,
     max_order_notional: string | null | undefined,
@@ -116,7 +131,6 @@ function create_risk_operator_notices(
     daily_loss_scope: string | null | undefined,
     manual_kill_behavior: string | null | undefined,
     session_risk_policy_version: number | null | undefined,
-    last_risk_decision_allowed: boolean | null | undefined,
     manual_kill_active: boolean | undefined,
     manual_kill_cleanup_complete: boolean | undefined,
     manual_kill_activation_behavior: string | null | undefined,
@@ -124,14 +138,6 @@ function create_risk_operator_notices(
     process_ownership_ambiguous: boolean | undefined,
 ): ReadonlyArray<RiskOperatorNotice> {
     const notices: Array<RiskOperatorNotice> = [];
-
-    // Backend reason은 exact allowlist로만 번역하며 알 수 없는 원문은 절대 DOM에 보간하지 않는다.
-    if (risk_block_reason !== null && risk_block_reason !== undefined) {
-        notices.push(
-            RISK_OPERATOR_NOTICE_BY_REASON[risk_block_reason]
-                ?? UNKNOWN_RISK_OPERATOR_NOTICE,
-        );
-    }
 
     // Policy availability와 session version 불일치는 마지막 BUY 판정이 없어도 독립 경고한다.
     if (risk_policy_availability === 'UNAVAILABLE'
@@ -157,13 +163,6 @@ function create_risk_operator_notices(
         && manual_kill_behavior !== null
         && manual_kill_behavior !== undefined) {
         notices.push(CONFIGURED_UNBOUNDED_OPERATOR_NOTICE);
-    }
-
-    // 불완전 component 입력의 차단 판정도 성공 상태로 축소하지 않고 일반 안전 경고로 표시한다.
-    if (last_risk_decision_allowed === false
-        && (risk_block_reason === null || risk_block_reason === undefined)
-        && !notices.some((notice) => notice.id === 'unknown-risk-block')) {
-        notices.push(UNKNOWN_RISK_OPERATOR_NOTICE);
     }
 
     // Manual kill과 process ownership 모호성은 risk reason과 별개인 운영 상태로 각각 보존한다.
@@ -289,8 +288,10 @@ export function TraderPanel({
             - panel.getBoundingClientRect().top - 62;
         panel.scrollTop = Math.max(0, target);  // sticky 탭 바로 아래에 새 제목을 둔다.
     }, [activeTab, phase_key]);
+    const last_risk_notice = risk_block_reason != null
+        ? RISK_OPERATOR_NOTICE_BY_REASON[risk_block_reason] ?? UNKNOWN_RISK_OPERATOR_NOTICE
+        : last_risk_decision_allowed === false ? UNKNOWN_RISK_OPERATOR_NOTICE : null;
     const risk_operator_notices = create_risk_operator_notices(
-        risk_block_reason,
         risk_policy_availability,
         configured_risk_policy_version,
         max_order_notional,
@@ -299,7 +300,6 @@ export function TraderPanel({
         daily_loss_scope,
         manual_kill_behavior,
         session_risk_policy_version,
-        last_risk_decision_allowed,
         manual_kill_active,
         manual_kill_cleanup_complete,
         manual_kill_activation_behavior,
@@ -362,6 +362,13 @@ export function TraderPanel({
                     </ul>
                 </section>
             ) : null}
+            {last_risk_notice === null ? null : (
+                <section aria-label="최근 매수 판정 사유" className={styles.riskDecisionNotice} role="status">
+                    <p>아래 사유는 마지막 주문 평가 당시의 기록입니다.</p>
+                    <strong>{last_risk_notice.summary}</strong>
+                    <p>{last_risk_notice.action}</p>
+                </section>
+            )}
             {/* 마지막 decision의 frozen budget을 별도 계산 없이 authoritative 문자열로 표시한다. */}
             {last_risk_budget === null || last_risk_budget === undefined ? null : (
                 <section
@@ -369,18 +376,25 @@ export function TraderPanel({
                     className={styles.riskBudget}
                 >
                     <div className={styles.riskBudgetHeader}>
-                        <h3 id="trader-risk-budget-title">마지막 BUY 위험 예산</h3>
+                        <h3 id="trader-risk-budget-title">최근 매수 판정</h3>
                         <span>
                             {last_risk_decision_allowed === true
                                 ? '허용'
                                 : last_risk_decision_allowed === false
-                                    ? '차단'
+                                    ? risk_block_reason === 'RISK_BUY_BUDGET_INSUFFICIENT' ? '보류' : '차단'
                                     : '판정 확인 필요'}
                         </span>
                     </div>
+                    <p>판정 시각: {format_risk_time(last_risk_budget.evaluated_at)}</p>
+                    <p>아래 금액은 판정 당시의 값입니다.</p>
                     <dl>
+                        <div><dt>전략 포지션</dt><dd>{format_risk_amount(last_risk_budget.strategy_position_notional)}</dd></div>
+                        <div><dt>잔여 ETH 평가액</dt><dd>{format_risk_amount(last_risk_budget.residual_position_notional)}</dd></div>
+                        <div><dt>총 보유 한도</dt><dd>{format_risk_amount(last_risk_budget.max_position_notional)}</dd></div>
+                        <div><dt>남은 총 보유 예산</dt><dd>{format_risk_amount(last_risk_budget.remaining_position_notional)}</dd></div>
+                        <div><dt>조정 전 주문 금액</dt><dd>{format_risk_amount(last_risk_budget.requested_order_notional)}</dd></div>
                         <div>
-                            <dt>현재 포지션</dt>
+                            <dt>합산 보유액</dt>
                             <dd>{format_quote_amount(
                                 last_risk_budget.current_position_notional,
                                 'USDT',
@@ -394,7 +408,7 @@ export function TraderPanel({
                             )}</dd>
                         </div>
                         <div>
-                            <dt>후보 주문</dt>
+                            <dt>조정 후 후보 주문</dt>
                             <dd>{format_quote_amount(
                                 last_risk_budget.candidate_order_notional,
                                 'USDT',
@@ -431,7 +445,7 @@ export function TraderPanel({
                         {last_risk_budget.policy_version ?? '미설정'} · market v
                         {last_risk_budget.market_version} · account v
                         {last_risk_budget.account_version} · context v
-                        {last_risk_budget.context_version} · 판정 시 안전 차단
+                        {last_risk_budget.context_version} · 판정 시 수동 긴급정지
                         {' '}{last_risk_budget.manual_kill_active ? '활성' : '비활성'}
                     </p>
                 </section>

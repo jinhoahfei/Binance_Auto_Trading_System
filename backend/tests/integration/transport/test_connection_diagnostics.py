@@ -2,13 +2,18 @@
 
 import json
 import socket
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
+from binance_auto_trader.application.trading_controller import TradingSessionStatus
 from binance_auto_trader.transport.app import LoopbackTransportServer
 from tests.integration.test_trading_session_flow import _create_ready_controller
+from tests.integration.test_buy_sell_flow import (
+    FakeOrderScenario, _create_buy_flow_fixture, _execute_case_b_buy,
+)
 
 
 class ConnectionDiagnosticsTests(unittest.TestCase):
@@ -69,3 +74,32 @@ class ConnectionDiagnosticsTests(unittest.TestCase):
         self.assertEqual(failures[0]["details"]["reason"], "parent_stop_pipe_eof")
         self.assertEqual(controller.snapshot_session().recovery["phase"], "blocked")
         self.assertEqual(controller.snapshot_session().recovery["block_reason"], "PROCESS_OWNERSHIP_AMBIGUOUS")
+
+    def test_two_ui_disconnects_and_reconnect_leave_trading_independent(self):
+        """UI 연결이 두 번 끊겨도 세션·전략은 유지되고 재연결은 주문을 재전송하지 않는다."""
+        with TemporaryDirectory() as directory:
+            fixture = _create_buy_flow_fixture(directory, FakeOrderScenario.IMMEDIATE_FILLED)
+            self.addCleanup(fixture.controller.close_session_resources)
+            initial_reconciliation = fixture.controller.reconciliation_required
+            records = []
+            server = object.__new__(LoopbackTransportServer)
+            server._runtime = SimpleNamespace(
+                diagnostics=RuntimeDiagnostics(records.append), trading_controller=fixture.controller)
+            server._event_stream = Mock(session_id="test-session")
+            server._event_stream.wait_for_events.return_value = SimpleNamespace(
+                requires_resync=False, events=(Mock(sequence=1),), closed=True)
+            server._authenticate_websocket_frame = Mock(return_value=(0, None))
+            for cycle in range(3):
+                websocket = Mock()
+                if cycle < 2:
+                    websocket.send_text_object.side_effect = ConnectionResetError("peer disconnected")
+                with patch("binance_auto_trader.transport.app._WebSocketConnection", return_value=websocket):
+                    server._serve_websocket(Mock())
+                self.assertIs(fixture.controller.status, TradingSessionStatus.RUNNING)
+                self.assertEqual(fixture.controller.reconciliation_required, initial_reconciliation)
+                if cycle == 1:
+                    _execute_case_b_buy(fixture, "after-ui-disconnect")
+            self.assertEqual(len(fixture.rest_client.submitted_orders), 1)
+            self.assertEqual(len(fixture.repository.get_trade_history()), 1)
+            self.assertEqual(sum(record['event'] == 'ui_stream_connection_lost' for record in records), 2)
+            self.assertEqual(sum(record['event'] == 'ui_stream_authenticated' for record in records), 3)

@@ -16,6 +16,28 @@ class BinanceReadOnlyRESTFacade:
 
     __slots__ = ()  # Credential과 delegate 저장 책임은 mode별 adapter에 남긴다.
 
+    def preview_cached_buy_quantity(self, *, symbol, quantity, price):
+        """
+        함수 이름: preview_cached_buy_quantity()
+        기능: 네트워크 없는 보류 판단만 mode별 delegate에 전달한다.
+        인자: symbol, quantity, price -> 예산 계산 입력
+        반환값: 로컬 예상 수량 또는 미지원 None
+        작성 날짜: 2026/09/18
+        """
+        preview = getattr(self._delegate, "preview_cached_buy_quantity", None)
+        return preview(symbol=symbol, quantity=quantity, price=price) if callable(preview) else None
+
+    def discard_unsubmitted_preparation(self, *, order):
+        """
+        함수 이름: discard_unsubmitted_preparation()
+        기능: 외부 주문 없이 포기한 준비 자료만 delegate에서 제거한다.
+        인자: order -> journal 이전 주문
+        반환값: 정리 여부 또는 미지원 False
+        작성 날짜: 2026/09/18
+        """
+        discard = getattr(self._delegate, "discard_unsubmitted_preparation", None)
+        return discard(order=order) if callable(discard) else False
+
     def fetch_earn_residual_evidence(self, *, since):
         """
         함수 이름: fetch_earn_residual_evidence()

@@ -323,6 +323,12 @@ const ALLOWED_ERROR_CODES: &[&str] = &[
 
 // payload 내용 대신 실패한 계약 필드의 고정 이름만 기록한다.
 const ALLOWED_VALIDATION_FIELDS: &[&str] = &[
+    "trading.last_risk_budget.evaluated_at",
+    "trading.last_risk_budget.strategy_position_notional",
+    "trading.last_risk_budget.residual_position_notional",
+    "trading.last_risk_budget.remaining_position_notional",
+    "trading.last_risk_budget.requested_order_notional",
+    "trading.last_risk_budget.max_position_notional",
     "trading.last_risk_budget.projected_position_notional",
     "trading.last_risk_budget.current_position_notional",
     "trading.last_risk_budget.candidate_order_notional",

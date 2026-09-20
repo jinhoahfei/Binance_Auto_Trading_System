@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from enum import Enum
@@ -157,6 +157,20 @@ class PositionStateSnapshot:
     entered_at: datetime | None
     status: PositionStatus
     exit_reason: ExitReason | None
+    # 남은 포지션에 비례 배분한 gross 체결값으로 표시 평단가에서 수수료를 제외한다.
+    # 표시용 비례 배분의 반올림 차이가 기존 회계 상태 대조를 바꾸지 않도록 비교에서 제외한다.
+    entry_executed_quantity: Decimal = field(default=ZERO_DECIMAL, compare=False)
+    entry_executed_amount: Decimal = field(default=ZERO_DECIMAL, compare=False)
+
+    @property
+    def average_fill_price(self) -> Decimal:
+        """수수료 제외 체결 수량 가중 평균가. 손익용 평균 원가와 별도로 공개한다."""
+        if self.entry_executed_quantity == ZERO_DECIMAL:
+            return ZERO_DECIMAL
+        with localcontext() as decimal_context:
+            decimal_context.prec = DECIMAL_CALCULATION_PRECISION
+            decimal_context.rounding = ROUND_HALF_EVEN
+            return self.entry_executed_amount / self.entry_executed_quantity
 
     def __post_init__(self) -> None:
         """
@@ -177,6 +191,10 @@ class PositionStateSnapshot:
         _validate_decimal(self.cost_basis, "cost_basis", allow_zero=True)
         if not isinstance(self.status, PositionStatus):
             raise TypeError("status must be a PositionStatus")
+        for name in ("entry_executed_quantity", "entry_executed_amount"):
+            _validate_decimal(
+                getattr(self, name), name, allow_zero=self.status is PositionStatus.CLOSED,
+            )
         if self.owner is not None and not isinstance(self.owner, StrategyType):
             raise TypeError("owner must be a StrategyType or None")
         if self.exit_reason is not None and not isinstance(
@@ -228,6 +246,8 @@ class PositionStateSnapshot:
             raise ValueError("A CLOSED Position requires zero cost_basis")
         if self.average_entry_price != ZERO_DECIMAL:
             raise ValueError("A CLOSED Position requires zero average_entry_price")
+        if self.entry_executed_quantity != ZERO_DECIMAL or self.entry_executed_amount != ZERO_DECIMAL:
+            raise ValueError("A CLOSED Position requires zero entry execution values")
         if self.owner is not None:
             raise ValueError("A CLOSED Position cannot have an owner")
         if self.entered_at is not None:
@@ -576,11 +596,15 @@ class Position:
                         + acquisition_fee
                     )
                     next_average_entry_price = next_cost_basis / next_quantity
+                    next_entry_quantity = state.entry_executed_quantity + trade.executed_quantity
+                    next_entry_amount = state.entry_executed_amount + trade.executed_amount
                 next_state = PositionStateSnapshot(
                     symbol=state.symbol,
                     owner=trade.strategy,
                     quantity=next_quantity,
                     average_entry_price=next_average_entry_price,
+                    entry_executed_quantity=next_entry_quantity,
+                    entry_executed_amount=next_entry_amount,
                     cost_basis=next_cost_basis,
                     entered_at=(
                         state.entered_at
@@ -650,11 +674,15 @@ class Position:
                 decimal_context.prec = DECIMAL_CALCULATION_PRECISION
                 decimal_context.rounding = ROUND_HALF_EVEN
                 next_average_entry_price = next_cost_basis / next_quantity
+                next_entry_quantity = state.entry_executed_quantity * next_quantity / state.quantity
+                next_entry_amount = state.entry_executed_amount * next_quantity / state.quantity
             next_state = PositionStateSnapshot(
                 symbol=state.symbol,
                 owner=state.owner,
                 quantity=next_quantity,
                 average_entry_price=next_average_entry_price,
+                entry_executed_quantity=next_entry_quantity,
+                entry_executed_amount=next_entry_amount,
                 cost_basis=next_cost_basis,
                 entered_at=state.entered_at,
                 status=PositionStatus.OPEN,
@@ -698,6 +726,8 @@ class Position:
                 )
             )
             next_average_entry_price = next_cost_basis / next_quantity
+            next_entry_quantity = state.entry_executed_quantity + summary.executed_quantity
+            next_entry_amount = state.entry_executed_amount + summary.executed_amount
         entered_at = (
             state.entered_at if state.entered_at is not None else executed_at
         )  # 최초 BUY 시각은 이후 추가 체결에도 바꾸지 않는다.
@@ -707,6 +737,8 @@ class Position:
             owner=summary.strategy,
             quantity=next_quantity,
             average_entry_price=next_average_entry_price,
+            entry_executed_quantity=next_entry_quantity,
+            entry_executed_amount=next_entry_amount,
             cost_basis=next_cost_basis,
             entered_at=entered_at,
             status=PositionStatus.OPEN,
@@ -761,11 +793,15 @@ class Position:
             decimal_context.rounding = ROUND_HALF_EVEN
             next_cost_basis = state.cost_basis - allocated_cost_basis
             next_average_entry_price = next_cost_basis / next_quantity
+            next_entry_quantity = state.entry_executed_quantity * next_quantity / state.quantity
+            next_entry_amount = state.entry_executed_amount * next_quantity / state.quantity
         return PositionStateSnapshot(
             symbol=state.symbol,
             owner=state.owner,
             quantity=next_quantity,
             average_entry_price=next_average_entry_price,
+            entry_executed_quantity=next_entry_quantity,
+            entry_executed_amount=next_entry_amount,
             cost_basis=next_cost_basis,
             entered_at=state.entered_at,
             status=PositionStatus.OPEN,

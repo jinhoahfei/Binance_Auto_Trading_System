@@ -93,6 +93,7 @@ const BACKEND_RISK_BLOCK_REASONS: ReadonlySet<BackendRiskBlockReason> = new Set(
     'RISK_ORDER_NOTIONAL_EXCEEDED',
     'RISK_DAILY_LOSS_EXCEEDED',
     'RISK_POSITION_NOTIONAL_EXCEEDED',
+    'RISK_BUY_BUDGET_INSUFFICIENT',
 ]);
 
 
@@ -393,12 +394,16 @@ function validate_risk_budget_snapshot(
         'daily_loss',
         'manual_kill_active',
     ]);
+    const extension_fields = new Set([
+        'evaluated_at', 'strategy_position_notional', 'residual_position_notional',
+        'remaining_position_notional', 'requested_order_notional', 'max_position_notional',
+    ]);
     const received_budget_fields = Object.keys(budget);
 
-    // Unknown field나 누락 field가 typed facade state에 숨지 못하게 exact DTO 표면을 고정한다.
-    if (received_budget_fields.length !== expected_budget_fields.size
+    // 기존 필수 필드와 신규 선택 필드를 구분해 이전 판정도 손실 없이 읽는다.
+    if ([...expected_budget_fields].some((field_name) => !(field_name in budget))
         || received_budget_fields.some((field_name) => {
-            return !expected_budget_fields.has(field_name);
+            return !expected_budget_fields.has(field_name) && !extension_fields.has(field_name);
         })) {
         throw new BackendContractError(
             'MALFORMED_BACKEND_PAYLOAD',
@@ -483,7 +488,45 @@ function validate_risk_budget_snapshot(
         'trading.last_risk_budget.manual_kill_active',
     );
 
+    const extensions: Record<string, string | null> = {};
+    for (const field_name of extension_fields) {
+        if (!(field_name in budget)) continue;
+        const field_value = budget[field_name];
+        extensions[field_name] = field_value === null ? null
+            : field_name === 'evaluated_at'
+                ? assert_utc_timestamp(field_value, `trading.last_risk_budget.${field_name}`)
+                : assert_non_negative_decimal_string(field_value, `trading.last_risk_budget.${field_name}`);
+    }
+    const strategy_amount = extensions.strategy_position_notional;
+    const residual_amount = extensions.residual_position_notional;
+    if ((strategy_amount != null) !== (residual_amount != null)) {
+        throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'risk position breakdown is incomplete');
+    }
+    if (strategy_amount != null && residual_amount != null) {
+        const scale = Math.max(...[strategy_amount, residual_amount, current_position_notional]
+            .map((value) => value.split('.')[1]?.length ?? 0));
+        if (decimal_text_to_scaled_integer(strategy_amount, scale)
+            + decimal_text_to_scaled_integer(residual_amount, scale)
+            !== decimal_text_to_scaled_integer(current_position_notional, scale)) {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'risk position breakdown is inconsistent');
+        }
+    }
+    if (extensions.remaining_position_notional != null) {
+        if (extensions.max_position_notional == null) {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'risk budget limit is missing');
+        }
+        const amounts = [extensions.max_position_notional, current_position_notional,
+            reserved_buy_notional, extensions.remaining_position_notional];
+        const scale = Math.max(...amounts.map((value) => value.split('.')[1]?.length ?? 0));
+        const remaining = decimal_text_to_scaled_integer(amounts[0]!, scale)
+            - decimal_text_to_scaled_integer(amounts[1]!, scale) - decimal_text_to_scaled_integer(amounts[2]!, scale);
+        if (decimal_text_to_scaled_integer(amounts[3]!, scale) !== (remaining > 0n ? remaining : 0n)) {
+            throw new BackendContractError('MALFORMED_BACKEND_PAYLOAD', 'risk remaining budget is inconsistent');
+        }
+    }
+
     return {
+        ...extensions,
         policy_version,
         market_version,
         account_version,

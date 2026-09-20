@@ -516,6 +516,12 @@ class TransportContractTests(unittest.TestCase):
                 "unrealized_pnl": "-3.50",
                 "daily_loss": "12.75",
                 "manual_kill_active": False,
+                "evaluated_at": None,
+                "strategy_position_notional": None,
+                "residual_position_notional": None,
+                "remaining_position_notional": None,
+                "requested_order_notional": None,
+                "max_position_notional": None,
             },
             trading["last_risk_budget"],
         )

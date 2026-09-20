@@ -1,0 +1,768 @@
+{
+  "cutoff_sequence": 780092,
+  "cutoff_time": "2026-09-19T21:53:28.065820+09:00",
+  "events": {
+    "logging_started": 1,
+    "runtime_configured": 1,
+    "application_state_changed": 5,
+    "stream_unavailable": 1,
+    "stream_reconciled": 1,
+    "startup_step": 3,
+    "residual_custody_reconciled": 1,
+    "balance_reconciliation_checked": 1,
+    "market_input_observed": 220130,
+    "market_evaluation_deferred": 163260,
+    "runtime_heartbeat": 1951,
+    "ui_http_request_started": 5,
+    "ui_http_request_completed": 5,
+    "ui_stream_opened": 5,
+    "ui_stream_authenticated": 5,
+    "session_command_completed": 2,
+    "decision_started": 1,
+    "action_requested": 2,
+    "strategy_evaluated": 56867,
+    "market_boundary": 276980,
+    "evaluation_started": 56866,
+    "ui_stream_heartbeat": 3900,
+    "market_boundary_waiting": 87,
+    "ui_stream_connection_lost": 4,
+    "operation_failed": 4,
+    "ui_stream_closed": 4
+  },
+  "levels": {
+    "INFO": 780083,
+    "WARNING": 1,
+    "ERROR": 8
+  },
+  "file_count": 74,
+  "bytes": 1214911411,
+  "sequence_gaps": [],
+  "dropped": 0,
+  "parse_errors": [],
+  "state_counts": {
+    "LOWER_TOUCH_WATCH": 56867
+  },
+  "regime_counts": {
+    "TYPE_0": 56867
+  },
+  "transitions": [
+    {
+      "time": "2026-09-18T13:18:43.130795+09:00",
+      "file": "Log_History/2026-09-18_13-18-32-364965_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0001.log",
+      "line": 52,
+      "sequence": 52,
+      "before": {
+        "root_state": "NOT_STARTED",
+        "ownership_state": null,
+        "case_b_signal_state": null,
+        "case_c_signal_state": null,
+        "case_b_position_state": null,
+        "case_c_position_state": null
+      },
+      "after": {
+        "root_state": "LOWER_TOUCH_WATCH",
+        "ownership_state": null,
+        "case_b_signal_state": null,
+        "case_c_signal_state": null,
+        "case_b_position_state": null,
+        "case_c_position_state": null
+      },
+      "ids": [
+        "G-01"
+      ]
+    }
+  ],
+  "position_counts": {
+    "0": 56867
+  },
+  "heartbeat_fields": {
+    "status": {
+      "not_started": 1,
+      "running": 1950
+    },
+    "selected": {
+      "None": 1,
+      "TYPE_0": 1950
+    },
+    "command_enabled": {
+      "True": 1951
+    },
+    "has_open_position": {
+      "False": 1951
+    },
+    "manual_kill_active": {
+      "False": 1951
+    },
+    "last_risk_decision": {
+      "None": 1951
+    },
+    "process_ownership_ambiguous": {
+      "False": 1951
+    }
+  },
+  "metrics": {
+    "min_price": {
+      "time": "2026-09-18T13:34:16.060592+09:00",
+      "file": "Log_History/2026-09-18_13-18-32-364965_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0001.log",
+      "line": 6480,
+      "sequence": 6480,
+      "value": "2470.00000000",
+      "price": "2470.00000000",
+      "lower_band": "2433.541513257279929342871598501494",
+      "pct_b": "0.8244614233724210633507999448754941"
+    },
+    "max_price": {
+      "time": "2026-09-19T18:09:00.061102+09:00",
+      "file": "Log_History/2026-09-19_18-07-28-055465_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0066.log",
+      "line": 643,
+      "sequence": 694617,
+      "value": "2659.99000000",
+      "price": "2659.99000000",
+      "lower_band": "2602.629200592521971648383481025841",
+      "pct_b": "1.220816608795021378470322147642258"
+    },
+    "min_gap": {
+      "time": "2026-09-19T13:39:30.041730+09:00",
+      "file": "Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+      "line": 5172,
+      "sequence": 591607,
+      "value": "5.780683144411326452285075339",
+      "price": "2612.53000000",
+      "lower_band": "2606.749316855588673547714924661062",
+      "pct_b": "0.1780514361535269549094200021864720"
+    },
+    "max_gap": {
+      "time": "2026-09-19T04:49:02.061010+09:00",
+      "file": "Log_History/2026-09-19_04-40-00-062839_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0037.log",
+      "line": 3849,
+      "sequence": 386007,
+      "value": "172.9819848321880763055359474",
+      "price": "2645.01000000",
+      "lower_band": "2472.028015167811923694464052594176",
+      "pct_b": "0.9119772060944630256532429159596750"
+    },
+    "min_gap_pct_of_lower": {
+      "time": "2026-09-19T13:39:30.041730+09:00",
+      "file": "Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+      "line": 5172,
+      "sequence": 591607,
+      "value": "0.221758306678461884659911400",
+      "price": "2612.53000000",
+      "lower_band": "2606.749316855588673547714924661062",
+      "pct_b": "0.1780514361535269549094200021864720"
+    },
+    "max_gap_pct_of_lower": {
+      "time": "2026-09-19T04:49:02.061010+09:00",
+      "file": "Log_History/2026-09-19_04-40-00-062839_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0037.log",
+      "line": 3849,
+      "sequence": 386007,
+      "value": "6.997573804617473685550746800",
+      "price": "2645.01000000",
+      "lower_band": "2472.028015167811923694464052594176",
+      "pct_b": "0.9119772060944630256532429159596750"
+    },
+    "min_pct_b": {
+      "time": "2026-09-19T13:39:30.041730+09:00",
+      "file": "Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+      "line": 5172,
+      "sequence": 591607,
+      "value": "0.1780514361535269549094200021864720",
+      "price": "2612.53000000",
+      "lower_band": "2606.749316855588673547714924661062",
+      "pct_b": "0.1780514361535269549094200021864720"
+    },
+    "max_pct_b": {
+      "time": "2026-09-19T17:21:04.056633+09:00",
+      "file": "Log_History/2026-09-19_17-14-10-059718_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0064.log",
+      "line": 2864,
+      "sequence": 675334,
+      "value": "1.400991704662274608229615946123357",
+      "price": "2659.18000000",
+      "lower_band": "2603.360617919431393025124974509095",
+      "pct_b": "1.400991704662274608229615946123357"
+    }
+  },
+  "lower_touch_numeric_count": 0,
+  "condition_counts": {
+    "lower_price:False": 56866
+  },
+  "first_market": {
+    "time": "2026-09-18T13:18:44.080829+09:00",
+    "file": "Log_History/2026-09-18_13-18-32-364965_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0001.log",
+    "line": 62,
+    "sequence": 62,
+    "market": {
+      "realtime_price": "2476.68000000",
+      "lower_band": "2433.042190438197311631936334053845",
+      "upper_band": "2476.894809561802688368063665946155",
+      "realtime_pct_b": "0.9951015568489258427882119867713613",
+      "current_30m_candle_id": "ETHUSDT:30m:2026-09-18T04:00:00Z",
+      "current_30m_low": "2472.84000000",
+      "current_30m_high": "2483.11000000",
+      "touch_candle_bbw": "0.01786280317796557338154331996207283",
+      "confirmed_30m_close": false,
+      "confirmed_30m_close_time": null,
+      "confirmed_1m_close": false,
+      "ema_slope_30m_close": "0.11390892",
+      "realtime_ema_slope": "0.12877665",
+      "current_close_ema_slope": "0.12877665",
+      "tp_reference_ema_slope": "0.08483880",
+      "cci_30m_realtime": "193.3316990839750579735871491647018",
+      "pct_b_close": "1.138989223162928932703594554086481",
+      "current_closed_candle_low": "2469.18000000",
+      "previous_3_closed_candle_lows": [
+        "2452.71000000",
+        "2461.00000000",
+        "2461.78000000"
+      ],
+      "holding_elapsed": "0",
+      "signal_elapsed": "0",
+      "case_c_timer_elapsed": "0",
+      "pct_b_at_least_060_for_5s": true,
+      "realtime_slope_above_008_for_5s": true,
+      "realtime_slope_at_most_004_for_5s": false,
+      "pct_b_below_060_for_5s": false,
+      "realtime_slope_at_most_minus_055_for_3m": false,
+      "condition_timers": [
+        {
+          "condition_id": "b_profit_zone",
+          "timer_id": "hold:2:b_profit_zone:136720148283833",
+          "kind": "hold",
+          "state": "completed",
+          "duration_seconds": "5",
+          "remaining_seconds": "0",
+          "sampled_at": "2026-09-18T04:18:44.076136+00:00",
+          "reset_reason": "stream_reset"
+        },
+        {
+          "condition_id": "b_trend_slope",
+          "timer_id": "hold:2:b_trend_slope:136720148283833",
+          "kind": "hold",
+          "state": "completed",
+          "duration_seconds": "5",
+          "remaining_seconds": "0",
+          "sampled_at": "2026-09-18T04:18:44.076136+00:00",
+          "reset_reason": "stream_reset"
+        },
+        {
+          "condition_id": "b_trend_exit_slope",
+          "timer_id": "hold:2:b_trend_exit_slope:None",
+          "kind": "hold",
+          "state": "waiting",
+          "duration_seconds": "5",
+          "remaining_seconds": "5",
+          "sampled_at": "2026-09-18T04:18:44.076136+00:00",
+          "reset_reason": null
+        },
+        {
+          "condition_id": "b_trend_exit_pct_b",
+          "timer_id": "hold:2:b_trend_exit_pct_b:None",
+          "kind": "hold",
+          "state": "waiting",
+          "duration_seconds": "5",
+          "remaining_seconds": "5",
+          "sampled_at": "2026-09-18T04:18:44.076136+00:00",
+          "reset_reason": null
+        },
+        {
+          "condition_id": "c_stop",
+          "timer_id": "hold:2:c_stop:None",
+          "kind": "hold",
+          "state": "waiting",
+          "duration_seconds": "180",
+          "remaining_seconds": "180",
+          "sampled_at": "2026-09-18T04:18:44.076136+00:00",
+          "reset_reason": null
+        }
+      ]
+    }
+  },
+  "last_market": {
+    "time": "2026-09-19T21:53:28.062023+09:00",
+    "file": "Log_History/2026-09-19_21-53-10-064855_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0074.log",
+    "line": 123,
+    "sequence": 780087,
+    "market": {
+      "realtime_price": "2642.61000000",
+      "lower_band": "2615.366386027960871452428369761332",
+      "upper_band": "2652.024613972039128547571630238668",
+      "realtime_pct_b": "0.7431786941147012455763306873481723",
+      "current_30m_candle_id": "ETHUSDT:30m:2026-09-19T12:30:00Z",
+      "current_30m_low": "2637.79000000",
+      "current_30m_high": "2643.11000000",
+      "touch_candle_bbw": "0.01391893176112358360909348118540507",
+      "confirmed_30m_close": false,
+      "confirmed_30m_close_time": null,
+      "confirmed_1m_close": false,
+      "ema_slope_30m_close": "0.01440065",
+      "realtime_ema_slope": "0.01100319",
+      "current_close_ema_slope": "0.01100319",
+      "tp_reference_ema_slope": "-0.01461914",
+      "cci_30m_realtime": "54.36546200228847662025430375026798",
+      "pct_b_close": "0.7249308395479678998118320065905931",
+      "current_closed_candle_low": "2637.00000000",
+      "previous_3_closed_candle_lows": [
+        "2637.92000000",
+        "2636.59000000",
+        "2636.47000000"
+      ],
+      "holding_elapsed": "0",
+      "signal_elapsed": "0",
+      "case_c_timer_elapsed": "0",
+      "pct_b_at_least_060_for_5s": true,
+      "realtime_slope_above_008_for_5s": false,
+      "realtime_slope_at_most_004_for_5s": true,
+      "pct_b_below_060_for_5s": false,
+      "realtime_slope_at_most_minus_055_for_3m": false,
+      "condition_timers": [
+        {
+          "condition_id": "b_profit_zone",
+          "timer_id": "hold:2:b_profit_zone:235890015053458",
+          "kind": "hold",
+          "state": "completed",
+          "duration_seconds": "5",
+          "remaining_seconds": "0",
+          "sampled_at": "2026-09-19T12:53:28.053267+00:00",
+          "reset_reason": null
+        },
+        {
+          "condition_id": "b_trend_slope",
+          "timer_id": "hold:2:b_trend_slope:240008022099208",
+          "kind": "hold",
+          "state": "stopped",
+          "duration_seconds": "5",
+          "remaining_seconds": "5",
+          "sampled_at": "2026-09-19T12:53:28.053267+00:00",
+          "reset_reason": "condition_broken"
+        },
+        {
+          "condition_id": "b_trend_exit_slope",
+          "timer_id": "hold:2:b_trend_exit_slope:249008031524458",
+          "kind": "hold",
+          "state": "completed",
+          "duration_seconds": "5",
+          "remaining_seconds": "0",
+          "sampled_at": "2026-09-19T12:53:28.053267+00:00",
+          "reset_reason": null
+        },
+        {
+          "condition_id": "b_trend_exit_pct_b",
+          "timer_id": "hold:2:b_trend_exit_pct_b:235674017171208",
+          "kind": "hold",
+          "state": "stopped",
+          "duration_seconds": "5",
+          "remaining_seconds": "5",
+          "sampled_at": "2026-09-19T12:53:28.053267+00:00",
+          "reset_reason": "condition_broken"
+        },
+        {
+          "condition_id": "c_stop",
+          "timer_id": "hold:2:c_stop:None",
+          "kind": "hold",
+          "state": "waiting",
+          "duration_seconds": "180",
+          "remaining_seconds": "180",
+          "sampled_at": "2026-09-19T12:53:28.053267+00:00",
+          "reset_reason": null
+        }
+      ]
+    }
+  },
+  "nonempty_pending": 0,
+  "market_evaluation_count": 56866,
+  "closed_30m_candles": 65,
+  "ui_reconnections": [
+    {
+      "time": "2026-09-18T19:48:04.830245+09:00",
+      "file": "Log_History/2026-09-18_19-26-44-056375_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0015.log",
+      "line": 8618,
+      "sequence": 160071,
+      "recovered_at": "2026-09-18T19:48:05.137750+09:00",
+      "seconds": 0.307505
+    },
+    {
+      "time": "2026-09-19T02:16:35.046392+09:00",
+      "file": "Log_History/2026-09-19_02-06-56-056888_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0031.log",
+      "line": 4061,
+      "sequence": 321632,
+      "recovered_at": "2026-09-19T02:16:35.325795+09:00",
+      "seconds": 0.279403
+    },
+    {
+      "time": "2026-09-19T08:53:35.235728+09:00",
+      "file": "Log_History/2026-09-19_08-42-24-067399_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0046.log",
+      "line": 4370,
+      "sequence": 483312,
+      "recovered_at": "2026-09-19T08:53:35.399085+09:00",
+      "seconds": 0.163357
+    },
+    {
+      "time": "2026-09-19T15:59:35.228510+09:00",
+      "file": "Log_History/2026-09-19_15-46-58-052136_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0061.log",
+      "line": 4446,
+      "sequence": 644661,
+      "recovered_at": "2026-09-19T15:59:35.450916+09:00",
+      "seconds": 0.222406
+    }
+  ],
+  "gaps": {
+    "strategy": [
+      {
+        "seconds": 10.011083,
+        "before": {
+          "time": "2026-09-19T12:56:34.077839+09:00",
+          "file": "Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+          "line": 356,
+          "sequence": 576046
+        },
+        "after": {
+          "time": "2026-09-19T12:56:44.088922+09:00",
+          "file": "Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+          "line": 370,
+          "sequence": 576060
+        }
+      },
+      {
+        "seconds": 10.023501,
+        "before": {
+          "time": "2026-09-19T10:26:18.051388+09:00",
+          "file": "Log_History/2026-09-19_10-05-24-055739_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0049.log",
+          "line": 8656,
+          "sequence": 519852
+        },
+        "after": {
+          "time": "2026-09-19T10:26:28.074889+09:00",
+          "file": "Log_History/2026-09-19_10-05-24-055739_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0049.log",
+          "line": 8670,
+          "sequence": 519866
+        }
+      },
+      {
+        "seconds": 10.024137,
+        "before": {
+          "time": "2026-09-19T13:29:34.044174+09:00",
+          "file": "Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+          "line": 1424,
+          "sequence": 587859
+        },
+        "after": {
+          "time": "2026-09-19T13:29:44.068311+09:00",
+          "file": "Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+          "line": 1440,
+          "sequence": 587875
+        }
+      },
+      {
+        "seconds": 11.996425,
+        "before": {
+          "time": "2026-09-19T11:44:34.054131+09:00",
+          "file": "Log_History/2026-09-19_11-28-08-054168_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0052.log",
+          "line": 6301,
+          "sequence": 549742
+        },
+        "after": {
+          "time": "2026-09-19T11:44:46.050556+09:00",
+          "file": "Log_History/2026-09-19_11-28-08-054168_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0052.log",
+          "line": 6315,
+          "sequence": 549756
+        }
+      },
+      {
+        "seconds": 13.992805,
+        "before": {
+          "time": "2026-09-19T13:23:30.063195+09:00",
+          "file": "Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+          "line": 10148,
+          "sequence": 585838
+        },
+        "after": {
+          "time": "2026-09-19T13:23:44.056000+09:00",
+          "file": "Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+          "line": 10164,
+          "sequence": 585854
+        }
+      }
+    ],
+    "heartbeat": [
+      {
+        "seconds": 60.26291,
+        "before": {
+          "time": "2026-09-18T18:31:14.058946+09:00",
+          "file": "Log_History/2026-09-18_18-07-20-065611_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0012.log",
+          "line": 10087,
+          "sequence": 129129
+        },
+        "after": {
+          "time": "2026-09-18T18:32:14.321856+09:00",
+          "file": "Log_History/2026-09-18_18-07-20-065611_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0012.log",
+          "line": 10517,
+          "sequence": 129559
+        }
+      },
+      {
+        "seconds": 60.262959,
+        "before": {
+          "time": "2026-09-19T05:42:38.053800+09:00",
+          "file": "Log_History/2026-09-19_05-31-02-049571_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0039.log",
+          "line": 4552,
+          "sequence": 408230
+        },
+        "after": {
+          "time": "2026-09-19T05:43:38.316759+09:00",
+          "file": "Log_History/2026-09-19_05-31-02-049571_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0039.log",
+          "line": 4982,
+          "sequence": 408660
+        }
+      },
+      {
+        "seconds": 60.26303,
+        "before": {
+          "time": "2026-09-19T17:48:10.062022+09:00",
+          "file": "Log_History/2026-09-19_17-40-14-063556_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0065.log",
+          "line": 3247,
+          "sequence": 686469
+        },
+        "after": {
+          "time": "2026-09-19T17:49:10.325052+09:00",
+          "file": "Log_History/2026-09-19_17-40-14-063556_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0065.log",
+          "line": 3622,
+          "sequence": 686844
+        }
+      },
+      {
+        "seconds": 60.263389,
+        "before": {
+          "time": "2026-09-19T04:51:32.062992+09:00",
+          "file": "Log_History/2026-09-19_04-40-00-062839_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0037.log",
+          "line": 4911,
+          "sequence": 387069
+        },
+        "after": {
+          "time": "2026-09-19T04:52:32.326381+09:00",
+          "file": "Log_History/2026-09-19_04-40-00-062839_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0037.log",
+          "line": 5341,
+          "sequence": 387499
+        }
+      },
+      {
+        "seconds": 60.264287,
+        "before": {
+          "time": "2026-09-19T13:44:37.363232+09:00",
+          "file": "Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+          "line": 7194,
+          "sequence": 593629
+        },
+        "after": {
+          "time": "2026-09-19T13:45:37.627519+09:00",
+          "file": "Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+          "line": 7591,
+          "sequence": 594026
+        }
+      }
+    ]
+  },
+  "deferred_intervals": {
+    "1m": 53337,
+    "4h": 54956,
+    "1d": 54967
+  },
+  "input_intervals": {
+    "1m": 55292,
+    "30m": 54980,
+    "4h": 54972,
+    "1d": 54969
+  },
+  "unique_closed_candles": {
+    "1m": 1955,
+    "30m": 65,
+    "4h": 8,
+    "1d": 1
+  },
+  "market_gaps_over_5s": [
+    {
+      "seconds": 13.972002,
+      "before": {
+        "time": "2026-09-19T13:23:30.067254+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+        "line": 10151,
+        "sequence": 585841
+      },
+      "after": {
+        "time": "2026-09-19T13:23:44.039256+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+        "line": 10156,
+        "sequence": 585846
+      }
+    },
+    {
+      "seconds": 11.984087,
+      "before": {
+        "time": "2026-09-19T11:44:34.057825+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_11-28-08-054168_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0052.log",
+        "line": 6304,
+        "sequence": 549745
+      },
+      "after": {
+        "time": "2026-09-19T11:44:46.041912+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_11-28-08-054168_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0052.log",
+        "line": 6307,
+        "sequence": 549748
+      }
+    },
+    {
+      "seconds": 10.008795,
+      "before": {
+        "time": "2026-09-19T10:26:18.054799+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_10-05-24-055739_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0049.log",
+        "line": 8659,
+        "sequence": 519855
+      },
+      "after": {
+        "time": "2026-09-19T10:26:28.063594+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_10-05-24-055739_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0049.log",
+        "line": 8662,
+        "sequence": 519858
+      }
+    },
+    {
+      "seconds": 10.003507,
+      "before": {
+        "time": "2026-09-19T13:29:34.048427+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+        "line": 1427,
+        "sequence": 587862
+      },
+      "after": {
+        "time": "2026-09-19T13:29:44.051934+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_13-25-30-045991_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0056.log",
+        "line": 1432,
+        "sequence": 587867
+      }
+    },
+    {
+      "seconds": 9.991627,
+      "before": {
+        "time": "2026-09-19T12:56:34.081577+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+        "line": 359,
+        "sequence": 576049
+      },
+      "after": {
+        "time": "2026-09-19T12:56:44.073204+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_12-55-42-082283_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0055.log",
+        "line": 362,
+        "sequence": 576052
+      }
+    },
+    {
+      "seconds": 9.988858,
+      "before": {
+        "time": "2026-09-19T15:59:44.051258+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_15-46-58-052136_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0061.log",
+        "line": 4506,
+        "sequence": 644721
+      },
+      "after": {
+        "time": "2026-09-19T15:59:54.040116+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_15-46-58-052136_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0061.log",
+        "line": 4509,
+        "sequence": 644724
+      }
+    },
+    {
+      "seconds": 9.982236,
+      "before": {
+        "time": "2026-09-19T06:59:02.057515+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_06-50-28-074458_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0042.log",
+        "line": 3145,
+        "sequence": 439092
+      },
+      "after": {
+        "time": "2026-09-19T06:59:12.039751+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_06-50-28-074458_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0042.log",
+        "line": 3149,
+        "sequence": 439096
+      }
+    },
+    {
+      "seconds": 9.979177,
+      "before": {
+        "time": "2026-09-19T16:05:36.063394+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_15-46-58-052136_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0061.log",
+        "line": 6627,
+        "sequence": 646842
+      },
+      "after": {
+        "time": "2026-09-19T16:05:46.042571+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_15-46-58-052136_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0061.log",
+        "line": 6630,
+        "sequence": 646845
+      }
+    },
+    {
+      "seconds": 9.977869,
+      "before": {
+        "time": "2026-09-19T12:49:14.093580+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_12-24-42-065843_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0054.log",
+        "line": 8760,
+        "sequence": 573704
+      },
+      "after": {
+        "time": "2026-09-19T12:49:24.071449+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_12-24-42-065843_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0054.log",
+        "line": 8763,
+        "sequence": 573707
+      }
+    },
+    {
+      "seconds": 9.977171,
+      "before": {
+        "time": "2026-09-19T14:16:02.087360+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_13-53-38-091785_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0057.log",
+        "line": 8343,
+        "sequence": 605531
+      },
+      "after": {
+        "time": "2026-09-19T14:16:12.064531+09:00",
+        "file": "/Users/oscar/Desktop/Binance_Auto/Log_History/2026-09-19_13-53-38-091785_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0057.log",
+        "line": 8346,
+        "sequence": 605534
+      }
+    }
+  ],
+  "boundary_waits": {
+    "count": 87,
+    "unresolved": 0,
+    "max_seconds": 2.017746,
+    "reasons": {
+      "MISSING_BOUNDARY_SOURCES": 83,
+      "SNAPSHOT_TIME_VALIDATION": 4
+    }
+  },
+  "evidence": {
+    "runtime_configured": {
+      "time": "2026-09-18T13:18:32.365279+09:00",
+      "file": "Log_History/2026-09-18_13-18-32-364965_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0001.log",
+      "line": 2,
+      "sequence": 2
+    },
+    "balance_reconciliation_checked": {
+      "time": "2026-09-18T13:18:34.468142+09:00",
+      "file": "Log_History/2026-09-18_13-18-32-364965_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0001.log",
+      "line": 11,
+      "sequence": 11
+    },
+    "session_command_completed": {
+      "time": "2026-09-18T13:18:38.979100+09:00",
+      "file": "Log_History/2026-09-18_13-18-32-364965_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0001.log",
+      "line": 34,
+      "sequence": 34
+    },
+    "strategy_evaluated": {
+      "time": "2026-09-18T13:18:43.130795+09:00",
+      "file": "Log_History/2026-09-18_13-18-32-364965_KST_live_49325_01246b9353074cc6aec85fd5e5cfa87b_part0001.log",
+      "line": 52,
+      "sequence": 52
+    }
+  }
+}

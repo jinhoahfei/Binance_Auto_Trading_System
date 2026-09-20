@@ -1,0 +1,865 @@
+{
+  "public_request_url": "https://data-api.binance.vision/api/v3/aggTrades?symbol=ETHUSDT&startTime=1789791808000&endTime=1789791850000&limit=1000",
+  "fetched_at_utc": "2026-09-19T13:23:16.864746+00:00",
+  "public_aggtrade_ids_contiguous": true,
+  "previous_trade": {
+    "a": 2084108037,
+    "p": "2622.00000000",
+    "q": "0.00380000",
+    "f": 4368696753,
+    "l": 4368696753,
+    "T": 1789791808624,
+    "m": false,
+    "M": true
+  },
+  "next_trade": {
+    "a": 2084108038,
+    "p": "2621.99000000",
+    "q": "10.00030000",
+    "f": 4368696754,
+    "l": 4368696768,
+    "T": 1789791822034,
+    "m": true,
+    "M": true
+  },
+  "no_trade_interval_seconds": 13.41,
+  "trades_between_kline_events": [
+    {
+      "a": 2084108038,
+      "p": "2621.99000000",
+      "q": "10.00030000",
+      "f": 4368696754,
+      "l": 4368696768,
+      "T": 1789791822034,
+      "m": true,
+      "M": true
+    },
+    {
+      "a": 2084108039,
+      "p": "2622.00000000",
+      "q": "0.01300000",
+      "f": 4368696769,
+      "l": 4368696774,
+      "T": 1789791822591,
+      "m": false,
+      "M": true
+    }
+  ],
+  "sum_trade_quantity": "10.01330000",
+  "kline_volume_delta": "10.01330000",
+  "event_to_logged_ms": 19.256,
+  "next_trade_to_logged_ms": 2005.256103515625,
+  "log_evidence": [
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:30.047199+09:00",
+      "timestamp_utc": "2026-09-19T04:23:30.047199+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585830,
+      "event": "market_input_observed",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:30.047199+00:00",
+      "monotonic_ms": 223415972,
+      "dropped_records_before": 0,
+      "details": {
+        "source_event_id": "kline:ETHUSDT:1m:2026-09-19T04:23:00Z:2026-09-19T04:23:30.017000Z:open",
+        "market_version": 165342,
+        "klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "1m",
+            "open_time": "2026-09-19T04:23:00.000000+00:00",
+            "open": "2623.28000000",
+            "high": "2623.28000000",
+            "low": "2621.99000000",
+            "close": "2622.00000000",
+            "volume": "36.21690000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:30.017000+00:00"
+          }
+        ],
+        "snapshot_source_klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "1m",
+            "open_time": "2026-09-19T04:23:00.000000+00:00",
+            "open": "2623.28000000",
+            "high": "2623.28000000",
+            "low": "2621.99000000",
+            "close": "2622.00000000",
+            "volume": "36.21690000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:30.017000+00:00"
+          }
+        ]
+      },
+      "source_line": 10140
+    },
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:30.054632+09:00",
+      "timestamp_utc": "2026-09-19T04:23:30.054632+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585833,
+      "event": "market_input_observed",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:30.054632+00:00",
+      "monotonic_ms": 223415980,
+      "dropped_records_before": 0,
+      "details": {
+        "source_event_id": "kline:ETHUSDT:30m:2026-09-19T04:00:00Z:2026-09-19T04:23:30.017000Z:open",
+        "market_version": 165343,
+        "klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "30m",
+            "open_time": "2026-09-19T04:00:00.000000+00:00",
+            "open": "2620.17000000",
+            "high": "2626.66000000",
+            "low": "2620.15000000",
+            "close": "2622.00000000",
+            "volume": "1154.95150000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:30.017000+00:00"
+          }
+        ],
+        "snapshot_source_klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "30m",
+            "open_time": "2026-09-19T04:00:00.000000+00:00",
+            "open": "2620.17000000",
+            "high": "2626.66000000",
+            "low": "2620.15000000",
+            "close": "2622.00000000",
+            "volume": "1154.95150000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:30.017000+00:00"
+          }
+        ]
+      },
+      "source_line": 10143
+    },
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:30.063195+09:00",
+      "timestamp_utc": "2026-09-19T04:23:30.063195+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585838,
+      "event": "strategy_evaluated",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:30.063195+00:00",
+      "monotonic_ms": 223415988,
+      "dropped_records_before": 0,
+      "details": {
+        "session_id": "745e0c2c-7bda-4c06-817f-d042eec0b5b5",
+        "event_id": "market:165343:kline:ETHUSDT:30m:2026-09-19T04:00:00Z:2026-09-19T04:23:30.017000Z:open",
+        "lower_event_id": null,
+        "market_version": 165343,
+        "context_version": 42700,
+        "session_status": "running",
+        "selected_regime": "TYPE_0",
+        "decision_id": "market:165343:kline:ETHUSDT:30m:2026-09-19T04:00:00Z:2026-09-19T04:23:30.017000Z:open:v42700:NOOP",
+        "consumed": false,
+        "transition_ids": [],
+        "state_before": {
+          "root_state": "LOWER_TOUCH_WATCH",
+          "ownership_state": null,
+          "case_b_signal_state": null,
+          "case_c_signal_state": null,
+          "case_b_position_state": null,
+          "case_c_position_state": null
+        },
+        "state_after": {
+          "root_state": "LOWER_TOUCH_WATCH",
+          "ownership_state": null,
+          "case_b_signal_state": null,
+          "case_c_signal_state": null,
+          "case_b_position_state": null,
+          "case_c_position_state": null
+        },
+        "evaluation": {
+          "phase_key": "LOWER_TOUCH_WATCH:LOWER_TOUCH_WATCH:",
+          "notice": null,
+          "evaluated_at": "2026-09-19T04:23:30.062580+00:00",
+          "context_version": 42700,
+          "state": {
+            "root_state": "LOWER_TOUCH_WATCH",
+            "ownership_state": null,
+            "case_b_signal_state": null,
+            "case_c_signal_state": null,
+            "case_b_position_state": null,
+            "case_c_position_state": null
+          },
+          "market": {
+            "realtime_price": "2622.00000000",
+            "lower_band": "2606.722693665318148868437119971853",
+            "upper_band": "2638.975306334681851131562880028147",
+            "realtime_pct_b": "0.4736765511463059544151859767183847",
+            "current_30m_candle_id": "ETHUSDT:30m:2026-09-19T04:00:00Z",
+            "current_30m_low": "2620.15000000",
+            "current_30m_high": "2626.66000000",
+            "touch_candle_bbw": "0.01229678592605357848016632297791219",
+            "confirmed_30m_close": false,
+            "confirmed_30m_close_time": null,
+            "confirmed_1m_close": false,
+            "ema_slope_30m_close": "0.01076634",
+            "realtime_ema_slope": "0.01973927",
+            "current_close_ema_slope": "0.01973927",
+            "tp_reference_ema_slope": "0.00663690",
+            "cci_30m_realtime": "-0.8131776480400333611342785654607901",
+            "pct_b_close": "0.4375936353021866768542028354409056",
+            "current_closed_candle_low": "2619.41000000",
+            "previous_3_closed_candle_lows": [
+              "2612.00000000",
+              "2617.25000000",
+              "2620.98000000"
+            ],
+            "holding_elapsed": "0",
+            "signal_elapsed": "0",
+            "case_c_timer_elapsed": "0",
+            "pct_b_at_least_060_for_5s": false,
+            "realtime_slope_above_008_for_5s": false,
+            "realtime_slope_at_most_004_for_5s": true,
+            "pct_b_below_060_for_5s": true,
+            "realtime_slope_at_most_minus_055_for_3m": false,
+            "condition_timers": [
+              {
+                "condition_id": "b_profit_zone",
+                "timer_id": "hold:2:b_profit_zone:222958005987875",
+                "kind": "hold",
+                "state": "stopped",
+                "duration_seconds": "5",
+                "remaining_seconds": "5",
+                "sampled_at": "2026-09-19T04:23:30.054249+00:00",
+                "reset_reason": "condition_broken"
+              },
+              {
+                "condition_id": "b_trend_slope",
+                "timer_id": "hold:2:b_trend_slope:203665910895416",
+                "kind": "hold",
+                "state": "stopped",
+                "duration_seconds": "5",
+                "remaining_seconds": "5",
+                "sampled_at": "2026-09-19T04:23:30.054249+00:00",
+                "reset_reason": "condition_broken"
+              },
+              {
+                "condition_id": "b_trend_exit_slope",
+                "timer_id": "hold:2:b_trend_exit_slope:205507910376833",
+                "kind": "hold",
+                "state": "completed",
+                "duration_seconds": "5",
+                "remaining_seconds": "0",
+                "sampled_at": "2026-09-19T04:23:30.054249+00:00",
+                "reset_reason": null
+              },
+              {
+                "condition_id": "b_trend_exit_pct_b",
+                "timer_id": "hold:2:b_trend_exit_pct_b:222974022320083",
+                "kind": "hold",
+                "state": "completed",
+                "duration_seconds": "5",
+                "remaining_seconds": "0",
+                "sampled_at": "2026-09-19T04:23:30.054249+00:00",
+                "reset_reason": null
+              },
+              {
+                "condition_id": "c_stop",
+                "timer_id": "hold:2:c_stop:None",
+                "kind": "hold",
+                "state": "waiting",
+                "duration_seconds": "180",
+                "remaining_seconds": "180",
+                "sampled_at": "2026-09-19T04:23:30.054249+00:00",
+                "reset_reason": null
+              }
+            ]
+          },
+          "runtime": {
+            "position_owner": null,
+            "pending_strategy": null,
+            "pending_order_side": null,
+            "pending_order_id": null,
+            "pending_order_attempt_kind": null,
+            "pending_intent_id": null,
+            "trading_phase": "IDLE",
+            "lower_event_id": null,
+            "touch_time": null,
+            "touch_candle_id": null,
+            "touch_candle_low": null,
+            "lower_band_at_touch": null,
+            "touch_candle_bbw": null,
+            "case_b_enabled": false,
+            "case_c_enabled": false,
+            "case_b_entry_paused": false,
+            "case_b_only_until_next_lower_touch": false,
+            "allow_new_case_c_setup": false,
+            "case_c_consumed_for_event": false,
+            "case_c_recovery_confirmed": false,
+            "signal_created": false,
+            "signal_candle_id": null,
+            "signal_time": null,
+            "last_case_c_setup_candle_id": null,
+            "flush_low": null,
+            "flush_low_pct_b": null,
+            "flush_low_time": null,
+            "current_open_pct_b": null,
+            "timer_base_pct_b": null,
+            "timer_base_time": null,
+            "entry_pct_b": null,
+            "tp_price": null,
+            "previous_trail_ema_slope": null,
+            "pending_exit_reason": null,
+            "pending_exit_pct_b": null,
+            "pending_return_state": null,
+            "case_b_exit_reason": null,
+            "case_c_exit_reason": null,
+            "case_c_exit_pct_b": null
+          },
+          "position": {
+            "quantity": "0",
+            "entry_price": null
+          },
+          "pending_order": null,
+          "condition_comparisons": [
+            {
+              "phase": "LOWER_TOUCH_WATCH",
+              "strategy": null,
+              "applicable": true,
+              "condition": {
+                "condition_id": "lower_price",
+                "value": "2622.00000000",
+                "threshold": "2606.722693665318148868437119971853",
+                "comparison": "<=",
+                "satisfied": false,
+                "source": "realtime",
+                "hold_seconds": null
+              }
+            }
+          ]
+        },
+        "action_requests": [],
+        "runtime_after": {
+          "position_owner": null,
+          "pending_strategy": null,
+          "pending_order_side": null,
+          "pending_order_id": null,
+          "pending_order_attempt_kind": null,
+          "pending_intent_id": null,
+          "trading_phase": "IDLE",
+          "lower_event_id": null,
+          "touch_time": null,
+          "touch_candle_id": null,
+          "touch_candle_low": null,
+          "lower_band_at_touch": null,
+          "touch_candle_bbw": null,
+          "case_b_enabled": false,
+          "case_c_enabled": false,
+          "case_b_entry_paused": false,
+          "case_b_only_until_next_lower_touch": false,
+          "allow_new_case_c_setup": false,
+          "case_c_consumed_for_event": false,
+          "case_c_recovery_confirmed": false,
+          "signal_created": false,
+          "signal_candle_id": null,
+          "signal_time": null,
+          "last_case_c_setup_candle_id": null,
+          "flush_low": null,
+          "flush_low_pct_b": null,
+          "flush_low_time": null,
+          "current_open_pct_b": null,
+          "timer_base_pct_b": null,
+          "timer_base_time": null,
+          "entry_pct_b": null,
+          "tp_price": null,
+          "previous_trail_ema_slope": null,
+          "pending_exit_reason": null,
+          "pending_exit_pct_b": null,
+          "pending_return_state": null,
+          "case_b_exit_reason": null,
+          "case_c_exit_reason": null,
+          "case_c_exit_pct_b": null
+        },
+        "position_after": {
+          "quantity": "0",
+          "entry_price": null
+        }
+      },
+      "source_line": 10148
+    },
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:34.741883+09:00",
+      "timestamp_utc": "2026-09-19T04:23:34.741883+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585844,
+      "event": "runtime_heartbeat",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:34.741883+00:00",
+      "monotonic_ms": 223420667,
+      "dropped_records_before": 0,
+      "details": {
+        "session": {
+          "status": "running",
+          "session_id": "745e0c2c-7bda-4c06-817f-d042eec0b5b5",
+          "version": 42700,
+          "scale_in": "0.5",
+          "scale_out": "0.5",
+          "has_open_position": false,
+          "command_enabled": true,
+          "selected": "TYPE_0",
+          "support_status": "supported",
+          "risk_policy_availability": "CONFIGURED",
+          "configured_risk_policy_version": 1,
+          "session_risk_policy_version": 1,
+          "risk_control_version": 0,
+          "manual_kill_active": false,
+          "manual_kill_cleanup_complete": true,
+          "manual_kill_activation_behavior": null,
+          "manual_kill_activation_policy_version": null,
+          "last_risk_decision": null,
+          "process_ownership_ambiguous": false,
+          "max_order_notional": "10",
+          "max_position_notional": "10",
+          "max_daily_loss": null,
+          "daily_loss_scope": "REALIZED_ONLY",
+          "manual_kill_behavior": "CANCEL_AND_LIQUIDATE",
+          "residual_quantity": "0.00009600",
+          "residual_cost_basis": "0.234862702702702702702702702702703",
+          "balance_reconciliation": {
+            "asset": "ETH",
+            "status": "verified",
+            "position_quantity": "0",
+            "residual_principal_quantity": "0.00009600",
+            "earn_rewards_quantity": "0.00000001",
+            "earn_quantity": "0",
+            "expected_spot_quantity": "0.00009601",
+            "exchange_spot_quantity": "0.00009601",
+            "difference_quantity": "0.00000000",
+            "checked_at": "2026-09-18T04:18:34.468075+00:00",
+            "reason_code": null,
+            "retryable": false
+          },
+          "position_average_entry_price": null,
+          "recovery": {
+            "phase": "idle",
+            "started_at": null,
+            "attempts": 1,
+            "block_reason": null,
+            "last_market_input_at": "2026-09-19T04:23:30.065919+00:00",
+            "last_strategy_evaluation_at": "2026-09-19T04:23:30.062577+00:00",
+            "prolonged": false
+          },
+          "active_logic": {
+            "regime_type": "TYPE_0",
+            "root_state": "LOWER_TOUCH_WATCH",
+            "active_strategies": [],
+            "indicators": {
+              "phase_key": "LOWER_TOUCH_WATCH:LOWER_TOUCH_WATCH:",
+              "notice": null,
+              "conditions": [
+                {
+                  "slot": {
+                    "condition_id": "lower_price",
+                    "strategy": null,
+                    "phase": "LOWER_TOUCH_WATCH"
+                  },
+                  "condition": {
+                    "condition_id": "lower_price",
+                    "value": "2622.00000000",
+                    "threshold": "2606.722693665318148868437119971853",
+                    "comparison": "<=",
+                    "satisfied": false,
+                    "source": "realtime",
+                    "hold_seconds": null
+                  },
+                  "evaluated_at": "2026-09-19T04:23:30.062580+00:00",
+                  "market_version": 165343,
+                  "context_version": 42700,
+                  "timer": null
+                }
+              ],
+              "captured_at": "2026-09-19T04:23:34.741497+00:00",
+              "phases": []
+            }
+          }
+        }
+      },
+      "source_line": 10154
+    },
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:36.569262+09:00",
+      "timestamp_utc": "2026-09-19T04:23:36.569262+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585845,
+      "event": "ui_stream_heartbeat",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:36.569262+00:00",
+      "monotonic_ms": 223422494,
+      "dropped_records_before": 0,
+      "details": {
+        "transport_session_id": "9d9ef350-e183-4035-ad5a-d42dc9ea824e",
+        "connection_id": "e56bc432-98e8-4202-a5c4-b1d9128337eb",
+        "last_sequence": 44005,
+        "sent_count": 7727
+      },
+      "source_line": 10155
+    },
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:44.039256+09:00",
+      "timestamp_utc": "2026-09-19T04:23:44.039256+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585846,
+      "event": "market_input_observed",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:44.039256+00:00",
+      "monotonic_ms": 223429964,
+      "dropped_records_before": 0,
+      "details": {
+        "source_event_id": "kline:ETHUSDT:1m:2026-09-19T04:23:00Z:2026-09-19T04:23:44.020000Z:open",
+        "market_version": 165346,
+        "klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "1m",
+            "open_time": "2026-09-19T04:23:00.000000+00:00",
+            "open": "2623.28000000",
+            "high": "2623.28000000",
+            "low": "2621.99000000",
+            "close": "2622.00000000",
+            "volume": "46.23020000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:44.020000+00:00"
+          }
+        ],
+        "snapshot_source_klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "1m",
+            "open_time": "2026-09-19T04:23:00.000000+00:00",
+            "open": "2623.28000000",
+            "high": "2623.28000000",
+            "low": "2621.99000000",
+            "close": "2622.00000000",
+            "volume": "46.23020000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:44.020000+00:00"
+          }
+        ]
+      },
+      "source_line": 10156
+    },
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:44.046717+09:00",
+      "timestamp_utc": "2026-09-19T04:23:44.046717+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585849,
+      "event": "market_input_observed",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:44.046717+00:00",
+      "monotonic_ms": 223429972,
+      "dropped_records_before": 0,
+      "details": {
+        "source_event_id": "kline:ETHUSDT:30m:2026-09-19T04:00:00Z:2026-09-19T04:23:44.020000Z:open",
+        "market_version": 165347,
+        "klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "30m",
+            "open_time": "2026-09-19T04:00:00.000000+00:00",
+            "open": "2620.17000000",
+            "high": "2626.66000000",
+            "low": "2620.15000000",
+            "close": "2622.00000000",
+            "volume": "1164.96480000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:44.020000+00:00"
+          }
+        ],
+        "snapshot_source_klines": [
+          {
+            "symbol": "ETHUSDT",
+            "interval": "30m",
+            "open_time": "2026-09-19T04:00:00.000000+00:00",
+            "open": "2620.17000000",
+            "high": "2626.66000000",
+            "low": "2620.15000000",
+            "close": "2622.00000000",
+            "volume": "1164.96480000",
+            "closed": false,
+            "event_time": "2026-09-19T04:23:44.020000+00:00"
+          }
+        ]
+      },
+      "source_line": 10159
+    },
+    {
+      "schema_version": 2,
+      "timestamp_kst": "2026-09-19T13:23:44.056000+09:00",
+      "timestamp_utc": "2026-09-19T04:23:44.056000+00:00",
+      "run_id": "01246b9353074cc6aec85fd5e5cfa87b",
+      "execution_mode": "live",
+      "pid": 49325,
+      "sequence": 585854,
+      "event": "strategy_evaluated",
+      "level": "INFO",
+      "observed_at": "2026-09-19T04:23:44.056000+00:00",
+      "monotonic_ms": 223429981,
+      "dropped_records_before": 0,
+      "details": {
+        "session_id": "745e0c2c-7bda-4c06-817f-d042eec0b5b5",
+        "event_id": "market:165347:kline:ETHUSDT:30m:2026-09-19T04:00:00Z:2026-09-19T04:23:44.020000Z:open",
+        "lower_event_id": null,
+        "market_version": 165347,
+        "context_version": 42701,
+        "session_status": "running",
+        "selected_regime": "TYPE_0",
+        "decision_id": "market:165347:kline:ETHUSDT:30m:2026-09-19T04:00:00Z:2026-09-19T04:23:44.020000Z:open:v42701:NOOP",
+        "consumed": false,
+        "transition_ids": [],
+        "state_before": {
+          "root_state": "LOWER_TOUCH_WATCH",
+          "ownership_state": null,
+          "case_b_signal_state": null,
+          "case_c_signal_state": null,
+          "case_b_position_state": null,
+          "case_c_position_state": null
+        },
+        "state_after": {
+          "root_state": "LOWER_TOUCH_WATCH",
+          "ownership_state": null,
+          "case_b_signal_state": null,
+          "case_c_signal_state": null,
+          "case_b_position_state": null,
+          "case_c_position_state": null
+        },
+        "evaluation": {
+          "phase_key": "LOWER_TOUCH_WATCH:LOWER_TOUCH_WATCH:",
+          "notice": null,
+          "evaluated_at": "2026-09-19T04:23:44.055353+00:00",
+          "context_version": 42701,
+          "state": {
+            "root_state": "LOWER_TOUCH_WATCH",
+            "ownership_state": null,
+            "case_b_signal_state": null,
+            "case_c_signal_state": null,
+            "case_b_position_state": null,
+            "case_c_position_state": null
+          },
+          "market": {
+            "realtime_price": "2622.00000000",
+            "lower_band": "2606.722693665318148868437119971853",
+            "upper_band": "2638.975306334681851131562880028147",
+            "realtime_pct_b": "0.4736765511463059544151859767183847",
+            "current_30m_candle_id": "ETHUSDT:30m:2026-09-19T04:00:00Z",
+            "current_30m_low": "2620.15000000",
+            "current_30m_high": "2626.66000000",
+            "touch_candle_bbw": "0.01229678592605357848016632297791219",
+            "confirmed_30m_close": false,
+            "confirmed_30m_close_time": null,
+            "confirmed_1m_close": false,
+            "ema_slope_30m_close": "0.01076634",
+            "realtime_ema_slope": "0.01973927",
+            "current_close_ema_slope": "0.01973927",
+            "tp_reference_ema_slope": "0.00663690",
+            "cci_30m_realtime": "-0.8131776480400333611342785654607901",
+            "pct_b_close": "0.4375936353021866768542028354409056",
+            "current_closed_candle_low": "2619.41000000",
+            "previous_3_closed_candle_lows": [
+              "2612.00000000",
+              "2617.25000000",
+              "2620.98000000"
+            ],
+            "holding_elapsed": "0",
+            "signal_elapsed": "0",
+            "case_c_timer_elapsed": "0",
+            "pct_b_at_least_060_for_5s": false,
+            "realtime_slope_above_008_for_5s": false,
+            "realtime_slope_at_most_004_for_5s": true,
+            "pct_b_below_060_for_5s": true,
+            "realtime_slope_at_most_minus_055_for_3m": false,
+            "condition_timers": [
+              {
+                "condition_id": "b_profit_zone",
+                "timer_id": "hold:2:b_profit_zone:222958005987875",
+                "kind": "hold",
+                "state": "stopped",
+                "duration_seconds": "5",
+                "remaining_seconds": "5",
+                "sampled_at": "2026-09-19T04:23:44.046311+00:00",
+                "reset_reason": "condition_broken"
+              },
+              {
+                "condition_id": "b_trend_slope",
+                "timer_id": "hold:2:b_trend_slope:203665910895416",
+                "kind": "hold",
+                "state": "stopped",
+                "duration_seconds": "5",
+                "remaining_seconds": "5",
+                "sampled_at": "2026-09-19T04:23:44.046311+00:00",
+                "reset_reason": "condition_broken"
+              },
+              {
+                "condition_id": "b_trend_exit_slope",
+                "timer_id": "hold:2:b_trend_exit_slope:205507910376833",
+                "kind": "hold",
+                "state": "completed",
+                "duration_seconds": "5",
+                "remaining_seconds": "0",
+                "sampled_at": "2026-09-19T04:23:44.046311+00:00",
+                "reset_reason": null
+              },
+              {
+                "condition_id": "b_trend_exit_pct_b",
+                "timer_id": "hold:2:b_trend_exit_pct_b:222974022320083",
+                "kind": "hold",
+                "state": "completed",
+                "duration_seconds": "5",
+                "remaining_seconds": "0",
+                "sampled_at": "2026-09-19T04:23:44.046311+00:00",
+                "reset_reason": null
+              },
+              {
+                "condition_id": "c_stop",
+                "timer_id": "hold:2:c_stop:None",
+                "kind": "hold",
+                "state": "waiting",
+                "duration_seconds": "180",
+                "remaining_seconds": "180",
+                "sampled_at": "2026-09-19T04:23:44.046311+00:00",
+                "reset_reason": null
+              }
+            ]
+          },
+          "runtime": {
+            "position_owner": null,
+            "pending_strategy": null,
+            "pending_order_side": null,
+            "pending_order_id": null,
+            "pending_order_attempt_kind": null,
+            "pending_intent_id": null,
+            "trading_phase": "IDLE",
+            "lower_event_id": null,
+            "touch_time": null,
+            "touch_candle_id": null,
+            "touch_candle_low": null,
+            "lower_band_at_touch": null,
+            "touch_candle_bbw": null,
+            "case_b_enabled": false,
+            "case_c_enabled": false,
+            "case_b_entry_paused": false,
+            "case_b_only_until_next_lower_touch": false,
+            "allow_new_case_c_setup": false,
+            "case_c_consumed_for_event": false,
+            "case_c_recovery_confirmed": false,
+            "signal_created": false,
+            "signal_candle_id": null,
+            "signal_time": null,
+            "last_case_c_setup_candle_id": null,
+            "flush_low": null,
+            "flush_low_pct_b": null,
+            "flush_low_time": null,
+            "current_open_pct_b": null,
+            "timer_base_pct_b": null,
+            "timer_base_time": null,
+            "entry_pct_b": null,
+            "tp_price": null,
+            "previous_trail_ema_slope": null,
+            "pending_exit_reason": null,
+            "pending_exit_pct_b": null,
+            "pending_return_state": null,
+            "case_b_exit_reason": null,
+            "case_c_exit_reason": null,
+            "case_c_exit_pct_b": null
+          },
+          "position": {
+            "quantity": "0",
+            "entry_price": null
+          },
+          "pending_order": null,
+          "condition_comparisons": [
+            {
+              "phase": "LOWER_TOUCH_WATCH",
+              "strategy": null,
+              "applicable": true,
+              "condition": {
+                "condition_id": "lower_price",
+                "value": "2622.00000000",
+                "threshold": "2606.722693665318148868437119971853",
+                "comparison": "<=",
+                "satisfied": false,
+                "source": "realtime",
+                "hold_seconds": null
+              }
+            }
+          ]
+        },
+        "action_requests": [],
+        "runtime_after": {
+          "position_owner": null,
+          "pending_strategy": null,
+          "pending_order_side": null,
+          "pending_order_id": null,
+          "pending_order_attempt_kind": null,
+          "pending_intent_id": null,
+          "trading_phase": "IDLE",
+          "lower_event_id": null,
+          "touch_time": null,
+          "touch_candle_id": null,
+          "touch_candle_low": null,
+          "lower_band_at_touch": null,
+          "touch_candle_bbw": null,
+          "case_b_enabled": false,
+          "case_c_enabled": false,
+          "case_b_entry_paused": false,
+          "case_b_only_until_next_lower_touch": false,
+          "allow_new_case_c_setup": false,
+          "case_c_consumed_for_event": false,
+          "case_c_recovery_confirmed": false,
+          "signal_created": false,
+          "signal_candle_id": null,
+          "signal_time": null,
+          "last_case_c_setup_candle_id": null,
+          "flush_low": null,
+          "flush_low_pct_b": null,
+          "flush_low_time": null,
+          "current_open_pct_b": null,
+          "timer_base_pct_b": null,
+          "timer_base_time": null,
+          "entry_pct_b": null,
+          "tp_price": null,
+          "previous_trail_ema_slope": null,
+          "pending_exit_reason": null,
+          "pending_exit_pct_b": null,
+          "pending_return_state": null,
+          "case_b_exit_reason": null,
+          "case_c_exit_reason": null,
+          "case_c_exit_pct_b": null
+        },
+        "position_after": {
+          "quantity": "0",
+          "entry_price": null
+        }
+      },
+      "source_line": 10164
+    }
+  ]
+}

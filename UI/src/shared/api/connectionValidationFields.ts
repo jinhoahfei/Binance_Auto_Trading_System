@@ -1,5 +1,11 @@
 // 소스에서 정의한 검증 필드만 허용한다. 원본 메시지·값을 로그로 전달하지 않는다.
 export const CONNECTION_VALIDATION_FIELDS = [
+    "trading.last_risk_budget.evaluated_at",
+    "trading.last_risk_budget.strategy_position_notional",
+    "trading.last_risk_budget.residual_position_notional",
+    "trading.last_risk_budget.remaining_position_notional",
+    "trading.last_risk_budget.requested_order_notional",
+    "trading.last_risk_budget.max_position_notional",
     "trading.last_risk_budget.projected_position_notional",
     "trading.last_risk_budget.current_position_notional",
     "trading.last_risk_budget.candidate_order_notional",

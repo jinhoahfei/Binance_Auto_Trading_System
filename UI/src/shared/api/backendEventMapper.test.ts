@@ -148,6 +148,30 @@ function create_configured_unbounded_snapshot(): BackendSnapshot {
 }
 
 describe('backend runtime contract validation', () => {
+    it('신규 위험 판정 근거와 legacy 누락 필드를 모두 읽는다', () => {
+        const old = create_configured_unbounded_snapshot();
+        const recent = { ...old, trading: { ...old.trading, last_risk_budget: {
+            ...old.trading.last_risk_budget!, evaluated_at: '2026-09-18T01:06:32Z',
+            strategy_position_notional: '125', residual_position_notional: '0.50',
+            remaining_position_notional: null, requested_order_notional: '60', max_position_notional: null,
+        } } };
+        expect(validate_backend_snapshot(old)).toBe(old);
+        expect(validate_backend_snapshot(recent)).toBe(recent);
+    });
+
+    it.each([
+        { evaluated_at: 'yesterday' }, { requested_order_notional: -1 },
+        { strategy_position_notional: '125' },
+        { strategy_position_notional: '125', residual_position_notional: '1' },
+        { remaining_position_notional: '1', max_position_notional: null },
+        { remaining_position_notional: '1', max_position_notional: '150' },
+    ])('추가 위험 근거의 불일치를 거부한다: %j', (fields) => {
+        const old = create_configured_unbounded_snapshot();
+        expect(() => validate_backend_snapshot({ ...old, trading: { ...old.trading,
+            last_risk_budget: { ...old.trading.last_risk_budget!, ...fields },
+        } })).toThrowError(expect.objectContaining({ code: 'MALFORMED_BACKEND_PAYLOAD' }));
+    });
+
     it('실시간 시장 갱신 뒤에도 마지막 4시간봉 REGIME 평가 snapshot을 읽을 수 있다', () => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_backend_snapshot_fixture();

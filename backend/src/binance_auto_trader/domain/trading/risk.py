@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 from typing import Final
@@ -59,6 +60,7 @@ class RiskBlockReason(str, Enum):
     RISK_ORDER_NOTIONAL_EXCEEDED = "RISK_ORDER_NOTIONAL_EXCEEDED"
     RISK_DAILY_LOSS_EXCEEDED = "RISK_DAILY_LOSS_EXCEEDED"
     RISK_POSITION_NOTIONAL_EXCEEDED = "RISK_POSITION_NOTIONAL_EXCEEDED"
+    RISK_BUY_BUDGET_INSUFFICIENT = "RISK_BUY_BUDGET_INSUFFICIENT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +227,13 @@ class RiskBudgetSnapshot:
     unrealized_pnl: Decimal
     daily_loss: Decimal
     manual_kill_active: bool
+    # Legacy 판정에는 관측하지 않은 값을 0으로 합성하지 않는다.
+    evaluated_at: datetime | None = None
+    strategy_position_notional: Decimal | None = None
+    residual_position_notional: Decimal | None = None
+    remaining_position_notional: Decimal | None = None
+    requested_order_notional: Decimal | None = None
+    max_position_notional: Decimal | None = None
 
     def __post_init__(self) -> None:
         """
@@ -278,6 +287,37 @@ class RiskBudgetSnapshot:
                 "projected_position_notional must equal current, reserved, "
                 "and candidate notionals"
             )
+
+        if self.evaluated_at is not None and (
+            not isinstance(self.evaluated_at, datetime)
+            or self.evaluated_at.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("evaluated_at must be timezone-aware UTC")
+        for field_name in (
+            "strategy_position_notional", "residual_position_notional",
+            "remaining_position_notional", "requested_order_notional", "max_position_notional",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_finite_decimal(field_name, value, non_negative=True)
+        if (self.strategy_position_notional is None) != (self.residual_position_notional is None):
+            raise ValueError("position breakdown must be supplied together")
+        with localcontext() as decimal_context:
+            decimal_context.prec = DECIMAL128_PRECISION
+            decimal_context.rounding = ROUND_HALF_EVEN
+            if self.strategy_position_notional is not None and (
+                self.strategy_position_notional + self.residual_position_notional
+                != self.current_position_notional
+            ):
+                raise ValueError("position breakdown must equal current position notional")
+            if self.remaining_position_notional is not None and (
+                self.max_position_notional is None
+                or self.remaining_position_notional != max(
+                    ZERO_DECIMAL, self.max_position_notional
+                    - self.current_position_notional - self.reserved_buy_notional,
+                )
+            ):
+                raise ValueError("remaining position budget is inconsistent")
 
         if type(self.manual_kill_active) is not bool:
             raise TypeError("manual_kill_active must be a bool")

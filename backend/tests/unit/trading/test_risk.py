@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
 
 from binance_auto_trader.domain.trading import (
@@ -393,6 +394,36 @@ class RiskValueObjectTests(unittest.TestCase):
                 budget=budget,
                 block_reason="RISK_POLICY_UNAVAILABLE",  # type: ignore[arg-type]
             )
+
+
+class RiskBudgetObservationTests(unittest.TestCase):
+    """추가 관측 필드가 오래된 데이터의 미관측 상태와 정확한 예산 관계를 보존한다."""
+
+    def test_legacy_snapshot_keeps_unknown_observations(self):
+        """이전 snapshot은 시각·분해액·잔여 예산을 0으로 합성하지 않는다."""
+        legacy = create_budget()
+        self.assertIsNone(legacy.evaluated_at)
+        self.assertIsNone(legacy.strategy_position_notional)
+        self.assertIsNone(legacy.residual_position_notional)
+        self.assertIsNone(legacy.remaining_position_notional)
+
+    def test_observations_reject_inconsistent_amounts_and_non_utc_time(self):
+        """금액 분해·잔여 예산과 UTC 시각을 한 불변 snapshot에서 검사한다."""
+        budget = replace(create_budget(), evaluated_at=datetime(2026, 9, 18, tzinfo=timezone.utc),
+            strategy_position_notional=Decimal("49"), residual_position_notional=Decimal("1"),
+            max_position_notional=Decimal("100"), remaining_position_notional=Decimal("30"),
+            requested_order_notional=Decimal("12"))
+        for overrides in (
+            {"evaluated_at": datetime(2026, 9, 18)},
+            {"evaluated_at": datetime(2026, 9, 18, tzinfo=timezone(timedelta(hours=9)))},
+            {"strategy_position_notional": None},
+            {"residual_position_notional": Decimal("2")},
+            {"remaining_position_notional": Decimal("31")},
+            {"max_position_notional": None},
+            {"requested_order_notional": Decimal("NaN")},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                replace(budget, **overrides)
 
 
 class BuyRiskEvaluationTests(unittest.TestCase):

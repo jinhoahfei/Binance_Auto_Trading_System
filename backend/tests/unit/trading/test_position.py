@@ -205,6 +205,7 @@ class PositionTests(unittest.TestCase):
         self.assertEqual(snapshot.quantity, Decimal("2"))
         self.assertEqual(snapshot.cost_basis, Decimal("201"))
         self.assertEqual(snapshot.average_entry_price, Decimal("100.5"))
+        self.assertEqual(snapshot.average_fill_price, Decimal("100"))
         self.assertEqual(snapshot.entered_at, FIRST_EXECUTED_AT)
         self.assertIs(snapshot.status, PositionStatus.OPEN)
         self.assertIsNone(snapshot.exit_reason)
@@ -234,6 +235,7 @@ class PositionTests(unittest.TestCase):
         snapshot = position.get_snapshot()
         self.assertEqual(snapshot.quantity, Decimal("0.999"))
         self.assertEqual(snapshot.cost_basis, Decimal("100"))
+        self.assertEqual(snapshot.average_fill_price, Decimal("100"))
         self.assertEqual(
             snapshot.average_entry_price,
             Decimal("100.1001001001001001001001001001001"),
@@ -267,6 +269,7 @@ class PositionTests(unittest.TestCase):
         self.assertEqual(snapshot.quantity, Decimal("1"))
         self.assertEqual(snapshot.cost_basis, Decimal("100.1"))
         self.assertEqual(snapshot.average_entry_price, Decimal("100.1"))
+        self.assertEqual(snapshot.average_fill_price, Decimal("100"))
         self.assertTrue(position.requires_legacy_fee_accounting_migration)
         with self.assertRaises(
             LegacyFeeAccountingMigrationRequiredError
@@ -321,6 +324,7 @@ class PositionTests(unittest.TestCase):
         position.apply_historical_trade(current_trade)
 
         snapshot = position.get_snapshot()
+        self.assertEqual(snapshot.average_fill_price, Decimal("100"))
         self.assertEqual(snapshot.quantity, Decimal("0.999"))
         self.assertEqual(snapshot.cost_basis, Decimal("100"))
         self.assertEqual(
@@ -435,6 +439,7 @@ class PositionTests(unittest.TestCase):
         self.assertEqual(snapshot.quantity, Decimal("3"))
         self.assertEqual(snapshot.cost_basis, Decimal("322.2"))
         self.assertEqual(snapshot.average_entry_price, Decimal("107.4"))
+        self.assertEqual(snapshot.average_fill_price, Decimal("107"))
         self.assertEqual(snapshot.entered_at, FIRST_EXECUTED_AT)
         self.assertIs(snapshot.owner, StrategyType.CASE_B)
 
@@ -482,6 +487,7 @@ class PositionTests(unittest.TestCase):
         )
         self.assertEqual(snapshot.cost_basis, Decimal("303"))
         self.assertEqual(snapshot.average_entry_price, Decimal("101"))
+        self.assertEqual(snapshot.average_fill_price, Decimal("100"))
         self.assertIs(snapshot.owner, StrategyType.CASE_B)
         self.assertEqual(snapshot.entered_at, FIRST_EXECUTED_AT)
         self.assertIs(snapshot.status, PositionStatus.OPEN)
@@ -525,10 +531,71 @@ class PositionTests(unittest.TestCase):
         self.assertEqual(snapshot.quantity, Decimal("0"))
         self.assertEqual(snapshot.cost_basis, Decimal("0"))
         self.assertEqual(snapshot.average_entry_price, Decimal("0"))
+        self.assertEqual(snapshot.average_fill_price, Decimal("0"))
         self.assertIsNone(snapshot.owner)
         self.assertIsNone(snapshot.entered_at)
         self.assertIs(snapshot.status, PositionStatus.CLOSED)
         self.assertIs(snapshot.exit_reason, ExitReason.STOP)
+
+    def test_price_only_average_survives_partial_sell_scale_in_and_history_replay(self) -> None:
+        """수수료 자산이 바뀌어도 잔여 체결 수량으로 가중하고 저장 이력 재생과 일치한다."""
+        position = Position()
+        restored = Position()
+        executions = (
+            _execution_summary(
+                side=OrderSide.BUY, quantity="2", price="100",
+                fee_asset="ETH", fee_amount="0.002", fee_quote_amount="0.2",
+            ),
+            _execution_summary(
+                side=OrderSide.SELL, quantity="0.999", price="120",
+                exchange_order_id="2", exit_reason=ExitReason.TAKE_PROFIT,
+            ),
+            _execution_summary(
+                side=OrderSide.BUY, quantity="1", price="200",
+                fee_quote_amount="2", exchange_order_id="3",
+            ),
+            _execution_summary(
+                side=OrderSide.SELL, quantity="1.999", price="200",
+                exchange_order_id="4", exit_reason=ExitReason.TAKE_PROFIT,
+            ),
+            _execution_summary(
+                side=OrderSide.BUY, quantity="1", price="300",
+                fee_quote_amount="3", exchange_order_id="5",
+            ),
+        )
+        for execution, expected in zip(executions, ("100", "100", "150", "0", "300")):
+            with self.subTest(order=execution.exchange_order_id):
+                sell_fields = {}
+                if execution.side is OrderSide.SELL:
+                    basis = Decimal("100" if execution.exchange_order_id == "2" else "302")
+                    pnl = execution.executed_amount - basis
+                    sell_fields = {
+                        "allocated_cost_basis": basis,
+                        "realized_pnl": pnl,
+                        "realized_return_rate": (pnl / basis * 100).quantize(Decimal("0.00000001")),
+                    }
+                trade = make_trade(
+                    schema_version=2,
+                    trade_id=f"trade-{execution.exchange_order_id}",
+                    order_id=execution.exchange_order_id,
+                    executed_at=execution.executed_at,
+                    side=execution.side,
+                    executed_quantity=execution.executed_quantity,
+                    executed_amount=execution.executed_amount,
+                    average_fill_price=execution.average_fill_price,
+                    fee_amount=execution.fee_amount,
+                    fee_asset=execution.fee_asset,
+                    fee_quote_amount=execution.fee_quote_amount,
+                    **sell_fields,
+                )
+                position.apply_execution(execution)
+                restored.apply_historical_trade(trade)
+                self.assertEqual(position.get_snapshot().average_fill_price, Decimal(expected))
+                self.assertEqual(restored.get_snapshot().average_fill_price, Decimal(expected))
+                self.assertEqual(position.clone().get_snapshot().average_fill_price, Decimal(expected))
+                self.assertEqual(restored.get_snapshot(), position.get_snapshot())
+                self.assertEqual(position.clone().get_snapshot(), position.get_snapshot())
+        self.assertEqual(position.cost_basis, Decimal("303"))
 
     def test_invalid_cost_basis_requests_do_not_mutate_position(self) -> None:
         """

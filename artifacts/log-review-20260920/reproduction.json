@@ -1,0 +1,58 @@
+{
+  "mode": "offline fake clients; isolated temporary history",
+  "states": [
+    {
+      "stage": "REST FILLED and durable history complete",
+      "status": "running",
+      "reconciliation_required": false,
+      "history_count": 1,
+      "pending_count": 0,
+      "position": "0.03999200159968006398720255948810238",
+      "pending_recovery_pending": false,
+      "lifecycle": "HISTORY_COMMITTED"
+    },
+    {
+      "stage": "late NEW",
+      "status": "running",
+      "reconciliation_required": false,
+      "history_count": 1,
+      "pending_count": 0,
+      "position": "0.03999200159968006398720255948810238",
+      "pending_recovery_pending": false,
+      "lifecycle": "HISTORY_COMMITTED"
+    },
+    {
+      "stage": "late PARTIALLY_FILLED",
+      "status": "reconciliation_required",
+      "reconciliation_required": true,
+      "history_count": 1,
+      "pending_count": 0,
+      "position": "0.03999200159968006398720255948810238",
+      "pending_recovery_pending": true,
+      "lifecycle": "HISTORY_COMMITTED"
+    },
+    {
+      "stage": "late FILLED",
+      "status": "reconciliation_required",
+      "reconciliation_required": true,
+      "history_count": 1,
+      "pending_count": 0,
+      "position": "0.03999200159968006398720255948810238",
+      "pending_recovery_pending": true,
+      "lifecycle": "HISTORY_COMMITTED"
+    }
+  ],
+  "caught_repository_errors": [
+    {
+      "type": "ValueError",
+      "message": "pending-order transition requires an active pending order",
+      "lifecycle": "HISTORY_COMMITTED"
+    },
+    {
+      "type": "ValueError",
+      "message": "pending-order transition requires an active pending order",
+      "lifecycle": "HISTORY_COMMITTED"
+    }
+  ],
+  "fake_submits": 1
+}
