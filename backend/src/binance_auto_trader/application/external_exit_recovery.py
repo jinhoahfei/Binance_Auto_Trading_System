@@ -6,6 +6,7 @@ from binance_auto_trader.domain.history.trade import Trade
 from binance_auto_trader.domain.trading.account_execution import AccountExecution
 from binance_auto_trader.domain.trading.order import OrderStatus, _aggregate_fills
 from binance_auto_trader.domain.trading.position import Position
+from binance_auto_trader.domain.trading.residual import allocate_external_residual
 from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 
@@ -16,12 +17,13 @@ def build_external_exit_trades(
     *,
     eth_balance: Decimal,
     residual_quantity: Decimal,
+    residual_cost_basis: Decimal = Decimal("0"),
 ) -> tuple[Trade, ...]:
     """
     함수 이름: build_external_exit_trades()
     기능: 단일 앱 lot 이후 외부 SELL만 후보에 반영하고 실제 잔고와 수량·수수료를 대조한다.
     인자: history -> 원본 이력, position -> 복원된 앱 Position, executions -> 신규 외부 체결,
-        eth_balance -> REST free+locked ETH, residual_quantity -> 기존 별도 잔여 장부 수량
+        eth_balance -> Earn 보관·보상을 대조한 ETH 원금, residual_quantity/residual_cost_basis -> 잔여 장부
     반환값: 원본 이력·Position을 변경하지 않은 v4 외부 매도 Trade tuple
     작성 날짜: 2026/09/10
     """
@@ -42,12 +44,17 @@ def build_external_exit_trades(
         if result.client_order_id.startswith("bat-") or execution.created_at < latest_time or min(fill.executed_at for fill in result.fills) <= latest_time:
             raise ValueError("external exit overlaps existing history")
         quantity, amount, price, fee, fee_asset, fee_quote, executed_at = _aggregate_fills(result.fills)
-        if execution.requested_quantity > candidate.quantity or any(fill.fee_asset == "ETH" and fill.fee_amount > 0 for fill in result.fills):
-            raise ValueError("external exit quantity or base commission is ambiguous")
-        allocated_cost = candidate.get_cost_basis(quantity)
         with localcontext() as context:
             context.prec = 34
             context.rounding = ROUND_HALF_EVEN
+            if execution.requested_quantity > candidate.quantity + residual_quantity or any(fill.fee_asset == "ETH" and fill.fee_amount > 0 for fill in result.fills):
+                raise ValueError("external exit quantity or base commission is ambiguous")
+            consumed_quantity, consumed_cost = allocate_external_residual(
+                candidate.quantity, quantity, residual_quantity, residual_cost_basis,
+            )
+            allocated_cost = candidate.get_cost_basis(quantity - consumed_quantity) + consumed_cost
+            residual_quantity -= consumed_quantity
+            residual_cost_basis -= consumed_cost
             pnl = amount - fee_quote - allocated_cost
             rate = (pnl / allocated_cost * 100).quantize(Decimal("0.00000001"))
         trade = Trade(
@@ -74,7 +81,7 @@ def build_external_exit_trades(
             exit_reason=ExitReason.EXTERNAL_MANUAL,
             fee_fills=result.fills,
         )
-        candidate.apply_historical_trade(trade)
+        candidate.apply_historical_trade(trade, residual_quantity=consumed_quantity, residual_cost_basis=consumed_cost)
         trades.append(trade)
         latest_time = executed_at
     with localcontext() as context:

@@ -164,7 +164,13 @@ class PositionStateSnapshot:
 
     @property
     def average_fill_price(self) -> Decimal:
-        """수수료 제외 체결 수량 가중 평균가. 손익용 평균 원가와 별도로 공개한다."""
+        """
+        함수 이름: average_fill_price()
+        기능: 수수료 제외 체결 수량 가중 평균가를 손익용 평균 원가와 별도로 공개한다.
+        인자: 없음
+        반환값: 매수 체결 금액을 체결 수량으로 나눈 평균가
+        작성 날짜: 2026/09/20
+        """
         if self.entry_executed_quantity == ZERO_DECIMAL:
             return ZERO_DECIMAL
         with localcontext() as decimal_context:
@@ -540,11 +546,15 @@ class Position:
             candidate._legacy_base_fee_history_open = self._legacy_base_fee_history_open
             return candidate
 
-    def apply_historical_trade(self, trade: object) -> None:
+    def apply_historical_trade(
+        self, trade: object, *, residual_quantity: Decimal = ZERO_DECIMAL,
+        residual_cost_basis: Decimal = ZERO_DECIMAL,
+    ) -> None:
         """
         함수 이름: apply_historical_trade()
         기능: durable Trade의 version별 aggregate 회계를 사용해 재시작 Position을 복원한다.
-        인자: trade -> JSONL 검증을 통과한 canonical Trade
+        인자: trade -> JSONL 검증을 통과한 canonical Trade,
+            residual_quantity/residual_cost_basis -> 외부 매도에 소비된 별도 장부 수량·원가
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -558,6 +568,12 @@ class Position:
             raise TypeError("trade must be a Trade")
         if trade.symbol != self.symbol:
             raise ValueError("historical Trade symbol does not match Position")
+        for value in (residual_quantity, residual_cost_basis):
+            _validate_decimal(value, "external residual allocation", allow_zero=True)
+        if residual_quantity or residual_cost_basis:
+            if (trade.schema_version != 4 or trade.exit_reason is not ExitReason.EXTERNAL_MANUAL
+                    or trade.side is not OrderSide.SELL or residual_quantity <= 0 or residual_cost_basis <= 0):
+                raise ValueError("residual allocation requires a verified external SELL")
 
         # History aggregate는 fill 재합성 없이 row version에 고정된 회계 공식을 적용한다.
         with self._lock:
@@ -638,21 +654,28 @@ class Position:
                 raise ValueError("historical SELL requires an open Position")
             if state.owner is not trade.strategy:
                 raise ValueError("historical SELL strategy does not own Position")
-            if trade.executed_quantity > state.quantity:
+            with localcontext() as decimal_context:
+                decimal_context.prec = DECIMAL_CALCULATION_PRECISION
+                position_sold = trade.executed_quantity - residual_quantity
+            if residual_quantity and position_sold != state.quantity:
+                raise ValueError("external residual is used only after exhausting the open lot")
+            if position_sold <= 0 or position_sold > state.quantity:
                 raise ValueError("historical SELL exceeds Position quantity")
             with localcontext() as decimal_context:
                 decimal_context.prec = DECIMAL_CALCULATION_PRECISION
                 decimal_context.rounding = ROUND_HALF_EVEN
                 allocated_cost_basis = (
                     state.cost_basis
-                    if trade.executed_quantity == state.quantity
+                    if position_sold == state.quantity
                     else (
                         state.cost_basis
-                        * trade.executed_quantity
+                        * position_sold
                         / state.quantity
                     )
                 )
-                next_quantity = state.quantity - trade.executed_quantity
+                if residual_quantity and trade.allocated_cost_basis != allocated_cost_basis + residual_cost_basis:
+                    raise ValueError("external SELL cost conflicts with position and residual ledger")
+                next_quantity = state.quantity - position_sold
                 next_cost_basis = state.cost_basis - allocated_cost_basis
             if next_quantity == ZERO_DECIMAL:
                 next_state = PositionStateSnapshot(

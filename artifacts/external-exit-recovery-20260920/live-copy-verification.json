@@ -1,0 +1,137 @@
+{
+  "order_execution_enabled": false,
+  "recovery_module": "/Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader.app/Contents/MacOS/binance-auto-sidecar!/binance_auto_trader/application/external_exit_recovery.pyc",
+  "runs": [
+    {
+      "ready": true,
+      "session_status": "not_started",
+      "position_quantity": "0",
+      "residual_totals": [
+        "0.00009230",
+        "0.2258107027027027027027027027027030"
+      ],
+      "balance": {
+        "asset": "ETH",
+        "status": "verified",
+        "position_quantity": "0",
+        "residual_principal_quantity": "0.00009230",
+        "earn_rewards_quantity": "0.00000001",
+        "earn_quantity": "0",
+        "expected_spot_quantity": "0.00009231",
+        "exchange_spot_quantity": "0.00009231",
+        "difference_quantity": "0.00000000",
+        "checked_at": "2026-09-20T13:22:05.174769+00:00",
+        "reason_code": null,
+        "retryable": false
+      },
+      "history_count": 4,
+      "last_trade": {
+        "trade_id": "trade-49962570529",
+        "order_id": "49962570529",
+        "client_order_id": "web_8b9bfd6659b44551a4162501eeaa1e97",
+        "symbol": "ETHUSDT",
+        "executed_at": "2026-09-20 13:00:18.669000+00:00",
+        "side": "SELL",
+        "regime_type": "TYPE_0",
+        "strategy": "CASE_C",
+        "requested_quantity": "0.00370000",
+        "executed_quantity": "0.00370000",
+        "executed_amount": "9.5491450000000000",
+        "average_fill_price": "2580.85000000",
+        "market_price_at_decision": null,
+        "fee_amount": "0.00954915",
+        "fee_asset": "USDT",
+        "fee_quote_amount": "0.00954915",
+        "allocated_cost_basis": "9.711229000000000000000000000000000",
+        "realized_pnl": "-0.171633150000000000000000000000000",
+        "realized_return_rate": "-1.76736796",
+        "exit_reason": "EXTERNAL_MANUAL",
+        "schema_version": 4,
+        "fee_fills": [
+          {
+            "exchange_order_id": "49962570529",
+            "trade_id": "4371071673",
+            "quantity": "0.00370000",
+            "price": "2580.85000000",
+            "fee_amount": "0.00954915",
+            "fee_asset": "USDT",
+            "fee_quote_amount": "0.00954915",
+            "executed_at": "2026-09-20 13:00:18.669000+00:00",
+            "fee_valuation": null
+          }
+        ]
+      },
+      "pending_count": 0,
+      "closed": "CLOSED"
+    },
+    {
+      "ready": true,
+      "session_status": "not_started",
+      "position_quantity": "0",
+      "residual_totals": [
+        "0.00009230",
+        "0.2258107027027027027027027027027030"
+      ],
+      "balance": {
+        "asset": "ETH",
+        "status": "verified",
+        "position_quantity": "0",
+        "residual_principal_quantity": "0.00009230",
+        "earn_rewards_quantity": "0.00000001",
+        "earn_quantity": "0",
+        "expected_spot_quantity": "0.00009231",
+        "exchange_spot_quantity": "0.00009231",
+        "difference_quantity": "0.00000000",
+        "checked_at": "2026-09-20T13:22:07.419751+00:00",
+        "reason_code": null,
+        "retryable": false
+      },
+      "history_count": 4,
+      "last_trade": {
+        "trade_id": "trade-49962570529",
+        "order_id": "49962570529",
+        "client_order_id": "web_8b9bfd6659b44551a4162501eeaa1e97",
+        "symbol": "ETHUSDT",
+        "executed_at": "2026-09-20 13:00:18.669000+00:00",
+        "side": "SELL",
+        "regime_type": "TYPE_0",
+        "strategy": "CASE_C",
+        "requested_quantity": "0.00370000",
+        "executed_quantity": "0.00370000",
+        "executed_amount": "9.5491450000000000",
+        "average_fill_price": "2580.85000000",
+        "market_price_at_decision": null,
+        "fee_amount": "0.00954915",
+        "fee_asset": "USDT",
+        "fee_quote_amount": "0.00954915",
+        "allocated_cost_basis": "9.711229000000000000000000000000000",
+        "realized_pnl": "-0.171633150000000000000000000000000",
+        "realized_return_rate": "-1.76736796",
+        "exit_reason": "EXTERNAL_MANUAL",
+        "schema_version": 4,
+        "fee_fills": [
+          {
+            "exchange_order_id": "49962570529",
+            "trade_id": "4371071673",
+            "quantity": "0.00370000",
+            "price": "2580.85000000",
+            "fee_amount": "0.00954915",
+            "fee_asset": "USDT",
+            "fee_quote_amount": "0.00954915",
+            "executed_at": "2026-09-20 13:00:18.669000+00:00",
+            "fee_valuation": null
+          }
+        ]
+      },
+      "pending_count": 0,
+      "closed": "CLOSED"
+    }
+  ],
+  "source_sha256": {
+    "trade-history.jsonl": "c5a2399d55a1de7c8753150dbd290e04f82c6ffb33d95b41a6b747f3febfd0da",
+    "trade-history.jsonl.pending-orders.jsonl": "0f91cdac742236b12b05c6b6dc263afad000d76a231a9413c677a6ef4fd8ebf3",
+    "residual-ledger.json": "b2a7eeee1627d24e0251120e746c1b59be07a3e00b84ec3b999a5beef5c8cbf5"
+  },
+  "copy_ledger_unchanged": true,
+  "original_files_unchanged": true
+}

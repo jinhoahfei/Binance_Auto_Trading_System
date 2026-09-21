@@ -1,0 +1,80 @@
+{
+  "executions": [
+    {
+      "side": "BUY",
+      "requested_quantity": "0.00370000",
+      "created_at": "2026-09-19 21:22:48.507000+00:00",
+      "result": {
+        "symbol": "ETHUSDT",
+        "client_order_id": "bat-38271e3b3b9c853f6f980632-0",
+        "status": "FILLED",
+        "processed_at": "2026-09-19 21:22:48.507000+00:00",
+        "exchange_order_id": "49951686152",
+        "fills": [
+          {
+            "exchange_order_id": "49951686152",
+            "trade_id": "4369971612",
+            "quantity": "0.00210000",
+            "price": "2622.21000000",
+            "fee_amount": "0.00000210",
+            "fee_asset": "ETH",
+            "fee_quote_amount": "0.0055066410000000",
+            "executed_at": "2026-09-19 21:22:48.507000+00:00",
+            "fee_valuation": null
+          },
+          {
+            "exchange_order_id": "49951686152",
+            "trade_id": "4369971613",
+            "quantity": "0.00160000",
+            "price": "2622.21000000",
+            "fee_amount": "0.00000160",
+            "fee_asset": "ETH",
+            "fee_quote_amount": "0.0041955360000000",
+            "executed_at": "2026-09-19 21:22:48.507000+00:00",
+            "fee_valuation": null
+          }
+        ],
+        "failure_reason": null,
+        "failure_kind": null,
+        "retry_after": null
+      }
+    },
+    {
+      "side": "SELL",
+      "requested_quantity": "0.00370000",
+      "created_at": "2026-09-20 13:00:18.669000+00:00",
+      "result": {
+        "symbol": "ETHUSDT",
+        "client_order_id": "web_8b9bfd6659b44551a4162501eeaa1e97",
+        "status": "FILLED",
+        "processed_at": "2026-09-20 13:00:18.669000+00:00",
+        "exchange_order_id": "49962570529",
+        "fills": [
+          {
+            "exchange_order_id": "49962570529",
+            "trade_id": "4371071673",
+            "quantity": "0.00370000",
+            "price": "2580.85000000",
+            "fee_amount": "0.00954915",
+            "fee_asset": "USDT",
+            "fee_quote_amount": "0.00954915",
+            "executed_at": "2026-09-20 13:00:18.669000+00:00",
+            "fee_valuation": null
+          }
+        ],
+        "failure_reason": null,
+        "failure_kind": null,
+        "retry_after": null
+      }
+    }
+  ],
+  "eth_balances": [
+    {
+      "asset": "ETH",
+      "free": "0.00009231",
+      "locked": "0E-8"
+    }
+  ],
+  "open_orders": false,
+  "open_order_lists": false
+}

@@ -70,7 +70,7 @@ def reconcile_balance(c, *, strict: bool = False, use_cached: bool = False) -> B
     principal = c.residual_totals[0]
     exchange = c._account.get_holdings("ETH")
     # 잔여 장부가 없는 기존 비전용/testnet 계좌의 시작 정책은 보존한다.
-    if not strict and principal == 0:
+    if not strict and principal == 0 and (c._residual_settlement is None or not c._residual_settlement.transfers):
         return None
     basis = balance_basis(c)
     prior = c._balance_reconciliation

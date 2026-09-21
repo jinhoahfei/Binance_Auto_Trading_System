@@ -5577,29 +5577,50 @@ class TradingController:
         if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
             raise StartupOrderReconciliationError("external recovery requires no account-wide open orders")
         first_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
+        settlement = self._residual_settlement
+        residual_quantity, residual_cost = self.residual_totals
+        # 외부 매도도 기존 잔여의 Earn 보관·보상을 포함한 같은 계좌 근거를 사용한다.
+        since = history[settlement.transfers[0].history_count - 1].executed_at if settlement is not None and settlement.transfers else None
+        earn_evidence = self._api_gateway.fetch_earn_residual_evidence(since) if since is not None else None
+        if earn_evidence is not None and not settlement.matches_earn_custody(earn_evidence, history):
+            raise StartupOrderReconciliationError("external recovery Earn provenance is invalid")
         # 별도의 두 조회에서 동일 주문·fill과 잔고를 확인한 뒤에만 첫 durable write를 허용한다.
         repeated = self._api_gateway.list_account_executions_since(_TRADING_SYMBOL, anchor)
+        repeated_earn = self._api_gateway.fetch_earn_residual_evidence(since) if since is not None else None
         confirmed_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
         first_eth = tuple(balance for balance in first_account.balances if balance.asset == _BASE_ASSET)
         confirmed_eth = tuple(balance for balance in confirmed_account.balances if balance.asset == _BASE_ASSET)
-        if repeated != executions or first_eth != confirmed_eth or len(confirmed_eth) != 1:
+        if repeated != executions or repeated_earn != earn_evidence or first_eth != confirmed_eth or len(confirmed_eth) != 1:
             raise StartupOrderReconciliationError("external recovery evidence changed during verification")
         if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
             raise StartupOrderReconciliationError("open orders appeared during external recovery")
         if not self._web_socket_gateway.account_ready or self._process_lifetime_reconciliation_required_locked():
             raise StartupOrderReconciliationError("external recovery account stream is not stable")
         balance = confirmed_eth[0]
-        residual_quantity = self._residual_settlement.totals[0] if self._residual_settlement is not None else Decimal("0")
         try:
-            trades = build_external_exit_trades(history, position, tuple(new_executions), eth_balance=balance.free + balance.locked, residual_quantity=residual_quantity)
+            with localcontext() as context:
+                context.prec = 34
+                principal_balance = balance.free + balance.locked
+                if earn_evidence is not None:
+                    principal_balance += earn_evidence.quantity - earn_evidence.rewards
+            trades = build_external_exit_trades(history, position, tuple(new_executions),
+                eth_balance=principal_balance, residual_quantity=residual_quantity, residual_cost_basis=residual_cost)
+            if settlement is not None:
+                preview = ResidualSettlement(settlement.storage)
+                preview.restore(Position(), (*history, *trades), self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL).lot_size.step_size)
+                if earn_evidence is not None and not preview.matches_earn_custody(earn_evidence, (*history, *trades)):
+                    raise ValueError("external SELL consumed residual held in Earn")
         except (ValueError, TypeError) as error:
             raise StartupOrderReconciliationError("external SELL cannot be attributed to the app position") from error
         self._account.apply_startup_reconciliation_snapshot(confirmed_account, self._market_snapshot.get_current_eth_price())
         self._account_free_overlays.clear()
-        for trade in trades:
+        for history_count, trade in enumerate(trades, len(history) + 1):
             # 전체 후보는 이미 검증했다. 저장 중 중단돼도 다음 실행이 원래 order ID로 멱등 복원한다.
             history_controller.record_reconciled_external_trade(trade)
-            position.apply_historical_trade(trade)
+            if settlement is not None:
+                settlement.apply_external_trade(position, trade, history_count)
+            else:
+                position.apply_historical_trade(trade)
         self._web_socket_gateway.rebase_order_results(tuple(execution.result for execution in executions))
 
     def _restore_position_from_history(
@@ -6545,6 +6566,7 @@ class TradingController:
         open_lot_regime: RegimeType | None = None
         open_lot_owner: StrategyType | None = None
         residual_entries = {} if self._residual_settlement is None else {entry.history_count: entry for entry in self._residual_settlement.transfers}
+        residual_replay = ResidualSettlement(self._residual_settlement.storage) if self._residual_settlement is not None else None
         for history_count, trade in enumerate(durable_trades, 1):
             if replayed_position.quantity == Decimal("0"):
                 if trade.side is not OrderSide.BUY:
@@ -6559,10 +6581,14 @@ class TradingController:
                     "A recovered open lot cannot mix REGIME or owner"
                 )
 
-            replayed_position.apply_historical_trade(trade)
+            if residual_replay is not None and trade.exit_reason is ExitReason.EXTERNAL_MANUAL:
+                residual_replay.apply_external_trade(replayed_position, trade, history_count)
+            else:
+                replayed_position.apply_historical_trade(trade)
             residual = residual_entries.get(history_count)
             if residual is not None:
                 replayed_position.detach_residual(residual.quantity, residual.cost_basis, residual.step_size)
+                residual_replay.transfers = (*residual_replay.transfers, residual)
             if replayed_position.quantity == Decimal("0"):
                 open_lot_regime = None
                 open_lot_owner = None

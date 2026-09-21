@@ -80,3 +80,23 @@ stepSize와 history hash를 다시 검증한다. 부분 매도 잔량을 임의�
 
 - [Binance 공식 Account endpoints](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/account): `allOrders`의 orderId cursor와 `myTrades` 주문별 조회.
 - [수정 검증 기록](../../Validation/External_Manual_Sell_Recovery_Fix_2026-09-10.md).
+
+## 7. 2026-09-20 보완 — 열린 lot과 이전 잔여의 합산 매도
+
+위 단일 lot 수량 제한은 **검증된 기존 잔여 원금**을 함께 매도하는 경우로 확장한다.
+원 요청 수량은 해당 시점의 `Position.quantity + 남은 잔여 원금`을 초과할 수 없다.
+보상이나 출처가 없는 추가 ETH를 매도 가능 원금으로 끌어오지 않는다.
+
+실제 체결량 중 열린 lot 수량까지는 기존 Position 원가를 배분하고, 초과분만 잔여 장부의
+남은 평균 원가로 배분한다. 초과분이 있으면 열린 lot은 전량 종료되며, 실제 주문량·체결량·fill·fee는
+하나의 기존 v4 `EXTERNAL_MANUAL` Trade에 보존한다. 합산 배분 원가와 실현손익도 같은 Trade에 저장한다.
+잔여 소비는 해당 Trade의 이력 순번에서 결정적으로 재생하므로 이관 장부 원본을 덮어쓰거나
+별도의 소비 파일과 이중 저장하지 않는다. 중간 중단 후에도 저장된 SELL prefix가 같은 소비를 복원한다.
+v4의 기존 필드와 단일 lot 매도 결과는 유지되며, 초과 수량을 재생할 때 잔여 원가 대조를 추가한다.
+
+이전 잔여가 있으면 외부 매도 검증에서도 Earn 근거를 두 번 읽는다. 확인된 현재 Earn 보관량과
+누적 보상을 반영한 원금 잔고로 후보 전체를 검증하고, 소비된 잔여가 첫 매도 체결 전에 현물에
+있었는지도 예치·상환 시각으로 확인한다. 매도 뒤 재예치는 소비 후 남은 수량만 사용할 수 있다.
+보상은 거래 원가나 매도 수량에 포함하지 않고 기존 계좌 대조 항목으로 유지한다.
+
+상세 장애 수치와 검증 결과는 [2026-09-20 수정 기록](../../../artifacts/external-exit-recovery-20260920/report.md)에 기록한다.

@@ -1,11 +1,37 @@
 """매도 뒤 주문 단위 미만 ETH의 수량·원가와 체결 이력 결속을 정의한다."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 import hashlib
 import json
 
 from binance_auto_trader.domain.history.trade import Trade, trade_to_json_object
+
+
+def allocate_external_residual(
+    position_quantity: Decimal, executed_quantity: Decimal,
+    residual_quantity: Decimal, residual_cost: Decimal,
+) -> tuple[Decimal, Decimal]:
+    """
+    함수 이름: allocate_external_residual()
+    기능: 외부 매도가 현재 lot을 초과한 부분에만 검증된 잔여 원금을 평균 원가로 배분한다.
+    인자: position_quantity/executed_quantity -> 보유·매도량, residual_quantity/residual_cost -> 남은 잔여 장부
+    반환값: 소비된 잔여 수량과 원가
+    작성 날짜: 2026/09/20
+    """
+    for value in (position_quantity, executed_quantity, residual_quantity, residual_cost):
+        if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+            raise ValueError("invalid external residual allocation")
+    if position_quantity <= 0 or executed_quantity <= 0 or (residual_quantity == 0) != (residual_cost == 0):
+        raise ValueError("external residual allocation requires an open lot and valid ledger")
+    with localcontext() as context:
+        context.prec = 34
+        context.rounding = ROUND_HALF_EVEN
+        consumed = max(Decimal("0"), executed_quantity - position_quantity)
+        if consumed > residual_quantity:
+            raise ValueError("external sale exceeds position and residual principal")
+        cost = (residual_cost if consumed == residual_quantity else residual_cost * consumed / residual_quantity) if consumed else Decimal("0")
+        return consumed, cost
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,6 +18,7 @@ from binance_auto_trader.domain.history.trade import Trade, trade_from_json_obje
 from binance_auto_trader.domain.trading.account_execution import AccountExecution
 from binance_auto_trader.domain.trading.fee_valuation import BnbFeeValuation
 from binance_auto_trader.domain.trading.order import Fill, OrderResult, OrderStatus
+from binance_auto_trader.domain.trading.residual import EarnResidualEvidence
 from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 from binance_auto_trader.transport.contracts import map_trade
 from tests.integration.test_account_stream_flow import _account_rest_payload
@@ -265,6 +266,175 @@ class ExternalExitRecoveryTests(unittest.TestCase):
             self.assertEqual(position.quantity, 0)
             self.assertEqual(controller.residual_totals[0], Decimal("0.000096"))
             self.assertEqual(client.submit_count, 0)
+
+    def residual_exit_facts(self, path, *, reward="0.00000001"):
+        """
+        함수 이름: residual_exit_facts()
+        기능: 이전 잔여와 새 매수 net 수량을 함께 수동 매도한 9월 20일 장애를 재현한다.
+        인자: path -> 격리 이력, reward -> 검증된 Earn 보상
+        반환값: 새 매수, 가짜 거래소, Earn 근거
+        작성 날짜: 2026/09/20
+        """
+        old_buy, old_client = recovery_facts()
+        repository = TradeHistoryRepository(path)
+        repository.save_this_trade_by_order_id(old_buy.order_id, old_buy)
+        controller, _, _ = self.reconcile(path, old_client)
+        controller.close_session_resources()
+        buy_time = FIXED_TIME - timedelta(minutes=20)
+        sell_time = FIXED_TIME - timedelta(minutes=10)
+        buy = replace(old_buy, trade_id="trade-1003", order_id="1003", client_order_id="bat-second-buy",
+            executed_at=buy_time, requested_quantity=Decimal("0.003717591640607123789184654107238196"),
+            executed_quantity=Decimal("0.0037"), executed_amount=Decimal("9.702177"),
+            average_fill_price=Decimal("2622.21"), fee_amount=Decimal("0.0000037"), fee_quote_amount=Decimal("0.009702177"))
+        repository.save_this_trade_by_order_id(buy.order_id, buy)
+        buy_fill = Fill("1003", "10003", buy.executed_quantity, buy.average_fill_price, buy.fee_amount, "ETH", buy.fee_quote_amount, buy_time)
+        buy_result = OrderResult("ETHUSDT", buy.client_order_id, OrderStatus.FILLED, buy_time, "1003", (buy_fill,))
+        sell_fill = Fill("1004", "10004", Decimal("0.0037"), Decimal("2580.85"), Decimal("0.00954915"), "USDT", Decimal("0.00954915"), sell_time)
+        sell_result = OrderResult("ETHUSDT", "web-combined-sell", OrderStatus.FILLED, sell_time, "1004", (sell_fill,))
+        executions = (AccountExecution(OrderSide.BUY, buy.executed_quantity, buy_time, buy_result),
+            AccountExecution(OrderSide.SELL, Decimal("0.0037"), sell_time, sell_result))
+        client = ExternalExitRESTClient(buy_result, executions, str(Decimal("0.0000923") + Decimal(reward)))
+        evidence = EarnResidualEvidence(
+            (("123", int((FIXED_TIME - timedelta(minutes=50)).timestamp() * 1000), Decimal("0.000096")),),
+            Decimal("0"), Decimal(reward),
+            (("456", int((FIXED_TIME - timedelta(minutes=40)).timestamp() * 1000), Decimal("0.000096") + Decimal(reward)),))
+        client.fetch_earn_residual_evidence = lambda **kwargs: evidence
+        return buy, client, evidence
+
+    def test_manual_exit_consumes_old_residual_and_preserves_earn_reward_across_restarts(self):
+        """
+        함수 이름: test_manual_exit_consumes_old_residual_and_preserves_earn_reward_across_restarts()
+        기능: 실제 매도량·잔여 원가·보상을 보존하고 반복 시작 시 중복 차감을 막는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/20
+        """
+        for reward in ("0", "0.00000001"):
+            with self.subTest(reward=reward), TemporaryDirectory() as directory:
+                path = Path(directory).resolve() / "history.jsonl"
+                buy, client, _ = self.residual_exit_facts(path, reward=reward)
+                original_history = path.read_bytes()
+                ledger = path.parent / "residual-ledger.json"
+                original_ledger = ledger.read_bytes()
+                with localcontext() as context:
+                    context.prec = 34
+                    original_cost = Decimal("0.234862702702702702702702702702703")
+                    consumed_cost = original_cost * Decimal("0.0000037") / Decimal("0.000096")
+                    remaining_cost = original_cost - consumed_cost
+                for _ in range(3):
+                    controller, history, position = self.reconcile(path, client)
+                    self.assertTrue(controller.startup_reconciliation_complete)
+                    self.assertEqual(position.quantity, 0)
+                    self.assertEqual(controller.residual_totals, (Decimal("0.0000923"), remaining_cost))
+                    self.assertEqual(controller.snapshot_session().status.value, "not_started")
+                    trades = history.trade_history.trades
+                    self.assertEqual(len(trades), 4)
+                    sell = trades[-1]
+                    self.assertEqual(sell.executed_quantity, Decimal("0.0037"))
+                    self.assertEqual(sell.requested_quantity, Decimal("0.0037"))
+                    self.assertEqual(sell.fee_fills, client.executions[-1].result.fills)
+                    with localcontext() as context:
+                        context.prec = 34
+                        self.assertEqual(sell.allocated_cost_basis, buy.executed_amount + consumed_cost)
+                        self.assertEqual(sell.realized_pnl, sell.executed_amount - sell.fee_quote_amount - sell.allocated_cost_basis)
+                    receipt = controller.balance_reconciliation_snapshot()
+                    self.assertEqual(receipt["status"], "verified")
+                    self.assertEqual(Decimal(receipt["earn_rewards_quantity"]), Decimal(reward))
+                    self.assertEqual(Decimal(receipt["difference_quantity"]), 0)
+                    controller.close_session_resources()
+                self.assertTrue(path.read_bytes().startswith(original_history))
+                self.assertEqual(ledger.read_bytes(), original_ledger)
+                self.assertEqual(client.submit_count, 0)
+
+    def test_combined_exit_recovers_after_save_without_double_consuming_residual(self):
+        """
+        함수 이름: test_combined_exit_recovers_after_save_without_double_consuming_residual()
+        기능: SELL 내구 저장 직후 중단돼도 잔여 차감을 다음 시작에서 한 번만 재생한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/20
+        """
+        with TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "history.jsonl"
+            _, client, _ = self.residual_exit_facts(path)
+            original_save = TradeHistoryRepository.save_this_trade_by_order_id
+
+            def save_then_fail(repository, order_id, trade):
+                """실제 저장이 완료된 직후 process 중단을 모사한다."""
+                original_save(repository, order_id, trade)
+                raise OSError("injected post-save failure")
+
+            with patch.object(TradeHistoryRepository, "save_this_trade_by_order_id", save_then_fail), self.assertRaises(OSError):
+                self.reconcile(path, client)
+            for _ in range(2):
+                controller, history, position = self.reconcile(path, client)
+                self.assertEqual(len(history.trade_history.trades), 4)
+                self.assertEqual(position.quantity, 0)
+                self.assertEqual(controller.residual_totals[0], Decimal("0.0000923"))
+                controller.close_session_resources()
+            self.assertEqual(client.submit_count, 0)
+
+    def test_combined_exit_still_rejects_unexplained_or_unstable_evidence_before_writing(self):
+        """
+        함수 이름: test_combined_exit_still_rejects_unexplained_or_unstable_evidence_before_writing()
+        기능: 잔여 포함 복구도 미확인 보상·이체·Earn 변경·늦은 상환·장부 초과를 거부한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/20
+        """
+        for scenario in ("missing_earn", "earn_race", "late_redemption", "oversized_request", "extra_balance", "withdrawal", "base_fee"):
+            with self.subTest(scenario=scenario), TemporaryDirectory() as directory:
+                path = Path(directory).resolve() / "history.jsonl"
+                _, client, evidence = self.residual_exit_facts(path)
+                if scenario == "missing_earn":
+                    client.fetch_earn_residual_evidence = lambda **kwargs: None
+                elif scenario == "earn_race":
+                    values = iter((evidence, None))
+                    client.fetch_earn_residual_evidence = lambda **kwargs: next(values)
+                elif scenario == "late_redemption":
+                    late = replace(evidence, redemptions=(("456", int(FIXED_TIME.timestamp() * 1000), Decimal("0.00009601")),))
+                    client.fetch_earn_residual_evidence = lambda **kwargs: late
+                elif scenario == "oversized_request":
+                    sell = client.executions[-1]
+                    client.executions = (client.executions[0], replace(sell, requested_quantity=Decimal("0.004"), result=replace(sell.result, status=OrderStatus.CANCELED)))
+                elif scenario == "extra_balance":
+                    client.balance = "0.00009232"
+                elif scenario == "withdrawal":
+                    client.balance = "0.00009230"
+                elif scenario == "base_fee":
+                    sell = client.executions[-1]
+                    fill = replace(sell.result.fills[0], fee_asset="ETH", fee_amount=Decimal("0.000001"), fee_quote_amount=Decimal("0.00258085"))
+                    client.executions = (client.executions[0], replace(sell, result=replace(sell.result, fills=(fill,))))
+                ledger = path.parent / "residual-ledger.json"
+                original = path.read_bytes(), ledger.read_bytes()
+                with self.assertRaises(StartupOrderReconciliationError):
+                    self.reconcile(path, client)
+                self.assertEqual((path.read_bytes(), ledger.read_bytes()), original)
+                self.assertEqual(client.submit_count, 0)
+
+    def test_new_open_lot_provenance_replays_prior_combined_exit(self):
+        """
+        함수 이름: test_new_open_lot_provenance_replays_prior_combined_exit()
+        기능: 다음 매수 lot의 재시작·시작 조건도 이전 잔여 소비 이력을 정확히 재생한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/20
+        """
+        with TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "history.jsonl"
+            buy, client, _ = self.residual_exit_facts(path)
+            controller, _, _ = self.reconcile(path, client)
+            controller.close_session_resources()
+            buy = replace(buy, trade_id="trade-1005", order_id="1005", client_order_id="bat-third-buy", executed_at=FIXED_TIME)
+            TradeHistoryRepository(path).save_this_trade_by_order_id(buy.order_id, buy)
+            fill = replace(client.executions[0].result.fills[0], exchange_order_id="1005", trade_id="10005", executed_at=FIXED_TIME)
+            client.result = replace(client.executions[0].result, exchange_order_id="1005", client_order_id=buy.client_order_id, processed_at=FIXED_TIME, fills=(fill,))
+            client.executions = (AccountExecution(OrderSide.BUY, buy.executed_quantity, FIXED_TIME, client.result),)
+            client.balance = "0.00378861"
+            controller, history, position = self.reconcile(path, client)
+            self.assertEqual(position.quantity, Decimal("0.0036963"))
+            self.assertEqual(controller._resolve_recovered_position_provenance(history.trade_history.trades, position.get_snapshot()), (buy.regime_type, buy.strategy))
+            self.assertEqual(controller.residual_totals[0], Decimal("0.0000923"))
 
     def test_ambiguous_evidence_never_changes_durable_history(self):
         """

@@ -1,11 +1,11 @@
 """기존 Position·Trade 사이의 잔여 이관과 durable replay를 조정한다."""
 
-from decimal import Decimal, localcontext
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from typing import Protocol
 
 from binance_auto_trader.domain.history.trade import Trade
 from binance_auto_trader.domain.trading.position import Position
-from binance_auto_trader.domain.trading.residual import EarnResidualEvidence, ResidualTransfer, history_digest
+from binance_auto_trader.domain.trading.residual import EarnResidualEvidence, ResidualTransfer, allocate_external_residual, history_digest
 from binance_auto_trader.domain.trading.states import ExitReason, OrderSide
 
 
@@ -54,6 +54,7 @@ class ResidualSettlement:
         """
         self.storage = storage
         self.transfers = ()
+        self._external_consumptions = ()
         self._open_base_fee = False
 
     @property
@@ -67,10 +68,34 @@ class ResidualSettlement:
         """
         with localcontext() as context:
             context.prec = 34
-            return (
-                sum((entry.quantity for entry in self.transfers), Decimal("0")),
-                sum((entry.cost_basis for entry in self.transfers), Decimal("0")),
-            )  # 잔여 장부에는 실현손익을 생성하지 않는다.
+            context.rounding = ROUND_HALF_EVEN
+            quantity = cost = Decimal("0")
+            events = [(entry.history_count, entry.quantity, entry.cost_basis) for entry in self.transfers]
+            events.extend((count, -used_quantity, -used_cost) for count, used_quantity, used_cost in self._external_consumptions)
+            for _, change_quantity, change_cost in sorted(events):
+                quantity += change_quantity
+                cost += change_cost
+            return quantity, cost  # 실제 배분 순서로 재생해 전량 소비 시 원가 반올림 잔량도 남기지 않는다.
+
+    def apply_external_trade(self, position: Position, trade: Trade, history_count: int) -> None:
+        """
+        함수 이름: apply_external_trade()
+        기능: 원래 SELL의 수량·원가를 검증하고 포지션과 잔여의 소비를 같은 이력에 결속한다.
+        인자: position -> 현재 lot, trade -> 실제 외부 SELL, history_count -> 적용할 이력 순번
+        반환값: 없음
+        작성 날짜: 2026/09/20
+        """
+        if trade.schema_version != 4 or trade.exit_reason is not ExitReason.EXTERNAL_MANUAL or trade.side is not OrderSide.SELL:
+            raise ValueError("residual consumption requires an external SELL")
+        totals = self.totals
+        with localcontext() as context:
+            context.prec = 34
+            if trade.requested_quantity > position.quantity + totals[0]:
+                raise ValueError("external requested quantity exceeds durable principal")
+        quantity, cost = allocate_external_residual(position.quantity, trade.executed_quantity, *totals)
+        position.apply_historical_trade(trade, residual_quantity=quantity, residual_cost_basis=cost)
+        if quantity:
+            self._external_consumptions = (*self._external_consumptions, (history_count, quantity, cost))
 
     def restore(self, position: Position, trades: tuple[Trade, ...], current_step_size: Decimal | None = None) -> bool:
         """
@@ -88,6 +113,7 @@ class ResidualSettlement:
             raise ValueError("residual ledger has missing or duplicate history")
         fee_seen = False
         eligible = False
+        replay = ResidualSettlement(self.storage)
         for count, trade in enumerate(trades, 1):
             previous_quantity = position.quantity
             if previous_quantity == 0:
@@ -105,15 +131,20 @@ class ResidualSettlement:
                     and trade.executed_quantity == (previous_quantity // effective_step) * effective_step
                 )  # 외부 주문의 실제 origQty를 보존하며 매도 가능한 전량이 체결됐는지 확인한다.
             eligible = trade.side is OrderSide.SELL and fee_seen and (trade.requested_quantity == previous_quantity or external_full_step)
-            position.apply_historical_trade(trade)
+            if trade.exit_reason is ExitReason.EXTERNAL_MANUAL:
+                replay.apply_external_trade(position, trade, count)
+            else:
+                position.apply_historical_trade(trade)
             if entry is not None:
                 # 이력 내용·전량 매도 의도·원가를 모두 재검증해 장부만 바꿔 Position을 숨기지 못한다.
                 if not eligible or entry.history_sha256 != history_digest(trades[:count]):
                     raise ValueError("residual transfer provenance mismatch")
                 position.detach_residual(entry.quantity, entry.cost_basis, entry.step_size)
+                replay.transfers = (*replay.transfers, entry)
                 eligible = False
         position.require_history_accounting_compatibility()
         self.transfers = transfers
+        self._external_consumptions = replay._external_consumptions
         self._open_base_fee = fee_seen and position.quantity > 0
         return eligible
 
@@ -148,21 +179,41 @@ class ResidualSettlement:
         if not self.transfers or type(evidence) is not EarnResidualEvidence:
             return False
         epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        trade_times = []
+        first_fill_times = []
+        for trade in trades:
+            delta = trade.executed_at - epoch
+            trade_times.append((delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000)
+            first_fill = min((fill.executed_at for fill in trade.fee_fills), default=trade.executed_at)
+            delta = first_fill - epoch
+            first_fill_times.append((delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000)
         with localcontext() as context:
             context.prec = 34
             deposited = Decimal("0")
             for _, timestamp, amount in sorted(evidence.subscriptions, key=lambda entry: (entry[1], entry[0])):
                 available = Decimal("0")
                 for transfer in self.transfers:
-                    delta = trades[transfer.history_count - 1].executed_at - epoch
-                    transfer_ms = (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
+                    transfer_ms = trade_times[transfer.history_count - 1]
                     if transfer_ms < timestamp:
                         available += transfer.quantity
                 # 이미 상환된 원금·검증된 보상의 재예치는 같은 자산을 새 원금으로 중복 계산하지 않는다.
                 available += sum((entry[2] for entry in evidence.redemptions if entry[1] < timestamp), Decimal("0"))
+                available -= sum((quantity for count, quantity, _ in self._external_consumptions
+                    if first_fill_times[count - 1] <= timestamp), Decimal("0"))
                 deposited += amount
                 if deposited > available:
                     return False  # 전략 보유량의 자동 예치를 잔여 예치로 바꾸지 않는다.
+            # 현재는 상환돼 있어도 매도 당시 Earn에 묶여 있던 원금을 소비할 수 없다.
+            consumed = Decimal("0")
+            for count, quantity, _ in self._external_consumptions:
+                timestamp = first_fill_times[count - 1]
+                available = sum((entry.quantity for entry in self.transfers
+                    if trade_times[entry.history_count - 1] < timestamp), Decimal("0"))
+                available += sum((entry[2] for entry in evidence.redemptions if entry[1] < timestamp), Decimal("0"))
+                available -= sum((entry[2] for entry in evidence.subscriptions if entry[1] <= timestamp), Decimal("0"))
+                consumed += quantity
+                if consumed > available:
+                    return False
         return True
 
     def settle(self, position: Position, trades: tuple[Trade, ...], step_size: Decimal) -> bool:
