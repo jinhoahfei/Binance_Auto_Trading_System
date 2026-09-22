@@ -1,4 +1,4 @@
-"""BNB 원 수수료와 구분되는 결정론적 USDT 평가 근거를 정의한다."""
+"""과거 BNB 장부의 USDT 평가 근거를 보존하며 새 시장 가격은 조회하지 않는다."""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone

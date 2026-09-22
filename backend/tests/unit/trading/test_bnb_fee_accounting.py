@@ -1,14 +1,12 @@
-"""BNB 평가·혼합 fallback·durable replay와 malformed 증거를 검증한다."""
+"""과거 BNB 장부 복구와 새 체결의 비할인 수수료 경계를 검증한다."""
 
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 import copy
 import unittest
 from unittest.mock import Mock
-from binance_auto_trader.adapters.binance.bnb_fee_valuator import BnbFeeValuator
-from binance_auto_trader.adapters.binance.mappers import map_fill_payloads
+from binance_auto_trader.adapters.binance.mappers import BinancePayloadError, map_fill_payloads
 from binance_auto_trader.domain.trading.fee_valuation import BnbFeeValuation
 from binance_auto_trader.domain.trading.position import Position
 from binance_auto_trader.domain.trading.order import FeeAssetReconciliationRequiredError
@@ -127,81 +125,95 @@ class BnbFeeAccountingTests(unittest.TestCase):
                 replace(fill, fee_valuation=valuation_for(TEST_TIME + timedelta(seconds=delta)))
         self.assertEqual(replace(fill, fee_amount=Decimal("0"), fee_quote_amount=Decimal("0")).fee_quote_amount, 0)
 
-    def test_public_valuation_exact_window_and_unavailable_data(self):
+    def test_rest_rejects_new_bnb_fills_and_preserves_matching_history(self):
         """
-        함수 이름: test_public_valuation_exact_window_and_unavailable_data()
-        기능: 정확한 과거 1초봉만 수용하고 빈·미래·NaN 데이터를 거부한다.
+        함수 이름: test_rest_rejects_new_bnb_fills_and_preserves_matching_history()
+        기능: 새 BNB 수수료는 거부하고 동일한 과거 체결만 저장 근거로 복원한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/09/09
+        작성 날짜: 2026/09/22
         """
-        evidence = valuation_for()
-        row = [evidence.open_time_ms, "600", "600", "600", "600", "2", evidence.close_time_ms, "1200", 2, "0", "0", "0"]
-        request = Mock(return_value=SimpleNamespace(payload=[row]))
-        self.assertEqual(BnbFeeValuator(request).resolve(TEST_TIME), evidence)
-        self.assertFalse(request.call_args.kwargs["signed"])
-        self.assertEqual(request.call_args.kwargs["parameters"]["symbol"], "BNBUSDT")
-        for payload in ([], [row, row], [row[:8] + [-1] + row[9:]], [row[:4] + ["NaN"] + row[5:]], [[True] + row[1:]]):
-            request.return_value = SimpleNamespace(payload=payload)
-            with self.assertRaises((ValueError, TypeError)):
-                BnbFeeValuator(request, wait=Mock()).resolve(TEST_TIME)
-
-    def test_rest_mytrades_individual_time_and_dedup(self):
-        """
-        함수 이름: test_rest_mytrades_individual_time_and_dedup()
-        기능: 개별 체결시각과 중복 제거를 검증하고 FULL 시간 대용을 거부한다.
-        인자: 없음
-        반환값: 없음
-        작성 날짜: 2026/09/09
-        """
-        payload = {"id": 11, "orderId": 1001, "price": "100", "qty": "0.5", "commission": "0.00001", "commissionAsset": "BNB", "time": int(TEST_TIME.timestamp()) * 1000}
-        options = dict(symbol="ETHUSDT", exchange_order_id="1001", base_asset="ETH", quote_asset="USDT", fallback_executed_at=TEST_TIME, bnb_fee_resolver=valuation_for)
-        self.assertEqual(map_fill_payloads([payload, payload], **options), (bnb_fill(),))
-        del payload["time"]
-        with self.assertRaises(ValueError):
+        payload = {
+            "symbol": "ETHUSDT", "id": 11, "orderId": 1001, "price": "100", "qty": "0.5",
+            "commission": "0.00001", "commissionAsset": "BNB",
+            "time": int(TEST_TIME.timestamp()) * 1000,
+        }
+        options = {
+            "symbol": "ETHUSDT", "exchange_order_id": "1001",
+            "base_asset": "ETH", "quote_asset": "USDT",
+            "fallback_executed_at": TEST_TIME,
+        }
+        with self.assertRaises(FeeAssetReconciliationRequiredError):
             map_fill_payloads([payload], **options)
+        self.assertEqual(
+            map_fill_payloads([payload], historical_fills=(bnb_fill(),), **options),
+            (bnb_fill(),),
+        )
 
-    def test_permission_requires_policy_and_rejects_other_assets(self):
+        for field_name, changed_value in (
+            ("id", 12), ("qty", "0.6"), ("price", "101"),
+            ("commission", "0.00002"), ("time", payload["time"] + 1),
+            ("symbol", "BTCUSDT"), ("orderId", None), ("commissionAsset", "ETH"),
+        ):
+            with self.subTest(field_name=field_name), self.assertRaises(ValueError):
+                map_fill_payloads(
+                    [{**payload, field_name: changed_value}],
+                    historical_fills=(bnb_fill(),), **options,
+                )
+        del payload["time"]
+        with self.assertRaises(BinancePayloadError):
+            map_fill_payloads([payload], historical_fills=(bnb_fill(),), **options)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            map_fill_payloads([], historical_fills=(bnb_fill(), bnb_fill()), **options)
+
+    def test_permission_rejects_discount_without_bnb_price_lookup(self):
         """
-        함수 이름: test_permission_requires_policy_and_rejects_other_assets()
-        기능: BNB 지원 표식·환율 조회가 있어야 할인 설정을 허용한다.
+        함수 이름: test_permission_rejects_discount_without_bnb_price_lookup()
+        기능: BNB 잔액과 환율에 관계없이 할인 납부를 거부하고 현물 0.1%를 허용한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/09/09
+        작성 날짜: 2026/09/22
         """
         delegate = Mock()
         payload = _zero_commission_payload()
-        payload["standardCommission"]["taker"] = "0.001"
-        payload["discount"] = {"enabledForAccount": True, "enabledForSymbol": True, "discountAsset": "BNB", "discount": "0.25"}
+        payload["standardCommission"].update(maker="0.001", taker="0.001")
+        payload["discount"] = {
+            "enabledForAccount": True, "enabledForSymbol": True,
+            "discountAsset": "BNB", "discount": "0.25",
+        }
         delegate.get_account_commission.return_value = payload
         order = live_order()
         delegate.prepare_order.return_value = order
-        with self.assertRaises(LiveConfigurationError):
-            LiveOrderPermissionRESTClient(delegate, live_configuration(orders=True), base_fee_residual_enabled=True).prepare_order(order=order)
-        permission = LiveOrderPermissionRESTClient(delegate, live_configuration(orders=True), base_fee_residual_enabled=True, bnb_fee_accounting_enabled=True)
-        self.assertIs(permission.prepare_order(order=order), order)
-        delegate.resolve_bnb_fee.assert_called_once()
-        payload["discount"]["discountAsset"] = "ABC"
+        permission = LiveOrderPermissionRESTClient(
+            delegate, live_configuration(orders=True), base_fee_residual_enabled=True,
+        )
         with self.assertRaises(LiveConfigurationError):
             permission.prepare_order(order=order)
-        delegate.submit_order.assert_not_called()  # 외부 fixture이며 실제 주문은 없다.
+        delegate.prepare_order.assert_not_called()
+        payload["discount"]["enabledForAccount"] = False
+        self.assertIs(permission.prepare_order(order=order), order)
+        delegate.resolve_bnb_fee.assert_not_called()
+        delegate.get_account.assert_not_called()
+        delegate.submit_order.assert_not_called()
 
-
-    def test_ws_rest_and_csv_preserve_same_fee_evidence(self):
+    def test_ws_rejects_bnb_and_csv_preserves_historical_fee_evidence(self):
         """
-        함수 이름: test_ws_rest_and_csv_preserve_same_fee_evidence()
-        기능: WS 개별 체결이 REST와 같고 CSV v2가 원 수수료와 평가 근거를 보존한다.
+        함수 이름: test_ws_rejects_bnb_and_csv_preserves_historical_fee_evidence()
+        기능: 새 WS의 BNB 수수료를 거부하고 CSV의 과거 평가 근거를 보존한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/09/09
+        작성 날짜: 2026/09/22
         """
         import json
         from binance_auto_trader.adapters.binance.websocket_gateway import _parse_execution_fill
         from binance_auto_trader.adapters.filesystem.csv_file_gateway import _trade_to_csv_row
         from binance_auto_trader.domain.history.fill_record import fill_from_record
-        event = {"l": "0.5", "L": "100", "n": "0.00001", "t": 11, "N": "BNB", "T": int(TEST_TIME.timestamp()) * 1000}
-        fill = _parse_execution_fill(event, exchange_order_id="1001", execution_type="TRADE", bnb_fee_resolver=valuation_for)
-        self.assertEqual(fill, bnb_fill())
+        event = {
+            "l": "0.5", "L": "100", "n": "0.00001", "t": 11,
+            "N": "BNB", "T": int(TEST_TIME.timestamp()) * 1000,
+        }
+        with self.assertRaises(FeeAssetReconciliationRequiredError):
+            _parse_execution_fill(event, exchange_order_id="1001", execution_type="TRADE")
         order, summary = mixed_execution()
         trade = Trade.from_order_execution(order, summary)
         row = _trade_to_csv_row(trade)

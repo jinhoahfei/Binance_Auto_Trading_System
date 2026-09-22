@@ -3,8 +3,6 @@
 from collections.abc import Callable, Mapping
 from decimal import Decimal
 from datetime import datetime
-from binance_auto_trader.adapters.binance.bnb_fee_valuator import BnbFeeValuator
-from binance_auto_trader.domain.trading.fee_valuation import BnbFeeValuation
 from .earn_residual import EARN_READ_ENDPOINTS, read_earn_residual_evidence
 
 from binance_auto_trader.adapters.binance.live_endpoints import (
@@ -128,17 +126,6 @@ class BinanceLiveRESTClient(BinanceSpotRESTClient):
             """
             return self._request_json(method="GET", endpoint=endpoint, parameters=parameters, signed=True).payload
         return read_earn_residual_evidence(request, since, self.get_server_timestamp_milliseconds())
-
-    def resolve_bnb_fee(self, executed_at: datetime) -> BnbFeeValuation:
-        """
-        함수 이름: resolve_bnb_fee()
-        기능: live fixed GET adapter로 체결 직전 BNB 평가 근거를 조회한다.
-        인자: executed_at -> 거래소 체결 UTC 시각
-        반환값: 검증된 BnbFeeValuation
-        작성 날짜: 2026/09/09
-        """
-        # REST와 WS가 같은 평가 adapter를 공유해 수수료 계산 차이를 방지한다.
-        return BnbFeeValuator(self._request_json).resolve(executed_at)
 
 
 class BinanceLiveWebSocketClient(BinanceSpotWebSocketClient):

@@ -13,8 +13,7 @@ from binance_auto_trader.adapters.binance.live_clients import BinanceLiveRESTCli
 from binance_auto_trader.bootstrap import close_application, start_application
 from binance_auto_trader.bootstrap.live import create_live_application_runtime
 from binance_auto_trader.bootstrap.live_configuration import LIVE_CREDENTIAL_NAMESPACE
-from tests.unit.bootstrap.test_live_bootstrap import live_configuration
-from tests.unit.bootstrap.test_testnet_configuration import _zero_commission_payload
+from tests.unit.bootstrap.test_live_bootstrap import live_configuration, spot_commission_payload
 from tests.unit.binance.test_spot_rest_client import _json_response
 from tests.unit.binance.test_spot_websocket_client import _ScriptedSocketFactory, _execution_report
 
@@ -67,7 +66,7 @@ class MemoryLiveHTTP:
         if parsed.path.endswith("/account"):
             return _json_response({"updateTime": self.timestamp, "canTrade": True, "canWithdraw": False, "canDeposit": True, "accountType": "SPOT", "balances": [{"asset": "ETH", "free": "0", "locked": "0"}, {"asset": "USDT", "free": "100", "locked": "0"}], "permissions": ["SPOT"]})
         if parsed.path.endswith("/commission"):
-            return _json_response(_zero_commission_payload())
+            return _json_response(spot_commission_payload())
         if parsed.path.endswith(("/openOrders", "/allOrders", "/openOrderList")):
             return _json_response([])
         raise AssertionError("unexpected memory live GET path")

@@ -47,6 +47,25 @@ def live_configuration(*, orders: bool = False) -> LiveConfiguration:
     )
 
 
+def spot_commission_payload() -> dict[str, object]:
+    """
+    함수 이름: spot_commission_payload()
+    기능: BNB 납부가 꺼진 편도 0.1% 현물 계정 응답을 만든다.
+    인자: 없음
+    반환값: 공식 account commission 형식의 독립 dictionary
+    작성 날짜: 2026/09/22
+    """
+    payload = _zero_commission_payload()
+    payload["standardCommission"].update(maker="0.001", taker="0.001")
+    payload["discount"] = {
+        "enabledForAccount": False,
+        "enabledForSymbol": True,
+        "discountAsset": "BNB",
+        "discount": "0.25",
+    }
+    return payload  # 비활성 discount metadata에 BNB가 남아 있어도 납부하지 않는다.
+
+
 def live_order(*, version: int = 1, quantity: str = "0.004") -> Order:
     """
     함수 이름: live_order()
@@ -228,8 +247,10 @@ class LiveBootstrapTests(unittest.TestCase):
         작성 날짜: 2026/09/08
         """
         delegate = Mock()
-        delegate.get_account_commission.return_value = _zero_commission_payload()
-        proxy = LiveOrderPermissionRESTClient(delegate, live_configuration(orders=True))
+        delegate.get_account_commission.return_value = spot_commission_payload()
+        proxy = LiveOrderPermissionRESTClient(
+            delegate, live_configuration(orders=True), base_fee_residual_enabled=True
+        )
         order = live_order()
         delegate.prepare_order.return_value = order
         self.assertIs(proxy.prepare_order(order=order), order)

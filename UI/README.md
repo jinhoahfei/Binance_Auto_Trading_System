@@ -2,6 +2,10 @@
 
 Figma의 1440×1024 데스크톱 화면을 TypeScript, React, Vite와 XState 기반으로 구현한 UI 패키지입니다. production entry는 Tauri에서 받은 loopback descriptor로 backend 전체 snapshot을 먼저 읽은 뒤에만 화면 actor를 시작합니다. 새로고침한 메인 화면도 현재 backend session의 descriptor를 다시 받아 연결합니다. 계좌와 REGIME 추천은 backend의 ETHUSDT/USDT 값을 표시하며, snapshot 준비·schema·session 검증이 실패하면 demo로 fallback하지 않습니다.
 
+신규 현물 거래 수수료는 **BNB 납부 없이 매수·매도 각각 0.1%**입니다. 화면은 실제 체결
+수수료와 backend의 손익을 표시하며 과거 BNB 거래를 현재 요율로 재계산하지 않습니다.
+현재 운영 기준은 [현물 수수료 정책](../SPOT_FEE_POLICY.md)입니다.
+
 데스크톱의 차트와 REGIME 계산은 Binance 실제 시장의 공개 REST 봉과 WebSocket 시세를 사용합니다. 계좌 조회와 계좌 stream은 Testnet을 유지하고 주문 전송은 비활성입니다. 상단에 `시세·REGIME 실제 시장`, `계좌 Testnet · 주문 비활성`을 항상 표시합니다. 숫자로 표시하던 Swing Low/High는 백엔드의 확정 HL/LL·HH/LH 판정으로 표시하며 0.30% 기준 미달은 `-`입니다.
 
 좌상단 연결됨/연결 끊김에 마우스를 올리거나 키보드로 포커스하면 Binance 연결 상태 툴팁이 열립니다. 백엔드의 인증 API 조회 결과와 시세·계좌 WebSocket 연결 여부를 각각 표시하며, `/v1/binance/connection-status`를 통해 응답 완료 후 5초마다 갱신합니다. 커서가 표시 영역을 벗어나거나 포커스를 잃거나 Escape를 누르면 즉시 닫히고 UI 조회와 타이머가 정리됩니다. 진단용 API 응답은 연결 확인에만 사용하며 계좌 상태에는 적용하지 않습니다.
@@ -31,7 +35,7 @@ powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\start_window
 이 스크립트는 이 checkout의 `.dev-tools`와 `backend/.venv`를 사용합니다.
 일반 개발 PowerShell에는 `scripts/enter_windows_development.ps1`을 dot-source할 수 있습니다.
 현재 shell에만 경로를 설정하며 전역 PATH와 영구 실행 정책은 바꾸지 않습니다.
-설치 구성·실제 READY/종료 결과·실패 기록은 [Windows 개발 검증 보고서](../WINDOWS_DEVELOPMENT_VALIDATION.md)에 있습니다.
+설치 구성·실제 READY/종료 결과·실패 기록은 [통합 로드맵 §16.20.9](../INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md#16209-session-6--windows-10-x64-개발-실행과-read-only-smoke)에 있습니다.
 
 Windows에서도 `UI`에서 **`pnpm desktop:dev`**를 사용합니다. Tauri debug 앱과 Vite를 실행하고
 `backend/.venv/Scripts/python.exe`가 현재 Python 소스를 직접 실행합니다. Python 변경 후에는 앱을
@@ -156,8 +160,9 @@ PYTHONPATH=backend/src backend/.venv/bin/python scripts/run_live_read_only_from_
 ```
 
 `read_only_preflight=PASS`는 별도 package READY·local Position·pending·unknown·fresh restart 검증을
-대신하지 않는다. 수수료·MARKET 최소 금액 잔액·open-order 조건이 맞지 않으면
+대신하지 않는다. 할인 자산 납부 미적용·매수/매도 각각 0.1%·MARKET 최소 금액 잔액·open-order 조건이 맞지 않으면
 `pilot_prerequisites=NO_GO`와 구체적인 `blockers`를 반환한다.
+BNB 잔액과 가격 평가는 사전 검사 조건에서 제외한다.
 `-2015`는 key/IP/permission 검사가 필요하며 정확한 원인을 응답만으로 추정하지 않는다.
 Session 7에서는 `orders` profile을 활성화하지 않는다. Session 8의 별도 실제 주문 승인과 모든
 readiness 조건이 충족될 때만 그 profile을 사용할 수 있다.
@@ -174,9 +179,9 @@ PYTHONPATH=backend/src backend/.venv/bin/python scripts/live_runtime_readiness.p
 
 macOS live 저장소는 `~/Library/Application Support/com.binance-auto.trader/com.binance-auto.trader.live/`
 아래에 있다. Testnet 이력을 이곳으로 복사하지 않는다. Profile 변경은 다음 app process부터 적용된다.
-현재 검증 상태·package 경로·digest·남은 조건은
-[macOS live-readiness 검증](../MACOS_LIVE_READINESS_VALIDATION.md)을 따른다.
+과거 검증 상태·package 경로·digest는
+[통합 로드맵 §16.20.10](../INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md#162010-session-7--live-bootstrap과-양-os-live-readiness)에 보존한다.
 
-BNB 납부 유지 지원과 JSONL v3/CSV v2 정책은 [BNB 수수료 회계](../BNB_FEE_ACCOUNTING.md)를 따른다.
-BNB 수수료를 포함한 손익·수수료 합계는 명시된 과거 가격의 USDT 평가값이며 내부 정산 환율이 아니다.
-BNB 거래 이력 생성 후에는 `session7-bnb-baeabcd` 새 패키지를 사용한다.
+과거 BNB 수수료를 포함한 손익·수수료 합계는 저장된 과거 가격의 USDT 평가값으로 유지한다.
+과거 `session7-bnb-baeabcd` 패키지는 이전 정책 검증본이며 현재 0.1% 정책을 적용하려면
+갱신한 소스로 앱을 다시 빌드해야 한다.

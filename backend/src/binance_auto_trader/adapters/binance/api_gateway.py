@@ -21,9 +21,10 @@ from binance_auto_trader.domain.trading.account import (
     AssetBalance,
     SUPPORTED_VALUATION_ASSET,
 )
-from binance_auto_trader.domain.trading.order import Order, OrderResult
+from binance_auto_trader.domain.trading.order import Fill, Order, OrderResult
 from binance_auto_trader.domain.trading.account_execution import AccountExecution
 from binance_auto_trader.domain.trading.states import OrderSide
+from binance_auto_trader.domain.trading.spot_fee_policy import SPOT_FEE_RATE
 from binance_auto_trader.domain.market import (
     Interval,
     Kline,
@@ -48,7 +49,7 @@ _INTERVAL_MILLISECONDS_BY_INTERVAL = {
 class CommissionDiscountPolicy:
     """
     클래스 이름: CommissionDiscountPolicy
-    기능: 한 Spot symbol의 할인과 MARKET BUY 수신 자산 수수료 가능성을 raw payload 없이 보존한다.
+    기능: 한 Spot symbol의 할인과 MARKET 양방향 수수료율을 raw payload 없이 보존한다.
     작성 날짜: 2026/08/24
     """
 
@@ -60,6 +61,9 @@ class CommissionDiscountPolicy:
     standard_market_buy_rate: Decimal
     special_market_buy_rate: Decimal
     tax_market_buy_rate: Decimal
+    standard_market_sell_rate: Decimal = Decimal("0")
+    special_market_sell_rate: Decimal = Decimal("0")
+    tax_market_sell_rate: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         """
@@ -103,11 +107,14 @@ class CommissionDiscountPolicy:
         ):
             raise ValueError("discount_rate must be a finite Decimal from 0 to 1")
 
-        # 공식 taker+buyer 합산은 음수·NaN을 허용하지 않고 각 수수료 유형을 분리한다.
+        # 양방향 수수료 합산은 음수·NaN을 허용하지 않고 각 수수료 유형을 분리한다.
         for field_name in (
             "standard_market_buy_rate",
             "special_market_buy_rate",
             "tax_market_buy_rate",
+            "standard_market_sell_rate",
+            "special_market_sell_rate",
+            "tax_market_sell_rate",
         ):
             field_value = getattr(self, field_name)
             if (
@@ -119,12 +126,15 @@ class CommissionDiscountPolicy:
                     f"{field_name} must be a non-negative finite Decimal"
                 )
 
-        # 정책 객체의 null asset은 할인율과 세 MARKET BUY 합도 0인 안전 부재만 허용한다.
+        # 정책 객체의 null asset은 할인율과 양방향 수수료가 모두 0인 부재만 허용한다.
         if self.discount_asset is None and (
             self.discount_rate != Decimal("0")
             or self.standard_market_buy_rate != Decimal("0")
             or self.special_market_buy_rate != Decimal("0")
             or self.tax_market_buy_rate != Decimal("0")
+            or self.standard_market_sell_rate != Decimal("0")
+            or self.special_market_sell_rate != Decimal("0")
+            or self.tax_market_sell_rate != Decimal("0")
         ):
             raise ValueError(
                 "discount_asset may be None only for an all-zero policy"
@@ -164,6 +174,41 @@ class CommissionDiscountPolicy:
                 + self.special_market_buy_rate
                 + self.tax_market_buy_rate
             )
+
+    @property
+    def market_sell_received_asset_commission_rate(self) -> Decimal:
+        """
+        함수 이름: market_sell_received_asset_commission_rate()
+        기능: MARKET SELL의 수신 quote 자산에 적용되는 비할인 수수료율을 합산한다.
+        인자: 없음
+        반환값: standard, special과 tax의 taker + seller Decimal 합
+        작성 날짜: 2026/09/22
+        """
+        # 매수와 같은 Decimal128 정밀도로 매도측 추가 수수료도 보존한다.
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            return (
+                self.standard_market_sell_rate
+                + self.special_market_sell_rate
+                + self.tax_market_sell_rate
+            )
+
+    @property
+    def matches_spot_fee_policy(self) -> bool:
+        """
+        함수 이름: matches_spot_fee_policy()
+        기능: 할인 자산 납부 없이 매수·매도 각각 0.1%인지 확인한다.
+        인자: 없음
+        반환값: 현물 수수료 정책과 일치하면 True
+        작성 날짜: 2026/09/22
+        """
+        # BNB 잔액 부족 fallback에 기대지 않고 공식 설정 자체를 대조한다.
+        return (
+            not self.can_charge_discount_asset
+            and self.market_buy_received_asset_commission_rate == SPOT_FEE_RATE
+            and self.market_sell_received_asset_commission_rate == SPOT_FEE_RATE
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -887,7 +932,7 @@ def _parse_commission_discount_policy(
 ) -> CommissionDiscountPolicy:
     """
     함수 이름: _parse_commission_discount_policy()
-    기능: 공식 account commission 응답의 할인과 MARKET BUY 수신 자산 비율을 엄격 정규화한다.
+    기능: 공식 account commission 응답의 할인과 MARKET 양방향 비율을 엄격 정규화한다.
     인자: payload -> GET /api/v3/account/commission JSON object
         expected_symbol -> 요청에 사용한 canonical Spot symbol
     반환값: raw 수수료율을 노출하지 않는 CommissionDiscountPolicy
@@ -918,6 +963,14 @@ def _parse_commission_discount_policy(
     )
     special_market_buy_rate = _sum_market_buy_commission_rate(special_rates)
     tax_market_buy_rate = _sum_market_buy_commission_rate(tax_rates)
+
+    # 매도는 buyer 대신 seller를 합산하며 tax와 special도 할인 없이 반영한다.
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decimal_context.rounding = ROUND_HALF_EVEN
+        standard_market_sell_rate = standard_rates[1] + standard_rates[3]
+        special_market_sell_rate = special_rates[1] + special_rates[3]
+        tax_market_sell_rate = tax_rates[1] + tax_rates[3]
 
     # 제3 자산 가능성을 결정하는 공식 discount object와 네 필드를 모두 요구한다.
     discount_payload = payload.get("discount")
@@ -962,6 +1015,9 @@ def _parse_commission_discount_policy(
         standard_market_buy_rate=standard_market_buy_rate,
         special_market_buy_rate=special_market_buy_rate,
         tax_market_buy_rate=tax_market_buy_rate,
+        standard_market_sell_rate=standard_market_sell_rate,
+        special_market_sell_rate=special_market_sell_rate,
+        tax_market_sell_rate=tax_market_sell_rate,
     )
 
 
@@ -1110,6 +1166,34 @@ class APIGateway:
             get_account(),
             normalized_asset,
         )
+
+    def restore_historical_fee_fills(
+        self,
+        *,
+        symbol: str,
+        client_order_id: str,
+        exchange_order_id: str,
+        fills: tuple[Fill, ...],
+    ) -> None:
+        """
+        함수 이름: restore_historical_fee_fills()
+        기능: 저장된 과거 체결 근거를 지원 REST client의 읽기 대조에만 등록한다.
+        인자: symbol -> 거래 symbol, client_order_id -> 앱 주문 식별자
+            exchange_order_id -> 거래소 주문 식별자, fills -> 복원된 원 체결 tuple
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        # Fake client는 이미 canonical Fill을 반환하고 공식 REST만 원문 대조가 필요하다.
+        restore_fills = getattr(
+            self._rest_client, "restore_historical_fee_fills", None
+        )
+        if callable(restore_fills):
+            restore_fills(
+                symbol=symbol,
+                client_order_id=client_order_id,
+                exchange_order_id=exchange_order_id,
+                fills=fills,
+            )
 
     def fetch_commission_discount_policy(
         self,

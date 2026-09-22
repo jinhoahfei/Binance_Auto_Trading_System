@@ -6,7 +6,7 @@ from collections import OrderedDict
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 import json
 from threading import RLock
 from typing import Callable, Protocol
@@ -21,6 +21,7 @@ from binance_auto_trader.domain.trading.account import (
     AssetBalance,
 )
 from binance_auto_trader.domain.trading.order import (
+    FeeAssetReconciliationRequiredError,
     Fill,
     OrderResult,
     OrderStatus,
@@ -736,7 +737,6 @@ def _parse_execution_fill(
     *,
     exchange_order_id: str,
     execution_type: str,
-    bnb_fee_resolver: object | None = None,
 ) -> Fill | None:
     """
     함수 이름: _parse_execution_fill()
@@ -744,7 +744,6 @@ def _parse_execution_fill(
     인자: event_payload -> 공식 executionReport event object
         exchange_order_id -> 검증을 마친 거래소 주문 ID
         execution_type -> event.x의 공식 실행 유형
-        bnb_fee_resolver -> live BNB 평가 조회 함수
     반환값: 실제 TRADE이면 Fill, 상태 event이면 None
     작성 날짜: 2026/08/22
     """
@@ -773,16 +772,15 @@ def _parse_execution_fill(
     if fee_asset == "USDT":
         fee_quote_amount = fee_amount
     elif fee_asset == "ETH":
-        fee_quote_amount = fee_amount * last_price
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            fee_quote_amount = fee_amount * last_price
     else:
-        fee_quote_amount = Decimal("0")  # Fill이 미지원 fee asset을 typed reconciliation 오류로 닫는다.
+        raise FeeAssetReconciliationRequiredError(fee_asset)
 
-    # WS와 signed myTrades 모두 개별 체결 T/time으로 동일한 완료 구간을 평가한다.
+    # 수수료는 거래소가 보고한 원래 자산과 금액을 체결 시각에 함께 보존한다.
     executed_at = _milliseconds_to_utc(event_payload.get("T"), "event.T")
-    valuation = None
-    if fee_asset == "BNB" and callable(bnb_fee_resolver):
-        valuation = bnb_fee_resolver(executed_at)
-        fee_quote_amount = valuation.quote_amount(fee_amount, executed_at)
     return Fill(
         exchange_order_id=exchange_order_id,
         trade_id=str(trade_id),
@@ -792,16 +790,14 @@ def _parse_execution_fill(
         fee_asset=fee_asset,
         fee_quote_amount=fee_quote_amount,
         executed_at=executed_at,
-        fee_valuation=valuation,
     )
 
 
-def _parse_execution_report(payload: object, bnb_fee_resolver: object | None = None) -> _ExecutionReportObservation:
+def _parse_execution_report(payload: object) -> _ExecutionReportObservation:
     """
     함수 이름: _parse_execution_report()
     기능: 공식 Spot executionReport envelope를 주문 관찰 값과 선택 Fill로 정규화한다.
     인자: payload -> JSON text 또는 해석된 WebSocket API envelope
-        bnb_fee_resolver -> live BNB 평가 조회 함수
     반환값: source cursor와 cumulative quantity를 포함한 execution 관찰 값
     작성 날짜: 2026/08/22
     """
@@ -843,7 +839,6 @@ def _parse_execution_report(payload: object, bnb_fee_resolver: object | None = N
         event_payload,
         exchange_order_id=exchange_order_id,
         execution_type=execution_type,
-        bnb_fee_resolver=bnb_fee_resolver,
     )
     if fill is not None and fill.quantity > cumulative_quantity:
         raise ValueError("last executed quantity must not exceed cumulative quantity")
@@ -876,7 +871,6 @@ class WebSocketGateway:
         order_result_callback: Callable[[OrderResult], object] | None = None,
         reconciliation_required_callback: Callable[[str], object]
         | None = None,
-        bnb_fee_resolver: object | None = None,
         market_diagnostic_callback: Callable[..., object] | None = None,
     ) -> None:
         """
@@ -886,12 +880,10 @@ class WebSocketGateway:
             account_snapshot_callback -> 정규화 account patch를 적용할 callback
             order_result_callback -> 정규화 executionReport를 적용할 callback
             reconciliation_required_callback -> stream gap을 복원하도록 알릴 callback
-            bnb_fee_resolver -> live BNB 평가 조회 함수 또는 None
         반환값: 없음
         작성 날짜: 2026/08/20
         """
         self._market_diagnostic_callback = market_diagnostic_callback
-        self._bnb_fee_resolver = bnb_fee_resolver  # Live root만 공식 평가 함수를 주입한다.
         provides_kline_operation = callable(
             getattr(
                 web_socket_client,
@@ -1895,7 +1887,7 @@ class WebSocketGateway:
         if callback is None:
             return
 
-        observation = _parse_execution_report(payload, self._bnb_fee_resolver)
+        observation = _parse_execution_report(payload)
         with self._lock:
             # Parse 중 종료·교체된 세대는 누적 fill map을 변경하지 않는다.
             if (

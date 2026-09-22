@@ -4,7 +4,6 @@
 from collections.abc import Callable
 import argparse
 from decimal import Decimal
-from datetime import datetime, timezone
 import json
 import os
 import resource
@@ -13,6 +12,7 @@ import subprocess
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
 from binance_auto_trader.adapters.binance.live_clients import BinanceLiveRESTClient
 from binance_auto_trader.bootstrap.live_configuration import LiveConfiguration
+from binance_auto_trader.domain.trading.spot_fee_policy import SPOT_FEE_RATE
 
 KEYCHAIN_SECURITY_COMMAND = "/usr/bin/security"
 KEYCHAIN_SERVICE = "com.binance-auto.trader.live"
@@ -200,25 +200,14 @@ def run_preflight(configuration: LiveConfiguration) -> dict[str, object]:
     checks["account_filters"] = True
     commission = gateway.fetch_commission_discount_policy("ETHUSDT")
     checks["commission"] = True
-    checks["supported_fee_asset"] = not commission.can_charge_discount_asset or commission.discount_asset in {"ETH", "USDT", "BNB"}
-    # 할인 설정을 유지하되 공식 완료 구간의 가격 근거가 실제 조회되는지도 별도 확인한다.
-    if commission.can_charge_discount_asset and commission.discount_asset == "BNB":
-        try:
-            rest.resolve_bnb_fee(datetime.now(timezone.utc))
-            checks["bnb_fee_valuation"] = True
-        except (ValueError, RuntimeError, TypeError) as error:
-            checks["bnb_fee_valuation"] = False
-            # 알려진 고정 진단만 공개하고 transport 예외 원문·서명 URL은 절대 보고하지 않는다.
-            safe_reasons = {
-                "BNB valuation candle unavailable": "CANDLE_UNAVAILABLE",
-                "BNB valuation requires actual market trades": "NO_TRADES_AFTER_BOUNDED_READS",
-                "BNB valuation window mismatch": "WINDOW_MISMATCH",
-                "invalid BNB valuation kline": "INVALID_KLINE",
-                "invalid BNB valuation trade count": "INVALID_TRADE_COUNT",
-                "BNB rate must be a decimal string": "INVALID_RATE",
-                "valuation requires a positive finite Decimal rate": "INVALID_RATE",
-            }
-            result["bnb_fee_valuation_failure"] = safe_reasons.get(str(error), "UNCLASSIFIED_REDACTED")
+    # BNB 보유·평가 가능성과 무관하게 할인 미적용 및 매수·매도 각각 0.1%만 허용한다.
+    checks["discount_asset_payment_disabled"] = not commission.can_charge_discount_asset
+    checks["market_buy_fee_rate_matches_policy"] = (
+        commission.market_buy_received_asset_commission_rate == SPOT_FEE_RATE
+    )
+    checks["market_sell_fee_rate_matches_policy"] = (
+        commission.market_sell_received_asset_commission_rate == SPOT_FEE_RATE
+    )
     checks["base_fee_residual_policy"] = True  # Live root는 승인된 durable 잔여 회계를 조립한다.
     rest.fetch_reference_price(symbol="ETHUSDT")
     checks["reference_price"] = True

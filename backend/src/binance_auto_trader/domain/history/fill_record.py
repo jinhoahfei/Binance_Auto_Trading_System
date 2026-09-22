@@ -1,4 +1,4 @@
-"""Trade v3의 실제 fill과 BNB 평가 근거를 lossless JSON으로 보존한다."""
+"""Trade v3/v4의 실제 fill과 과거 BNB 평가 근거를 lossless JSON으로 보존한다."""
 
 from datetime import datetime
 from decimal import Decimal

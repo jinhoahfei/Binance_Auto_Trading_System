@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation, ROUND_DOWN, localcontext
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from math import gcd
 
 from binance_auto_trader.domain.trading.order import (
+    FeeAssetReconciliationRequiredError,
     Fill,
     Order,
     OrderResult,
@@ -1763,7 +1764,7 @@ def map_fill_payloads(
     base_asset: str,
     quote_asset: str,
     fallback_executed_at: datetime,
-    bnb_fee_resolver: object | None = None,
+    historical_fills: tuple[Fill, ...] = (),
 ) -> tuple[Fill, ...]:
     """
     함수 이름: map_fill_payloads()
@@ -1773,8 +1774,8 @@ def map_fill_payloads(
         exchange_order_id -> fill이 속한 거래소 order ID
         base_asset -> 수수료 직접 환산을 허용할 base asset
         quote_asset -> 수수료 직접 환산을 허용할 quote asset
-        bnb_fee_resolver -> live 전용 BNB 평가 근거 조회 함수 또는 None
         fallback_executed_at -> FULL fill에 time이 없을 때 사용할 처리 시각
+        historical_fills -> 저장 장부에서 검증한 동일 주문의 과거 체결
     반환값: 거래소 order ID와 trade ID로 중복 제거한 Fill tuple
     작성 날짜: 2026/08/22
     """
@@ -1790,6 +1791,14 @@ def map_fill_payloads(
         or fallback_executed_at.utcoffset() is None
     ):
         raise ValueError("fallback_executed_at must be timezone-aware")
+    if not isinstance(historical_fills, tuple) or any(
+        not isinstance(fill, Fill) or fill.exchange_order_id != exchange_order_id
+        for fill in historical_fills
+    ):
+        raise ValueError("historical fills must belong to the requested order")
+    historical_fills_by_key = {fill.key: fill for fill in historical_fills}
+    if len(historical_fills_by_key) != len(historical_fills):
+        raise ValueError("historical fills must not contain duplicate keys")
 
     fills_by_key: dict[tuple[str, str], Fill] = {}
     for payload in payloads:
@@ -1823,29 +1832,42 @@ def map_fill_payloads(
             "fill.commissionAsset",
         )
 
-        # Project domain이 직접 검증할 수 있는 base/quote fee만 결정론적으로 환산한다.
-        if fee_asset == quote_asset:
-            fee_quote_amount = fee_amount
-        elif fee_asset == base_asset:
-            with localcontext() as decimal_context:
-                decimal_context.prec = 34
-                fee_quote_amount = fee_amount * price
-        else:
-            fee_quote_amount = _DECIMAL_ZERO
-
         # myTrades의 time을 우선하고 FULL 응답은 주문 transactTime을 사용한다.
         executed_at = (
             milliseconds_to_utc(payload["time"], "fill.time")
             if "time" in payload
             else fallback_executed_at.astimezone(timezone.utc)
         )
-        # BNB 체결은 주문 시각을 대용하지 않고 myTrades의 개별 체결 시각을 요구한다.
         valuation = None
-        if fee_asset == "BNB" and callable(bnb_fee_resolver):
-            if "time" not in payload:
-                raise BinancePayloadError("BNB fills require individual myTrades time")
-            valuation = bnb_fee_resolver(executed_at)
-            fee_quote_amount = valuation.quote_amount(fee_amount, executed_at)
+        # 과거 BNB 비용은 동일한 signed 체결 사실과 저장된 근거가 모두 있을 때만 복원한다.
+        historical_fill = historical_fills_by_key.get((exchange_order_id, trade_id))
+        if historical_fill is not None and (
+            "time" not in payload
+            or payload.get("symbol") != symbol
+            or type(payload_order_id) is not int
+            or historical_fill.quantity != quantity
+            or historical_fill.price != price
+            or historical_fill.fee_amount != fee_amount
+            or historical_fill.fee_asset != fee_asset
+            or historical_fill.executed_at != executed_at
+        ):
+            raise BinancePayloadError("historical fee fill differs from exchange evidence")
+        if fee_asset == "BNB":
+            if historical_fill is None:
+                raise FeeAssetReconciliationRequiredError(fee_asset)
+            valuation = historical_fill.fee_valuation
+            fee_quote_amount = historical_fill.fee_quote_amount
+        # 신규 체결은 base/quote 원 수수료만 결정론적으로 환산한다.
+        elif fee_asset == quote_asset:
+            fee_quote_amount = fee_amount
+        elif fee_asset == base_asset:
+            with localcontext() as decimal_context:
+                decimal_context.prec = 34
+                decimal_context.rounding = ROUND_HALF_EVEN
+                fee_quote_amount = fee_amount * price
+        else:
+            raise FeeAssetReconciliationRequiredError(fee_asset)
+
         fill_value = Fill(
             exchange_order_id=exchange_order_id,
             trade_id=trade_id,

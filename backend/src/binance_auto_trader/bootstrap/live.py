@@ -50,8 +50,7 @@ def create_live_application_runtime(
         timestamp_provider=rest_client.get_server_timestamp_milliseconds,
     )
     return create_application_runtime(
-        LiveOrderPermissionRESTClient(rest_client, configuration, base_fee_residual_enabled=True, bnb_fee_accounting_enabled=True), websocket_client,
-        bnb_fee_resolver=rest_client.resolve_bnb_fee,
+        LiveOrderPermissionRESTClient(rest_client, configuration, base_fee_residual_enabled=True), websocket_client,
         history_path=selected_history_path, execution_mode="live", market_data_environment="mainnet",
         risk_policy_state=create_live_risk_policy(),
         _live_order_capability=_LIVE_ORDER_CAPABILITY if configuration.allow_live_orders else None,

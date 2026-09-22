@@ -5,6 +5,11 @@
 하나의 `binance_auto_trader` distribution으로 통합한 Python package입니다. 두 STM은
 상태와 guard만 판정하고, 외부 효과는 typed action request로 반환합니다.
 
+신규 현물 주문은 BNB 납부를 사용하지 않으며 매수·매도 각각 `Decimal("0.001")`의
+수수료 정책을 검증합니다. BNB 잔액·가격에 따른 거래 제한은 사용하지 않습니다.
+실제 체결·과거 BNB 이력의 회계와 복구 호환은 보존합니다. 자세한 검증 조건과
+수량·손익 계산은 [현물 수수료 정책](../SPOT_FEE_POLICY.md)을 따릅니다.
+
 ## 구성
 
 - `domain/common/enums.py`: backend가 공유하는 canonical `RegimeType`/
@@ -13,7 +18,7 @@
 - `domain/regime/`: 13개 `EA-*` transition의 4시간봉 REGIME 추천 STM
 - `domain/trading/`: 109개 transition의 run-to-completion TradingSTM과
   free/locked balance를 보존하는 `Account`
-- `domain/history/`: ADR-004 JSONL v1/v2 reader·v2 writer `Trade`, KST query `TradeHistory`,
+- `domain/history/`: ADR-004 JSONL v1~v4 reader와 versioned writer `Trade`, KST query `TradeHistory`,
   fee 포함 startup `Performance`
 - `adapters/binance/`: Kline/account/order Gateway와 고정 Spot Testnet
   HMAC REST·combined stream·signed user-data WebSocket client, payload 정규화와 dedup
@@ -87,13 +92,14 @@ Decimal string과 UTC timestamp를 canonical `Trade`로 복원합니다. 파일 
 truncate합니다. directory fsync 실패 시 원본을 유지합니다. 이 startup 복구 구간은
 bootstrap process 하나가 history 경로를 독점하고 다른 writer가 없다는 계약입니다.
 `TradeHistoryController`는 같은 거래 tuple로 `TradeHistory`와 ADR-004 `Performance`를
-모두 만든 뒤 원자적으로 공개합니다. repository는 JSONL v1/v2를 읽고 신규 record는
-실제 자산 흐름을 보존하는 v2로 씁니다. v2 BUY의 base-asset fee는 취득 수량에서
+모두 만든 뒤 원자적으로 공개합니다. repository는 JSONL v1~v4를 읽고 일반 ETH/USDT 신규
+record는 실제 자산 흐름을 보존하는 v2로 씁니다. v2 BUY의 base-asset fee는 취득 수량에서
 차감하며 quote cost에 다시 더하지 않습니다. `fee_quote_amount`는 USDT fee면 원래
 금액과 같고, ETH fee면 execution 시 fill별 가격으로 환산한 합계입니다. 여러 fill의
 maker/taker 요율이 다를 수 있으므로 ETH 총 fee에 평균 체결가를 다시 곱하지 않습니다.
-제3 fee asset은 임의 시세 없이 `FEE_ASSET_CONVERSION_REQUIRED`, 열린 v1 ETH-fee lot은
-`HISTORY_ACCOUNTING_MIGRATION_REQUIRED`로 주문을 fail closed합니다.
+과거 BNB 거래는 v3/v4에 저장된 fill별 평가 근거를 보존하며 신규 정책으로 다시 계산하지
+않습니다. 지원되지 않는 제3 fee asset은 임의 시세 없이 `FEE_ASSET_CONVERSION_REQUIRED`,
+열린 v1 ETH-fee lot은 `HISTORY_ACCOUNTING_MIGRATION_REQUIRED`로 주문을 fail closed합니다.
 
 ## 실행 계약
 

@@ -686,6 +686,9 @@ class BinanceSpotRESTClient:
         )  # Phase 13 actual target은 논리 주문 하나가 HTTP POST 하나만 소비하게 한다.
         self._server_time_offset_milliseconds: int | None = None
         self._symbol_rules_by_symbol: dict[str, SymbolTradingRules] = {}
+        self._historical_fee_fills_by_order: dict[
+            tuple[str, str, str], tuple[Fill, ...]
+        ] = {}
         self._prepared_orders_by_client_id: dict[
             str,
             _PreparedOrderFingerprint,
@@ -713,6 +716,49 @@ class BinanceSpotRESTClient:
             f"request_timeout_seconds={self._request_timeout_seconds!r}"
             ")"
         )  # credential과 signature는 어떤 repr 필드에도 포함하지 않는다.
+
+    def restore_historical_fee_fills(
+        self,
+        *,
+        symbol: str,
+        client_order_id: str,
+        exchange_order_id: str,
+        fills: tuple[Fill, ...],
+    ) -> None:
+        """
+        함수 이름: restore_historical_fee_fills()
+        기능: 이미 저장된 과거 BNB 수수료 근거를 동일 주문의 읽기 복구에만 등록한다.
+        인자: symbol -> 저장 거래 symbol
+            client_order_id -> 저장된 원 client 주문 ID
+            exchange_order_id -> 저장된 거래소 주문 ID
+            fills -> 검증을 마친 v3/v4 장부의 원래 체결 tuple
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        normalized_symbol = self._normalize_symbol(symbol)
+        if (
+            not isinstance(client_order_id, str)
+            or not client_order_id
+            or client_order_id != client_order_id.strip()
+            or not isinstance(exchange_order_id, str)
+            or re.fullmatch(r"[1-9][0-9]*", exchange_order_id) is None
+        ):
+            raise ValueError("historical fee evidence requires canonical order identifiers")
+        if not isinstance(fills, tuple) or not fills or any(
+            not isinstance(fill, Fill) or fill.exchange_order_id != exchange_order_id
+            for fill in fills
+        ):
+            raise ValueError("historical fee evidence must contain the original order fills")
+        if len({fill.key for fill in fills}) != len(fills):
+            raise ValueError("historical fee evidence must not contain duplicate fills")
+        if not any(fill.fee_asset == "BNB" for fill in fills):
+            return
+
+        order_identity = (normalized_symbol, client_order_id, exchange_order_id)
+        existing_fills = self._historical_fee_fills_by_order.get(order_identity)
+        if existing_fills is not None and existing_fills != fills:
+            raise ValueError("historical fee evidence must not change after restoration")
+        self._historical_fee_fills_by_order[order_identity] = fills
 
     def get_klines(
         self,
@@ -1500,7 +1546,13 @@ class BinanceSpotRESTClient:
                 if not isinstance(quantity, str):
                     raise BinancePayloadError("account execution original quantity missing")
                 processed = self._payload_processed_time(row)
-                fills = self._load_order_fills(symbol=symbol, exchange_order_id=identifier, fallback_executed_at=processed, expected_side=side)
+                fills = self._load_order_fills(
+                    symbol=symbol,
+                    exchange_order_id=identifier,
+                    client_order_id=row.get("clientOrderId"),
+                    fallback_executed_at=processed,
+                    expected_side=side,
+                )
                 result = map_order_result(row, expected_symbol=symbol, expected_client_order_id=row.get("clientOrderId"), fills=fills)
                 executions.append(AccountExecution(side, Decimal(quantity), _UNIX_EPOCH + timedelta(milliseconds=created), result))
             if len(payload) < 1000:
@@ -1992,15 +2044,7 @@ class BinanceSpotRESTClient:
 
         # FULL response fills를 우선 사용하고 query/cancel/list 응답은 myTrades로 보강한다.
         direct_fill_payloads = payload.get("fills")
-        # FULL에는 개별 fill 시간이 없으므로 live BNB 체결은 signed myTrades로 확정한다.
-        bnb_resolver = getattr(self, "resolve_bnb_fee", None)
-        has_bnb = isinstance(direct_fill_payloads, list) and any(
-            isinstance(item, Mapping) and item.get("commissionAsset") == "BNB"
-            for item in direct_fill_payloads
-        )
-        if has_bnb and callable(bnb_resolver):
-            fills = self._load_order_fills(symbol=order.symbol, exchange_order_id=order_id, fallback_executed_at=processed_at)
-        elif direct_fill_payloads is not None:
+        if direct_fill_payloads is not None:
             rules = self._rules_from_order_symbol(order.symbol)
             fills = map_fill_payloads(
                 direct_fill_payloads,
@@ -2014,6 +2058,7 @@ class BinanceSpotRESTClient:
             fills = self._load_order_fills(
                 symbol=order.symbol,
                 exchange_order_id=order_id,
+                client_order_id=payload.get("clientOrderId"),
                 fallback_executed_at=processed_at,
             )
         else:
@@ -2070,6 +2115,7 @@ class BinanceSpotRESTClient:
                 self._load_order_fills(
                     symbol=expected_symbol,
                     exchange_order_id=order_id,
+                    client_order_id=client_order_id,
                     fallback_executed_at=processed_at,
                 )
                 if self._payload_has_executions(order_payload)
@@ -2091,6 +2137,7 @@ class BinanceSpotRESTClient:
         *,
         symbol: str,
         exchange_order_id: int,
+        client_order_id: str,
         fallback_executed_at: datetime,
         expected_side: OrderSide | None = None,
     ) -> tuple[Fill, ...]:
@@ -2099,11 +2146,14 @@ class BinanceSpotRESTClient:
         기능: GET /api/v3/myTrades를 orderId 조건으로 조회해 해당 order의 Fill tuple을 만든다.
         인자: symbol -> 주문 symbol
             exchange_order_id -> Binance orderId
+            client_order_id -> 같은 order 응답의 원 client 주문 ID
             fallback_executed_at -> trade time 누락 시 사용할 UTC 시각
             expected_side -> 외부 복구 시 fill 방향·출처·조회 완전성을 엄격하게 검증할 방향
         반환값: 중복 제거한 Fill tuple
         작성 날짜: 2026/08/22
         """
+        if not isinstance(client_order_id, str) or not client_order_id:
+            raise BinancePayloadError("fill order must contain clientOrderId")
         # orderId를 보내 weight 20 대신 공식 weight 5 경로를 사용한다.
         response = self._request_json(
             method="GET",
@@ -2136,7 +2186,9 @@ class BinanceSpotRESTClient:
             base_asset=rules.base_asset,
             quote_asset=rules.quote_asset,
             fallback_executed_at=fallback_executed_at,
-            bnb_fee_resolver=getattr(self, "resolve_bnb_fee", None),
+            historical_fills=self._historical_fee_fills_by_order.get(
+                (symbol, client_order_id, str(exchange_order_id)), ()
+            ),
         )  # trade ID와 order ID를 domain fill 멱등 key로 유지한다.
 
     def _rules_from_order_symbol(self, symbol: str) -> SymbolTradingRules:

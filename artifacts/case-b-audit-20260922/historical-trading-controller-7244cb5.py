@@ -11,7 +11,7 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 import hashlib
 import sys
-from threading import Event, RLock, get_ident
+from threading import RLock, get_ident
 from time import sleep
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -20,6 +20,7 @@ from binance_auto_trader.adapters.binance.api_gateway import (
     APP_CLIENT_ORDER_ID_PREFIX,
     APIGateway,
 )
+from binance_auto_trader.adapters.binance.bnb_fee_valuator import BnbValuationUnavailableError, BnbValuationInvalidError
 from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
 from binance_auto_trader.adapters.binance.mappers import SymbolFilterError, BinancePayloadError
 from binance_auto_trader.adapters.binance.websocket_gateway import (
@@ -34,9 +35,6 @@ from binance_auto_trader.application.balance_reconciliation import (
     BalanceReconciliation, balance_basis, current_balance_snapshot, reconcile_balance,
 )
 from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics, describe_exception
-from binance_auto_trader.application.session_recovery import (
-    RecoveryIssue, SessionRecoveryRetry, is_transient_recovery_error,
-)
 from binance_auto_trader.application.trading_diagnostics import describe_trading_evaluation, normalize_order_failure, normalize_stream_reason
 from binance_auto_trader.application.trading_indicator_snapshot import TradingIndicatorStore
 from binance_auto_trader.application.market_evaluation_builder import calculate_execution_pct_b
@@ -226,8 +224,8 @@ def _order_result_accounting_confirms_trade(
     ):
         return False
 
-    # v3/v4는 혼합 수수료를 포함한 원 체결과 평가 근거가 모두 같아야 한다.
-    if trade.schema_version in (3, 4):
+    # v3는 aggregate만 같아도 다른 원 BNB·가격 근거이면 동일 체결로 취급하지 않는다.
+    if trade.schema_version == 3:
         return {fill.key: fill for fill in result.fills} == {fill.key: fill for fill in trade.fee_fills}
 
     # Durable schema의 단일 fee asset과 같은 Decimal128 정책으로 누적 fill을 다시 집계한다.
@@ -262,43 +260,6 @@ def _order_result_accounting_confirms_trade(
         and next(iter(fee_assets)) == trade.fee_asset
         and fee_quote_amount == trade.fee_quote_amount
     )  # REST FULL fallback 시각과 stream T가 달라도 동일한 재무 effect만 멱등 후보가 된다.
-
-
-def _order_result_replays_applied_fills(result: OrderResult, order: Order) -> bool:
-    """
-    함수 이름: _order_result_replays_applied_fills()
-    기능: 완료 주문의 뒤늦은 체결 알림이 이미 적용한 체결인지 대조한다.
-    인자: result, order -> 수신 체결과 보관된 주문
-    반환값: 기존 체결과 같은 부분 집합이면 True
-    작성 날짜: 2026/09/20
-    """
-    if (
-        result.status is not OrderStatus.PARTIALLY_FILLED
-        or order.status not in TERMINAL_ORDER_STATUSES
-        or result.symbol != order.symbol
-        or result.client_order_id != order.client_order_id
-        or result.exchange_order_id != order.exchange_order_id
-        or not result.fills
-        or order.unapplied_fills
-    ):
-        return False
-
-    applied_fills = {fill.key: fill for fill in order.fills}
-    for incoming in result.fills:
-        applied = applied_fills.get(incoming.key)
-        if applied is None:
-            return False
-        # REST FULL 시각과 stream T의 차이만 허용하며 체결 및 수수료 평가 근거는 보존한다.
-        if (
-            incoming.quantity != applied.quantity
-            or incoming.price != applied.price
-            or incoming.fee_amount != applied.fee_amount
-            or incoming.fee_asset != applied.fee_asset
-            or incoming.fee_quote_amount != applied.fee_quote_amount
-            or incoming.fee_valuation != applied.fee_valuation
-        ):
-            return False
-    return True
 
 
 def _wait_for_order_retry_delay(delay: timedelta) -> None:
@@ -588,7 +549,6 @@ class OrderExecutionFailureCode(str, Enum):
     RISK_ORDER_NOTIONAL_EXCEEDED = "RISK_ORDER_NOTIONAL_EXCEEDED"
     RISK_DAILY_LOSS_EXCEEDED = "RISK_DAILY_LOSS_EXCEEDED"
     RISK_POSITION_NOTIONAL_EXCEEDED = "RISK_POSITION_NOTIONAL_EXCEEDED"
-    RISK_BUY_BUDGET_INSUFFICIENT = "RISK_BUY_BUDGET_INSUFFICIENT"
 
 
 class OrderExecutionTraceResult(str, Enum):
@@ -1062,21 +1022,6 @@ class _EventDrivenScheduler:
         return len(self._scheduled)
 
 
-@dataclass(slots=True)
-class _BuyBudgetWait:
-    """클래스 이름: _BuyBudgetWait
-    기능: 전략별 최근 보류 하나와 제한된 필터 재확인 시각만 보존한다.
-    작성 날짜: 2026/09/18
-    """
-
-    reason: RiskBlockReason
-    fingerprint: tuple[object, ...]
-    retry_at: datetime
-    quantity: Decimal
-    preview_quantity: Decimal | None
-    suppressed_count: int = 0
-
-
 class TradingController:
     """
     클래스 이름: TradingController
@@ -1271,7 +1216,6 @@ class TradingController:
         )
         self._manual_kill_control_persistence_ambiguous = False
         self._last_risk_decision: RiskDecision | None = None
-        self._buy_budget_waits: dict[StrategyType, _BuyBudgetWait] = {}
         self._order_retry_jitter = (
             order_retry_jitter or _unit_order_retry_jitter_factor
         )  # Phase 8 fake는 factor 1.0, 실거래는 동일 경계에 난수 provider를 주입한다.
@@ -1379,18 +1323,6 @@ class TradingController:
         self._active_trace_event_id: str | None = None
         self._account_free_overlays: dict[str, _AccountFreeOverlay] = {}
         self._stream_reconciliation_required = False
-        self._session_recovery_notifier: Callable[[], object] | None = None
-        self._session_recovery_issues: dict[tuple[str, str, str | None], RecoveryIssue] = {}
-        self._session_recovery_session_id: str | None = None
-        self._session_recovery_trading_phase: TradingPhase | None = None
-        self._session_recovery_generation = 0
-        self._session_recovery_in_progress = False
-        self._session_recovery_resyncing_market = False
-        self._session_recovery_waiting_evaluation: int | None = None
-        self._session_recovery_latest_evaluation: MarketEvaluationSnapshot | None = None
-        self._session_recovery_cancelled = Event()
-        self._session_recovery_next_attempt_at: datetime | None = None
-        self._session_recovery_order_not_before: dict[str, datetime] = {}
         self._market_stream_monitoring_started = False
         self._market_stream_reconciliation_required = False
         self._market_stream_interrupted_running_session = False
@@ -1671,12 +1603,6 @@ class TradingController:
         if not isinstance(category, ReconciliationCauseCategory):
             raise TypeError("category must be a ReconciliationCauseCategory")
 
-        if self._session_recovery_notifier is not None:
-            # 복합 장애의 증거는 주문별 issue에 보존한다. 반복 callback 자체는 모호성이 아니다.
-            self._reconciliation_cause_status = ReconciliationCauseStatus.EXACT
-            self._reconciliation_cause_category = category
-            return
-
         # 이미 모호해진 latch는 후속 callback 순서와 무관하게 같은 fail-closed 상태를 유지한다.
         if self._reconciliation_cause_status in (
             ReconciliationCauseStatus.DUPLICATE,
@@ -1850,10 +1776,6 @@ class TradingController:
         self._validate_expected_version_value(expected_version)
         fingerprint = (active, expected_version)
 
-        if (active and self._session_recovery_notifier is not None and self._session_recovery_in_progress
-                and self._normalize_command_id(command_id) not in self._manual_kill_command_records):
-            self._session_recovery_cancelled.set()
-
         with self._session_lock:
             # Fsync 결과가 불명인 process에서는 어느 control command도 상태를 다시 추측하지 않는다.
             if self._manual_kill_control_persistence_ambiguous:
@@ -1973,12 +1895,6 @@ class TradingController:
                     raise
             previous_cleanup_verified = self._manual_kill_cleanup_verified
             self._manual_kill_active = active
-            if active and self._session_recovery_notifier is not None:
-                self._session_recovery_cancelled.set()
-                self._session_recovery_generation += 1
-                self._session_recovery_next_attempt_at = None
-                self._session_recovery_waiting_evaluation = None
-                self._session_recovery_latest_evaluation = None
             self._risk_control_version = next_control_state.version
             if active:
                 self._manual_kill_behavior_at_activation = (
@@ -2603,14 +2519,14 @@ class TradingController:
                 else self._position_snapshot.is_open
             )
 
-            # 표시 평단가는 수수료 제외 체결가이며, 손익용 평균 원가는 Position에 유지한다.
+            # 보유 여부와 같은 lock에서 기존 평단가를 읽고 종료된 포지션은 표시하지 않는다.
             position_average_entry_price = None
             if has_open_position:
                 position_average_entry_price = (
-                    position_state.average_fill_price
+                    position_state.average_entry_price
                     if position_state is not None
                     else self._position_snapshot.entry_price
-                )  # 종료된 포지션은 null, 열린 포지션은 반올림 전 Decimal을 공개한다.
+                )  # UI 표시를 위해 수수료 포함 원가를 다시 계산하거나 반올림하지 않는다.
 
             # Configured policy의 nullable 상한과 운영 enum을 unavailable 상태와 섞지 않고 공개한다.
             configured_risk_policy = (
@@ -3019,12 +2935,6 @@ class TradingController:
                 raise
 
             self._market_resume_suppressed = False
-            self._session_recovery_cancelled.clear()
-            self._session_recovery_session_id = None
-            self._session_recovery_trading_phase = None
-            self._session_recovery_waiting_evaluation = None
-            self._session_recovery_issues.clear()
-            self._session_recovery_generation += 1
             self._liveness_started_at = None
             self._recovery_phase = "idle"
             self._recovery_started_at = None
@@ -3334,11 +3244,6 @@ class TradingController:
         self._validate_expected_version_value(expected_version)
         fingerprint = (expected_version,)
 
-        # 긴 REST 검증이 session lock을 잡고 있어도 정지 의도는 commit 전에 관찰한다.
-        if (self._session_recovery_notifier is not None and self._session_recovery_in_progress
-                and ("stop", self._normalize_command_id(command_id)) not in self._command_records):
-            self._session_recovery_cancelled.set()
-
         with self._session_effect_lock():
             # exact replay를 먼저 반환하고 새 stop만 version·session 상태를 검증한다.
             cached = self._read_command_record(
@@ -3349,12 +3254,6 @@ class TradingController:
             if cached is not None:
                 return self._require_session_result(cached)
             self._require_expected_version(expected_version)
-            if self._session_recovery_notifier is not None:
-                self._session_recovery_cancelled.set()
-                self._session_recovery_generation += 1
-                self._session_recovery_next_attempt_at = None
-                self._session_recovery_waiting_evaluation = None
-                self._session_recovery_latest_evaluation = None
             self._preparation_retry_due_at = None
             self._preparation_retry_intent = None
             self._preparation_retry_attempt = 0
@@ -3781,8 +3680,6 @@ class TradingController:
 
             # Queue 대기 중 다른 Kline이 도착해도 source 평가를 잃지 않도록 event 자체에 보존한다.
             evaluation_time = self._clock()
-            if self._session_recovery_waiting_evaluation is not None:
-                self._session_recovery_latest_evaluation = market
             event = TradingEvent(
                 event_type=TradingEventType.MARKET_DATA_UPDATED,
                 occurred_at=evaluation_time,
@@ -3813,13 +3710,6 @@ class TradingController:
             if not self._preparation_signal_valid(strategy):
                 return self._expire_order_preparation(strategy)
         if event.market_evaluation is None:
-            # 먼저 처리할 미완료 주문 outcome도 복구 이전 가격·시각으로 전략을 판단하지 않는다.
-            if (self._session_recovery_waiting_evaluation is not None
-                    and self._session_recovery_latest_evaluation is not None):
-                self._context.update_market(self._enrich_market_evaluation_elapsed(
-                    self._session_recovery_latest_evaluation, self._clock(),
-                ))
-                return event
             # 내부 후속·retry에서도 새 signal/체결/timer 기준의 경과시간을 다시 결합한다.
             if self._latest_market_evaluation_version > 0:
                 self._context.update_market(self._enrich_market_evaluation_elapsed(
@@ -4050,11 +3940,6 @@ class TradingController:
             raise ValueError("max_microsteps must be positive")
 
         with self._session_effect_lock():
-            if self._session_recovery_in_progress or (
-                self._session_recovery_issues and not self._session_recovery_cancelled.is_set()
-            ) or (self._session_recovery_waiting_evaluation is not None
-                  and self._session_recovery_latest_evaluation is None):
-                return ()
             # 비활성 또는 terminal cleanup 중인 session에서는 scheduler와 queue를 모두 보존한다.
             if self._cleanup_in_progress or self._status not in (
                 TradingSessionStatus.RUNNING,
@@ -4297,10 +4182,6 @@ class TradingController:
                         ),
                     )
                 else:
-                    self._register_session_recovery_issue(
-                        ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION,
-                        OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED, None,
-                    )
                     self._record_reconciliation_cause_locked(
                         ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
                     )
@@ -4352,10 +4233,6 @@ class TradingController:
                     ),
                 )  # 실행 중 disconnect는 Context와 공개 status도 동시에 잠근다.
             else:
-                self._register_session_recovery_issue(
-                    ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION,
-                    OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED, None,
-                )
                 self._record_reconciliation_cause_locked(
                     ReconciliationCauseCategory.ACCOUNT_STREAM_UNKNOWN_OR_EXTERNAL_EXECUTION
                 )  # 시작 전 blocker도 원인 없는 MISSING으로 남기지 않는다.
@@ -4386,7 +4263,7 @@ class TradingController:
                 self._recovery_attempts = 0
             self._recovery_phase = "market"
             self._recovery_block_reason = None
-            if reason == "market_stream_initializing" and self._session_recovery_notifier is None:
+            if reason == "market_stream_initializing":
                 self._recovery_attempts += 1
             if self._event_queue is not None:
                 self._event_queue.discard_market_work()
@@ -4411,10 +4288,6 @@ class TradingController:
                     cause_category=ReconciliationCauseCategory.MARKET_STREAM_FAILED,
                 )
             elif not is_pre_session_initialization:
-                self._register_session_recovery_issue(
-                    ReconciliationCauseCategory.MARKET_STREAM_FAILED,
-                    OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED, None,
-                )
                 self._record_reconciliation_cause_locked(
                     ReconciliationCauseCategory.MARKET_STREAM_FAILED
                 )  # 시작 전 실패나 이미 잠긴 session의 새 시장 원인도 단일 latch에 기록한다.
@@ -4473,338 +4346,6 @@ class TradingController:
         with self._session_lock:
             self._last_market_input_at = self._clock()
 
-    def configure_session_recovery(self, notifier: Callable[[], object]) -> None:
-        """
-        함수 이름: configure_session_recovery()
-        기능: 단일 복구 워커의 요청 경계를 연결한다.
-        인자: notifier -> 비차단 복구 요청 콜백
-        반환값: 없음
-        작성 날짜: 2026/09/20
-        """
-        if not callable(notifier):
-            raise TypeError("session recovery notifier must be callable")
-        with self._session_lock:
-            self._session_recovery_notifier = notifier
-
-    def _register_session_recovery_issue(
-        self, category: ReconciliationCauseCategory, code: OrderExecutionFailureCode,
-        state: _OrderExecutionState | None,
-    ) -> None:
-        """
-        함수 이름: _register_session_recovery_issue()
-        기능: 장애를 종류·주문별로 보존하고 최초 중단 세션을 기억한다.
-        인자: category, code -> 장애 범주와 코드, state -> 관련 주문 상태
-        반환값: 없음
-        작성 날짜: 2026/09/20
-        """
-        if self._session_recovery_notifier is None:
-            return
-        retryable = code in {
-            OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
-            OrderExecutionFailureCode.GATEWAY_REQUEST_FAILED,
-            OrderExecutionFailureCode.QUERY_BUDGET_EXHAUSTED,
-            OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED,
-        } and category not in {
-            ReconciliationCauseCategory.EVENT_WORKER_OR_RUNTIME_FAILED,
-            ReconciliationCauseCategory.PROCESS_OWNERSHIP_AMBIGUOUS,
-        }
-        retryable = retryable and not self._external_execution_reconciliation_required
-        error = sys.exception()
-        if code in (OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED, OrderExecutionFailureCode.GATEWAY_REQUEST_FAILED) and error is not None:
-            self._diagnostics.record_exception("order_storage_failed" if code is OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED else "order_request_failed", error,
-                client_order_id=None if state is None else state.order.client_order_id)
-            retryable = retryable and is_transient_recovery_error(error)
-        now = self._clock()
-        key = (category.value, code.value, None if state is None else state.order.client_order_id)
-        existing = self._session_recovery_issues.get(key)
-        if existing is None:
-            self._session_recovery_issues[key] = RecoveryIssue(*key, retryable, now, now)
-            if not (self._session_recovery_resyncing_market
-                    and category is ReconciliationCauseCategory.MARKET_STREAM_FAILED):
-                self._session_recovery_generation += 1
-        else:
-            existing.last_seen = now
-            existing.occurrences += 1
-            existing.retryable = existing.retryable and retryable
-        self._session_recovery_waiting_evaluation = None
-        self._session_recovery_latest_evaluation = None
-        if self._recovery_started_at is None:
-            self._recovery_started_at = now
-        if self._status is TradingSessionStatus.RUNNING and self._session_recovery_session_id is None:
-            self._session_recovery_session_id = self._session_id
-            self._session_recovery_trading_phase = self._context.runtime.trading_phase
-            self._recovery_started_at = now
-            self._recovery_attempts = 0
-            self._session_recovery_waiting_evaluation = None
-        self._recovery_phase = "market" if self._market_stream_reconciliation_required else "account_orders"
-        self._recovery_block_reason = None
-        blocker = next((issue for issue in self._session_recovery_issues.values() if not issue.retryable), None)
-        if blocker is not None or self._session_recovery_cancelled.is_set():
-            self._block_market_auto_resume(blocker.code if blocker is not None else "STOP_REQUESTED")
-        if existing is None:
-            self._record_diagnostic(
-                "session_recovery_requested", issue_category=category, failure_code=code,
-                client_order_id=key[2], retryable=retryable, generation=self._session_recovery_generation,
-            )
-        if not self._session_recovery_in_progress and self._session_recovery_can_resume():
-            self._session_recovery_notifier()
-
-    @property
-    def session_recovery_pending(self) -> bool:
-        """
-        함수 이름: session_recovery_pending()
-        기능: 현재 세션에서 자동 검증을 재시도할 장애가 있는지 반환한다.
-        인자: 없음
-        반환값: 미해결 재시도 가능 장애가 있으면 True
-        작성 날짜: 2026/09/20
-        """
-        with self._session_lock:
-            return bool(self._session_recovery_issues) and self._session_recovery_can_resume()
-
-    def _session_recovery_can_resume(self) -> bool:
-        """
-        함수 이름: _session_recovery_can_resume()
-        기능: 사용자 정지와 영구 차단 원인을 모두 검사한다.
-        인자: 없음
-        반환값: 같은 프로세스에서 자동 검증을 계속할 수 있으면 True
-        작성 날짜: 2026/09/20
-        """
-        return (
-            not self._session_recovery_cancelled.is_set()
-            and not self._market_resume_suppressed
-            and self._market_stop_requested is None
-            and not self._manual_kill_active
-            and not self._cleanup_in_progress
-            and not self._shutdown_preparing
-            and not self._process_lifetime_reconciliation_required_locked()
-            and not self._startup_reconciliation_blocked
-            and self._startup_reconciliation_complete
-            and all(issue.retryable for issue in self._session_recovery_issues.values())
-            and self._status not in (TradingSessionStatus.STOPPING, TradingSessionStatus.TERMINATED)
-        )
-
-    def note_session_recovery_retry(self, delay: timedelta, error: BaseException) -> None:
-        """
-        함수 이름: note_session_recovery_retry()
-        기능: 실패 후 다음 복구 예정 시각과 원본 예외 위치를 기록한다.
-        인자: delay -> 재시도 대기시간, error -> 실패 예외
-        반환값: 없음
-        작성 날짜: 2026/09/20
-        """
-        with self._session_lock:
-            if not self._session_recovery_can_resume():
-                self._session_recovery_next_attempt_at = None
-                return
-            self._session_recovery_next_attempt_at = self._clock() + delay
-            self._record_diagnostic(
-                "session_recovery_retry_scheduled", attempts=self._recovery_attempts,
-                next_attempt_at=self._session_recovery_next_attempt_at,
-                delay_seconds=str(delay.total_seconds()), generation=self._session_recovery_generation,
-                causes=describe_exception(error),
-            )
-
-    def _query_order_for_session_recovery(self, order: Order) -> OrderResult:
-        """
-        함수 이름: _query_order_for_session_recovery()
-        기능: 거래소 대기 시각을 지키며 기존 주문 ID만 재조회한다.
-        인자: order -> 기존 주문
-        반환값: 정규화된 동일 주문 조회 결과
-        작성 날짜: 2026/09/20
-        """
-        due = self._session_recovery_order_not_before.get(order.client_order_id)
-        if due is not None and due > self._clock():
-            raise SessionRecoveryRetry("exchange order query wait-not-before", retry_after=due - self._clock())
-        result = self._api_gateway.query_order_result(order)
-        if result.retry_after is not None:
-            self._session_recovery_order_not_before[order.client_order_id] = self._clock() + result.retry_after
-        return result
-
-    def _verify_recovery_order_result(self, state: _OrderExecutionState, result: OrderResult, trade: Trade) -> None:
-        """
-        함수 이름: _verify_recovery_order_result()
-        기능: 저장 복구 전에 거래소 terminal 체결과 기록을 대조한다.
-        인자: state, result, trade -> 메모리 주문·거래소 결과·저장 기록
-        반환값: 동일하면 없음, 미확정·불일치이면 예외
-        작성 날짜: 2026/09/20
-        """
-        if result.status is OrderStatus.UNKNOWN or result.status in ACTIVE_ORDER_STATUSES:
-            raise SessionRecoveryRetry("order terminal fact not yet confirmed", retry_after=result.retry_after)
-        if result.status is not state.order.status or not _order_result_accounting_confirms_trade(result, trade):
-            self._record_diagnostic("session_recovery_verification_difference", level="ERROR",
-                client_order_id=state.order.client_order_id, expected_trade=trade, observed_order=result)
-            raise AccountStreamRecoveryBlockedError("recovery terminal execution differs from recorded trade")
-
-    def _recover_session_order_storage(self) -> None:
-        """
-        함수 이름: _recover_session_order_storage()
-        기능: 동일 주문의 미완료 저장과 journal 정리만 멱등 복구한다.
-        인자: 없음
-        반환값: 없음
-        작성 날짜: 2026/09/20
-        """
-        history = self._require_trade_history_controller()
-        for order_id in tuple(history.dirty_order_ids):
-            state = self._persistence_states_by_order_id.get(order_id)
-            if state is None or state.terminal_summary is None:
-                raise AccountStreamRecoveryBlockedError("dirty history has no terminal execution owner")
-            result = self._query_order_for_session_recovery(state.order)
-            realized = (
-                history.performance.calculate_realized_result(state.terminal_summary, state.allocated_cost_basis)
-                if state.order.side is OrderSide.SELL else None
-            )
-            proof = Trade.from_order_execution(state.order, state.terminal_summary, realized)
-            self._verify_recovery_order_result(state, result, proof)
-            self.retry_pending_order_persistence(order_id)
-        if not history.verify_durable_history():
-            raise AccountStreamRecoveryBlockedError("durable trade history differs from published history")
-        records = {record.order.client_order_id: record for record in history.get_pending_order_recovery_records()} if self._pending_order_recovery_enabled else {}
-        trades = {(trade.client_order_id, trade.order_id): trade for trade in history.trade_history.trades}
-        for state in tuple(self._order_states_by_client_id.values()):
-            order = state.order
-            if not (state.pending_recovery_pending or state.persistence_pending or order.client_order_id in records):
-                continue
-            trade = trades.get((order.client_order_id, order.exchange_order_id))
-            if trade is None or not order.is_terminal or not order.fills:
-                continue  # 미확정 체결은 뒤의 기존 계좌·same-ID reconciliation에서 반영한다.
-            result = self._query_order_for_session_recovery(order)
-            self._verify_recovery_order_result(state, result, trade)
-            record = records.get(order.client_order_id)
-            if record is not None and not self._transition_pending_order_recovery(state, PendingOrderRecoveryLifecycle.HISTORY_COMMITTED):
-                raise SessionRecoveryRetry("history lifecycle persistence is still pending")
-            state.recovery_lifecycle = PendingOrderRecoveryLifecycle.HISTORY_COMMITTED
-            # 디스크 REMOVE 완료를 검증한 뒤에만 메모리 marker를 정리한다.
-            if record is None and state.pending_outcome is not None:
-                state.pending_recovery_pending = False
-                state.persistence_pending = False
-                self._persistence_states_by_order_id.pop(order.exchange_order_id, None)
-                self._scheduled_order_queries.pop(order.client_order_id, None)
-            else:
-                outcomes = self._complete_terminal_after_history(state)
-                if state.pending_recovery_pending:
-                    raise SessionRecoveryRetry("terminal journal removal is still pending")
-                self._enqueue_order_outcomes(outcomes)
-
-    def recover_interrupted_trading_session(
-        self, *, reconcile_market: Callable[[], object], publish_evaluation: Callable[[], object],
-        publish_commit: Callable[[], object] | None = None,
-    ) -> bool:
-        """
-        함수 이름: recover_interrupted_trading_session()
-        기능: 주문·저장·계좌·시장 검증 뒤 동일 세션의 최신 평가를 예약한다.
-        인자: reconcile_market -> 시장 재동기화, publish_evaluation -> 최신 평가 게시, publish_commit -> 상태 게시
-        반환값: 완료 로그를 실제 평가까지 보류하는 False
-        작성 날짜: 2026/09/20
-        """
-        with self._session_effect_lock():
-            if not self.session_recovery_pending or self._session_recovery_in_progress:
-                return False
-            generation = self._session_recovery_generation
-            session_id = self._session_recovery_session_id
-            self._session_recovery_in_progress = True
-            self._recovery_attempts += 1
-            self._session_recovery_next_attempt_at = None
-            self._record_diagnostic("session_recovery_attempt", generation=generation, attempts=self._recovery_attempts)
-        try:
-            with self._session_effect_lock():
-                self._recovery_phase = "account_orders"
-                wait_until = max(self._session_recovery_order_not_before.values(), default=self._clock())
-                if wait_until > self._clock():
-                    raise SessionRecoveryRetry("exchange recovery wait-not-before", retry_after=wait_until - self._clock())
-                self._recover_session_order_storage()
-                self.reconnect_account_stream_after_reconciliation()
-                if self._stream_reconciliation_required:
-                    delay = max((q.due_at - self._clock() for q in self._scheduled_order_queries.values()), default=timedelta(0))
-                    raise SessionRecoveryRetry("order/account reconciliation remains pending", retry_after=delay)
-                self._recovery_phase = "market"
-                self._session_recovery_resyncing_market = True
-            # Market callback은 stream lock -> session lock 순서다. 네트워크 초기화 동안 역순으로 잡지 않는다.
-            try:
-                reconcile_market()
-            finally:
-                with self._session_lock:
-                    self._session_recovery_resyncing_market = False
-            with self._session_effect_lock():
-                if not self._session_recovery_can_resume():
-                    self._block_market_auto_resume("STOP_OR_UNRESOLVED_BLOCKER")
-                    return False
-                if self._market_stream_reconciliation_required or not self._market_stream_ready:
-                    raise SessionRecoveryRetry("fresh market stream is not ready")
-                if not self._web_socket_gateway.account_ready:
-                    raise SessionRecoveryRetry("account stream has not caught up")
-                history = self._require_trade_history_controller()
-                if history.dirty_order_ids:
-                    raise SessionRecoveryRetry("history changed during market verification")
-                if not history.verify_durable_history():
-                    raise AccountStreamRecoveryBlockedError("durable history changed during reconciliation")
-                position = self._require_position()
-                if position.quantity > Decimal("0"):
-                    regime, owner = self._resolve_recovered_position_provenance(history.trade_history.trades, position.get_snapshot())
-                    if session_id is not None and (
-                        self._active_stm is None or regime is not self._active_stm.regime_type
-                        or owner not in (self._context.runtime.position_owner, self._context.runtime.pending_strategy)
-                    ):
-                        raise AccountStreamRecoveryBlockedError("position strategy provenance differs")
-                if generation != self._session_recovery_generation or (session_id is not None and session_id != self._session_id):
-                    raise SessionRecoveryRetry("recovery generation changed during verification")
-                if self._event_queue is not None:
-                    self._event_queue.discard_market_work()
-                self._market_stream_interrupted_running_session = False
-                self._interrupted_trading_phase = None
-                self._reconciliation_cause_status = ReconciliationCauseStatus.MISSING
-                self._reconciliation_cause_category = None
-                for issue in self._session_recovery_issues.values():
-                    self._record_diagnostic("session_recovery_issue_resolved", issue_category=issue.category,
-                        failure_code=issue.code, client_order_id=issue.client_order_id, occurrences=issue.occurrences)
-                self._session_recovery_issues.clear()
-                self._recovery_block_reason = None
-                self._liveness_started_at = self._clock()
-                if session_id is None:
-                    if self._session_id is None:
-                        self._status = TradingSessionStatus.NOT_STARTED
-                    self._recovery_phase = "idle"
-                    if publish_commit is not None:
-                        publish_commit()
-                    return False  # 연결 복구가 새 전략 세션을 시작하지 않는다.
-                self._status = TradingSessionStatus.RUNNING
-                if self._context.runtime.trading_phase is TradingPhase.RECONCILIATION_REQUIRED:
-                    self._context.apply_runtime_patch(patch(trading_phase=self._session_recovery_trading_phase or TradingPhase.IDLE))
-                self._session_recovery_waiting_evaluation = self._latest_market_evaluation_version
-                self._session_recovery_latest_evaluation = None
-                self._recovery_phase = "account_orders"
-                if publish_commit is not None:
-                    publish_commit()
-            publish_evaluation()
-            return False
-        except Exception as error:
-            with self._session_lock:
-                if self._session_recovery_cancelled.is_set():
-                    self._block_market_auto_resume("STOP_OR_SHUTDOWN_REQUESTED", error=error)
-                    return False
-                retryable_error = (not isinstance(error, AccountStreamRecoveryBlockedError)
-                                   and is_transient_recovery_error(error))
-                if self._session_recovery_waiting_evaluation is not None:
-                    if retryable_error and not self._event_runtime_failed:
-                        # 검증 직후 끊긴 연결도 일시 장애다. 신규 평가 전에 gate를 다시 닫는다.
-                        self._market_stream_reconciliation_required = True
-                        self._enter_order_reconciliation(
-                            None, OrderExecutionFailureCode.STREAM_RECONCILIATION_REQUIRED,
-                            message_id=None, cause_category=ReconciliationCauseCategory.MARKET_STREAM_FAILED,
-                        )
-                    else:
-                        self.mark_event_runtime_failed()
-                if retryable_error and self._session_recovery_can_resume():
-                    self._record_diagnostic("session_recovery_attempt_failed", causes=describe_exception(error), retryable=True)
-                    raise
-                self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
-                self._block_market_auto_resume("RECOVERY_INVARIANT_FAILED", error=error)
-                for issue in self._session_recovery_issues.values():
-                    issue.retryable = False
-            raise AccountStreamRecoveryBlockedError("session recovery verification failed") from error
-        finally:
-            with self._session_lock:
-                self._session_recovery_in_progress = False
-                self._request_event_runtime_processing()
-
     def market_recovery_snapshot(self) -> dict[str, object]:
         """
         함수 이름: market_recovery_snapshot()
@@ -4857,18 +4398,8 @@ class TradingController:
             last = max(self._liveness_started_at, self._last_strategy_evaluation_at or self._liveness_started_at)
             if (now - last).total_seconds() < 60:
                 return False
-            input_last = self._last_market_input_at or self._liveness_started_at
-            input_age = (now - input_last).total_seconds()
-            evaluation_age = (now - last).total_seconds()
-            reason = "market_input_stalled" if input_age >= 60 else "market_evaluation_stalled"
-            self._record_diagnostic("strategy_evaluation_stalled", level="WARNING", reason=reason,
-                                    last_evaluated_at=self._last_strategy_evaluation_at,
-                                    last_market_input_at=self._last_market_input_at,
-                                    market_input_age_seconds=(input_age if self._last_market_input_at is not None else None),
-                                    evaluation_age_seconds=((now - self._last_strategy_evaluation_at).total_seconds()
-                                        if self._last_strategy_evaluation_at is not None else None),
-                                    evaluation_stall_elapsed_seconds=evaluation_age)
-            self.mark_market_stream_reconciliation_required(reason)
+            self._record_diagnostic("strategy_evaluation_stalled", level="WARNING", last_evaluated_at=last)
+            self.mark_market_stream_reconciliation_required("market_evaluation_stalled")
             return True
 
     def _block_market_auto_resume(self, reason: str, *, error: BaseException | None = None) -> None:
@@ -4907,12 +4438,9 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/09/10
         """
-        self._session_recovery_cancelled.set()
         with self._session_lock:
-            self._session_recovery_generation += 1
-            self._session_recovery_next_attempt_at = None
             self._market_resume_suppressed = True
-            if self._market_stream_interrupted_running_session or self._session_recovery_issues:
+            if self._market_stream_interrupted_running_session:
                 self._block_market_auto_resume("SHUTDOWN_REQUESTED")
 
     def recover_interrupted_market_session(self) -> None:
@@ -4924,10 +4452,6 @@ class TradingController:
         작성 날짜: 2026/09/10
         """
         with self._session_lock:
-            if self._session_recovery_notifier is not None:
-                if self.session_recovery_pending:
-                    self._session_recovery_notifier()
-                return  # Production 복구는 단일 전체 검증 barrier만 사용한다.
             if not self._market_stream_interrupted_running_session:
                 return
             if self._market_stream_reconciliation_required:
@@ -5576,50 +5100,29 @@ class TradingController:
         if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
             raise StartupOrderReconciliationError("external recovery requires no account-wide open orders")
         first_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
-        settlement = self._residual_settlement
-        residual_quantity, residual_cost = self.residual_totals
-        # 외부 매도도 기존 잔여의 Earn 보관·보상을 포함한 같은 계좌 근거를 사용한다.
-        since = history[settlement.transfers[0].history_count - 1].executed_at if settlement is not None and settlement.transfers else None
-        earn_evidence = self._api_gateway.fetch_earn_residual_evidence(since) if since is not None else None
-        if earn_evidence is not None and not settlement.matches_earn_custody(earn_evidence, history):
-            raise StartupOrderReconciliationError("external recovery Earn provenance is invalid")
         # 별도의 두 조회에서 동일 주문·fill과 잔고를 확인한 뒤에만 첫 durable write를 허용한다.
         repeated = self._api_gateway.list_account_executions_since(_TRADING_SYMBOL, anchor)
-        repeated_earn = self._api_gateway.fetch_earn_residual_evidence(since) if since is not None else None
         confirmed_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
         first_eth = tuple(balance for balance in first_account.balances if balance.asset == _BASE_ASSET)
         confirmed_eth = tuple(balance for balance in confirmed_account.balances if balance.asset == _BASE_ASSET)
-        if repeated != executions or repeated_earn != earn_evidence or first_eth != confirmed_eth or len(confirmed_eth) != 1:
+        if repeated != executions or first_eth != confirmed_eth or len(confirmed_eth) != 1:
             raise StartupOrderReconciliationError("external recovery evidence changed during verification")
         if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
             raise StartupOrderReconciliationError("open orders appeared during external recovery")
         if not self._web_socket_gateway.account_ready or self._process_lifetime_reconciliation_required_locked():
             raise StartupOrderReconciliationError("external recovery account stream is not stable")
         balance = confirmed_eth[0]
+        residual_quantity = self._residual_settlement.totals[0] if self._residual_settlement is not None else Decimal("0")
         try:
-            with localcontext() as context:
-                context.prec = 34
-                principal_balance = balance.free + balance.locked
-                if earn_evidence is not None:
-                    principal_balance += earn_evidence.quantity - earn_evidence.rewards
-            trades = build_external_exit_trades(history, position, tuple(new_executions),
-                eth_balance=principal_balance, residual_quantity=residual_quantity, residual_cost_basis=residual_cost)
-            if settlement is not None:
-                preview = ResidualSettlement(settlement.storage)
-                preview.restore(Position(), (*history, *trades), self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL).lot_size.step_size)
-                if earn_evidence is not None and not preview.matches_earn_custody(earn_evidence, (*history, *trades)):
-                    raise ValueError("external SELL consumed residual held in Earn")
+            trades = build_external_exit_trades(history, position, tuple(new_executions), eth_balance=balance.free + balance.locked, residual_quantity=residual_quantity)
         except (ValueError, TypeError) as error:
             raise StartupOrderReconciliationError("external SELL cannot be attributed to the app position") from error
         self._account.apply_startup_reconciliation_snapshot(confirmed_account, self._market_snapshot.get_current_eth_price())
         self._account_free_overlays.clear()
-        for history_count, trade in enumerate(trades, len(history) + 1):
+        for trade in trades:
             # 전체 후보는 이미 검증했다. 저장 중 중단돼도 다음 실행이 원래 order ID로 멱등 복원한다.
             history_controller.record_reconciled_external_trade(trade)
-            if settlement is not None:
-                settlement.apply_external_trade(position, trade, history_count)
-            else:
-                position.apply_historical_trade(trade)
+            position.apply_historical_trade(trade)
         self._web_socket_gateway.rebase_order_results(tuple(execution.result for execution in executions))
 
     def _restore_position_from_history(
@@ -6131,11 +5634,8 @@ class TradingController:
                             outcomes.append(failure_event)
                             continue
                     else:
-                        result = (self._query_order_for_session_recovery(order) if self._session_recovery_in_progress
-                                  else self._api_gateway.query_order_result(order))
+                        result = self._api_gateway.query_order_result(order)
                     if result.status is OrderStatus.UNKNOWN:
-                        if self._session_recovery_in_progress:
-                            raise SessionRecoveryRetry("same-ID order query remained unknown", retry_after=result.retry_after)
                         raise StartupOrderReconciliationError(
                             "stream reconnect order query remained unknown"
                         )
@@ -6172,8 +5672,6 @@ class TradingController:
                             "account stream recovery outcome invariant failed"
                         ) from error
 
-                if self._session_recovery_in_progress and history_controller.dirty_order_ids:
-                    raise SessionRecoveryRetry("new terminal execution persistence remains pending")
                 # Terminal fill은 memory state만으로 설명하지 않고 새 durable snapshot과 정확히 대조한다.
                 refreshed_durable_trades = (
                     history_controller.trade_history.trades
@@ -6267,8 +5765,6 @@ class TradingController:
                         "account stream recovery gap Position exceeds Binance balance"
                     )  # ACK 공백에서 감소한 잔고도 command gate를 다시 열기 전에 확인한다.
                 if not shutdown_owner and not self._web_socket_gateway.account_ready:
-                    if self._session_recovery_in_progress:
-                        raise SessionRecoveryRetry("account stream did not catch up during reconnect")
                     raise StartupOrderReconciliationError(
                         "account stream was not caught up during reconnect gap reconciliation"
                     )
@@ -6288,8 +5784,6 @@ class TradingController:
                 )
                 if (
                     self._status is TradingSessionStatus.RECONCILIATION_REQUIRED
-                    and not self._session_recovery_in_progress
-                    and (not self._session_recovery_issues or self._requires_manual_kill_cleanup_locked())
                     and not unresolved_state_remains
                     and not self._market_stream_reconciliation_required
                     and not self._market_stream_interrupted_running_session
@@ -6565,7 +6059,6 @@ class TradingController:
         open_lot_regime: RegimeType | None = None
         open_lot_owner: StrategyType | None = None
         residual_entries = {} if self._residual_settlement is None else {entry.history_count: entry for entry in self._residual_settlement.transfers}
-        residual_replay = ResidualSettlement(self._residual_settlement.storage) if self._residual_settlement is not None else None
         for history_count, trade in enumerate(durable_trades, 1):
             if replayed_position.quantity == Decimal("0"):
                 if trade.side is not OrderSide.BUY:
@@ -6580,14 +6073,10 @@ class TradingController:
                     "A recovered open lot cannot mix REGIME or owner"
                 )
 
-            if residual_replay is not None and trade.exit_reason is ExitReason.EXTERNAL_MANUAL:
-                residual_replay.apply_external_trade(replayed_position, trade, history_count)
-            else:
-                replayed_position.apply_historical_trade(trade)
+            replayed_position.apply_historical_trade(trade)
             residual = residual_entries.get(history_count)
             if residual is not None:
                 replayed_position.detach_residual(residual.quantity, residual.cost_basis, residual.step_size)
-                residual_replay.transfers = (*residual_replay.transfers, residual)
             if replayed_position.quantity == Decimal("0"):
                 open_lot_regime = None
                 open_lot_owner = None
@@ -6792,18 +6281,6 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/09/05
         """
-        for strategy in tuple(self._buy_budget_waits):
-            current = self._context.snapshot()
-            current = replace(current, market=self._enrich_market_evaluation_elapsed(current.market, self._clock()))
-            runtime = current.runtime
-            expired = (
-                not runtime.signal_created or not condition_met("b_signal_age", current)
-                if strategy is StrategyType.CASE_B else
-                not runtime.allow_new_case_c_setup or runtime.case_c_consumed_for_event
-                or runtime.timer_base_time is None or not condition_met("c_recovery_window", current)
-            )
-            if expired:
-                self._clear_buy_budget_wait(strategy, "signal_expired")
         # 종료 cleanup 이후에도 입력·전이·최종 runtime을 남겨 마지막 청산까지 복원할 수 있게 한다.
         if self._diagnostics.enabled:
             self._record_diagnostic(
@@ -6822,24 +6299,6 @@ class TradingController:
                 self._latest_market_evaluation_version,
                 entered_at=self._position.entered_at if self._position is not None else None,
             )  # 표시를 위해 주문 로직을 실행하거나 Context를 수정하지 않는다.
-
-        marker = self._session_recovery_waiting_evaluation
-        if (marker is not None and result.decision_id.startswith("market:")
-                and self._latest_market_evaluation_version > marker
-                and not self._session_recovery_issues
-                and not self._session_recovery_cancelled.is_set()
-                and self._status is not TradingSessionStatus.RECONCILIATION_REQUIRED):
-            self._last_strategy_evaluation_at = self._clock()
-            self._session_recovery_waiting_evaluation = None
-            self._session_recovery_latest_evaluation = None
-            self._session_recovery_session_id = None
-            self._session_recovery_trading_phase = None
-            self._recovery_phase = "resumed"
-            self._recovery_block_reason = None
-            self._record_diagnostic("trading_session_resumed",
-                restored_market_version=self._latest_market_evaluation_version,
-                generation=self._session_recovery_generation, attempts=self._recovery_attempts)
-            self._record_diagnostic("stream_recovery_completed", worker="binance-session-recovery")
 
     def _execute_action(
         self,
@@ -6869,16 +6328,12 @@ class TradingController:
             self._context.open_lower_event(action)
             return ()
         if isinstance(action, CloseLowerEvent):
-            for strategy in tuple(self._buy_budget_waits):
-                self._clear_buy_budget_wait(strategy, "lower_event_closed")
             self._context.close_lower_event(action)
             return ()
         if isinstance(action, ResetCaseBContext):
-            self._clear_buy_budget_wait(StrategyType.CASE_B, "signal_reset")
             self._context.reset_case_b_context(action)
             return ()
         if isinstance(action, ResetCaseCContext):
-            self._clear_buy_budget_wait(StrategyType.CASE_C, "signal_reset")
             self._context.reset_case_c_context(action)
             return ()
         if isinstance(action, ScheduleReevaluation):
@@ -7270,23 +6725,6 @@ class TradingController:
             selected_override,
             force_sell=force_sell,
         )
-        requested_order_notional = None
-        if action.side is OrderSide.BUY:
-            with localcontext() as decimal_context:
-                decimal_context.prec = 34
-                decimal_context.rounding = ROUND_HALF_EVEN
-                requested_order_notional = requested_quantity * market_price
-            requested_quantity = self._limit_buy_quantity(requested_quantity, market_price)
-            budget = self._build_buy_risk_budget(market_price, requested_quantity,
-                                                requested_order_notional=requested_order_notional)
-            preliminary = evaluate_buy_risk(self._risk_policy_state, budget)
-            if preliminary.allowed and requested_quantity <= Decimal("0"):
-                preliminary = RiskDecision(False, budget, RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT)
-            if not preliminary.allowed:
-                return self._block_buy_budget(action, provisional_client_id, preliminary, requested_quantity, market_price)
-            if self._defer_buy_budget_preparation(action.strategy, requested_quantity, market_price):
-                return self._block_buy_budget(action, provisional_client_id,
-                    RiskDecision(False, budget, RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT), requested_quantity, market_price)
         if requested_quantity <= Decimal("0"):
             self._append_order_trace_values(
                 "5",
@@ -7334,26 +6772,13 @@ class TradingController:
         try:
             order = self._api_gateway.prepare_order(order)
         except Exception as error:
-            # 정상적인 최소 주문 미달만 보류한다. 인증·규칙 불일치 등은 기존 오류 처리로 남긴다.
-            self._api_gateway.discard_unsubmitted_preparation(order)
-            if (order.side is OrderSide.BUY and isinstance(error, SymbolFilterError)
-                    and str(error) in {
-                        "FILTER_MARKET_QUANTITY_ZERO", "FILTER_LOT_SIZE_MINIMUM",
-                        "FILTER_MARKET_LOT_SIZE_MINIMUM", "FILTER_MIN_NOTIONAL_MINIMUM",
-                        "FILTER_NOTIONAL_MINIMUM",
-                    }):
-                budget = self._build_buy_risk_budget(market_price, requested_quantity,
-                                                    requested_order_notional=requested_order_notional)
-                return self._block_buy_budget(action, provisional_client_id,
-                    RiskDecision(False, budget, RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT),
-                    requested_quantity, market_price, prepared=True)
-            transient = isinstance(error, (OSError, TimeoutError)) or (
+            transient = isinstance(error, (BnbValuationUnavailableError, OSError, TimeoutError)) or (
                 isinstance(error, BinanceAPIError) and (error.status_code >= 500 or error.status_code in (418, 429))
             )
             failure_code = (
                 OrderExecutionFailureCode.ORDER_PREPARATION_DEFERRED if transient else
                 OrderExecutionFailureCode.SYMBOL_FILTER_REJECTED if isinstance(error, SymbolFilterError) else
-                OrderExecutionFailureCode.ORDER_PREPARATION_INVALID_DATA if isinstance(error, BinancePayloadError) else
+                OrderExecutionFailureCode.ORDER_PREPARATION_INVALID_DATA if isinstance(error, (BnbValuationInvalidError, BinancePayloadError)) else
                 OrderExecutionFailureCode.ORDER_PREPARATION_FAILED
             )
             self._unsubmitted_preparation_intent = action.idempotency_key
@@ -7427,18 +6852,41 @@ class TradingController:
 
         # 모든 production BUY는 filter 뒤 실제 제출 수량으로 같은 cumulative risk gate를 통과한다.
         if order.side is OrderSide.BUY:
-            risk_decision = self._evaluate_buy_order_risk(order, requested_order_notional=requested_order_notional)
+            risk_decision = self._evaluate_buy_order_risk(order)
             if not risk_decision.allowed:
-                self._api_gateway.discard_unsubmitted_preparation(order)
-                return self._block_buy_budget(action, provisional_client_id, risk_decision,
-                                              order.submitted_quantity, market_price, prepared=True, evaluated=True)
-            self._clear_buy_budget_wait(action.strategy, "budget_available")
+                risk_block_reason = risk_decision.block_reason
+                if risk_block_reason is None:
+                    raise RuntimeError("blocked risk decision requires a reason")
+                self._append_order_trace(
+                    order,
+                    "5.1",
+                    context_version,
+                    failure_code=OrderExecutionFailureCode(
+                        risk_block_reason.value
+                    ),
+                )
+                return (
+                    TradingEvent(
+                        event_type=TradingEventType.BUY_RISK_BLOCKED,
+                        occurred_at=self._clock(),
+                        priority=EventPriority.ORDER_OUTCOME,
+                        event_id=(
+                            f"{order.client_order_id}:risk:"
+                            f"{risk_block_reason.value}"
+                        ),
+                        lower_event_id=self._context.runtime.lower_event_id,
+                        order_id=order.client_order_id,
+                        payload=BuyRiskBlockedPayload(
+                            strategy=order.strategy,
+                            reason=risk_block_reason,
+                        ),
+                    ),
+                )  # PREPARED journal과 REST POST 전에 STM에 typed feedback만 전달한다.
             self._append_order_trace(order, "5.1", context_version)
 
         # 준비 조회 중 도착한 종료 요청도 journal 및 실제 전송보다 먼저 반영한다.
         if self._shutdown_preparing and not (force_sell and self._shutdown_liquidation_allowed and self._shutdown_cleanup_owner == get_ident()):
             self._unsubmitted_preparation_intent = action.idempotency_key
-            self._api_gateway.discard_unsubmitted_preparation(order)
             return ()
         if self._shutdown_cleanup_check is not None:
             self._shutdown_cleanup_check()
@@ -7564,173 +7012,25 @@ class TradingController:
 
         return self._handle_order_result(state, result, initial=True)
 
-    def _buy_wait_fingerprint(self, strategy: StrategyType) -> tuple[object, ...]:
-        """
-        함수 이름: _buy_wait_fingerprint()
-        기능: 시세 틱마다 바뀌는 version을 제외하고 예산·신호 변경만 식별한다.
-        인자: strategy -> 매수 전략
-        반환값: 보류 재평가 기준
-        작성 날짜: 2026/09/18
-        """
-        runtime = self._context.runtime
-        return (self._risk_policy_state, self._session_risk_policy_version, self._account.version,
-                self._get_effective_free_balance(_QUOTE_ASSET), self._buy_exposure(Decimal("1")),
-                self._manual_kill_active, runtime.lower_event_id,
-                runtime.signal_time if strategy is StrategyType.CASE_B else
-                (runtime.last_case_c_setup_candle_id, runtime.timer_base_time))
-
-    def _defer_buy_budget_preparation(self, strategy: StrategyType, quantity: Decimal, price: Decimal) -> bool:
-        """
-        함수 이름: _defer_buy_budget_preparation()
-        기능: 최소 주문 미달의 동일 조건은 30초까지 준비 조회를 억제한다.
-        인자: strategy, quantity, price -> 현재 로컬 후보
-        반환값: 이번 준비를 생략할지 여부
-        작성 날짜: 2026/09/18
-        """
-        wait = self._buy_budget_waits.get(strategy)
-        if (wait is None or wait.reason is not RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT
-                or wait.fingerprint != self._buy_wait_fingerprint(strategy)
-                or self._clock() >= wait.retry_at or wait.quantity <= 0):
-            return False
-        preview = self._api_gateway.preview_cached_buy_quantity(quantity, price)
-        # 가격 변화로 수량 격자가 커지거나 최소 금액을 넘으면 30초를 기다리지 않는다.
-        return not (preview is not None and preview > (wait.preview_quantity or Decimal("0")))
-
-    def _block_buy_budget(self, action: SubmitOrder, client_id: str, decision: RiskDecision,
-                          quantity: Decimal, price: Decimal, *, prepared: bool = False,
-                          evaluated: bool = False) -> tuple[TradingEvent, ...]:
-        """
-        함수 이름: _block_buy_budget()
-        기능: 미전송 BUY를 정상 감시로 돌리고 반복 사유 로그를 합산한다.
-        인자: action/client_id -> 후보, decision -> 차단 판정, quantity/price -> 크기,
-            prepared -> 이번 실제 준비 수행 여부, evaluated -> 이미 판정 기록 여부
-        반환값: 제출 예산을 소비하지 않는 BUY_RISK_BLOCKED feedback
-        작성 날짜: 2026/09/18
-        """
-        reason = decision.block_reason
-        if decision.allowed or reason is None:
-            raise ValueError("a blocked buy decision is required")
-        fingerprint = self._buy_wait_fingerprint(action.strategy)
-        wait = self._buy_budget_waits.get(action.strategy)
-        changed = wait is None or wait.reason is not reason or wait.fingerprint != fingerprint
-        if changed:
-            self._clear_buy_budget_wait(action.strategy, "conditions_changed")
-            wait = _BuyBudgetWait(reason, fingerprint, self._clock() + timedelta(seconds=30),
-                                 quantity, self._api_gateway.preview_cached_buy_quantity(quantity, price))
-            self._buy_budget_waits[action.strategy] = wait
-            if not evaluated:
-                self._record_diagnostic("risk_evaluated", decision=decision)
-            self._record_diagnostic("buy_budget_wait_started", strategy=action.strategy, reason=reason,
-                                    retry_at=wait.retry_at)
-            self._append_order_trace_values("5.1", action.idempotency_key, client_id, None,
-                                            self._context.version, failure_code=OrderExecutionFailureCode(reason.value))
-        else:
-            wait.suppressed_count += 1
-            if prepared:
-                self._record_diagnostic("buy_budget_wait_rechecked", strategy=action.strategy,
-                                        reason=reason, suppressed_count=wait.suppressed_count)
-                wait.retry_at = self._clock() + timedelta(seconds=30)
-                wait.quantity = quantity
-                wait.preview_quantity = self._api_gateway.preview_cached_buy_quantity(quantity, price)
-        self._last_risk_decision = decision
-        self._unsubmitted_preparation_intent = None
-        self._preparation_retry_attempt = 0
-        self._preparation_retry_due_at = None
-        self._preparation_retry_intent = None
-        return (TradingEvent(
-            event_type=TradingEventType.BUY_RISK_BLOCKED, occurred_at=self._clock(),
-            priority=EventPriority.ORDER_OUTCOME,
-            event_id=f"{client_id}:risk:{reason.value}:{self._context.version}",
-            lower_event_id=self._context.runtime.lower_event_id, order_id=client_id,
-            payload=BuyRiskBlockedPayload(strategy=action.strategy, reason=reason),
-        ),)
-
-    def _clear_buy_budget_wait(self, strategy: StrategyType, reason: str) -> None:
-        """
-        함수 이름: _clear_buy_budget_wait()
-        기능: 해소·만료·종료 때 보류 한 건을 정리하고 억제 합계를 기록한다.
-        인자: strategy -> 정리 전략, reason -> 고정 종료 원인
-        반환값: 없음
-        작성 날짜: 2026/09/18
-        """
-        wait = self._buy_budget_waits.pop(strategy, None)
-        if wait is not None:
-            self._record_diagnostic("buy_budget_wait_finished", strategy=strategy, reason=reason,
-                                    suppressed_count=wait.suppressed_count)
-
-    def _buy_exposure(self, decision_price: Decimal) -> tuple[Decimal, Decimal, Decimal]:
-        """
-        함수 이름: _buy_exposure()
-        기능: 수량 제한과 최종 위험 검사에 같은 전략·잔여·미체결 노출을 제공한다.
-        인자: decision_price -> 동일 시장 평가에서 고정한 가격
-        반환값: 전략 평가액, 잔여 평가액, 미체결 BUY 예약액
-        작성 날짜: 2026/09/18
-        """
-        with localcontext() as decimal_context:
-            decimal_context.prec = 34
-            decimal_context.rounding = ROUND_HALF_EVEN
-            reserved = Decimal("0")
-            for state in self._order_states_by_client_id.values():
-                order = state.order
-                if order.side is OrderSide.BUY and not order.is_terminal:
-                    reserved += max(Decimal("0"), order.submitted_quantity - order.filled_quantity) * order.market_price_at_decision
-            return (self._require_position().quantity * decision_price,
-                    self.residual_totals[0] * decision_price, reserved)
-
-    def _limit_buy_quantity(self, quantity: Decimal, price: Decimal) -> Decimal:
-        """
-        함수 이름: _limit_buy_quantity()
-        기능: 기존 주문 희망량을 정책 단건 상한과 잔여 누적 예산 이하로 내린다.
-        인자: quantity -> 잔고·분할·기존 단건 상한으로 계산한 수량, price -> 결정 가격
-        반환값: 필터 적용 전 수량 또는 소진된 예산의 0
-        작성 날짜: 2026/09/18
-        """
-        policy = self._risk_policy_state
-        if not isinstance(policy, RiskPolicy):
-            return quantity  # 정책 부재는 preflight 위험 검사가 구분한다.
-        strategy, residual, reserved = self._buy_exposure(price)
-        with localcontext() as decimal_context:
-            decimal_context.prec = 34
-            decimal_context.rounding = ROUND_HALF_EVEN
-            remaining = None if policy.max_position_notional is None else max(
-                Decimal("0"), policy.max_position_notional - (strategy + residual) - reserved,
-            )
-            decimal_context.rounding = ROUND_DOWN
-            for limit in (policy.max_order_notional, remaining):
-                if limit is not None:
-                    quantity = min(quantity, limit / price)
-            return quantity
-
-    def _evaluate_buy_order_risk(self, order: Order, *, requested_order_notional: Decimal | None = None) -> RiskDecision:
+    def _evaluate_buy_order_risk(self, order: Order) -> RiskDecision:
         """
         함수 이름: _evaluate_buy_order_risk()
-        기능: 필터 후 실제 수량을 재검사하고 판정 시점의 예산을 보존한다.
-        인자: order -> journal 이전 BUY, requested_order_notional -> 예산 조정 전 금액
-        반환값: 최종 불변 위험 판정
-        작성 날짜: 2026/09/18
+        기능: filter 뒤 BUY와 current Position·예약·KST 손실을 한 RiskBudgetSnapshot으로 평가한다.
+        인자: order -> 아직 journal이나 Gateway에 전달하지 않은 BUY Order
+        반환값: 순수 RiskPolicy gate가 만든 RiskDecision
+        작성 날짜: 2026/08/24
         """
-        if not isinstance(order, Order) or order.side is not OrderSide.BUY:
-            raise ValueError("risk evaluation requires a BUY Order")
-        budget = self._build_buy_risk_budget(order.market_price_at_decision, order.submitted_quantity,
-                                            requested_order_notional=requested_order_notional)
-        decision = evaluate_buy_risk(self._risk_policy_state, budget)
-        self._last_risk_decision = decision
-        self._record_diagnostic("risk_evaluated", order=order, decision=decision)
-        return decision
+        # Journal 이전 gate는 exact BUY Order만 받아 다른 side의 cleanup 경로를 방해하지 않는다.
+        if not isinstance(order, Order):
+            raise TypeError("order must be an Order")
+        if order.side is not OrderSide.BUY:
+            raise ValueError("risk evaluation is available only for BUY orders")
 
-    def _build_buy_risk_budget(self, decision_price: Decimal, quantity: Decimal,
-                               *, requested_order_notional: Decimal | None = None) -> RiskBudgetSnapshot:
-        """
-        함수 이름: _build_buy_risk_budget()
-        기능: 주문 객체가 없는 예산 부족도 같은 시각·노출·손실 산식으로 설명한다.
-        인자: decision_price -> 결정 가격, quantity -> 후보 수량, requested_order_notional -> 조정 전 금액
-        반환값: 위험 예산 스냅샷
-        작성 날짜: 2026/09/18
-        """
         # Position·history·market 값은 session RLock을 보유한 caller의 동일 원자 snapshot에서 읽는다.
         position = self._require_position()
         history_controller = self._require_trade_history_controller()
         position_state = position.get_snapshot()
+        decision_price = order.market_price_at_decision
         current_time = self._clock()
         if not isinstance(current_time, datetime):
             raise TypeError("clock result must be a datetime")
@@ -7740,7 +7040,21 @@ class TradingController:
             raise ValueError("clock result must use UTC")
         current_kst_date = current_time.astimezone(_KOREA_TIME_ZONE).date()
 
-        strategy_notional, residual_notional, reserved_buy_notional = self._buy_exposure(decision_price)
+        # Active·UNKNOWN·PREPARED BUY의 미체결 수량만 후보 외 예약 예산으로 합산한다.
+        reserved_buy_notional = Decimal("0")
+        for state in self._order_states_by_client_id.values():
+            reserved_order = state.order
+            if reserved_order.side is not OrderSide.BUY or reserved_order.is_terminal:
+                continue
+            remaining_quantity = (
+                reserved_order.submitted_quantity
+                - reserved_order.filled_quantity
+            )
+            if remaining_quantity > Decimal("0"):
+                reserved_buy_notional += (
+                    remaining_quantity
+                    * reserved_order.market_price_at_decision
+                )
 
         # Durable KST 당일 SELL만 실현손익에 포함하고 BUY/null field는 계산 대상에서 제외한다.
         daily_realized_pnl = Decimal("0")
@@ -7758,9 +7072,12 @@ class TradingController:
         # Decimal128 계산 context로 ambient precision과 무관한 누적 exposure·PnL을 고정한다.
         with localcontext() as decimal_context:
             decimal_context.prec = 34
-            decimal_context.rounding = ROUND_HALF_EVEN
-            current_position_notional = strategy_notional + residual_notional
-            candidate_order_notional = quantity * decision_price
+            current_position_notional = (
+                (position_state.quantity + self.residual_totals[0]) * decision_price
+            )
+            candidate_order_notional = (
+                order.submitted_quantity * decision_price
+            )
             projected_position_notional = (
                 current_position_notional
                 + reserved_buy_notional
@@ -7782,14 +7099,7 @@ class TradingController:
                 scoped_pnl += unrealized_pnl
             daily_loss = max(-scoped_pnl, Decimal("0"))
 
-        maximum_position = policy_state.max_position_notional if isinstance(policy_state, RiskPolicy) else None
-        with localcontext() as decimal_context:
-            decimal_context.prec = 34
-            decimal_context.rounding = ROUND_HALF_EVEN
-            remaining_position = None if maximum_position is None else max(
-                Decimal("0"), maximum_position - current_position_notional - reserved_buy_notional,
-            )
-        return RiskBudgetSnapshot(
+        budget = RiskBudgetSnapshot(
             policy_version=self._session_risk_policy_version,
             market_version=(
                 self._latest_market_evaluation_version
@@ -7806,13 +7116,11 @@ class TradingController:
             unrealized_pnl=unrealized_pnl,
             daily_loss=daily_loss,
             manual_kill_active=self._manual_kill_active,
-            evaluated_at=current_time,
-            strategy_position_notional=strategy_notional,
-            residual_position_notional=residual_notional,
-            remaining_position_notional=remaining_position,
-            requested_order_notional=requested_order_notional,
-            max_position_notional=maximum_position,
         )
+        decision = evaluate_buy_risk(policy_state, budget)
+        self._last_risk_decision = decision
+        self._record_diagnostic("risk_evaluated", order=order, decision=decision)
+        return decision  # frozen decision은 UI publication과 fault trace가 같은 budget을 재사용한다.
 
     def _calculate_order_quantity(
         self,
@@ -8038,19 +7346,10 @@ class TradingController:
 
         # apply/reapply 전체를 예외 경계로 묶어 충돌 시 거래소 사실을 임의 보정하지 않는다.
         order = state.order
-        if self._session_recovery_notifier is not None and result.retry_after is not None:
-            due = self._clock() + result.retry_after
-            previous = self._session_recovery_order_not_before.get(order.client_order_id, due)
-            self._session_recovery_order_not_before[order.client_order_id] = max(previous, due)
-        if (self._session_recovery_notifier is not None
-                and (state.persistence_pending or state.pending_recovery_pending)
-                and _order_result_replays_applied_fills(result, order)):
-            return ()  # 적용한 체결의 늦은 부분 알림은 기존 저장 복구를 퇴행시키지 않는다.
         message_id = "7" if initial else "9"
         version_before = self._context.version
         completed_durable_terminal_replay = False
         completed_durable_stale_no_fill_replay = False
-        completed_durable_partial_replay = False
 
         # Testnet reset의 숫자 order ID 재사용은 새 client execution을 Position에 적용하기 전에 막는다.
         if result.exchange_order_id is not None:
@@ -8099,15 +7398,6 @@ class TradingController:
                 and result.client_order_id == durable_trade.client_order_id
                 and result.symbol == durable_trade.symbol
             )
-            if completed_durable_state and result.status is OrderStatus.PARTIALLY_FILLED:
-                completed_durable_partial_replay = _order_result_replays_applied_fills(result, order)
-                if not completed_durable_partial_replay:
-                    self._enter_order_reconciliation(
-                        state,
-                        OrderExecutionFailureCode.ORDER_RESULT_INVALID,
-                        message_id=message_id,
-                    )
-                    return ()  # 알 수 없거나 변경된 fill은 완료 Order와 삭제된 journal을 변경하지 않는다.
             if (
                 durable_trade is not None
                 and result.status in TERMINAL_ORDER_STATUSES
@@ -8126,10 +7416,9 @@ class TradingController:
         if (
             completed_durable_terminal_replay
             or completed_durable_stale_no_fill_replay
-            or completed_durable_partial_replay
         ):
-            # History와 REMOVE가 완료된 주문의 중복 알림은 Order·Position·journal을 다시 갱신하지 않는다.
-            return ()  # 검증된 과거 부분 체결도 다음 시장 평가와 보유 관리를 중단시키지 않는다.
+            # REST FULL이 먼저 끝난 뒤 도착한 같은 주문의 과거 NEW와 terminal replay는 durable 사실을 되돌리지 않는다.
+            return ()  # 회계 불일치 terminal과 fill이 있는 비terminal 결과는 위 보수적 재조정 경계를 유지한다.
         try:
             if initial:
                 order.apply_order_result(result)
@@ -8190,8 +7479,6 @@ class TradingController:
                 result.retry_after,
                 scheduled_from=schedule_from,
             )
-            if result.status is OrderStatus.UNKNOWN and self._session_recovery_notifier is not None:
-                self._enter_order_reconciliation(state, OrderExecutionFailureCode.GATEWAY_REQUEST_FAILED, message_id=None)
             return ()
 
         # terminal zero-fill은 Trade 없이 같은 intent retry가 가능한 concrete 실패로 끝낸다.
@@ -9450,12 +8737,11 @@ class TradingController:
                 )
             )
             self._context.apply_runtime_patch(patch(trading_phase=phase))
-            if not self._session_recovery_in_progress and not self._session_recovery_issues:
-                self._status = (
-                    TradingSessionStatus.STOPPING
-                    if state.force_sell or state.stop_after_reconciliation
-                    else TradingSessionStatus.RUNNING
-                )
+            self._status = (
+                TradingSessionStatus.STOPPING
+                if state.force_sell or state.stop_after_reconciliation
+                else TradingSessionStatus.RUNNING
+            )  # 저장 lock 해소를 먼저 publish해 후속 residual submit이 자체 차단되지 않게 한다.
             outcomes = self._complete_terminal_after_history(state)
             return self._enqueue_order_outcomes(outcomes)
 
@@ -9605,7 +8891,6 @@ class TradingController:
                     selected_cause_category = (
                         ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
                     )
-            self._register_session_recovery_issue(selected_cause_category, failure_code, state)
             self._record_reconciliation_cause_locked(selected_cause_category)
             self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
             self._record_diagnostic(
@@ -9939,9 +9224,6 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
-        for strategy in tuple(self._buy_budget_waits):
-            self._clear_buy_budget_wait(strategy, "session_closed")
-
         # close callback이 Controller에 재진입해도 같은 자원을 두 번 정리하지 않는다.
         if self._cleanup_in_progress:
             return

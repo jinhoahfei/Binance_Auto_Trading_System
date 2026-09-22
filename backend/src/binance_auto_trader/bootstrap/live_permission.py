@@ -1,19 +1,15 @@
 """Live root의 Gateway에 필요한 read surface와 policy-bound mutation permission만 노출한다."""
 
 from decimal import Decimal, localcontext
-from datetime import datetime, timezone
+
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
+from binance_auto_trader.adapters.binance.mappers import SymbolFilterError
 from binance_auto_trader.adapters.binance.read_facade import BinanceReadOnlyRESTFacade
 from binance_auto_trader.bootstrap.live_configuration import (
     LiveConfiguration, LiveConfigurationError, LIVE_NOTIONAL_CAP, LIVE_POLICY_VERSION,
 )
 from binance_auto_trader.domain.trading.order import Order, OrderResult
 from binance_auto_trader.domain.trading.states import OrderSide, ExitReason
-
-_ACCOUNTING_SUPPORTED_FEE_ASSETS = frozenset({"ETH", "USDT"})
-
-
-from binance_auto_trader.adapters.binance.mappers import SymbolFilterError
 
 
 class _LiveOrderLimitError(LiveConfigurationError, SymbolFilterError):
@@ -31,13 +27,18 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
     작성 날짜: 2026/09/08
     """
 
-    def __init__(self, delegate: object, configuration: LiveConfiguration, *, base_fee_residual_enabled: bool = False, bnb_fee_accounting_enabled: bool = False) -> None:
+    def __init__(
+        self,
+        delegate: object,
+        configuration: LiveConfiguration,
+        *,
+        base_fee_residual_enabled: bool = False,
+    ) -> None:
         """
         함수 이름: __init__()
         기능: live validator가 승인한 immutable 설정을 전용 REST delegate와 결속한다.
         인자: delegate -> fixed live REST client, configuration -> 검증된 live 설정,
             base_fee_residual_enabled -> root가 durable 잔여 정책을 조립했는지 여부
-            bnb_fee_accounting_enabled -> v3 fill 회계와 WS 평가를 결속했는지 여부
         반환값: 없음
         작성 날짜: 2026/09/08
         """
@@ -46,15 +47,35 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
             raise LiveConfigurationError("enabled live configuration required")
         if type(base_fee_residual_enabled) is not bool:
             raise TypeError("residual policy flag must be bool")
-        if type(bnb_fee_accounting_enabled) is not bool:
-            raise TypeError("BNB accounting flag must be bool")
-        if bnb_fee_accounting_enabled and not callable(getattr(delegate, "resolve_bnb_fee", None)):
-            raise TypeError("BNB accounting requires a valuation resolver")
-        self._bnb_fee_accounting_enabled = bnb_fee_accounting_enabled
         self._base_fee_residual_enabled = base_fee_residual_enabled
         self._delegate = delegate
         self._allow_orders = configuration.allow_live_orders
         self._maximum_order_notional = configuration.max_notional
+
+    def _require_spot_fee_policy(self, order: Order) -> None:
+        """
+        함수 이름: _require_spot_fee_policy()
+        기능: 할인 자산 미사용과 편도 0.1% 및 ETH 수수료 잔여 회계를 검증한다.
+        인자: order -> 준비 또는 제출할 canonical 주문
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        # 실제 계정 설정이 달라졌다면 추정 수수료로 주문하지 않고 사전에 차단한다.
+        commission_policy = APIGateway(
+            self._delegate
+        ).fetch_commission_discount_policy(order.symbol)
+        if commission_policy.can_charge_discount_asset:
+            raise LiveConfigurationError(
+                "live spot fee policy requires discount asset payment disabled"
+            )
+        if not commission_policy.matches_spot_fee_policy:
+            raise LiveConfigurationError(
+                "live spot fee policy requires 0.1% commission on BUY and SELL"
+            )
+        if order.side is OrderSide.BUY and not self._base_fee_residual_enabled:
+            raise LiveConfigurationError(
+                "base fee requires durable residual settlement"
+            )
 
     def _require_order_permission(self, order: Order) -> None:
         """
@@ -119,28 +140,8 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
         )
         decision_price = order.market_price_at_decision  # cap 계산은 이후 mutable 객체가 아닌 event claim을 쓴다.
 
-        # 공식 signed commission 설정을 매 attempt 전에 확인해 제3 자산 fill을 주문 전에 막는다.
-        commission_policy = APIGateway(
-            self._delegate
-        ).fetch_commission_discount_policy(order.symbol)
-        if (
-            commission_policy.can_charge_discount_asset
-            and commission_policy.discount_asset
-            not in _ACCOUNTING_SUPPORTED_FEE_ASSETS
-            and not (commission_policy.discount_asset == "BNB" and self._bnb_fee_accounting_enabled)
-        ):
-            raise LiveConfigurationError(
-                "live commission policy permits an unsupported fee asset"
-            )
-
-        # BNB 정책은 가격 근거 조회도 제출 전에 검사하되 실제 비용은 체결 시각으로 다시 평가한다.
-        if commission_policy.can_charge_discount_asset and commission_policy.discount_asset == "BNB":
-            self._delegate.resolve_bnb_fee(datetime.now(timezone.utc))
-
-        # ETH BUY fee는 live root의 durable sub-step 잔여 장부가 보존한다.
-        # BNB 등 제3 자산 차단은 위에서 유지하며 Testnet 정책에는 적용하지 않는다.
-        if order.side is OrderSide.BUY and commission_policy.market_buy_received_asset_commission_rate > 0 and not self._base_fee_residual_enabled:
-            raise LiveConfigurationError("base fee requires durable residual settlement")
+        # BNB 가격이나 잔액 대신 공식 비할인 현물 수수료 정책만 검사한다.
+        self._require_spot_fee_policy(order)
 
         prepared_order = prepare_order(order=order)
         if not isinstance(prepared_order, Order):
@@ -162,6 +163,7 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
             prepared_order.side is OrderSide.SELL
             and prepared_order.exit_reason is ExitReason.STOP
         ):
+            self._require_spot_fee_policy(prepared_order)
             return prepared_order
 
         final_quantity = prepared_order.submitted_quantity
@@ -191,17 +193,19 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
                 "prepared live order exceeds the configured or absolute cap"
             )
 
+        # 마지막 읽기 검증도 journal 전에 끝내 조회 실패·종료 요청을 미제출 상태로 처리한다.
+        self._require_spot_fee_policy(prepared_order)
         return prepared_order  # journal 이전 마지막 bootstrap 경계가 final 수량과 immutable 가격을 결속한다.
 
     def submit_order(self, *, order: Order) -> OrderResult:
         """
         함수 이름: submit_order()
-        기능: version·cap 재검증 뒤 준비 완료 주문만 REST에 전달한다.
+        기능: 추가 조회 없이 version·cap을 재검증하고 준비 완료 주문만 REST에 전달한다.
         인자: order -> durable journal에 기록된 주문
         반환값: 정규화 주문 결과
         작성 날짜: 2026/09/08
         """
-        # Prepare 이후 mutation이나 policy drift도 최종 submit 전에 거부한다.
+        # 수수료 조회는 journal 전 prepare에서 끝내고 여기서는 로컬 권한만 재검증한다.
         self._require_order_permission(order)
         return self._delegate.submit_order(order=order)
 

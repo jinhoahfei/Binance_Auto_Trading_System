@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from binance_auto_trader.bootstrap import start_application
 from binance_auto_trader.domain.common import RegimeType
-from binance_auto_trader.adapters.binance.bnb_fee_valuator import BnbValuationInvalidError
+from binance_auto_trader.adapters.binance.mappers import BinancePayloadError
 from binance_auto_trader.sidecar_stdio import run_stdio_sidecar_process
 from tests.integration.test_deterministic_production_path_case2_flow import _create_deterministic_production_path_fixture
 from tests.integration.test_buy_sell_flow import _execute_case_b_buy
@@ -19,7 +19,21 @@ from tests.integration.test_shutdown_preparation import ShutdownExchange, _submi
 
 
 def create_factory(configuration):
+    """
+    함수 이름: create_factory()
+    기능: 수수료 응답 오류 또는 잔여 청산을 검증할 로컬 runtime 생성 함수를 만든다.
+    인자: configuration -> 테스트 sidecar 설정
+    반환값: 외부 주문을 수행하지 않는 runtime 생성 함수
+    작성 날짜: 2026/09/22
+    """
     def factory(*_observers):
+        """
+        함수 이름: factory()
+        기능: 저장소와 메모리 거래소에 종료 시나리오를 구성한다.
+        인자: _observers -> 테스트에서 사용하지 않는 publication callback
+        반환값: 종료 경로를 재현하는 application runtime
+        작성 날짜: 2026/09/22
+        """
         f = _create_deterministic_production_path_fixture(str(Path(configuration.history_path).parent))
         client = f.rest_client
         for balance in client.account_payload['balances']:
@@ -62,7 +76,7 @@ def create_factory(configuration):
             state.pending_recovery_pending = True
             c._enter_order_reconciliation(state, OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED, message_id=None)
         elif not earn:
-            with patch.object(c._api_gateway, 'prepare_order', side_effect=BnbValuationInvalidError('fixture candle')):
+            with patch.object(c._api_gateway, 'prepare_order', side_effect=BinancePayloadError('fixture commission')):
                 _execute_case_b_buy(SimpleNamespace(controller=c), 'unsubmitted-fixture-price-intent')
         c.mark_event_runtime_failed()
         assert not client.submitted_orders

@@ -1265,7 +1265,6 @@ def create_application_runtime(
     _live_order_capability: object | None = None,
     live_maximum_order_notional: Decimal | None = None,
     residual_settlement: object | None = None,
-    bnb_fee_resolver: object | None = None,
     account_update_observer: Callable[[Account], object] | None = None,
     trade_history_update_observer: Callable[[Trade, Performance], object]
     | None = None,
@@ -1286,7 +1285,6 @@ def create_application_runtime(
     인자: rest_client -> Kline과 account payload를 제공할 REST client
         web_socket_client -> Kline과 account 구독을 제공할 WebSocket client
         residual_settlement -> live 전용 durable 잔여 정책 또는 None
-        bnb_fee_resolver -> live BNB 체결 평가 조회 함수 또는 None
         history_path -> local JSONL storage 경로 또는 None
         history_repository -> 주입할 TradeHistory repository port 또는 None
         execution_mode -> fail-closed parser에 전달할 외부 mode 값
@@ -1376,8 +1374,6 @@ def create_application_runtime(
     # Application lock과 entity를 만들며 실행 mode도 gate 조립 전에 canonicalize한다.
     application_lock = RLock()
     selected_execution_mode = parse_execution_mode(execution_mode)
-    if bnb_fee_resolver is not None and (selected_execution_mode is not ExecutionMode.LIVE or not callable(bnb_fee_resolver)):
-        raise ValueError("BNB resolver is only available in the live root")
     if residual_settlement is not None and selected_execution_mode is not ExecutionMode.LIVE:
         raise ValueError("residual policy is only available in the live root")
     # 시세 출처는 연결 여부와 별도로 보존해 UI가 LIVE 표시로 계좌 환경을 추측하지 않게 한다.
@@ -1593,7 +1589,6 @@ def create_application_runtime(
         account_snapshot_callback=apply_account_stream_snapshot,
         order_result_callback=apply_order_stream_result,
         reconciliation_required_callback=require_stream_reconciliation,
-        bnb_fee_resolver=bnb_fee_resolver,
         market_diagnostic_callback=diagnostics.record,
     )
 

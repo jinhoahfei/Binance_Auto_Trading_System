@@ -3,7 +3,7 @@
 from binance_auto_trader.adapters.binance.mappers import (
     OrderPreparationFilterEvidence, OrderSubmissionAttemptEvidence, ReferencePrice, SymbolTradingRules,
 )
-from binance_auto_trader.domain.trading.order import Order, OrderResult
+from binance_auto_trader.domain.trading.order import Fill, Order, OrderResult
 from binance_auto_trader.domain.trading.account_execution import AccountExecution
 
 
@@ -15,6 +15,31 @@ class BinanceReadOnlyRESTFacade:
     """
 
     __slots__ = ()  # Credential과 delegate 저장 책임은 mode별 adapter에 남긴다.
+
+    def restore_historical_fee_fills(
+        self,
+        *,
+        symbol: str,
+        client_order_id: str,
+        exchange_order_id: str,
+        fills: tuple[Fill, ...],
+    ) -> None:
+        """
+        함수 이름: restore_historical_fee_fills()
+        기능: 검증된 과거 체결 근거를 delegate의 동일 주문 읽기 복구에 전달한다.
+        인자: symbol -> 저장 거래 symbol
+            client_order_id -> 원 client 주문 ID
+            exchange_order_id -> 거래소 주문 ID
+            fills -> 검증된 v3/v4 저장 체결 tuple
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        self._delegate.restore_historical_fee_fills(
+            symbol=symbol,
+            client_order_id=client_order_id,
+            exchange_order_id=exchange_order_id,
+            fills=fills,
+        )
 
     def preview_cached_buy_quantity(self, *, symbol, quantity, price):
         """

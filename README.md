@@ -5,6 +5,11 @@ REST/WebSocket adapter, authenticated read-only, 10 USDT BUY 진입 cap lifecycl
 cold-restart 복구 검증을 완료했습니다. 기본 실행은 fail-closed이며 `live` 주문은 Phase 13의
 별도 승인 전까지 잠겨 있습니다.
 
+신규 현물 거래는 **BNB 납부 없이 매수·매도 각각 0.1%**를 사용합니다. 주문 전에는
+할인 자산 납부 미적용과 양방향 비할인 수수료율 `0.001`을 확인하며 BNB 잔액·가격을
+거래 전제조건으로 삼지 않습니다. 실제 체결 수수료와 과거 BNB 거래 이력은 원래 값으로
+보존합니다. 현재 기준은 [현물 수수료 정책](SPOT_FEE_POLICY.md)입니다.
+
 ## 안전 원칙
 
 - 평상시 검증은 `disabled` 또는 `fake` mode를 사용합니다.

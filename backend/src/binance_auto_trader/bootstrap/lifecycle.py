@@ -444,6 +444,15 @@ def _start_history_and_performance(runtime: ApplicationRuntime) -> None:
 
     # History가 authoritative local 기준으로 publish된 뒤에만 Binance 주문과 Position을 대조한다.
     try:
+        # 과거 BNB 평가는 검증된 저장 체결에 한해 재사용하고 새 시세를 조회하지 않는다.
+        for trade in runtime.trade_history.trades:
+            if any(fill.fee_asset == "BNB" for fill in trade.fee_fills):
+                runtime.api_gateway.restore_historical_fee_fills(
+                    symbol=trade.symbol,
+                    client_order_id=trade.client_order_id,
+                    exchange_order_id=trade.order_id,
+                    fills=trade.fee_fills,
+                )
         runtime.trading_controller.reconcile_startup_state()
     except Exception as error:
         failure = _create_failure(

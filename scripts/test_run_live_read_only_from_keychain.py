@@ -1,11 +1,13 @@
 """Live read-only runner의 credential 격리·출력 안전성과 GET 전용 보고를 검증한다."""
 
 from contextlib import redirect_stdout
+from decimal import Decimal
 from io import StringIO
 import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -65,8 +67,6 @@ class LiveKeychainRunnerTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/09/08
         """
-        from decimal import Decimal
-
         rest = Mock()
         gateway = Mock()
         gateway.fetch_account_snapshot.return_value.balances = ()
@@ -77,6 +77,7 @@ class LiveKeychainRunnerTests(unittest.TestCase):
         commission = gateway.fetch_commission_discount_policy.return_value
         commission.can_charge_discount_asset = False
         commission.market_buy_received_asset_commission_rate = Decimal("0.001")
+        commission.market_sell_received_asset_commission_rate = Decimal("0.001")
         configuration = LiveConfiguration("key", "secret", enabled=True, confirmation="LIVE")
         with patch.object(runner, "BinanceLiveRESTClient", return_value=rest), patch.object(runner, "APIGateway", return_value=gateway):
             report = runner.run_preflight(configuration)
@@ -95,9 +96,6 @@ class LiveKeychainRunnerTests(unittest.TestCase):
         반환값: 없음
         작성 날짜: 2026/09/08
         """
-        from decimal import Decimal
-        from types import SimpleNamespace
-
         gateway = Mock()
         rules = gateway.fetch_symbol_trading_rules.return_value
         rules.symbol = "ETHUSDT"
@@ -109,7 +107,8 @@ class LiveKeychainRunnerTests(unittest.TestCase):
         gateway.has_any_exchange_open_order_lists.return_value = False
         commission = gateway.fetch_commission_discount_policy.return_value
         commission.can_charge_discount_asset = False
-        commission.market_buy_received_asset_commission_rate = Decimal("0")
+        commission.market_buy_received_asset_commission_rate = Decimal("0.001")
+        commission.market_sell_received_asset_commission_rate = Decimal("0.001")
         configuration = LiveConfiguration("key", "secret", enabled=True, confirmation="LIVE")
 
         # 정확한 하한만 통과시키고 상한 주문 가능성이나 수수료 여유까지 증명했다고 주장하지 않는다.
@@ -139,29 +138,99 @@ class LiveKeychainRunnerTests(unittest.TestCase):
         self.assertNotIn("live-secret-canary", output.getvalue())
         self.assertEqual(json.loads(output.getvalue())["order_mutations"], 0)
 
-    def test_bnb_failure_reports_only_allowlisted_reason(self) -> None:
+    def test_preflight_rejects_discount_payment_without_bnb_valuation(self) -> None:
         """
-        함수 이름: test_bnb_failure_reports_only_allowlisted_reason()
-        기능: BNB 실패 이유를 구분하되 credential이 포함된 미지의 예외는 고정 값으로 숨긴다.
+        함수 이름: test_preflight_rejects_discount_payment_without_bnb_valuation()
+        기능: BNB 할인 납부는 평가 조회 없이 차단하고 양방향 표준 수수료 조건을 독립 확인한다.
         인자: 없음
         반환값: 없음
-        작성 날짜: 2026/09/09
+        작성 날짜: 2026/09/22
+        """
+        gateway = self._create_ready_gateway()
+        gateway.fetch_commission_discount_policy.return_value.can_charge_discount_asset = True
+        configuration = LiveConfiguration("key", "secret", enabled=True, confirmation="LIVE")
+        rest = Mock()
+        with patch.object(runner, "BinanceLiveRESTClient", return_value=rest), patch.object(runner, "APIGateway", return_value=gateway):
+            report = runner.run_preflight(configuration)
+        self.assertEqual(report["read_only_preflight"], "PASS")
+        self.assertEqual(report["pilot_prerequisites"], "NO_GO")
+        self.assertEqual(report["blockers"], ["discount_asset_payment_disabled"])
+        self.assertNotIn("bnb_fee_valuation", report["checks"])
+        rest.resolve_bnb_fee.assert_not_called()
+        rest.submit_order.assert_not_called()
+        rest.cancel_order.assert_not_called()
+
+    def test_preflight_requires_exact_fee_rate_on_both_order_sides(self) -> None:
+        """
+        함수 이름: test_preflight_requires_exact_fee_rate_on_both_order_sides()
+        기능: 매수와 매도의 0·할인·추가 수수료를 각각 0.1% 정책 불일치로 보고한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        configuration = LiveConfiguration("key", "secret", enabled=True, confirmation="LIVE")
+        for order_side in ("buy", "sell"):
+            for commission_rate in ("0", "0.00075", "0.002"):
+                with self.subTest(order_side=order_side, commission_rate=commission_rate):
+                    gateway = self._create_ready_gateway()
+                    commission = gateway.fetch_commission_discount_policy.return_value
+                    setattr(
+                        commission,
+                        f"market_{order_side}_received_asset_commission_rate",
+                        Decimal(commission_rate),
+                    )
+                    with patch.object(runner, "BinanceLiveRESTClient"), patch.object(runner, "APIGateway", return_value=gateway):
+                        report = runner.run_preflight(configuration)
+                    self.assertEqual(report["read_only_preflight"], "PASS")
+                    self.assertEqual(report["pilot_prerequisites"], "NO_GO")
+                    self.assertEqual(report["blockers"], [f"market_{order_side}_fee_rate_matches_policy"])
+
+    def test_preflight_fee_policy_does_not_depend_on_bnb_balance_or_price(self) -> None:
+        """
+        함수 이름: test_preflight_fee_policy_does_not_depend_on_bnb_balance_or_price()
+        기능: BNB 잔액이 없거나 변해도 가격 조회 없이 현물 0.1% 정책이 통과함을 확인한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        configuration = LiveConfiguration("key", "secret", enabled=True, confirmation="LIVE")
+        for bnb_balance in (None, "0", "1"):
+            with self.subTest(bnb_balance=bnb_balance):
+                gateway = self._create_ready_gateway()
+                if bnb_balance is not None:
+                    gateway.fetch_account_snapshot.return_value.balances += (
+                        SimpleNamespace(asset="BNB", free=Decimal(bnb_balance)),
+                    )
+                rest = Mock()
+                rest.resolve_bnb_fee.side_effect = ValueError("secret-canary signed URL")
+                with patch.object(runner, "BinanceLiveRESTClient", return_value=rest), patch.object(runner, "APIGateway", return_value=gateway):
+                    report = runner.run_preflight(configuration)
+                self.assertEqual(report["pilot_prerequisites"], "PASS")
+                self.assertEqual(report["blockers"], [])
+                self.assertNotIn("bnb_fee_valuation_failure", report)
+                self.assertNotIn("balances", report)
+                self.assertNotIn("secret-canary", json.dumps(report))
+                rest.resolve_bnb_fee.assert_not_called()
+
+    def _create_ready_gateway(self) -> Mock:
+        """
+        함수 이름: _create_ready_gateway()
+        기능: 주문·외부 조회 없이 기본 현물 수수료 정책과 사전 검사 조건을 만족하는 대역을 만든다.
+        인자: 없음
+        반환값: USDT 잔액·양방향 0.1% 수수료·미체결 없음이 설정된 Gateway 대역
+        작성 날짜: 2026/09/22
         """
         gateway = Mock()
-        gateway.fetch_account_snapshot.return_value.balances = ()
+        gateway.fetch_account_snapshot.return_value.balances = (
+            SimpleNamespace(asset="USDT", free=Decimal("5")),
+        )
         gateway.fetch_symbol_trading_rules.return_value.symbol = "ETHUSDT"
         gateway.fetch_symbol_trading_rules.return_value.notional_filters = ()
-        gateway.fetch_commission_discount_policy.return_value.can_charge_discount_asset = True
-        gateway.fetch_commission_discount_policy.return_value.discount_asset = "BNB"
-        configuration = LiveConfiguration("key", "secret", enabled=True, confirmation="LIVE")
-
-        # 알려진 무체결과 외부 예외를 각각 검사하고 둘 다 pilot을 차단하는지 확인한다.
-        for reason, expected in (("BNB valuation requires actual market trades", "NO_TRADES_AFTER_BOUNDED_READS"), ("secret-canary signed URL", "UNCLASSIFIED_REDACTED")):
-            rest = Mock()
-            rest.resolve_bnb_fee.side_effect = ValueError(reason)
-            with patch.object(runner, "BinanceLiveRESTClient", return_value=rest), patch.object(runner, "APIGateway", return_value=gateway):
-                report = runner.run_preflight(configuration)
-            self.assertEqual(report["bnb_fee_valuation_failure"], expected)
-            self.assertIn("bnb_fee_valuation", report["blockers"])
-            self.assertEqual(report["pilot_prerequisites"], "NO_GO")
-            self.assertNotIn("secret-canary", json.dumps(report))  # 원 예외는 JSON에 반영하지 않는다.
+        gateway.has_any_exchange_open_orders.return_value = False
+        gateway.has_any_exchange_open_order_lists.return_value = False
+        commission = gateway.fetch_commission_discount_policy.return_value
+        commission.discount_asset = "BNB"
+        commission.can_charge_discount_asset = False
+        commission.market_buy_received_asset_commission_rate = Decimal("0.001")
+        commission.market_sell_received_asset_commission_rate = Decimal("0.001")
+        return gateway

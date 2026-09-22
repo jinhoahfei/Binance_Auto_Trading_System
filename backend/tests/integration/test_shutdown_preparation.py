@@ -10,7 +10,7 @@ from time import monotonic, sleep
 import unittest
 from unittest.mock import Mock, patch as mock_patch
 
-from binance_auto_trader.adapters.binance.bnb_fee_valuator import BnbValuationUnavailableError, BnbValuationInvalidError
+from binance_auto_trader.adapters.binance.mappers import BinancePayloadError
 from binance_auto_trader.application.shutdown_recovery import prepare_shutdown_cycle, ShutdownPreparationBlocked
 from binance_auto_trader.bootstrap import start_application, ApplicationStatus
 from binance_auto_trader.bootstrap.lifecycle import request_application_shutdown, ShutdownBlockedError
@@ -168,6 +168,13 @@ class ShutdownPreparationTests(unittest.TestCase):
 
 class OrderPreparationTests(unittest.TestCase):
     def test_temporary_failures_use_one_backoff_and_no_submission_budget(self):
+        """
+        함수 이름: test_temporary_failures_use_one_backoff_and_no_submission_budget()
+        기능: 일시적인 준비 조회 장애가 주문 없이 하나의 재시도만 예약하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
         with TemporaryDirectory() as directory:
             f = _create_buy_flow_fixture(directory, FakeOrderScenario.IMMEDIATE_FILLED)
             try:
@@ -176,7 +183,7 @@ class OrderPreparationTests(unittest.TestCase):
                     root_state=RootState.TRADE_MANAGEMENT, ownership_state=OwnershipState.NO_POSITION,
                     case_b_signal_state=CaseBSignalState.B_POSITION_OPEN_SIGNALLED,
                     case_c_signal_state=CaseCSignalState.C_WAIT_SETUP)
-                with mock_patch.object(f.controller._api_gateway, 'prepare_order', side_effect=BnbValuationUnavailableError('empty')):
+                with mock_patch.object(f.controller._api_gateway, 'prepare_order', side_effect=OSError('empty')):
                     for attempt, seconds in enumerate((1,2,5,10,30,30)):
                         outcomes = _execute_case_b_buy(f, 'same-intent')
                         self.assertEqual(len(outcomes), 1)
@@ -195,10 +202,17 @@ class OrderPreparationTests(unittest.TestCase):
             finally: f.controller.close_session_resources()
 
     def test_invalid_payload_is_not_reported_as_symbol_filter(self):
+        """
+        함수 이름: test_invalid_payload_is_not_reported_as_symbol_filter()
+        기능: 잘못된 수수료 응답이 filter 거절로 오인되지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
         with TemporaryDirectory() as directory:
             f = _create_buy_flow_fixture(directory, FakeOrderScenario.IMMEDIATE_FILLED)
             try:
-                with mock_patch.object(f.controller._api_gateway, 'prepare_order', side_effect=BnbValuationInvalidError('bad candle')):
+                with mock_patch.object(f.controller._api_gateway, 'prepare_order', side_effect=BinancePayloadError('invalid commission payload')):
                     self.assertEqual(_execute_case_b_buy(f, 'bad-price'), ())
                 self.assertEqual(f.rest_client.submitted_orders, [])
                 self.assertTrue(f.controller.reconciliation_required)
@@ -206,13 +220,20 @@ class OrderPreparationTests(unittest.TestCase):
             finally: f.controller.close_session_resources()
 
     def test_expired_signal_is_discarded_and_market_watching_continues(self):
+        """
+        함수 이름: test_expired_signal_is_discarded_and_market_watching_continues()
+        기능: 조회 장애 중 만료된 주문 신호를 폐기하고 시세 관찰을 유지하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
         with TemporaryDirectory() as directory:
             f = _create_buy_flow_fixture(directory, FakeOrderScenario.IMMEDIATE_FILLED)
             c = f.controller
             try:
                 c._context.apply_runtime_patch(patch(signal_created=True, signal_time=f.clock()))
                 c._active_stm._state = replace(c._active_stm.current_state, root_state=RootState.TRADE_MANAGEMENT, ownership_state=OwnershipState.NO_POSITION, case_b_signal_state=CaseBSignalState.B_POSITION_OPEN_SIGNALLED, case_c_signal_state=CaseCSignalState.C_WAIT_SETUP)
-                with mock_patch.object(c._api_gateway, 'prepare_order', side_effect=BnbValuationUnavailableError('offline')):
+                with mock_patch.object(c._api_gateway, 'prepare_order', side_effect=OSError('offline')):
                     outcomes = _execute_case_b_buy(f, 'expire-me')
                 c._enqueue_order_outcomes(outcomes); _drain_controller(c)
                 f.clock.advance(timedelta(hours=3,seconds=1))
@@ -225,12 +246,19 @@ class OrderPreparationTests(unittest.TestCase):
             finally:c.close_session_resources()
 
     def test_recovery_recomputes_price_and_quantity_then_submits_once(self):
+        """
+        함수 이름: test_recovery_recomputes_price_and_quantity_then_submits_once()
+        기능: 준비 조회 복구 뒤 최신 가격과 수량으로 한 번만 제출하는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
         with TemporaryDirectory() as directory:
             f = _create_buy_flow_fixture(directory, FakeOrderScenario.IMMEDIATE_FILLED)
             c = f.controller
             try:
                 c._context.apply_runtime_patch(patch(signal_created=True, signal_time=f.clock()))
-                with mock_patch.object(c._api_gateway, 'prepare_order', side_effect=BnbValuationUnavailableError('offline')):
+                with mock_patch.object(c._api_gateway, 'prepare_order', side_effect=OSError('offline')):
                     _execute_case_b_buy(f, 'fresh-price')
                     self.assertEqual(_execute_case_b_buy(f, 'fresh-price'), ()) # Duplicate cannot bypass backoff.
                 f.clock.advance(timedelta(seconds=1))
@@ -421,6 +449,13 @@ class ShutdownLiquidationTests(unittest.TestCase):
             finally:c.close_session_resources()
 
     def test_liquidation_price_retry_and_lost_submission_response_do_not_duplicate_sell(self):
+        """
+        함수 이름: test_liquidation_price_retry_and_lost_submission_response_do_not_duplicate_sell()
+        기능: 청산 준비 조회 재시도와 제출 응답 유실이 중복 매도를 만들지 않는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
         for recovered in (False, True):
             with self.subTest(recovered=recovered), TemporaryDirectory() as directory:
                 exchange = ShutdownExchange()
@@ -447,10 +482,17 @@ class ShutdownLiquidationTests(unittest.TestCase):
                 prepare_count = 0
 
                 def temporary_price_failure(*, order):
+                    """
+                    함수 이름: temporary_price_failure()
+                    기능: 첫 준비 조회에만 일시적인 수수료 조회 장애를 주입한다.
+                    인자: order -> 청산 준비 주문
+                    반환값: 재시도에서 정상 준비된 주문
+                    작성 날짜: 2026/09/22
+                    """
                     nonlocal prepare_count
                     prepare_count += 1
                     if prepare_count == 1:
-                        raise BnbValuationUnavailableError('official candle temporarily missing')
+                        raise OSError('commission service temporarily unavailable')
                     return original_prepare(order=order)
 
                 exchange.lose_submit_response = True
