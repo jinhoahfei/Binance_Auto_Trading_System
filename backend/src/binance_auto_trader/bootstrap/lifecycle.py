@@ -6,6 +6,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
+from binance_auto_trader.adapters.binance.request_deadline import (
+    RequestDeadlineExceeded, deadline_lock, operation_deadline, remaining_request_timeout,
+)
+from binance_auto_trader.bootstrap.resource_cleanup import close_runtime_resource
+
 from binance_auto_trader.application import (
     TradingSessionError,
     TradingSessionFailureCode,
@@ -21,6 +26,7 @@ from binance_auto_trader.bootstrap.application import (
     StartupStage,
     StartupTraceEntry,
     StartupTraceResult,
+    _ShutdownFlight,
 )
 
 
@@ -528,6 +534,7 @@ def _close_account_subscription_safely(
 def _attempt_shutdown_cleanup(
     operation: Callable[[], object],
     *,
+    runtime: ApplicationRuntime,
     resource_name: str,
     cleanup_failures: list[tuple[str, BaseException]],
 ) -> None:
@@ -535,6 +542,7 @@ def _attempt_shutdown_cleanup(
     함수 이름: _attempt_shutdown_cleanup()
     기능: 하나의 application 종료 Operation을 시도하고 실패를 순서대로 보존한다.
     인자: operation -> worker, stream, session 또는 subscription 종료 Operation
+        runtime -> 자원별 완료 기록을 보존할 runtime
         resource_name -> 후속 진단 note에 사용할 credential 없는 자원 이름
         cleanup_failures -> 최초와 후속 실패를 호출 순서대로 담을 목록
     반환값: 성공·실패 모두 없음
@@ -542,7 +550,7 @@ def _attempt_shutdown_cleanup(
     """
     # BaseException을 전파하기 전에 모든 후속 소유 자원을 회수할 수 있게 분리한다.
     try:
-        operation()
+        close_runtime_resource(runtime, resource_name, operation)
     except BaseException as error:
         cleanup_failures.append(
             (resource_name, error)
@@ -631,6 +639,7 @@ def start_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
         return ready_state  # READY 뒤 단일 worker를 시작하되 startup thread에서 cycle을 직접 실행하지 않는다.
 
 
+@operation_deadline(120)
 def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     """
     함수 이름: close_application()
@@ -643,27 +652,43 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("runtime must be an ApplicationRuntime")
 
+    with deadline_lock(runtime._shutdown_store.cleanup_lock):
+        return _close_application_resources(runtime)
+
+
+def _close_application_resources(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
+    """
+    함수 이름: _close_application_resources()
+    기능: 종료 소유 잠금 아래 미완료 자원만 회수하고 실제 완료 증거를 게시한다.
+    인자: runtime -> 종료 기록과 자원 참조를 보유한 application runtime
+    반환값: 자원 정리가 완료된 CLOSED 상태
+    작성 날짜: 2026/09/27
+    """
     cleanup_failures: list[tuple[str, BaseException]] = []
+    runtime._shutdown_store.cleanup_finished = False
 
     # Worker stop/join은 application lock 밖에서 수행하되 하나의 실패로 뒤 worker를 누수시키지 않는다.
     event_runtime_worker = runtime._trading_event_runtime_worker
     if event_runtime_worker is not None:
         _attempt_shutdown_cleanup(
-            event_runtime_worker.close,
+            lambda: event_runtime_worker.close(timeout=remaining_request_timeout(120)),
+            runtime=runtime,
             resource_name="trading event worker",
             cleanup_failures=cleanup_failures,
         )
     recovery_worker = runtime._account_stream_recovery_worker
     if recovery_worker is not None:
         _attempt_shutdown_cleanup(
-            recovery_worker.close,
+            lambda: recovery_worker.close(timeout=remaining_request_timeout(120)),
+            runtime=runtime,
             resource_name="account stream recovery worker",
             cleanup_failures=cleanup_failures,
         )
     market_recovery_worker = runtime._market_stream_recovery_worker
     if market_recovery_worker is not None:
         _attempt_shutdown_cleanup(
-            market_recovery_worker.close,
+            lambda: market_recovery_worker.close(timeout=remaining_request_timeout(120)),
+            runtime=runtime,
             resource_name="market stream recovery worker",
             cleanup_failures=cleanup_failures,
         )
@@ -671,34 +696,33 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
     # Market callback이 application lock을 재사용하므로 Kline handle도 lock 밖에서 먼저 종료를 시도한다.
     _attempt_shutdown_cleanup(
         runtime.market_data_controller.close_market_stream,
+        runtime=runtime,
         resource_name="market stream",
         cleanup_failures=cleanup_failures,
     )
 
-    with runtime.application_lock:
-        # 이미 CLOSED이면 상태를 재게시하지 않고 이번 호출의 worker·market 실패만 전파한다.
+    # 구독의 callback은 application 잠금에 재진입할 수 있으므로 close는 잠금 밖에서 수행한다.
+    _attempt_shutdown_cleanup(
+        runtime.trading_controller.close_session_resources,
+        runtime=runtime,
+        resource_name="trading session resources",
+        cleanup_failures=cleanup_failures,
+    )
+    account_subscription = runtime.trading_controller.account_subscription
+    if account_subscription is not None:
+        _attempt_shutdown_cleanup(
+            account_subscription.close,
+            runtime=runtime,
+            resource_name="account subscription",
+            cleanup_failures=cleanup_failures,
+        )
+
+    with deadline_lock(runtime.application_lock):
+        # CLOSED는 명령 차단 상태다. 정리 완료 증거는 아래에서 별도로 확정한다.
         current_state = runtime.state
         if current_state.status is ApplicationStatus.CLOSED:
             closed_state = current_state
         else:
-            # 거래 상태를 강제 종료하지 않고 callback·timer·session 구독 차단을 독립 시도한다.
-            _attempt_shutdown_cleanup(
-                runtime.trading_controller.close_session_resources,
-                resource_name="trading session resources",
-                cleanup_failures=cleanup_failures,
-            )
-
-            # Session 정리 실패와 무관하게 마지막 authenticated account handle도 닫는다.
-            account_subscription = (
-                runtime.trading_controller.account_subscription
-            )
-            if account_subscription is not None:
-                _attempt_shutdown_cleanup(
-                    account_subscription.close,
-                    resource_name="account subscription",
-                    cleanup_failures=cleanup_failures,
-                )
-
             # 자원 정리 실패가 있어도 terminal gate를 열지 않도록 CLOSED를 마지막에 게시한다.
             try:
                 closed_state = runtime._publish_state(
@@ -721,9 +745,9 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
                 "Additional shutdown cleanup failure: "
                 f"{resource_name} ({type(later_error).__name__})."
             )
-        runtime.diagnostics.close(timeout_seconds=1.0)
         raise first_error  # 최초 예외 identity와 원래 traceback을 호출자에게 그대로 보존한다.
 
+    runtime._shutdown_store.cleanup_finished = True
     runtime.diagnostics.close(timeout_seconds=1.0)  # 진단 디스크 지연으로 거래 자원 회수를 무한 대기하지 않는다.
     return closed_state
 
@@ -837,32 +861,33 @@ def _complete_shutdown_flight(
     if (result is None) == (error is None):
         raise ValueError("shutdown flight requires exactly one result or error")
 
-    with runtime.application_lock:
+    with runtime._shutdown_store.flight_lock:
         shutdown_store = runtime._shutdown_store
-        if not shutdown_store.in_progress:
+        flight = shutdown_store.flight
+        if not shutdown_store.in_progress or flight is None:
             raise RuntimeError("shutdown flight is not in progress")
 
         # Result metadata를 먼저 게시하고 Event를 마지막에 set해 waiter가 반쪽 상태를 읽지 않게 한다.
         shutdown_store.result = result
         shutdown_store.error = error
+        flight.result = result
+        flight.error = error
         shutdown_store.in_progress = False
-        shutdown_store.completion_event.set()
+        flight.completion_event.set()
 
 
-def _await_shutdown_flight(runtime: ApplicationRuntime) -> ShutdownSafetyReceipt:
+def _await_shutdown_flight(flight: _ShutdownFlight) -> ShutdownSafetyReceipt:
     """
     함수 이름: _await_shutdown_flight()
     기능: 기존 shutdown owner의 terminal 결과를 application lock 밖에서 기다려 재사용한다.
-    인자: runtime -> 진행 중 single-flight store를 소유한 runtime
+    인자: flight -> 대기 시작 시 선택한 종료 요청의 독립 결과
     반환값: owner가 게시한 accepted ShutdownSafetyReceipt
     작성 날짜: 2026/08/24
     """
-    completion_event = runtime._shutdown_store.completion_event
-    completion_event.wait()  # Owner는 BaseException 경로도 finally publication해 waiter를 깨운다.
-
-    with runtime.application_lock:
-        shutdown_result = runtime._shutdown_store.result
-        shutdown_error = runtime._shutdown_store.error
+    if not flight.completion_event.wait(timeout=remaining_request_timeout(120)):
+        raise RequestDeadlineExceeded("shutdown owner has not finished")
+    shutdown_result = flight.result
+    shutdown_error = flight.error
     if shutdown_error is not None:
         raise shutdown_error
     if not isinstance(shutdown_result, ShutdownSafetyReceipt):
@@ -871,6 +896,7 @@ def _await_shutdown_flight(runtime: ApplicationRuntime) -> ShutdownSafetyReceipt
     return shutdown_result
 
 
+@operation_deadline(120)
 def request_application_shutdown(
     runtime: ApplicationRuntime,
     *,
@@ -895,29 +921,25 @@ def request_application_shutdown(
     ):
         raise ValueError("command_id must be a non-empty trimmed string")
 
-    joins_existing_flight = False
-    with runtime.application_lock:
+    joined_flight = None
+    with deadline_lock(runtime.application_lock), deadline_lock(runtime._shutdown_store.flight_lock):
         shutdown_store = runtime._shutdown_store
         if shutdown_store.in_progress:
             if expected_version != shutdown_store.expected_version:
                 _require_shutdown_expected_version(runtime, expected_version)
-            joins_existing_flight = True
+            joined_flight = shutdown_store.flight
         else:
             # 같은 Context version에서만 현재 exposure와 lifecycle을 판단한다.
             _require_shutdown_expected_version(runtime, expected_version)
             current_state = runtime.state
-            if current_state.status is ApplicationStatus.CLOSED:
-                return ShutdownSafetyReceipt(
-                    accepted=True,
-                    status=ShutdownReceiptStatus.ACCEPTED,
-                    version=runtime.trading_controller.context.version,
-                    position_open=False,
-                    pending_order=False,
-                    reconciliation_required=False,
-                )  # 다른 command ID의 안전한 중복 종료도 외부 effect 없는 accepted 결과다.
+            if (current_state.status is ApplicationStatus.CLOSED
+                    and shutdown_store.cleanup_finished
+                    and isinstance(shutdown_store.result, ShutdownSafetyReceipt)):
+                return shutdown_store.result
             if current_state.status not in (
                 ApplicationStatus.READY,
                 ApplicationStatus.SHUTTING_DOWN,
+                ApplicationStatus.CLOSED,
             ):
                 raise RuntimeError("application is not ready for safe shutdown")
 
@@ -931,7 +953,7 @@ def request_application_shutdown(
             shutdown_store.expected_version = expected_version
             shutdown_store.result = None
             shutdown_store.error = None
-            shutdown_store.completion_event.clear()
+            shutdown_store.flight = _ShutdownFlight()
             try:
                 if current_state.status is ApplicationStatus.READY:
                     runtime._publish_state(
@@ -955,30 +977,33 @@ def request_application_shutdown(
                 _complete_shutdown_flight(runtime, error=error)
                 raise
 
-    if joins_existing_flight:
-        return _await_shutdown_flight(runtime)  # 다른 key도 owner tail과 fsync를 반복하지 않는다.
+    if joined_flight is not None:
+        return _await_shutdown_flight(joined_flight)  # 대기 만료도 실제 종료 소유자를 해제하지 않는다.
 
     try:
         # Worker join은 application lock 밖에서 수행해 진행 중 event/recovery cycle과 교착하지 않는다.
         event_runtime_worker = runtime._trading_event_runtime_worker
         if event_runtime_worker is not None:
-            event_runtime_worker.close()
+            close_runtime_resource(runtime, "trading event worker",
+                lambda: event_runtime_worker.close(timeout=remaining_request_timeout(120)))
         recovery_worker = runtime._account_stream_recovery_worker
         if recovery_worker is not None:
-            recovery_worker.close()
+            close_runtime_resource(runtime, "account stream recovery worker",
+                lambda: recovery_worker.close(timeout=remaining_request_timeout(120)))
         market_recovery_worker = runtime._market_stream_recovery_worker
         if market_recovery_worker is not None:
-            market_recovery_worker.close()
+            close_runtime_resource(runtime, "market stream recovery worker",
+                lambda: market_recovery_worker.close(timeout=remaining_request_timeout(120)))
 
         # 두 recovery worker를 모두 join한 뒤 callback mutation과 새 exposure를 마지막으로 재검사한다.
-        with runtime.application_lock:
+        with deadline_lock(runtime.application_lock):
             final_safety_receipt = _read_shutdown_safety_receipt(runtime)
             if not final_safety_receipt.accepted:
                 raise ShutdownBlockedError(final_safety_receipt)
 
             runtime.trade_history_controller.flush_durable_state()
         close_application(runtime)  # Market/network close must run outside the publication lock.
-        with runtime.application_lock:
+        with deadline_lock(runtime.application_lock):
             accepted_receipt = ShutdownSafetyReceipt(
                 accepted=True,
                 status=ShutdownReceiptStatus.ACCEPTED,

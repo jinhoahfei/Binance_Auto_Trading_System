@@ -1,0 +1,9 @@
+{
+  "tracked_before": 280,
+  "changed": [
+    "UI/src/app/runtime/DesktopWindowLifecycle.ts",
+    "UI/src/app/hooks/useDesktopWindowLifecycle.ts",
+    "UI/src/app/hooks/useDesktopWindowLifecycle.test.ts"
+  ],
+  "visual_components_unchanged": true
+}

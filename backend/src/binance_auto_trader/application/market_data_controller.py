@@ -8,6 +8,7 @@ from threading import RLock
 from typing import Protocol
 
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
+from binance_auto_trader.adapters.binance.request_deadline import deadline_lock
 from binance_auto_trader.adapters.binance.websocket_gateway import (
     Subscription,
     WebSocketGateway,
@@ -280,6 +281,7 @@ class MarketDataController:
         self._market_available = False
         self._diagnostics = diagnostics or RuntimeDiagnostics()  # 수치 계산·파일 기록의 책임은 서로 분리한다.
         self._live_subscription: Subscription | None = None
+        self._closing_subscriptions: list[Subscription] = []
         self._stream_cursor_by_interval: dict[Interval, Kline] = {}
         self._pending_boundary_one_minute_close: Kline | None = None
         self._pending_boundary_one_minute_open: Kline | None = None
@@ -546,16 +548,22 @@ class MarketDataController:
         반환값: 없음
         작성 날짜: 2026/08/25
         """
-        with self._initialization_lock:
+        with deadline_lock(self._initialization_lock):
             # Handle identity를 상태 폐기 전에 캡처해 소유자 close callback을 정확히 한 번 실행한다.
-            with self._stream_lock:
+            with deadline_lock(self._stream_lock):
                 subscription = self._live_subscription
+                if subscription is not None and not any(
+                    pending is subscription for pending in self._closing_subscriptions
+                ):
+                    self._closing_subscriptions.append(subscription)
             self._set_market_stream_unavailable(
                 "kline_stream_closed",
                 request_recovery=False,
             )
-            if subscription is not None:
-                subscription.close()
+            for pending in tuple(self._closing_subscriptions):
+                if pending.close() is False:
+                    raise TimeoutError("market subscription cleanup is not complete")
+                self._closing_subscriptions.remove(pending)
 
     def _set_market_stream_unavailable(
         self,
@@ -581,7 +589,7 @@ class MarketDataController:
             raise TypeError("request_recovery must be a bool")
 
         # Snapshot 자체는 UI와 다음 REST 병합 기준으로 보존하고 현재 세대 cursor만 모두 폐기한다.
-        with self._stream_lock:
+        with deadline_lock(self._stream_lock):
             self._collecting_initial_buffer = False
             self._initial_buffer = []
             self._initialized = False

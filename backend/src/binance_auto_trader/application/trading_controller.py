@@ -22,7 +22,7 @@ from binance_auto_trader.adapters.binance.api_gateway import (
 )
 from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
 from binance_auto_trader.adapters.binance.request_deadline import (
-    operation_deadline, request_deadline_scope, submission_check_scope,
+    deadline_lock, operation_deadline, remaining_request_timeout, request_deadline_scope, submission_check_scope,
 )
 from binance_auto_trader.adapters.binance.mappers import SymbolFilterError, BinancePayloadError
 from binance_auto_trader.adapters.binance.websocket_gateway import (
@@ -1351,6 +1351,7 @@ class TradingController:
         self._external_actions: list[TradingActionRequest] = []
         self._cleanup_failures: list[Exception] = []
         self._cleanup_in_progress = False
+        self._cleanup_active = False
         self._command_records: dict[tuple[str, str], _CommandRecord] = {}
         self._command_order: deque[tuple[str, str]] = deque()
         self._manual_kill_command_records: dict[str, _CommandRecord] = {}
@@ -4237,8 +4238,12 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
-        with self._session_lock:
+        with deadline_lock(self._session_lock):
+            if self._cleanup_active:
+                raise RuntimeError("session resource cleanup is still active")
             self._cleanup_session_resources()  # 포지션을 매도하거나 STM 종료로 위장하지 않는다.
+            if self._cleanup_failures:
+                raise self._cleanup_failures[0]
 
     def update_position_snapshot(
         self,
@@ -4464,7 +4469,7 @@ class TradingController:
                 "reason must be non-empty without outer whitespace"
             )
 
-        with self._session_lock:
+        with deadline_lock(self._session_lock):
             # 최초 RUNNING 중단만 기억해 STOPPING 또는 다른 reconciliation을 자동 재개하지 않는다.
             self._market_stream_monitoring_started = True
             if (self._status is TradingSessionStatus.RUNNING
@@ -10201,29 +10206,34 @@ class TradingController:
             self._clear_buy_budget_wait(strategy, "session_closed")
 
         # close callback이 Controller에 재진입해도 같은 자원을 두 번 정리하지 않는다.
-        if self._cleanup_in_progress:
+        if self._cleanup_active:
             return
 
         # untrusted close callback의 재진입보다 먼저 intake와 신규 등록 Guard를 닫는다.
         self._cleanup_in_progress = True
-        self._scheduler.clear()
-        event_queue = self._event_queue
-        self._event_queue = None
-        if event_queue is not None:
-            event_queue.clear()
-        self._event_processor = None  # terminal session processor 참조도 함께 해제한다.
-        subscriptions = tuple(self._session_subscriptions)
-        self._session_subscriptions.clear()
+        self._cleanup_active = True
+        try:
+            self._scheduler.clear()
+            event_queue = self._event_queue
+            if event_queue is not None:
+                event_queue.clear()
+            self._event_queue = None
+            self._event_processor = None  # terminal session processor 참조도 함께 해제한다.
+            subscriptions = tuple(self._session_subscriptions)
+            self._cleanup_failures.clear()
 
-        # 한 close 실패가 나머지 session 자원 정리와 terminal 상태 publish를 막지 않게 한다.
-        for subscription in subscriptions:
-            try:
-                subscription.close()
-            except Exception as error:
-                self._cleanup_failures.append(
-                    error
-                )  # 실패를 숨기지 않되 이미 commit된 STM 종료는 반쪽 상태로 되돌리지 않는다.
-                self._diagnostics.record_exception("session_subscription_cleanup", error, session_id=self._session_id)
+            # 실패한 handle은 보존한다. callback 재진입은 막되 다음 명시적 종료 시도는 허용한다.
+            for subscription in subscriptions:
+                try:
+                    if self._run_external_operation(subscription.close) is False:
+                        raise TimeoutError("session subscription cleanup is not complete")
+                except Exception as error:
+                    self._cleanup_failures.append(error)
+                    self._diagnostics.record_exception("session_subscription_cleanup", error, session_id=self._session_id)
+                else:
+                    self._session_subscriptions.remove(subscription)
+        finally:
+            self._cleanup_active = False
 
     def _synchronize_status_from_context(self, stm: TradingSTM) -> None:
         """
@@ -10373,11 +10383,11 @@ class TradingController:
         if self._shutdown_preparing and self._shutdown_cleanup_owner == get_ident():
             yield
             return
-        with self._effect_condition:
+        with deadline_lock(self._effect_condition):
             owner = get_ident()
             while self._effect_owner not in (None, owner):
                 # Condition은 바깥 route/worker의 RLock 재진입 깊이까지 양보해 교착을 막는다.
-                self._effect_condition.wait()
+                self._effect_condition.wait(timeout=remaining_request_timeout(120))
             self._effect_owner = owner
             self._effect_depth += 1
             try:

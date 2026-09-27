@@ -16,6 +16,8 @@ from threading import Event, RLock, Thread, current_thread
 from typing import Protocol
 from uuid import uuid4
 
+from binance_auto_trader.adapters.binance.request_deadline import deadline_lock, remaining_request_timeout
+
 
 _TESTNET_COMBINED_STREAM_URL = (
     "wss://stream.testnet.binance.vision/stream?streams="
@@ -160,7 +162,25 @@ def _default_socket_factory(
             "websocket-client package is required for Binance WebSocket transport"
         ) from error
 
-    return websocket.WebSocketApp(
+    class DeadlineWebSocketApplication(websocket.WebSocketApp):
+        """
+        클래스 이름: DeadlineWebSocketApplication
+        기능: 실제 socket 종료 handshake에 현재 작업의 남은 예산을 전달한다.
+        작성 날짜: 2026/09/27
+        """
+
+        def close(self, **arguments):
+            """
+            함수 이름: close()
+            기능: websocket-client의 기본 3초 제한을 종료 작업의 남은 시간으로 줄인다.
+            인자: arguments -> websocket-client 종료 옵션
+            반환값: websocket-client의 종료 결과
+            작성 날짜: 2026/09/27
+            """
+            arguments["timeout"] = remaining_request_timeout(arguments.get("timeout", 3))
+            return super().close(**arguments)
+
+    return DeadlineWebSocketApplication(
         url,
         on_open=on_open,
         on_message=on_message,
@@ -474,7 +494,7 @@ class _ConnectionLifecycle:
         반환값: 없음
         작성 날짜: 2026/08/22
         """
-        with self._lock:
+        with deadline_lock(self._lock):
             self._owner_closed = True
             self._startup_event.set()
 
@@ -717,7 +737,9 @@ class _BoundedMessageDispatcher:
         """
         self.request_close()
         if current_thread() is not self._worker_thread:
-            self._worker_thread.join(timeout=1)  # 막힌 application callback을 무기한 기다리지 않는다.
+            self._worker_thread.join(timeout=remaining_request_timeout(1))
+            if self._worker_thread.is_alive():
+                raise TimeoutError("message dispatcher has not stopped")
 
     def request_close(self) -> None:
         """
@@ -727,7 +749,7 @@ class _BoundedMessageDispatcher:
         반환값: 없음
         작성 날짜: 2026/09/22
         """
-        with self._lock:
+        with deadline_lock(self._lock):
             if self._closed:
                 return
             self._closed = True
@@ -808,6 +830,9 @@ class _SocketSubscription:
         self._message_dispatcher = message_dispatcher
         self._lock = RLock()
         self._closed = False
+        self._cleanup_lock = RLock()
+        self._close_completed = False
+        self._socket_closed = False
 
     @property
     def connected(self) -> bool:
@@ -860,24 +885,41 @@ class _SocketSubscription:
     def close(self) -> None:
         """
         함수 이름: close()
-        기능: 명시적 종료를 표시하고 socket과 worker를 한 번만 정리한다.
+        기능: 수신을 먼저 차단하고 실패한 socket·worker 정리만 다시 확인한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/22
         """
-        with self._lock:
-            if self._closed:
+        with deadline_lock(self._cleanup_lock):
+            if self._close_completed:
                 return
-            self._closed = True
-            self._lifecycle.mark_owner_closed()
+            with deadline_lock(self._lock):
+                self._closed = True
+                self._lifecycle.mark_owner_closed()
 
-        try:
-            self._socket_application.close()
-        finally:
-            if self._message_dispatcher is not None:
-                self._message_dispatcher.close()
-            if current_thread() is not self._worker_thread:
-                self._worker_thread.join(timeout=1)  # close를 무기한 기다리지 않는다.
+            cleanup_failures: list[BaseException] = []
+            try:
+                if not self._socket_closed:
+                    if self._socket_application.close() is False:
+                        raise TimeoutError("socket close is not complete")
+                    self._socket_closed = True
+            except BaseException as error:
+                cleanup_failures.append(error)
+            try:
+                if self._message_dispatcher is not None:
+                    self._message_dispatcher.close()
+            except BaseException as error:
+                cleanup_failures.append(error)
+            try:
+                if current_thread() is not self._worker_thread:
+                    self._worker_thread.join(timeout=remaining_request_timeout(1))
+                if self._worker_thread.is_alive():
+                    raise TimeoutError("socket worker has not stopped")
+            except BaseException as error:
+                cleanup_failures.append(error)
+            if cleanup_failures:
+                raise cleanup_failures[0]
+            self._close_completed = True
 
 
 class BinanceSpotWebSocketClient:

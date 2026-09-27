@@ -5,7 +5,11 @@ from threading import RLock, Thread, Timer
 from time import monotonic
 from uuid import uuid4
 
+from binance_auto_trader.adapters.binance.request_deadline import (
+    RequestDeadlineExceeded, deadline_lock, request_deadline_scope,
+)
 from binance_auto_trader.application.shutdown_recovery import ShutdownPreparationBlocked, prepare_shutdown_cycle
+from binance_auto_trader.bootstrap.resource_cleanup import close_runtime_resource
 
 
 @dataclass
@@ -28,6 +32,20 @@ class ShutdownPreparation:
     version_validated: bool = False
     deadline: float = field(default_factory=lambda: monotonic() + 120)
     lock: RLock = field(default_factory=RLock, repr=False)
+
+    def remaining_seconds(self) -> float:
+        """
+        함수 이름: remaining_seconds()
+        기능: 같은 종료 작업의 잠금·조회·정리에 사용할 남은 단조 시계 예산을 반환한다.
+        인자: 없음
+        반환값: 양수인 잔여 초, 만료이면 종료 차단 예외
+        작성 날짜: 2026/09/27
+        """
+        self.check()
+        remaining = self.deadline - monotonic()
+        if remaining <= 0:
+            raise ShutdownPreparationBlocked("SHUTDOWN_PREPARATION_TIMEOUT", True)
+        return remaining
 
     def snapshot(self) -> dict:
         """
@@ -126,7 +144,14 @@ def start_shutdown_preparation(runtime, *, expected_version: int, liquidation_co
         # 즉시 새 command를 막는다. 진행 중 effect의 완료 확인은 아래 worker join이 담당한다.
         runtime.trading_controller._shutdown_preparing = True
         runtime.trading_controller._market_resume_suppressed = True
-        Thread(target=_run, args=(runtime, operation), name="binance-shutdown-prepare", daemon=True).start()
+        try:
+            Thread(target=_run, args=(runtime, operation), name="binance-shutdown-prepare", daemon=True).start()
+        except Exception as error:
+            operation.block("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True)
+            with operation.lock:
+                operation.active = False
+            runtime.diagnostics.record_exception("shutdown_worker_start", error, operation_id=operation.operation_id)
+            runtime.diagnostics.record("shutdown_preparation_finished", **operation.snapshot())
         return operation.snapshot()
 
 
@@ -138,56 +163,90 @@ def _run(runtime, operation: ShutdownPreparation) -> None:
     반환값: 해당 단계의 처리 결과 또는 없음
     작성 날짜: 2026/09/16
     """
-    timer = Timer(max(0, operation.deadline - monotonic()),
-        lambda: operation.block("SHUTDOWN_PREPARATION_TIMEOUT", True))
-    timer.daemon = True  # 종료 제한 시간 감시는 거래 처리와 독립적으로 유지한다.
-    timer.start()
+    timer = None
     try:
-        # join과 REST를 application_lock 밖에서 수행한다. GET 진행 조회는 별도 짧은 lock만 쓴다.
-        for worker in (runtime._trading_event_runtime_worker,
-                       runtime._account_stream_recovery_worker, runtime._market_stream_recovery_worker):
-            operation.check()
-            if worker is not None:
-                try:
-                    stopped = worker.close(timeout=max(0, operation.deadline - monotonic()))
-                    if stopped is False:
-                        raise ShutdownPreparationBlocked("SHUTDOWN_PREPARATION_TIMEOUT", True)
-                except ShutdownPreparationBlocked:
-                    raise
-                except Exception as error:
-                    raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True) from error
-        operation.check()
-        controller = runtime.trading_controller
-        # Validate the user's basis before our own subscription cleanup changes context version.
-        with runtime.application_lock:
-            operation.check()
-            if controller.context.version != operation.expected_version:
-                raise ShutdownPreparationBlocked("STALE_CONTEXT_VERSION", True)
-            operation.version_validated = True
         try:
-            runtime.market_data_controller.close_market_stream()
+            timer = Timer(operation.remaining_seconds(),
+                lambda: operation.block("SHUTDOWN_PREPARATION_TIMEOUT", True))
+            timer.daemon = True
+            timer.start()
+        except ShutdownPreparationBlocked:
+            raise
         except Exception as error:
+            runtime.diagnostics.record_exception("shutdown_timer_start", error, operation_id=operation.operation_id)
             raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True) from error
-        operation.check()
-        previous = controller.account_subscription
-        if previous is not None:
-            try:
-                previous.close()
-            except Exception as error:
-                raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True) from error
-            controller._account_subscription = None
-        # Drain any already-entered callback/command before the sole owner begins.
-        with runtime.application_lock:
-            operation.check()
-        prepare_shutdown_cycle(controller, operation)
+        with request_deadline_scope(operation.remaining_seconds()):
+            _prepare_with_deadline(runtime, operation)
         operation.progress("ready", "complete", runtime.trading_controller.context.version)
+    except RequestDeadlineExceeded:
+        operation.block("SHUTDOWN_PREPARATION_TIMEOUT", True)
     except ShutdownPreparationBlocked as error:
         operation.block(error.code, error.retryable)
     except Exception as error:
-        runtime.diagnostics.record_exception("shutdown_preparation", error)
+        runtime.diagnostics.record_exception("shutdown_preparation", error,
+            operation_id=operation.operation_id, step=operation.snapshot()["step"])
         operation.block("SHUTDOWN_PREPARATION_INTERNAL_ERROR", False)
     finally:
-        timer.cancel()
+        if timer is not None:
+            timer.cancel()
         with operation.lock:
-            operation.active = False
+            operation.active = False  # 기한 표시와 달리 실제 소유자의 반환 시점에만 해제한다.
         runtime.diagnostics.record("shutdown_preparation_finished", **operation.snapshot())
+
+
+def _prepare_with_deadline(runtime, operation: ShutdownPreparation) -> None:
+    """
+    함수 이름: _prepare_with_deadline()
+    기능: 작업자·구독·계좌 검증을 하나의 종료 예산과 단일 소유자로 실행한다.
+    인자: runtime -> 정리할 runtime, operation -> 현재 작업과 남은 기한
+    반환값: 종료 준비를 검증하면 없음
+    작성 날짜: 2026/09/27
+    """
+    # join과 REST를 application_lock 밖에서 수행한다. GET 진행 조회는 별도 짧은 lock만 쓴다.
+    for resource_name, worker in (
+        ("trading event worker", runtime._trading_event_runtime_worker),
+        ("account stream recovery worker", runtime._account_stream_recovery_worker),
+        ("market stream recovery worker", runtime._market_stream_recovery_worker),
+    ):
+        operation.check()
+        if worker is not None:
+            try:
+                close_runtime_resource(runtime, resource_name,
+                    lambda: worker.close(timeout=operation.remaining_seconds()))
+            except ShutdownPreparationBlocked:
+                raise
+            except TimeoutError as error:
+                raise ShutdownPreparationBlocked("SHUTDOWN_PREPARATION_TIMEOUT", True) from error
+            except Exception as error:
+                raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True) from error
+    operation.check()
+    controller = runtime.trading_controller
+    # Validate the user's basis before our own subscription cleanup changes context version.
+    with deadline_lock(runtime.application_lock):
+        # HTTP 명령이 관측 잠금을 양보한 채 I/O 중이어도 두 청산 소유자가 겹치지 않는다.
+        while controller._effect_owner is not None:
+            controller._effect_condition.wait(timeout=operation.remaining_seconds())
+        operation.check()
+        if controller.context.version != operation.expected_version:
+            raise ShutdownPreparationBlocked("STALE_CONTEXT_VERSION", True)
+        operation.version_validated = True
+    try:
+        close_runtime_resource(runtime, "market stream", runtime.market_data_controller.close_market_stream)
+    except RequestDeadlineExceeded:
+        raise
+    except Exception as error:
+        raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True) from error
+    operation.check()
+    previous = controller.account_subscription
+    if previous is not None:
+        try:
+            close_runtime_resource(runtime, "account subscription", previous.close)
+        except RequestDeadlineExceeded:
+            raise
+        except Exception as error:
+            raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True) from error
+        controller._account_subscription = None
+    # Drain any already-entered callback/command before the sole owner begins.
+    with deadline_lock(runtime.application_lock):
+        operation.check()
+    prepare_shutdown_cycle(controller, operation)

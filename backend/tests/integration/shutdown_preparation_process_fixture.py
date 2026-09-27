@@ -1,12 +1,16 @@
 """실계좌 접근 없이 가격 준비 실패와 실제 sidecar 정상 종료를 재현한다."""
 import os
 import asyncio
+import json
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from binance_auto_trader.bootstrap import start_application
 from binance_auto_trader.domain.common import RegimeType
+from binance_auto_trader.domain.trading import ExitReason, PositionReturnState, StrategyType
+from binance_auto_trader.domain.trading.action_requests import patch as runtime_patch
+from binance_auto_trader.domain.trading.states import OrderSide
 from binance_auto_trader.adapters.binance.mappers import BinancePayloadError
 from binance_auto_trader.sidecar_stdio import run_stdio_sidecar_process
 from tests.integration.test_deterministic_production_path_case2_flow import _create_deterministic_production_path_fixture
@@ -44,6 +48,7 @@ def create_factory(configuration):
         client.get_order_submission_attempt_evidence = lambda **_: None
         earn = os.environ.get('SHUTDOWN_FIXTURE_EARN') == '1'
         stale_order = os.environ.get('SHUTDOWN_FIXTURE_STALE_ORDER') == '1'
+        retry_cleanup = os.environ.get('SHUTDOWN_FIXTURE_RETRY_CLEANUP') == '1'
         if stale_order:
             exchange = ShutdownExchange()
             for method in ('get_account', 'prepare_order', 'submit_order', 'sell_all_position',
@@ -75,10 +80,34 @@ def create_factory(configuration):
             assert not f.runtime.trade_history_controller.get_pending_order_recovery_records()
             state.pending_recovery_pending = True
             c._enter_order_reconciliation(state, OrderExecutionFailureCode.HISTORY_PERSISTENCE_FAILED, message_id=None)
+            c._context.apply_runtime_patch(runtime_patch(pending_intent_id="unsent-exit-before-shutdown",
+                pending_strategy=StrategyType.CASE_B, pending_order_side=OrderSide.SELL,
+                pending_exit_reason=ExitReason.TAKE_PROFIT, pending_return_state=PositionReturnState.CASE_B_HOLDING))
+            c._unsubmitted_preparation_intent = "unsent-exit-before-shutdown"
         elif not earn:
             with patch.object(c._api_gateway, 'prepare_order', side_effect=BinancePayloadError('fixture commission')):
                 _execute_case_b_buy(SimpleNamespace(controller=c), 'unsubmitted-fixture-price-intent')
         c.mark_event_runtime_failed()
+        if retry_cleanup:
+            close_session = c.close_session_resources
+            cleanup_attempts = []
+
+            def close_with_temporary_failure():
+                """
+                함수 이름: close_with_temporary_failure()
+                기능: 실제 자식 프로세스에서 최종 정리의 첫 실패와 다음 복구를 재현한다.
+                인자: 없음
+                반환값: 성공한 자원 정리 뒤 없음
+                작성 날짜: 2026/09/27
+                """
+                if f.runtime._shutdown_store.expected_version is not None:
+                    cleanup_attempts.append(True)
+                    (f.history_path.parent / "cleanup-attempts.json").write_text(json.dumps(cleanup_attempts))
+                    if len(cleanup_attempts) == 1:
+                        raise OSError("synthetic final cleanup failure")
+                close_session()
+
+            c.close_session_resources = close_with_temporary_failure
         assert not client.submitted_orders
         return f.runtime
     return factory

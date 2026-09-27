@@ -20,6 +20,27 @@ export interface DesktopWindowLifecycle {
 
 
 /**
+ * 함수 이름: destroy_window_with_retry()
+ * 기능: 백엔드 종료가 확인된 창 제거만 최대 세 번 시도한다.
+ * 인자: lifecycle -> 창 제거 포트
+ * 반환값: 실제 창 제거 완료 또는 마지막 실패 Promise
+ * 작성 날짜: 2026/09/27
+ */
+export async function destroy_window_with_retry(lifecycle: DesktopWindowLifecycle): Promise<void> {
+    const delays = [0, 250, 1_000] as const;
+    for (const [attempt, delay] of delays.entries()) {
+        if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+        try {
+            await lifecycle.destroy();
+            return;
+        } catch (error) {
+            if (attempt === delays.length - 1) throw error;
+        }
+    }
+}
+
+
+/**
  * 클래스 이름: TauriDesktopWindowLifecycle
  * 기능: Tauri 현재 창의 닫기 요청 구독과 최종 창 제거 명령을 좁은 UI port로 변환한다.
  * 작성 날짜: 2026/08/12

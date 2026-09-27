@@ -1,6 +1,7 @@
 """Process health와 안전한 shutdown endpoint route를 정의한다."""
 
 from binance_auto_trader.bootstrap import (
+    ApplicationStatus,
     ShutdownBlockedError,
     request_application_shutdown,
 )
@@ -90,7 +91,12 @@ def get_shutdown_state(request_id: str, context: RouteContext) -> TransportRespo
     """
     # 이 값은 종료 허가가 아닌 낙관적 기준이다. 공용 잠금이 막혀도 준비를 요청할 수 있어야 한다.
     if hasattr(context.runtime, "_state_store"):
-        ready = context.runtime._state_store.state.ready
+        state = context.runtime._state_store.state
+        shutdown_store = context.runtime._shutdown_store
+        ready = state.ready or (
+            state.status in (ApplicationStatus.SHUTTING_DOWN, ApplicationStatus.CLOSED)
+            and shutdown_store.expected_version is not None
+        )  # 종료만 재검증한다. 일반 명령의 READY gate는 계속 닫혀 있다.
     else:
         ready = context.runtime.ready
     if not ready:

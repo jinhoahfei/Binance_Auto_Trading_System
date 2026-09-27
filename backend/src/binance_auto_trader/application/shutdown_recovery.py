@@ -5,6 +5,7 @@ from threading import get_ident
 from time import monotonic, sleep
 
 from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
+from binance_auto_trader.adapters.binance.request_deadline import RequestDeadlineExceeded
 from binance_auto_trader.application.residual_settlement import ResidualSettlement
 from binance_auto_trader.application.balance_reconciliation import BalanceObservationChangedError
 from binance_auto_trader.application.session_recovery import SessionRecoveryRetry
@@ -149,8 +150,8 @@ def prepare_shutdown_cycle(controller, operation) -> None:
                 c._context.clear_pending_order()  # 전체 runtime 검증을 자원 해제 전에 완료한다.
             c._cleanup_session_resources()
             if c.cleanup_failures:
-                # 기존 session cleanup은 실패한 handle을 재사용하지 않는다. 자동 재시도를 약속하지 않는다.
-                raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED")
+                # 실패한 handle을 보존했으므로 다음 명시적 종료 시도에서 다시 확인할 수 있다.
+                raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True)
             c._status = TradingSessionStatus.TERMINATED
             check_cleanup()
             c._shutdown_verified_version = c.context.version
@@ -164,6 +165,8 @@ def prepare_shutdown_cycle(controller, operation) -> None:
     except BinanceAPIError as error:
         raise ShutdownPreparationBlocked("SHUTDOWN_ACCOUNT_UNREACHABLE",
             error.status_code >= 500 or error.status_code in (418, 429)) from error
+    except RequestDeadlineExceeded as error:
+        raise ShutdownPreparationBlocked("SHUTDOWN_PREPARATION_TIMEOUT", True) from error
     except (OSError, TimeoutError) as error:
         raise ShutdownPreparationBlocked("SHUTDOWN_ACCOUNT_UNREACHABLE", True) from error
     finally:
@@ -244,6 +247,8 @@ def _reconcile(c, operation) -> None:
             c._account_subscription = None
         c.reconnect_account_stream_after_reconciliation()
     except ShutdownPreparationBlocked:
+        raise
+    except RequestDeadlineExceeded:
         raise
     except BalanceObservationChangedError as error:
         raise ShutdownPreparationBlocked("SHUTDOWN_ACCOUNT_SNAPSHOT_CHANGED", True) from error

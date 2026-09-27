@@ -1,0 +1,42 @@
+[
+  {
+    "scenario": "account-balance-reconciliation--shutdown-checking",
+    "dimensions": [
+      1404,
+      1024
+    ],
+    "identical_bytes": true,
+    "different_pixels": 0,
+    "bounding_box": null
+  },
+  {
+    "scenario": "account-balance-reconciliation--unexplained-difference",
+    "dimensions": [
+      1404,
+      1024
+    ],
+    "identical_bytes": true,
+    "different_pixels": 0,
+    "bounding_box": null
+  },
+  {
+    "scenario": "account-balance-reconciliation--verified",
+    "dimensions": [
+      1404,
+      1024
+    ],
+    "identical_bytes": true,
+    "different_pixels": 0,
+    "bounding_box": null
+  },
+  {
+    "scenario": "figma-frames-binance-auto-trader--frame-01-realtime-indicator",
+    "dimensions": [
+      1404,
+      1024
+    ],
+    "identical_bytes": true,
+    "different_pixels": 0,
+    "bounding_box": null
+  }
+]

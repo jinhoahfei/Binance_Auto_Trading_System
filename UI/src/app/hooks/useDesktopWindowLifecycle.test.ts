@@ -1,5 +1,5 @@
-import { renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DesktopCloseRequest } from '../runtime/DesktopWindowLifecycle';
 import type { UiApplicationController } from '../runtime/UiApplicationStore';
@@ -27,8 +27,75 @@ vi.mock('../runtime/DesktopWindowLifecycle', async (import_original) => {
 describe('use_desktop_window_lifecycle Phase 12 bridge', () => {
     beforeEach(() => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
-        lifecycle_fixture.destroy.mockClear();
-        lifecycle_fixture.on_close_requested.mockClear();
+        lifecycle_fixture.destroy.mockReset().mockResolvedValue(undefined);
+        lifecycle_fixture.on_close_requested.mockReset().mockResolvedValue(() => undefined);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    it('창 제거가 일시 실패하면 같은 작업에서 최대 세 번 시도한다', async () => {
+        vi.useFakeTimers();
+        lifecycle_fixture.destroy.mockRejectedValueOnce(new Error('temporary window failure'))
+            .mockRejectedValueOnce(new Error('temporary window failure'));
+        const controller = { dispatch: vi.fn() } as unknown as UiApplicationController;
+        const hook = renderHook(
+            ({ is_final }) => use_desktop_window_lifecycle(controller, is_final),
+            { initialProps: { is_final: true } },
+        );
+        hook.rerender({ is_final: true });
+        await act(async () => { await vi.runAllTimersAsync(); });
+        expect(lifecycle_fixture.destroy).toHaveBeenCalledTimes(3);
+        expect(controller.dispatch).not.toHaveBeenCalled();
+        expect(lifecycle_fixture.on_close_requested).not.toHaveBeenCalled();
+        hook.unmount();
+    });
+
+    it('세 번 모두 실패해도 닫기 구독을 해제하고 사용자의 다음 닫기를 허용한다', async () => {
+        vi.useFakeTimers();
+        const report_error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        lifecycle_fixture.destroy.mockRejectedValue(new Error('window unavailable'));
+        const remove_listener = vi.fn();
+        lifecycle_fixture.on_close_requested.mockResolvedValue(remove_listener);
+        const controller = { dispatch: vi.fn() } as unknown as UiApplicationController;
+        const hook = renderHook(
+            ({ is_final }) => use_desktop_window_lifecycle(controller, is_final),
+            { initialProps: { is_final: false } },
+        );
+        await act(async () => undefined);
+        const listener = lifecycle_fixture.on_close_requested.mock.calls[0]![0];
+        hook.rerender({ is_final: true });
+        await act(async () => { await vi.runAllTimersAsync(); });
+        hook.rerender({ is_final: true });
+        const prevent_default = vi.fn();
+        listener({ preventDefault: prevent_default });
+        expect(remove_listener).toHaveBeenCalledOnce();
+        expect(lifecycle_fixture.destroy).toHaveBeenCalledTimes(3);
+        expect(report_error).toHaveBeenCalledOnce();
+        expect(prevent_default).not.toHaveBeenCalled();
+        expect(controller.dispatch).not.toHaveBeenCalled();
+        hook.unmount();
+    });
+
+    it('종료 후 늦게 완료된 닫기 구독도 즉시 해제한다', async () => {
+        const remove_listener = vi.fn();
+        let finish_subscription!: (remove: () => void) => void;
+        lifecycle_fixture.on_close_requested.mockImplementation(() => new Promise((resolve) => {
+            finish_subscription = resolve;
+        }));
+        const controller = { dispatch: vi.fn() } as unknown as UiApplicationController;
+        const hook = renderHook(
+            ({ is_final }) => use_desktop_window_lifecycle(controller, is_final),
+            { initialProps: { is_final: false } },
+        );
+        hook.rerender({ is_final: true });
+        await act(async () => { finish_subscription(remove_listener); });
+        expect(remove_listener).toHaveBeenCalledOnce();
+        expect(lifecycle_fixture.destroy).toHaveBeenCalledOnce();
+        expect(controller.dispatch).not.toHaveBeenCalled();
+        hook.unmount();
     });
 
     it('Command-Q처럼 renderer close callback이 없어도 final 상태에서 창을 제거한다', async () => {

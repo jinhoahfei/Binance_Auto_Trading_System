@@ -104,6 +104,27 @@ def remaining_request_timeout(timeout_seconds: Real) -> Real:
     return min(timeout_seconds, remaining)
 
 
+@contextmanager
+def deadline_lock(lock):
+    """
+    함수 이름: deadline_lock()
+    기능: 외부 작업 예산이 있으면 잠금 획득에도 같은 단조 시계 기한을 적용한다.
+    인자: lock -> acquire와 release를 제공하는 재진입 가능 잠금
+    반환값: 획득한 잠금을 반드시 해제하는 context manager
+    작성 날짜: 2026/09/27
+    """
+    if _REQUEST_DEADLINE.get() is None:
+        acquired = lock.acquire()
+    else:
+        acquired = lock.acquire(timeout=remaining_request_timeout(120))
+    if not acquired:
+        raise RequestDeadlineExceeded("cleanup lock deadline exceeded")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def operation_deadline(timeout_seconds: Real):
     """
     함수 이름: operation_deadline()

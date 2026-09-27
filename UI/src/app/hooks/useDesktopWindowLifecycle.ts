@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
     create_desktop_window_lifecycle,
+    destroy_window_with_retry,
     type DesktopWindowLifecycle,
 } from '../runtime/DesktopWindowLifecycle';
 import type { UiApplicationController } from '../runtime/UiApplicationStore';
@@ -43,9 +44,12 @@ export function use_desktop_window_lifecycle(
     is_final: boolean,
 ): void {
     const [window_lifecycle] = useState(create_window_lifecycle);
+    const final_state = useRef(is_final);
+    const destroy_task = useRef<Promise<void> | null>(null);
+    final_state.current = is_final;
 
     useEffect(() => {
-        if (window_lifecycle === null) {
+        if (window_lifecycle === null || is_final) {
             return;
         }
 
@@ -53,6 +57,8 @@ export function use_desktop_window_lifecycle(
         let remove_close_listener: (() => void) | null = null;
 
         void window_lifecycle.on_close_requested((request) => {
+            // 구독 해제가 아직 완료되지 않아도 종료된 backend의 창 닫기를 가로막지 않는다.
+            if (final_state.current) return;
             request.preventDefault();
             controller.dispatch({ type: 'APP_EXIT_CLICKED' });
         }).then((remove_listener) => {
@@ -71,15 +77,15 @@ export function use_desktop_window_lifecycle(
             is_disposed = true;
             remove_close_listener?.();
         };
-    }, [controller, window_lifecycle]);
+    }, [controller, window_lifecycle, is_final]);
 
     useEffect(() => {
-        if (!is_final || window_lifecycle === null) {
+        if (!is_final || window_lifecycle === null || destroy_task.current !== null) {
             return;
         }
 
         // Window close, Command-Q와 sidecar crash recovery 모두 같은 final에서 native 창을 제거한다.
-        void window_lifecycle.destroy().catch((error: unknown) => {
+        destroy_task.current = destroy_window_with_retry(window_lifecycle).catch((error: unknown) => {
             report_window_lifecycle_error('창 제거', error);
         });
     }, [is_final, window_lifecycle]);

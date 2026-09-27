@@ -1,0 +1,23 @@
+{
+  "files": [
+    "backend/src/binance_auto_trader/adapters/binance/request_deadline.py",
+    "backend/src/binance_auto_trader/adapters/binance/spot_websocket_client.py",
+    "backend/src/binance_auto_trader/adapters/binance/websocket_gateway.py",
+    "backend/src/binance_auto_trader/application/market_data_controller.py",
+    "backend/src/binance_auto_trader/application/shutdown_recovery.py",
+    "backend/src/binance_auto_trader/application/trading_controller.py",
+    "backend/src/binance_auto_trader/bootstrap/application.py",
+    "backend/src/binance_auto_trader/bootstrap/lifecycle.py",
+    "backend/src/binance_auto_trader/bootstrap/shutdown_preparation.py",
+    "backend/src/binance_auto_trader/transport/routes/system.py",
+    "backend/tests/integration/shutdown_preparation_process_fixture.py",
+    "backend/tests/integration/test_shutdown_preparation.py",
+    "backend/tests/integration/transport/test_shutdown_preparation_process.py",
+    "backend/tests/unit/bootstrap/test_shutdown_lifecycle.py",
+    "backend/src/binance_auto_trader/bootstrap/resource_cleanup.py",
+    "backend/tests/integration/test_shutdown_completion.py",
+    "backend/tests/unit/binance/test_subscription_cleanup.py"
+  ],
+  "changed_declarations": 80,
+  "gaps": []
+}

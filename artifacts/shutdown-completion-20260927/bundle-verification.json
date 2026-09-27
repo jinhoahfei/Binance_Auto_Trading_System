@@ -1,0 +1,10 @@
+{
+  "binary": "/Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader.app/Contents/MacOS/binance-auto-sidecar",
+  "sha256": "636630c0bd881f71a17c0ec4d5e3c3ee90d6671bca7874a7a3fb85e36da2db11",
+  "source_modules_compared": 127,
+  "all_source_modules_match": true,
+  "production_modules_loaded_from_bundle": 115,
+  "source_fallback_allowed": false,
+  "tests_run": 99,
+  "successful": true
+}

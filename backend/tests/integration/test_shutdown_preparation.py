@@ -26,6 +26,12 @@ from tests.integration.test_buy_sell_flow import _create_buy_flow_fixture, _exec
 
 
 class ShutdownPreparationTests(unittest.TestCase):
+    """
+    클래스 이름: ShutdownPreparationTests
+    기능: 모의 거래소에서 종료 준비의 상태 검증·자원 정리·재시도를 검증한다.
+    작성 날짜: 2026/09/27
+    """
+
     def setUp(self):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -202,16 +208,30 @@ class ShutdownPreparationTests(unittest.TestCase):
             self.assertTrue(worker.close(timeout=1))
             object.__setattr__(self.f.runtime, "_account_stream_recovery_worker", original)
 
-    def test_unverified_session_handle_cleanup_does_not_claim_safe_retry(self):
+    def test_failed_session_handle_is_retained_until_retry_confirms_cleanup(self):
+        """
+        함수 이름: test_failed_session_handle_is_retained_until_retry_confirms_cleanup()
+        기능: 실패한 구독을 보존하고 성공한 재시도 후에만 종료 준비가 완료되는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
         handle = Mock()
         handle.close.side_effect = OSError('subscription close failed')
         self.c.register_session_subscription(handle)
         self.prepare()
         state = self.finish()
         self.assertEqual(state['reason_code'], 'SHUTDOWN_RESOURCE_CLEANUP_FAILED')
-        self.assertFalse(state['retryable'])
+        self.assertTrue(state['retryable'])
         self.assertFalse(self.f.runtime.state.closed)
         self.assertTrue(self.c.cleanup_failures)
+        self.assertIn(handle, self.c._session_subscriptions)
+        handle.close.side_effect = None
+        self.prepare()
+        self.assertEqual(self.finish()['phase'], 'ready')
+        self.assertFalse(self.c.cleanup_failures)
+        self.assertNotIn(handle, self.c._session_subscriptions)
+        self.assertEqual(handle.close.call_count, 2)
 
 
 class OrderPreparationTests(unittest.TestCase):

@@ -1,0 +1,20 @@
+{
+  "installed_app": "/Applications/Binance Auto Trader.app",
+  "verified_build": "/Users/oscar/Desktop/Binance_Auto/UI/apps/desktop/src-tauri/target/release/bundle/macos/Binance Auto Trader.app",
+  "backup": "/Users/oscar/Desktop/Binance_Auto/artifacts/shutdown-completion-20260927/previous-installed-app",
+  "all_files_identical": true,
+  "files_verified": 5,
+  "sha256": {
+    "Contents/Info.plist": "8d9ef71e4e0b32433149ab77ac2e82169b5fee502cc26b68894c64d4cab5ff81",
+    "Contents/_CodeSignature/CodeResources": "7766f36f39586adbb42003dbf28b26800f84e1de06534721d733b1550372b292",
+    "Contents/MacOS/binance-auto-trader": "67a5b76c8bd4641e5f936d89abc7ab8938a1c6770f8b29b943e231579a1a6c8a",
+    "Contents/MacOS/binance-auto-sidecar": "636630c0bd881f71a17c0ec4d5e3c3ee90d6671bca7874a7a3fb85e36da2db11",
+    "Contents/Resources/icon.icns": "2cc657772e9cecbd47ae4a0572fb3cfed7e198ea236795f5f2573f3fc8736ec3"
+  },
+  "signature": "ad-hoc, deep strict verification passed",
+  "installed_app_launched": false,
+  "existing_debug_sidecar_untouched": true,
+  "installed_source_modules_verified": 127,
+  "all_installed_source_modules_match": true,
+  "tested_sidecar_matches_installed": true
+}

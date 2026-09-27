@@ -11,6 +11,8 @@ import json
 from threading import RLock
 from typing import Callable, Protocol
 
+from binance_auto_trader.adapters.binance.request_deadline import deadline_lock
+
 from binance_auto_trader.domain.market import (
     Interval,
     Kline,
@@ -137,7 +139,13 @@ class _ManagedSubscription:
 
     __slots__ = (
         "_close_lock",
+        "_cleanup_lock",
         "_closed",
+        "_close_completed",
+        "_close_active",
+        "_closing_notified",
+        "_closed_notified",
+        "_transport_closed",
         "_on_closing",
         "_on_closed",
         "_transport_subscription",
@@ -167,28 +175,46 @@ class _ManagedSubscription:
         self._on_closing = on_closing
         self._on_closed = on_closed
         self._close_lock = RLock()
+        self._cleanup_lock = RLock()
         self._closed = False
+        self._close_completed = False
+        self._close_active = False
+        self._closing_notified = False
+        self._closed_notified = False
+        self._transport_closed = False
 
     def close(self) -> None:
         """
         함수 이름: close()
-        기능: transport handle을 한 번만 닫고 성공 여부와 무관하게 Gateway를 종료한다.
+        기능: Gateway 수신을 먼저 막고 실제 transport 정리에 성공할 때만 완료를 확정한다.
         인자: 없음
         반환값: 없음
         작성 날짜: 2026/08/20
         """
-        with self._close_lock:
-            if self._closed:
-                return
-            self._closed = True
-
-        # 일부 test double과 transport는 close 안에서 disconnect를 동기 호출하므로 먼저 의도를 기록한다.
-        if self._on_closing is not None:
-            self._on_closing()
-        try:
-            self._transport_subscription.close()
-        finally:
-            self._on_closed()
+        with deadline_lock(self._cleanup_lock):
+            with deadline_lock(self._close_lock):
+                if self._close_completed or self._close_active:
+                    return
+                self._closed = True
+                self._close_active = True
+            try:
+                # 소유자 표식은 최초 socket 정리 전에 게시하되 실패를 완료로 취급하지 않는다.
+                if not self._closing_notified:
+                    if self._on_closing is not None:
+                        self._on_closing()
+                    self._closing_notified = True
+                try:
+                    if not self._transport_closed:
+                        if self._transport_subscription.close() is False:
+                            raise TimeoutError("subscription worker is still active")
+                        self._transport_closed = True
+                finally:
+                    if not self._closed_notified:
+                        self._on_closed()
+                        self._closed_notified = True
+                self._close_completed = True
+            finally:
+                self._close_active = False
 
     @property
     def connected(self) -> bool:

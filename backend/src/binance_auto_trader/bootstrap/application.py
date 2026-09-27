@@ -21,6 +21,7 @@ from binance_auto_trader.adapters.binance import (
     WebSocketGateway,
 )
 from binance_auto_trader.adapters.filesystem import CSVFileGateway
+from binance_auto_trader.adapters.binance.request_deadline import deadline_lock
 from binance_auto_trader.adapters.persistence import TradeHistoryRepository
 from binance_auto_trader.application import (
     AccountStreamRecoveryBlockedError,
@@ -380,6 +381,19 @@ class _ApplicationStateStore:
 
 
 @dataclass(slots=True)
+class _ShutdownFlight:
+    """
+    클래스 이름: _ShutdownFlight
+    기능: 종료 재시도가 시작되어도 이전 요청 대기자가 자신의 결과를 읽게 한다.
+    작성 날짜: 2026/09/27
+    """
+
+    completion_event: Event = field(default_factory=Event, repr=False)
+    result: object | None = field(default=None, repr=False)
+    error: BaseException | None = field(default=None, repr=False)
+
+
+@dataclass(slots=True)
 class _ApplicationShutdownStore:
     """
     클래스 이름: _ApplicationShutdownStore
@@ -389,15 +403,18 @@ class _ApplicationShutdownStore:
 
     in_progress: bool = False
     expected_version: int | None = None
-    completion_event: Event = field(
-        default_factory=Event,
-        repr=False,
-        compare=False,
-    )
+    flight_lock: RLock = field(default_factory=RLock, repr=False, compare=False)
+    flight: _ShutdownFlight | None = field(default=None, repr=False)
     result: object | None = field(default=None, repr=False, compare=False)
     error: BaseException | None = field(default=None, repr=False, compare=False)
     preparation_lock: RLock = field(default_factory=RLock, repr=False, compare=False)
     preparation: object | None = field(default=None, repr=False, compare=False)
+    cleanup_lock: RLock = field(default_factory=RLock, repr=False, compare=False)
+    cleanup_requested: set[str] = field(default_factory=set)
+    cleanup_active: set[str] = field(default_factory=set)
+    cleanup_completed: set[str] = field(default_factory=set)
+    cleanup_errors: dict[str, BaseException] = field(default_factory=dict, repr=False)
+    cleanup_finished: bool = False
 
 
 class _AccountStreamRecoveryWorker:
@@ -506,7 +523,7 @@ class _AccountStreamRecoveryWorker:
         작성 날짜: 2026/08/22
         """
         # 중단 신호와 현재 thread identity를 같은 worker lock 아래에서 원자적으로 읽는다.
-        with self._state_lock:
+        with deadline_lock(self._state_lock):
             self._closed = True
             self._rerun_requested = False
             self._stop_event.set()
@@ -881,7 +898,7 @@ class _TradingEventRuntimeWorker:
         작성 날짜: 2026/08/24
         """
         # Stop과 현재 thread identity를 worker lock 아래에서 원자적으로 확정한다.
-        with self._state_lock:
+        with deadline_lock(self._state_lock):
             self._closed = True
             self._stop_event.set()
             self._wake_event.set()

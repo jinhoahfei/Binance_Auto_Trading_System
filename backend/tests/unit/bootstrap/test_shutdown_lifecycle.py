@@ -188,11 +188,11 @@ class ShutdownLifecycleTests(unittest.TestCase):
                 작성 날짜: 2026/09/04
                 """
 
-                def run_cleanup_operation() -> None:
+                def run_cleanup_operation(*, timeout: float | None = None) -> None:
                     """
                     함수 이름: run_cleanup_operation()
                     기능: 해당 자원 시도를 기록하고 fixture의 예외를 그대로 발생시킨다.
-                    인자: 없음
+                    인자: timeout -> worker 종료의 남은 시간, 이 fixture에서는 별도 대기하지 않음
                     반환값: 성공하면 없음
                     작성 날짜: 2026/09/04
                     """
@@ -360,11 +360,13 @@ class ShutdownLifecycleTests(unittest.TestCase):
 
             def close_and_release(
                 worker: _AccountStreamRecoveryWorker,
-            ) -> None:
+                timeout: float | None = None,
+            ) -> bool:
                 """
                 함수 이름: close_and_release()
                 기능: shutdown이 market worker close에 도달한 순간 publication 대기를 해제한다.
                 인자: worker -> shutdown이 닫는 recovery worker
+                    timeout -> 현재 종료 작업의 남은 초
                 반환값: production close 결과
                 작성 날짜: 2026/08/25
                 """
@@ -372,7 +374,7 @@ class ShutdownLifecycleTests(unittest.TestCase):
                 if worker is market_recovery_worker:
                     close_entered.set()
                     release_publication.set()
-                original_close(worker)
+                return original_close(worker, timeout=timeout)
 
             def run_shutdown() -> None:
                 """

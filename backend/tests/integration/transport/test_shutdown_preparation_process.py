@@ -16,6 +16,12 @@ from tests.integration.transport.test_framed_sidecar_process import TEST_ORIGIN,
 
 
 class ShutdownPreparationProcessTests(unittest.TestCase):
+    """
+    클래스 이름: ShutdownPreparationProcessTests
+    기능: 실제 자식 프로세스와 로컬 HTTP에서 안전 종료와 재시도를 검증한다.
+    작성 날짜: 2026/09/27
+    """
+
     def test_prepare_response_replay_status_poll_and_verified_process_exit(self):
         self.exercise_shutdown(False)
 
@@ -25,13 +31,32 @@ class ShutdownPreparationProcessTests(unittest.TestCase):
     def test_held_position_with_stale_completed_order_liquidates_and_exits_actual_process(self):
         self.exercise_shutdown(False, stale_order=True)
 
-    def exercise_shutdown(self, earn, stale_order=False):
+    def test_cleanup_failure_after_liquidation_retries_without_another_sell_and_exits(self):
+        """
+        함수 이름: test_cleanup_failure_after_liquidation_retries_without_another_sell_and_exits()
+        기능: 실제 자식 프로세스에서 매도 뒤 정리 실패·인증 조회·재시도·정상 종료를 확인한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        self.exercise_shutdown(False, stale_order=True, retry_cleanup=True)
+
+    def exercise_shutdown(self, earn, stale_order=False, retry_cleanup=False):
+        """
+        함수 이름: exercise_shutdown()
+        기능: 모의 거래소를 쓰는 실제 sidecar의 인증된 종료 흐름과 저장 결과를 검증한다.
+        인자: earn -> 보상 잔고 재현, stale_order -> 매도 사유·복귀 상태 재현
+            retry_cleanup -> 최종 자원 정리의 일시 실패 재현
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
         backend_root = Path(__file__).resolve().parents[3]
         token = secrets.token_urlsafe(32)
         with TemporaryDirectory() as directory:
             environment = {'PYTHONPATH': os.pathsep.join((str(backend_root/'src'),str(backend_root))), 'PYTHONUNBUFFERED':'1','PYTHONDONTWRITEBYTECODE':'1'}
             if earn: environment['SHUTDOWN_FIXTURE_EARN'] = '1'
             if stale_order: environment['SHUTDOWN_FIXTURE_STALE_ORDER'] = '1'
+            if retry_cleanup: environment['SHUTDOWN_FIXTURE_RETRY_CLEANUP'] = '1'
             if os.name=='nt': environment['SystemRoot']=os.environ['SystemRoot']
             child = subprocess.Popen([sys.executable,'-m','tests.integration.shutdown_preparation_process_fixture'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=directory,env=environment)
             try:
@@ -71,12 +96,21 @@ class ShutdownPreparationProcessTests(unittest.TestCase):
                     self.assertEqual(details['exchange_spot_quantity'], '0.00009601')
                 self.assertIsNone(child.poll())
                 status,final=request(descriptor,token,'POST','/v1/shutdown',{'schema_version':3,'expected_version':progress['data']['version']})
+                if retry_cleanup:
+                    self.assertEqual(status, 500, final)
+                    self.assertIsNone(child.poll())
+                    status, basis = request(descriptor, token, 'GET', '/v1/shutdown/state')
+                    self.assertEqual(status, 200, basis)
+                    status, final = request(descriptor, token, 'POST', '/v1/shutdown',
+                        {'schema_version': 3, 'expected_version': basis['data']['version']})
                 self.assertEqual(status,202,final)
                 self.assertTrue(final['data']['accepted'])
                 write_json_frame(child.stdin,{'type':'CLOSED_ACK'})
                 self.assertEqual(child.wait(timeout=5),0)
                 ownership=json.loads((Path(directory)/'.backend-runtime.lock').read_text())
                 self.assertEqual(ownership['owner_state'],'RELEASED')
+                if retry_cleanup:
+                    self.assertGreaterEqual(len(json.loads((Path(directory) / 'cleanup-attempts.json').read_text())), 2)
                 if stale_order:
                     trades = [json.loads(line) for line in (Path(directory)/'deterministic-case2.jsonl').read_text().splitlines()]
                     self.assertEqual([trade['side'] for trade in trades], ['BUY', 'SELL'])
