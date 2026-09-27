@@ -1,19 +1,24 @@
-//! macOS native Keychain profile을 launch 동안 고정해 credential과 owner namespace를 함께 선택한다.
+//! Native execution profile을 launch 동안 고정해 credential과 owner namespace를 함께 선택한다.
 
 use super::*;
+#[cfg(target_os = "macos")]
 use security_framework::passwords::{generic_password, PasswordOptions};
+#[cfg(target_os = "macos")]
 use std::sync::OnceLock;
 
 pub(super) const LIVE_SERVICE: &str = "com.binance-auto.trader.live";
+#[cfg(target_os = "macos")]
 const PROFILE_SERVICE: &str = "com.binance-auto.trader.desktop-profile";
+#[cfg(target_os = "macos")]
 const PROFILE_ACCOUNT: &str = "execution-profile";
-static PROFILE: OnceLock<Result<MacosExecutionProfile, SidecarFailure>> = OnceLock::new();
+#[cfg(target_os = "macos")]
+static PROFILE: OnceLock<Result<ExecutionProfile, SidecarFailure>> = OnceLock::new();
 
-/// 클래스 이름: MacosExecutionProfile
+/// 클래스 이름: ExecutionProfile
 /// 기능: native 설정 도구가 승인한 credential·storage·order 선택을 launch 동안 보존한다.
 /// 작성 날짜: 2026/09/08
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum MacosExecutionProfile {
+pub(super) enum ExecutionProfile {
     Testnet,
     LiveReadOnly,
     LiveOrders,
@@ -25,12 +30,12 @@ pub(super) enum MacosExecutionProfile {
 /// 인자: value -> Keychain profile bytes 또는 item 부재
 /// 반환값: immutable mode 또는 startup failure
 /// 작성 날짜: 2026/09/08
-fn parse_profile(value: Option<&[u8]>) -> Result<MacosExecutionProfile, SidecarFailure> {
+pub(super) fn parse_profile(value: Option<&[u8]>) -> Result<ExecutionProfile, SidecarFailure> {
     // 공백·unknown version은 Testnet으로 fallback하지 않는다.
     match value {
-        None | Some(b"TESTNET") => Ok(MacosExecutionProfile::Testnet),
-        Some(b"LIVE_READ_ONLY") => Ok(MacosExecutionProfile::LiveReadOnly),
-        Some(b"LIVE_ORDERS_V1") => Ok(MacosExecutionProfile::LiveOrders),
+        None | Some(b"TESTNET") => Ok(ExecutionProfile::Testnet),
+        Some(b"LIVE_READ_ONLY") => Ok(ExecutionProfile::LiveReadOnly),
+        Some(b"LIVE_ORDERS_V1") => Ok(ExecutionProfile::LiveOrders),
         _ => Err(SidecarFailure::startup()),
     }
 }
@@ -41,7 +46,8 @@ fn parse_profile(value: Option<&[u8]>) -> Result<MacosExecutionProfile, SidecarF
 /// 인자: 없음
 /// 반환값: launch 전용 profile 또는 동일 failure
 /// 작성 날짜: 2026/09/08
-pub(super) fn selected_profile() -> Result<MacosExecutionProfile, SidecarFailure> {
+#[cfg(target_os = "macos")]
+pub(super) fn selected_profile() -> Result<ExecutionProfile, SidecarFailure> {
     // Item 부재만 disabled 기본값으로 인정하고 Keychain 접근 오류는 숨기지 않는다.
     PROFILE
         .get_or_init(|| {
@@ -63,8 +69,8 @@ pub(super) fn selected_profile() -> Result<MacosExecutionProfile, SidecarFailure
 /// 인자: original -> 기존 Tauri app-data, profile -> frozen native profile
 /// 반환값: 선택된 namespace directory
 /// 작성 날짜: 2026/09/08
-pub(super) fn profile_directory(original: PathBuf, profile: MacosExecutionProfile) -> PathBuf {
-    if profile == MacosExecutionProfile::Testnet {
+pub(super) fn profile_directory(original: PathBuf, profile: ExecutionProfile) -> PathBuf {
+    if profile == ExecutionProfile::Testnet {
         original
     } else {
         original.join(LIVE_SERVICE) // 기존 이력을 live directory로 복사하지 않는다.
@@ -93,13 +99,13 @@ struct LiveBootstrapWire<'a> {
 /// 작성 날짜: 2026/09/08
 pub(super) fn serialize_profile_configuration(
     mut configuration: SidecarBootstrapConfiguration<'_>,
-    profile: MacosExecutionProfile,
+    profile: ExecutionProfile,
 ) -> Result<Zeroizing<Vec<u8>>, SidecarFailure> {
-    if profile == MacosExecutionProfile::Testnet {
+    if profile == ExecutionProfile::Testnet {
         return serialize_bootstrap_configuration(&configuration);
     }
     // Live order 권한은 별도 native profile 하나에서만 cap과 동시에 활성화한다.
-    let allow_live_orders = profile == MacosExecutionProfile::LiveOrders;
+    let allow_live_orders = profile == ExecutionProfile::LiveOrders;
     configuration.max_notional = if allow_live_orders { Some("10") } else { None };
     let payload = Zeroizing::new(
         serde_json::to_vec(&LiveBootstrapWire {
@@ -130,14 +136,14 @@ mod tests {
     #[test]
     fn profile_is_exact_and_namespace_isolated() {
         // Profile 누락과 unknown은 서로 다른 결과여야 한다.
-        assert_eq!(parse_profile(None).unwrap(), MacosExecutionProfile::Testnet);
+        assert_eq!(parse_profile(None).unwrap(), ExecutionProfile::Testnet);
         assert_eq!(
             parse_profile(Some(b"LIVE_READ_ONLY")).unwrap(),
-            MacosExecutionProfile::LiveReadOnly
+            ExecutionProfile::LiveReadOnly
         );
         assert_eq!(
             parse_profile(Some(b"LIVE_ORDERS_V1")).unwrap(),
-            MacosExecutionProfile::LiveOrders
+            ExecutionProfile::LiveOrders
         );
         for invalid in [
             b"LIVE".as_slice(),
@@ -149,7 +155,7 @@ mod tests {
         }
         let original = PathBuf::from("/private/example");
         assert_ne!(
-            profile_directory(original.clone(), MacosExecutionProfile::LiveReadOnly),
+            profile_directory(original.clone(), ExecutionProfile::LiveReadOnly),
             original
         );
     }
@@ -163,8 +169,8 @@ mod tests {
     fn native_live_wire_binds_cap_and_readonly_namespace() {
         // 두 live profile은 같은 live namespace를 사용하되 mutation flag와 cap만 함께 바뀐다.
         for profile in [
-            MacosExecutionProfile::LiveReadOnly,
-            MacosExecutionProfile::LiveOrders,
+            ExecutionProfile::LiveReadOnly,
+            ExecutionProfile::LiveOrders,
         ] {
             let payload = serialize_profile_configuration(
                 SidecarBootstrapConfiguration {
@@ -186,9 +192,9 @@ mod tests {
             assert_eq!(decoded["allow_testnet_orders"], false);
             assert_eq!(
                 decoded["allow_live_orders"],
-                profile == MacosExecutionProfile::LiveOrders
+                profile == ExecutionProfile::LiveOrders
             );
-            if profile == MacosExecutionProfile::LiveOrders {
+            if profile == ExecutionProfile::LiveOrders {
                 assert_eq!(decoded["max_notional"], "10");
             } else {
                 assert!(decoded["max_notional"].is_null());

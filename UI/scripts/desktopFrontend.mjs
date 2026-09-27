@@ -2,20 +2,21 @@
 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 
 /**
  * 함수 이름: main()
- * 기능: Windows 개발 모드의 Python 사전 검사 뒤 Vite를 동일 Node runtime에서 실행한다.
+ * 기능: Windows Python 사전 검사 뒤 개발 서버 또는 sidecar·UI 배포 빌드를 실행한다.
  * 인자: 없음
  * 반환값: 종료 시 process exit code
  * 작성 날짜: 2026/09/06
  */
 async function main() {
-    // Release origin은 Windows native 검증 전이므로 package 명령을 개발 실행으로 우회하지 않는다.
-    if (process.argv[2] !== 'dev' || process.platform !== 'win32' || process.arch !== 'x64') {
-        throw new Error('Windows 11 x64 source development is required.');
+    const command = process.argv[2];
+    if (!['dev', 'build'].includes(command) || process.platform !== 'win32' || process.arch !== 'x64') {
+        throw new Error('Windows x64 development or build environment is required.');
     }
 
     // Shell quoting과 PATH의 다른 Python을 피하고 repository의 설치된 venv만 검사한다.
@@ -33,6 +34,23 @@ async function main() {
 
     // Vite API를 사용해 PowerShell/cmd와 .bin shell shim 차이를 제거한다.
     process.chdir(ui_directory);
+    if (command === 'build') {
+        const package_result = spawnSync(python_path, [path.resolve(ui_directory, '../scripts/package_sidecar_windows.py')], {
+            cwd: ui_directory, stdio: 'inherit',
+        });
+        if (package_result.error || package_result.status !== 0) throw new Error('Windows sidecar packaging failed.');
+        const require = createRequire(import.meta.url);
+        // TypeScript 7은 bin/tsc를 exports에 공개하지 않으므로 package.json의 bin을 해석한다.
+        const typescript_package = require('typescript/package.json');
+        const typescript_entrypoint = path.resolve(path.dirname(require.resolve('typescript/package.json')), typescript_package.bin.tsc);
+        const typecheck = spawnSync(process.execPath, [typescript_entrypoint, '-b'], {
+            cwd: ui_directory, stdio: 'inherit',
+        });
+        if (typecheck.error || typecheck.status !== 0) throw new Error('Frontend type checking failed.');
+        const { build } = await import('vite');
+        await build();
+        return;
+    }
     const { createServer } = await import('vite');
     const server = await createServer({ server: { host: '127.0.0.1', port: 5173, strictPort: true } });
     await server.listen();  // Native exact Origin 계약의 고정 port에서만 개발 서버를 연다.
@@ -41,6 +59,6 @@ async function main() {
 
 main().catch((error) => {
     // 사전 검사의 child stderr와 환경 값은 출력하지 않고 고정된 운영 안내만 남긴다.
-    console.error(`desktop:dev: ${error.message}`);
+    console.error(`desktop: ${error.message}`);
     process.exitCode = 1;
 });

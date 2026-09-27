@@ -31,7 +31,7 @@ const vite = await createServer({ configFile: false, root: path.join(root, 'UI')
 const { BackendUiAdapter } = await vite.ssrLoadModule('/src/shared/api/BackendUiAdapter.ts');
 const { BackendConnectionDiagnosticWriter } = await vite.ssrLoadModule('/src/shared/api/backendConnectionDiagnostics.ts');
 const stderr = await open(path.join(output, 'backend-stderr.log'), 'wx', 0o600);
-const child = spawn(path.join(root, 'backend/.venv/bin/python'), [path.join(root, 'scripts/backend_connection_soak_fixture.py'), path.join(output, 'backend')],
+const child = spawn(path.join(root, 'backend', '.venv', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'])), [path.join(root, 'scripts/backend_connection_soak_fixture.py'), path.join(output, 'backend')],
     { cwd: root, env: { ...process.env, PYTHONPATH: path.join(root, 'backend/src'), BINANCE_RUN_TESTNET: '0', BINANCE_RUN_TESTNET_ORDERS: '0' }, stdio: ['pipe', 'pipe', stderr.fd] });
 const lines = createInterface({ input: child.stdout });
 const iterator = lines[Symbol.asyncIterator]();

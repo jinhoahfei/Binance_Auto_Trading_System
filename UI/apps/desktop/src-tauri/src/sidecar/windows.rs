@@ -1,4 +1,4 @@
-//! Windows development sidecar를 credential, filesystem, process와 IPC adapter로 조합한다.
+//! Windows development and bundled sidecar를 credential, filesystem, process와 IPC adapter로 조합한다.
 
 mod credentials;
 mod files;
@@ -6,6 +6,7 @@ mod ipc;
 mod process;
 
 use super::*;
+use super::execution_profile::{profile_directory, ExecutionProfile};
 use std::fs;
 use std::os::windows::fs::MetadataExt;
 use std::os::windows::process::CommandExt;
@@ -24,7 +25,7 @@ pub(super) use process::runtime_process_exists;
 pub(super) fn resolve_app_data_directory(
     _app_handle: &AppHandle,
 ) -> Result<PathBuf, SidecarFailure> {
-    files::resolve_app_data_directory() // Windows Roaming 기본값을 사용하지 않는다.
+    Ok(profile_directory(files::resolve_app_data_directory()?, credentials::selected_profile()?)) // Windows Roaming 기본값을 사용하지 않는다.
 }
 
 
@@ -80,32 +81,42 @@ fn development_python_executable() -> Result<PathBuf, SidecarFailure> {
 pub(super) fn platform_prepare_backend_sidecar(
     app_handle: &AppHandle,
 ) -> Result<BackendSidecarPreparation, SidecarFailure> {
-    // Packaged Windows origin은 Session 6 실제 WebView 확인 전까지 credentials 조회보다 먼저 차단한다.
-    if !cfg!(all(debug_assertions, target_arch = "x86_64")) || !tauri::is_dev() {
+    if !cfg!(target_arch = "x86_64") {
         return Err(SidecarFailure::startup());
     }
-    let python_path = development_python_executable()?;
+    let executable = if tauri::is_dev() {
+        development_python_executable()?
+    } else {
+        bundled_sidecar_executable()?
+    };
+    let profile = credentials::selected_profile()?;
     let app_data_directory = resolve_app_data_directory(app_handle)?;
     ensure_private_app_data_directory(&app_data_directory)?;
-    let history_path = build_history_path(&app_data_directory)?;
-    let credentials = credentials::read_credentials()?;
+    let history_path = if profile == ExecutionProfile::Testnet {
+        build_history_path(&app_data_directory)?
+    } else {
+        app_data_directory.join("trade-history.jsonl").to_str()
+            .ok_or_else(SidecarFailure::startup)?.to_owned()
+    };
+    let credentials = credentials::read_credentials(profile)?;
     let mut token = Zeroizing::new(generate_session_token()?);
     let configuration = SidecarBootstrapConfiguration {
         schema_version: BACKEND_SCHEMA_VERSION,
-        allowed_origin: select_allowed_origin(true),
+        allowed_origin: select_allowed_origin(tauri::is_dev()),
         history_path: &history_path,
         api_key: &credentials.api_key,
         api_secret: &credentials.api_secret,
         allow_testnet_orders: false,
         max_notional: None,
     };
-    let bootstrap_payload = framed::serialize_bootstrap_frame(&token, &configuration)?;
+    let bootstrap_payload = framed::serialize_bootstrap_frame(&token, configuration, profile)?;
 
     // Python -I는 PYTHONPATH/user-site를 차단하며 secret 환경은 전부 제거한다.
-    let mut command = Command::new(python_path);
-    command
-        .args(["-I", "-m", "binance_auto_trader.sidecar"])
-        .env_clear()
+    let mut command = Command::new(executable);
+    if tauri::is_dev() {
+        command.args(["-I", "-m", "binance_auto_trader.sidecar"]);
+    }
+    command.env_clear()
         .current_dir(&app_data_directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -175,4 +186,21 @@ pub(super) fn platform_prepare_backend_sidecar(
         stop_writer,
         port,
     }))
+}
+
+
+/// Installed sidecars are colocated with the app; never execute a PATH lookup or a reparse target.
+fn bundled_sidecar_executable() -> Result<PathBuf, SidecarFailure> {
+    let executable = std::env::current_exe().map_err(|_| SidecarFailure::startup())?;
+    let directory = executable.parent().ok_or_else(SidecarFailure::startup)?;
+    let sidecar = directory.join("binance-auto-sidecar.exe");
+    let metadata = fs::symlink_metadata(&sidecar).map_err(|_| SidecarFailure::startup())?;
+    if !metadata.is_file()
+        || metadata.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || sidecar.canonicalize().map_err(|_| SidecarFailure::startup())?.parent()
+            != Some(directory.canonicalize().map_err(|_| SidecarFailure::startup())?.as_path())
+    {
+        return Err(SidecarFailure::startup());
+    }
+    Ok(sidecar)
 }

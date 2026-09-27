@@ -72,10 +72,8 @@ pub fn collect(native_pid: u32, backend_pid: Option<u32>) -> Value {
             _ => {}
         }
         match err.read(&mut buffer) {
-            Ok(n) if n > 0 => {
-                if errors.len() < 8192 {
-                    errors.extend_from_slice(&buffer[..n]);
-                }
+            Ok(n) if n > 0 && errors.len() < 8192 => {
+                errors.extend_from_slice(&buffer[..n]);
             }
             _ => {}
         }
@@ -131,6 +129,7 @@ pub fn collect(_native_pid: u32, _backend_pid: Option<u32>) -> Value {
 /// 인자: message -> 로그 메시지, pid -> 대상 프로세스 ID
 /// 반환값: 대상 PID가 명시되어 있으면 true
 /// 작성 날짜: 2026/09/17
+#[cfg(any(target_os = "macos", test))]
 fn owns_message(message: &str, pid: u32) -> bool {
     // PID 일부 일치나 다른 WebContent process를 당해 앱의 증거로 삼지 않는다.
     [
@@ -156,6 +155,7 @@ fn owns_message(message: &str, pid: u32) -> bool {
 /// 인자: records -> 공개 로그 행, native_pid -> 앱 PID, backend_pid -> 선택적 backend PID
 /// 반환값: 원문 자유 문자열을 제외한 정규화 증거 JSON
 /// 작성 날짜: 2026/09/17
+#[cfg(any(target_os = "macos", test))]
 pub fn normalize(records: &[Value], native_pid: u32, backend_pid: Option<u32>) -> Value {
     // 정확한 대상 PID와 신뢰한 OS 출처의 기록만 분류한다.
     let mut events = Vec::new();

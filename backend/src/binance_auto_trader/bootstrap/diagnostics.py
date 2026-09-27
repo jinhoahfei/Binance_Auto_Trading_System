@@ -1,6 +1,7 @@
 """운영 로그 저장 경로와 application 진단 sink를 composition root에서 연결한다."""
 
 from pathlib import Path
+import sys
 
 from binance_auto_trader.adapters.filesystem.diagnostic_log_writer import DiagnosticLogWriter
 from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
@@ -18,6 +19,12 @@ def resolve_log_directory() -> Path:
     for parent in Path(__file__).resolve().parents:
         if (parent / "CODING_CONVENTIONS.md").is_file():
             return parent / "Log_History"
+
+    if sys.platform == "win32":
+        from binance_auto_trader.adapters.platform.windows_paths import get_local_app_data_directory
+
+        # Packaged child는 USERPROFILE을 상속하지 않으므로 사용자 위치를 native known folder로 조회한다.
+        return get_local_app_data_directory() / "logs" / "backend"
 
     # Packaged sidecar에서도 사용자가 지정한 Desktop 프로젝트가 있으면 그 경로를 유지한다.
     desktop_project = Path.home() / "Desktop" / "Binance_Auto"

@@ -8,10 +8,14 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
-import resource
 import stat
 import subprocess
 import sys
+
+try:
+    import resource
+except ModuleNotFoundError:
+    resource = None  # macOS-only runner remains importable for portable offline contract tests.
 
 
 # Keychain source와 Testnet permission 환경 이름은 CLI로 바꿀 수 없는 상수로 고정한다.
@@ -638,6 +642,8 @@ def harden_runner_process() -> None:
     반환값: 없음
     작성 날짜: 2026/08/31
     """
+    if sys.platform != "darwin" or resource is None:
+        raise TestnetKeychainRunnerError()
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         os.umask(0o077)  # Exec 뒤 unittest가 만드는 임시 artifact에도 owner-only 기본 권한을 유지한다.

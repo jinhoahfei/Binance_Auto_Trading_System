@@ -3,7 +3,10 @@
 import argparse
 import json
 from pathlib import Path
-from analyze_runtime_incidents import read_records, analyze
+if __package__:
+    from .analyze_runtime_incidents import read_records, analyze
+else:
+    from analyze_runtime_incidents import read_records, analyze
 
 
 def validate(root):

@@ -35,7 +35,7 @@ _MAX_HISTORY_PATH_LENGTH = 4_096
 _MAX_CREDENTIAL_LENGTH = 1_024
 _APPROVED_RISK_POLICY_VERSION = 1
 _ALLOWED_ORIGIN_PATTERN = re.compile(
-    r"^(?:tauri://[A-Za-z0-9.-]+|https?://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)$"
+    r"^(?:tauri://[A-Za-z0-9.-]+|http://tauri\.localhost|https?://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)$"
 )
 _CONFIGURATION_FIELDS = frozenset(
     {

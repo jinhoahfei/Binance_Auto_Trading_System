@@ -8,11 +8,15 @@ import hashlib
 from io import StringIO
 import os
 from pathlib import Path
-import resource
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, call, patch
+
+try:
+    import resource
+except ModuleNotFoundError:
+    resource = None
 
 from scripts.run_testnet_from_keychain import (
     BACKEND_ROOT,
@@ -213,6 +217,7 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
             zeroize_secret_buffer(api_key_buffer)
             zeroize_secret_buffer(api_secret_buffer)
 
+    @unittest.skipUnless(os.name == "posix", "macOS runner uses POSIX baseline descriptors")
     def test_verified_baseline_is_optional_and_shared_by_both_modes(self) -> None:
         """
         함수 이름: test_verified_baseline_is_optional_and_shared_by_both_modes()
@@ -285,6 +290,7 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
             zeroize_secret_buffer(api_key_buffer)
             zeroize_secret_buffer(api_secret_buffer)
 
+    @unittest.skipUnless(os.name == "posix", "macOS runner validates POSIX symlink and permission rules")
     def test_baseline_validation_rejects_external_symlink_and_wrong_name(self) -> None:
         """
         함수 이름: test_baseline_validation_rejects_external_symlink_and_wrong_name()
@@ -345,6 +351,7 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
                         with self.assertRaises(TestnetKeychainRunnerError):
                             validate_baseline_history_path(invalid_path)
 
+    @unittest.skipUnless(os.name == "posix", "macOS runner uses POSIX baseline descriptors")
     def test_baseline_descriptor_pins_inode_and_rejects_hardlinks(self) -> None:
         """
         함수 이름: test_baseline_descriptor_pins_inode_and_rejects_hardlinks()
@@ -391,6 +398,8 @@ class TestnetKeychainRunnerTests(unittest.TestCase):
                 with self.assertRaises(TestnetKeychainRunnerError):
                     open_verified_baseline_history(hardlink_path)
 
+    @unittest.skipUnless(resource is not None, "POSIX core-dump policy is unavailable on Windows")
+    @patch("scripts.run_testnet_from_keychain.sys.platform", "darwin")
     def test_production_hardener_sets_core_limit_and_owner_umask(self) -> None:
         """
         함수 이름: test_production_hardener_sets_core_limit_and_owner_umask()

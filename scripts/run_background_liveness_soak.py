@@ -5,8 +5,18 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import subprocess
+import sys
 
-from validate_background_soak import validate
+if __package__:
+    from .validate_background_soak import validate
+else:
+    from validate_background_soak import validate
+
+
+def background_soak_binary(root: Path) -> Path:
+    """Resolve the native diagnostic executable without relying on shell suffix lookup."""
+    name = "background-liveness-soak.exe" if sys.platform == "win32" else "background-liveness-soak"
+    return root / "UI/apps/desktop/src-tauri/target/debug" / name
 
 
 def main():
@@ -32,29 +42,29 @@ def main():
     status_path = output.with_suffix(".status.json")
     stream_path = output.with_suffix(".runner.log")
     root = Path(__file__).resolve().parents[1]
-    binary = root / "UI/apps/desktop/src-tauri/target/debug/background-liveness-soak"
+    binary = background_soak_binary(root)
     status = {"status": "starting", "started_at": datetime.now(timezone.utc).isoformat(),
               "target_seconds": args.seconds, "phase": args.phase, "output": str(output), "orders_enabled": False}
-    with status_path.open("x") as stream:
+    with status_path.open("x", encoding="utf-8") as stream:
         json.dump(status, stream, indent=2)
     try:
-        with stream_path.open("x") as stream:
+        with stream_path.open("x", encoding="utf-8") as stream:
             child = subprocess.Popen([str(binary), "--output", str(output), "--seconds", str(args.seconds),
                 "--phase", args.phase, "--cycle-seconds", str(args.cycle_seconds), "--freeze-seconds", str(args.freeze_seconds)],
                 cwd=root, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT)
             status.update(status="running", process_id=child.pid)
-            status_path.write_text(json.dumps(status, indent=2) + "\n")
+            status_path.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
             code = child.wait()
         result = validate(output)
         status.update(status=result["status"], exit_code=code, validation=result,
                       finished_at=datetime.now(timezone.utc).isoformat())
         if code != 0:
             status["status"] = "failed_or_incomplete"
-        (output / "validation.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        (output / "validation.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except Exception as error:
         # 외부 오류 원문/환경 값은 저장하지 않는다.
         status.update(status="failed_or_incomplete", error_type=type(error).__name__)
-    status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n")
+    status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return 0 if status["status"] == "passed" else 1
 
 

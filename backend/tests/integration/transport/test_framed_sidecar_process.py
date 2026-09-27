@@ -60,6 +60,8 @@ class FramedSidecarProcessTests(unittest.TestCase):
         method: str,
         path: str,
         body: dict[str, object] | None = None,
+        *,
+        origin: str = TEST_ORIGIN,
     ) -> tuple[int, dict[str, object]]:
         """
         함수 이름: _request()
@@ -69,6 +71,7 @@ class FramedSidecarProcessTests(unittest.TestCase):
             method -> HTTP method
             path -> fixed local route
             body -> optional request DTO
+            origin -> 해당 runtime에 허용한 renderer Origin
         반환값: HTTP status와 완전히 읽은 JSON response
         작성 날짜: 2026/09/06
         """
@@ -76,7 +79,7 @@ class FramedSidecarProcessTests(unittest.TestCase):
         connection = HTTPConnection("127.0.0.1", descriptor["port"], timeout=3.0)
         headers = {
             "Host": f"127.0.0.1:{descriptor['port']}",
-            "Origin": TEST_ORIGIN,
+            "Origin": origin,
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "X-Request-Id": str(uuid4()),
@@ -89,11 +92,12 @@ class FramedSidecarProcessTests(unittest.TestCase):
         finally:
             connection.close()  # Shutdown ACK는 response body 소비 뒤에만 호출자가 보낸다.
 
-    def _run_round_trip(self, failure_mode: str | None) -> None:
+    def _run_round_trip(self, failure_mode: str | None, *, origin: str = TEST_ORIGIN) -> None:
         """
         함수 이름: _run_round_trip()
         기능: fresh subprocess에서 정상 종료 또는 parent-loss의 durable 결과를 검사한다.
         인자: failure_mode -> None, ready_eof, closed_eof 또는 malformed_control
+            origin -> development 또는 Windows release renderer Origin
         반환값: 없음
         작성 날짜: 2026/09/06
         """
@@ -121,7 +125,7 @@ class FramedSidecarProcessTests(unittest.TestCase):
                     "token": token,
                     "configuration": {
                         "schema_version": SCHEMA_VERSION,
-                        "allowed_origin": TEST_ORIGIN,
+                        "allowed_origin": origin,
                         "history_path": str(Path(temporary_directory) / "history.jsonl"),
                         "api_key": "fixture-key",
                         "api_secret": "fixture-secret",
@@ -148,6 +152,7 @@ class FramedSidecarProcessTests(unittest.TestCase):
                     status, response = self._request(
                         descriptor, token, "POST", "/v1/shutdown",
                         {"schema_version": SCHEMA_VERSION, "expected_version": 0},
+                        origin=origin,
                     )
                     self.assertEqual(status, 202)
                     self.assertIs(response["data"]["accepted"], True)
@@ -178,13 +183,13 @@ class FramedSidecarProcessTests(unittest.TestCase):
                         sleep(0.02)
                     self.assertTrue(completion_path.is_file())
                     self.assertIsNone(child.poll())
-                    status, _ = self._request(descriptor, token, "GET", "/v1/health")
+                    status, _ = self._request(descriptor, token, "GET", "/v1/health", origin=origin)
                     self.assertEqual(status, 200)
                     if failure_mode != "closed_eof":
                         # Ownership fsync와 BUY gate는 독립 장벽이므로 authoritative publication도 기다린다.
                         deadline = monotonic() + 5.0
                         while monotonic() < deadline:
-                            status, snapshot = self._request(descriptor, token, "GET", "/v1/snapshot")
+                            status, snapshot = self._request(descriptor, token, "GET", "/v1/snapshot", origin=origin)
                             self.assertEqual(status, 200)
                             if snapshot["data"]["trading"]["process_ownership_ambiguous"] is True:
                                 break
@@ -222,6 +227,16 @@ class FramedSidecarProcessTests(unittest.TestCase):
         작성 날짜: 2026/09/06
         """
         self._run_round_trip("ready_eof")  # 실제 pipe close를 liveness loss로 사용한다.
+
+    def test_windows_release_origin_ready_and_shutdown_round_trip(self) -> None:
+        """
+        함수 이름: test_windows_release_origin_ready_and_shutdown_round_trip()
+        기능: WebView2 release Origin으로 bootstrap부터 인증 종료·실제 child exit까지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        self._run_round_trip(None, origin="http://tauri.localhost")
 
     def test_stdin_eof_after_closed_is_not_shutdown_ack(self) -> None:
         """

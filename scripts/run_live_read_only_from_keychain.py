@@ -6,8 +6,13 @@ import argparse
 from decimal import Decimal
 import json
 import os
-import resource
 import subprocess
+import sys
+
+try:
+    import resource
+except ModuleNotFoundError:
+    resource = None  # Windows does not implement POSIX core-dump limits.
 
 from binance_auto_trader.adapters.binance.api_gateway import APIGateway
 from binance_auto_trader.adapters.binance.live_clients import BinanceLiveRESTClient
@@ -219,6 +224,14 @@ def run_preflight(configuration: LiveConfiguration) -> dict[str, object]:
     return result  # Package READY와 local Position 검증은 native app smoke 증거로 별도 기록한다.
 
 
+def harden_runner_process() -> None:
+    """Require native macOS protection before reading either Keychain credential."""
+    if sys.platform != "darwin" or resource is None:
+        raise LiveKeychainRunnerError("macOS Keychain runner requires macOS")
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    os.umask(0o077)
+
+
 def main() -> int:
     """
     함수 이름: main()
@@ -230,11 +243,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Official live signed read-only preflight; no orders")
     parser.add_argument("--confirm-live", required=True, choices=["LIVE"])
     parser.parse_args()
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    os.umask(0o077)
     api_key = bytearray()
     api_secret = bytearray()
     try:
+        harden_runner_process()
         # Secret은 argv/environment/file에 게시하지 않고 REST signing state로만 전달한다.
         api_key = read_keychain_credential("api-key")
         api_secret = read_keychain_credential("api-secret")

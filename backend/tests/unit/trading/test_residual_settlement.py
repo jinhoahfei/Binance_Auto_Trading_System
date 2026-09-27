@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from decimal import Decimal, localcontext
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -131,6 +132,40 @@ class ResidualSettlementTests(unittest.TestCase):
             trades = (trades[0], replace(trades[1], requested_quantity=Decimal("1.9")))
             self.assertFalse(service.settle(position, trades, Decimal("0.1")))
 
+    def test_replay_flush_uses_writable_descriptor_and_preserves_ledger(self) -> None:
+        """
+        함수 이름: test_replay_flush_uses_writable_descriptor_and_preserves_ledger()
+        기능: Windows 파일 flush에 필요한 쓰기 권한을 확보하고 복구 시 장부 bytes를 보존한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        with TemporaryDirectory() as directory:
+            storage = ResidualRepository(Path(directory).resolve() / "residual-ledger.json")
+            trades, position = closed_lot()
+            ResidualSettlement(storage).settle(position, trades, Decimal("0.1"))
+            expected_payload = storage.path.read_bytes()
+            original_fsync = os.fsync
+
+            def flush_writable_descriptor(descriptor: int) -> None:
+                """
+                함수 이름: flush_writable_descriptor()
+                기능: Windows처럼 read-only descriptor flush를 거부한 뒤 실제 file fsync를 수행한다.
+                인자: descriptor -> 장부 replay에서 연 파일 descriptor
+                반환값: 없음
+                작성 날짜: 2026/09/27
+                """
+                os.write(descriptor, b"")  # 빈 write는 내용·offset을 바꾸지 않고 쓰기 권한만 검증한다.
+                original_fsync(descriptor)
+
+            with (
+                patch("binance_auto_trader.adapters.persistence.residual_repository.os.fsync", side_effect=flush_writable_descriptor),
+                patch("binance_auto_trader.adapters.persistence.residual_repository.flush_created_file_metadata") as flush_metadata,
+            ):
+                self.assertEqual(len(storage.load()), 1)
+            flush_metadata.assert_called_once_with(storage.path)
+            self.assertEqual(storage.path.read_bytes(), expected_payload)
+
     def test_storage_failure_does_not_close_position(self) -> None:
         """
         함수 이름: test_storage_failure_does_not_close_position()
@@ -174,6 +209,11 @@ class ResidualSettlementTests(unittest.TestCase):
                 service.restore(Position(), (replace(trades[0], trade_id="changed"), trades[1]))
             target = path.with_name("original.json")
             path.rename(target)
-            path.symlink_to(target)
+            try:
+                path.symlink_to(target)
+            except OSError as error:
+                if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                    self.skipTest("Windows symbolic links require Developer Mode or symlink privilege")
+                raise
             with self.assertRaises(ValueError):
                 storage.load()

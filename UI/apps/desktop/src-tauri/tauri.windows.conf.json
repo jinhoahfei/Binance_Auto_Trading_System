@@ -2,12 +2,27 @@
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
     "beforeDevCommand": "node scripts/desktopFrontend.mjs dev",
-    "beforeBuildCommand": "node scripts/desktopFrontend.mjs unsupported-release"
+    "beforeBuildCommand": "node scripts/desktopFrontend.mjs build"
   },
   "bundle": {
-    "active": false,
-    "targets": [],
-    "externalBin": [],
-    "icon": ["icons/icon.ico"]
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "externalBin": [
+      "binaries/binance-auto-sidecar"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
   }
 }

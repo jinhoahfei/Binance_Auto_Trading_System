@@ -113,5 +113,24 @@ def create_factory(configuration):
     return factory
 
 
-if __name__ == '__main__':
+def main() -> None:
+    """
+    함수 이름: main()
+    기능: 임시 app-data에서 실제 Windows lock과 종료 준비 protocol을 검증한다.
+    인자: 없음
+    반환값: 정상 CLOSED ACK 뒤 없음
+    작성 날짜: 2026/09/27
+    """
+    if os.name == "nt":
+        # Test child의 저장 위치만 격리하고 native lock과 reparse 검증은 그대로 실행한다.
+        with patch(
+            "binance_auto_trader.adapters.platform.windows_runtime.get_local_app_data_directory",
+            return_value=Path.cwd(),
+        ):
+            run_stdio_sidecar_process(create_factory)
+        return
     run_stdio_sidecar_process(create_factory)
+
+
+if __name__ == '__main__':
+    main()

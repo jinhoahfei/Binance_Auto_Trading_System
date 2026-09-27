@@ -17,7 +17,9 @@ export function get_tauri_arguments(command, platform) {
     }
 
     // Tauri는 기본·OS 설정 다음 --config를 병합하므로 Windows에서는 OS 설정을 마지막에 유지한다.
-    const configuration_name = platform === 'win32' ? 'tauri.windows.conf.json' : 'tauri.conf.json';
+    const configuration_name = platform === 'win32'
+        ? (command === 'dev' ? 'tauri.windows.dev.conf.json' : 'tauri.windows.conf.json')
+        : 'tauri.conf.json';
 
     return [command, '--config', `apps/desktop/src-tauri/${configuration_name}`];
 }

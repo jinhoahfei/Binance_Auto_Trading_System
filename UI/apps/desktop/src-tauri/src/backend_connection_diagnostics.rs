@@ -170,77 +170,6 @@ fn encode_records(records: Vec<ConnectionDiagnostic>, now: u128, identity: Optio
     Ok(bytes)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 함수 이름: sample()
-    /// 기능: 허용된 최초 연결 오류를 재현할 고정 진단 fixture를 만든다.
-    /// 인자: 없음
-    /// 반환값: 검증용 진단 JSON
-    /// 작성 날짜: 2026/09/17
-    fn sample() -> serde_json::Value {
-        serde_json::json!({"event":"first_failure", "session_id":"00000000-0000-4000-8000-000000000001",
-            "adapter_id":"00000000-0000-4000-8000-000000000002", "renderer_id":"00000000-0000-4000-8000-000000000003",
-            "at_ms":1000, "sequence":1, "dropped_before":0, "generation":2, "last_sequence":100,
-            "stage":"decode", "error_code":"MALFORMED_BACKEND_PAYLOAD", "error_type":"SyntaxError"})
-    }
-
-    /// 함수 이름: rejects_free_text_and_accepts_fixed_failure_context()
-    /// 기능: 허용된 오류 문맥만 수락하고 비밀값·자유 문자열 필드를 거부하는지 검증한다.
-    /// 인자: 없음
-    /// 반환값: 없음; 진단 입력 계약을 어기면 테스트 실패
-    /// 작성 날짜: 2026/09/17
-    #[test]
-    fn rejects_free_text_and_accepts_fixed_failure_context() {
-        let value = sample();
-        assert!(validate_record(&serde_json::from_value(value.clone()).unwrap()));
-        let mut publication = value.clone();
-        publication["stage"] = serde_json::json!("publish");
-        publication["error_type"] = serde_json::json!("Error");
-        publication["error_code"] = serde_json::json!("UI_STATE_PUBLICATION_FAILED");
-        publication["origin"] = serde_json::json!("UiApplicationStore.ts:212:18");
-        assert!(validate_record(&serde_json::from_value(publication).unwrap()));
-        for key in ["token", "payload", "message", "headers"] {
-            let mut unsafe_value = value.clone(); unsafe_value[key] = serde_json::json!("SECRET_CANARY");
-            assert!(serde_json::from_value::<ConnectionDiagnostic>(unsafe_value).is_err());
-        }
-        for key in ["origin", "error_code", "validation_field", "session_id"] {
-            let mut unsafe_value = value.clone(); unsafe_value[key] = serde_json::json!("SECRET_CANARY");
-            assert!(!validate_record(&serde_json::from_value(unsafe_value).unwrap()));
-        }
-    }
-
-    /// 함수 이름: persists_first_failure_with_native_and_backend_identity_without_backend_access()
-    /// 기능: backend 재접속 없이 최초 오류와 프로세스 식별자가 디스크에 보존되는지 검증한다.
-    /// 인자: 없음
-    /// 반환값: 없음; 저장한 envelope가 다르면 테스트 실패
-    /// 작성 날짜: 2026/09/17
-    #[test]
-    fn persists_first_failure_with_native_and_backend_identity_without_backend_access() {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let directory = std::env::temp_dir().join(format!("backend-connection-log-{}-{now}", std::process::id()));
-        let records = vec![serde_json::from_value(sample()).unwrap()];
-        let bytes = encode_records(records, 2000, Some((1234, "test-process-start".into())), None).unwrap();
-        let mut writer = ChartLogWriter::new(directory.clone(), "test".into());
-        writer.append(&bytes).unwrap();
-        let saved = std::fs::read(directory.join("test_part0001.log")).unwrap();
-        let envelope: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-        assert_eq!(envelope["connection"]["event"], "first_failure");
-        assert_eq!(envelope["connection"]["stage"], "decode");
-        assert_eq!(envelope["native_at_ms"], 2000);
-        assert_eq!(envelope["backend_pid"], 1234);
-        assert_eq!(envelope["backend_process_start_id"], "test-process-start");
-        // Backend 프로세스가 사라진 후에도 마지막 사건을 저장할 수 있어야 한다.
-        writer.append(&encode_records(vec![serde_json::from_value(sample()).unwrap()], 3000, None, None).unwrap()).unwrap();
-        assert_eq!(std::fs::read_to_string(directory.join("test_part0001.log")).unwrap().lines().count(), 2);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-}
-
-// 아래 허용 목록은 UI의 진단 코드 목록과 contract test에서 대조한다.
-
-// 오류 원문 대신 기록할 수 있는 고정 오류 코드만 허용한다.
 const ALLOWED_ERROR_CODES: &[&str] = &[
     "ADAPTER_STOPPED",
     "AUTHENTICATION_REQUIRED",
@@ -504,3 +433,75 @@ const ALLOWED_VALIDATION_FIELDS: &[&str] = &[
     "buy",
     "ema",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 함수 이름: sample()
+    /// 기능: 허용된 최초 연결 오류를 재현할 고정 진단 fixture를 만든다.
+    /// 인자: 없음
+    /// 반환값: 검증용 진단 JSON
+    /// 작성 날짜: 2026/09/17
+    fn sample() -> serde_json::Value {
+        serde_json::json!({"event":"first_failure", "session_id":"00000000-0000-4000-8000-000000000001",
+            "adapter_id":"00000000-0000-4000-8000-000000000002", "renderer_id":"00000000-0000-4000-8000-000000000003",
+            "at_ms":1000, "sequence":1, "dropped_before":0, "generation":2, "last_sequence":100,
+            "stage":"decode", "error_code":"MALFORMED_BACKEND_PAYLOAD", "error_type":"SyntaxError"})
+    }
+
+    /// 함수 이름: rejects_free_text_and_accepts_fixed_failure_context()
+    /// 기능: 허용된 오류 문맥만 수락하고 비밀값·자유 문자열 필드를 거부하는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 진단 입력 계약을 어기면 테스트 실패
+    /// 작성 날짜: 2026/09/17
+    #[test]
+    fn rejects_free_text_and_accepts_fixed_failure_context() {
+        let value = sample();
+        assert!(validate_record(&serde_json::from_value(value.clone()).unwrap()));
+        let mut publication = value.clone();
+        publication["stage"] = serde_json::json!("publish");
+        publication["error_type"] = serde_json::json!("Error");
+        publication["error_code"] = serde_json::json!("UI_STATE_PUBLICATION_FAILED");
+        publication["origin"] = serde_json::json!("UiApplicationStore.ts:212:18");
+        assert!(validate_record(&serde_json::from_value(publication).unwrap()));
+        for key in ["token", "payload", "message", "headers"] {
+            let mut unsafe_value = value.clone(); unsafe_value[key] = serde_json::json!("SECRET_CANARY");
+            assert!(serde_json::from_value::<ConnectionDiagnostic>(unsafe_value).is_err());
+        }
+        for key in ["origin", "error_code", "validation_field", "session_id"] {
+            let mut unsafe_value = value.clone(); unsafe_value[key] = serde_json::json!("SECRET_CANARY");
+            assert!(!validate_record(&serde_json::from_value(unsafe_value).unwrap()));
+        }
+    }
+
+    /// 함수 이름: persists_first_failure_with_native_and_backend_identity_without_backend_access()
+    /// 기능: backend 재접속 없이 최초 오류와 프로세스 식별자가 디스크에 보존되는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 저장한 envelope가 다르면 테스트 실패
+    /// 작성 날짜: 2026/09/17
+    #[test]
+    fn persists_first_failure_with_native_and_backend_identity_without_backend_access() {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("backend-connection-log-{}-{now}", std::process::id()));
+        let records = vec![serde_json::from_value(sample()).unwrap()];
+        let bytes = encode_records(records, 2000, Some((1234, "test-process-start".into())), None).unwrap();
+        let mut writer = ChartLogWriter::new(directory.clone(), "test".into());
+        writer.append(&bytes).unwrap();
+        let saved = std::fs::read(directory.join("test_part0001.log")).unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(envelope["connection"]["event"], "first_failure");
+        assert_eq!(envelope["connection"]["stage"], "decode");
+        assert_eq!(envelope["native_at_ms"], 2000);
+        assert_eq!(envelope["backend_pid"], 1234);
+        assert_eq!(envelope["backend_process_start_id"], "test-process-start");
+        // Backend 프로세스가 사라진 후에도 마지막 사건을 저장할 수 있어야 한다.
+        writer.append(&encode_records(vec![serde_json::from_value(sample()).unwrap()], 3000, None, None).unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(directory.join("test_part0001.log")).unwrap().lines().count(), 2);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+// 아래 허용 목록은 UI의 진단 코드 목록과 contract test에서 대조한다.
+
+// 오류 원문 대신 기록할 수 있는 고정 오류 코드만 허용한다.

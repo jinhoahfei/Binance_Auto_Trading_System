@@ -4,11 +4,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import resource
 import secrets
 import sys
 import threading
 from types import SimpleNamespace
+
+if __package__:
+    from .diagnostic_process_metrics import peak_rss_bytes
+else:
+    from diagnostic_process_metrics import peak_rss_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "backend/src")]
@@ -32,7 +36,10 @@ def main():
     runtime.state = SimpleNamespace(status="READY")
     runtime.diagnostics = RuntimeDiagnostics(DiagnosticLogWriter(Path(sys.argv[1]), "disabled"))
     token = secrets.token_urlsafe(32)
-    server = LoopbackTransportServer(runtime, token, allowed_origins=("http://127.0.0.1:5173", "tauri://localhost"))
+    server = LoopbackTransportServer(
+        runtime, token,
+        allowed_origins=("http://127.0.0.1:5173", "tauri://localhost", "http://tauri.localhost"),
+    )
     controls = {"fail_snapshots": 0, "idle": False, "publications": 0}
     dispatch = server._dispatch_http_request
 
@@ -92,7 +99,7 @@ def main():
             elif command["operation"] != "metrics":
                 raise ValueError("Unknown soak command")
             print(json.dumps({"pid": os.getpid(), "threads": threading.active_count(),
-                "max_rss": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                "max_rss": peak_rss_bytes(),
                 "publications": controls["publications"], "worker_failed": worker.failed,
                 "diagnostic_failures": runtime.diagnostics.failure_count}), flush=True)
     finally:

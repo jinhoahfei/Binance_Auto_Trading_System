@@ -19,7 +19,7 @@ def read_records(root):
         if path.suffix not in {".log", ".jsonl"} or not path.is_file():
             continue
         try:
-            with path.open(errors="replace") as stream:
+            with path.open(encoding="utf-8", errors="replace") as stream:
                 for line, raw in enumerate(stream, 1):
                     source = {"file": str(path), "line": line}
                     try:
@@ -257,14 +257,14 @@ def main():
     report = analyze(rows, problems)
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=False)
-    (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = ["# 연결 장애 분석", "", "화면 수신 공백은 바이낸스 API 단절 시간이 아닙니다.", ""]
     for incident in report["incidents"] + report["native_incidents"]:
         lines.extend([f"- {incident['incident_id']}: {incident['cause']} ({incident['confidence']})",
                       f"  근본 원인: {incident['root_cause']} ({incident['root_confidence']})",
                       f"  화면 공백: {incident.get('ui_receive_gap', {}).get('ms')}ms; 복구: {incident['recovery_time']['ms']}ms",
                       f"  미확보 증거: {', '.join(incident['missing_evidence']) or '없음'}"])
-    (output / "report.md").write_text("\n".join(lines) + "\n")
+    (output / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps({"incidents": len(report["incidents"]), "native_incidents": len(report["native_incidents"]), "read_problems": len(problems)}))
 
 

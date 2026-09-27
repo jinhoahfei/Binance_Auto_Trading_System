@@ -57,7 +57,11 @@ class ResidualRepository:
         """
         self._validate_path()
         try:
-            descriptor = os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            # Windows _commit도 같은 descriptor를 flush할 수 있도록 쓰기 권한을 함께 연다.
+            descriptor = os.open(
+                self.path,
+                os.O_RDWR | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            )
         except FileNotFoundError:
             return ()
         with os.fdopen(descriptor, "rb") as stream:

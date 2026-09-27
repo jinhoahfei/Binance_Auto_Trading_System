@@ -1,0 +1,51 @@
+name: Windows compatibility
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: '1'
+      BINANCE_RUN_TESTNET: '0'
+      BINANCE_RUN_TESTNET_ORDERS: '0'
+      BINANCE_RUN_PHASE13_PUBLIC_CASE2: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install development tools
+        shell: pwsh
+        run: |
+          python -m pip install uv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm install --global pnpm@11.16.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable-x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup component add clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install locked dependencies
+        shell: pwsh
+        run: ./scripts/setup_windows_development.ps1
+      - name: Run tests without exchange credentials or orders
+        shell: pwsh
+        run: ./scripts/check_windows.ps1
+      - name: Build Windows installer without publishing
+        shell: pwsh
+        run: |
+          . ./scripts/enter_windows_development.ps1
+          Set-Location UI
+          pnpm.cmd desktop:build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

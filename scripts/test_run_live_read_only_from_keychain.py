@@ -133,7 +133,7 @@ class LiveKeychainRunnerTests(unittest.TestCase):
         """
         output = StringIO()
         # 실제 Keychain·resource policy를 변경하지 않고 실패 직렬화 경계만 검증한다.
-        with patch.object(sys, "argv", ["runner", "--confirm-live", "LIVE"]), patch.object(runner.resource, "setrlimit"), patch.object(runner.os, "umask"), patch.object(runner, "read_keychain_credential", side_effect=RuntimeError("live-secret-canary")), redirect_stdout(output):
+        with patch.object(sys, "argv", ["runner", "--confirm-live", "LIVE"]), patch.object(runner, "harden_runner_process"), patch.object(runner, "read_keychain_credential", side_effect=RuntimeError("live-secret-canary")), redirect_stdout(output):
             self.assertEqual(runner.main(), 1)
         self.assertNotIn("live-secret-canary", output.getvalue())
         self.assertEqual(json.loads(output.getvalue())["order_mutations"], 0)

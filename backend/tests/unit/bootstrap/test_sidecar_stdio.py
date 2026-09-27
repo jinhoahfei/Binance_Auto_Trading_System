@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from io import BytesIO
 import json
 from pathlib import Path
 import secrets
 import struct
 import unittest
+from unittest.mock import patch
 
+from binance_auto_trader.bootstrap.sidecar import _create_sidecar_runtime_factory
 from binance_auto_trader.sidecar_stdio import (
     MAX_STDIO_BOOTSTRAP_FRAME_BYTES,
     MAX_STDIO_CONFIGURATION_BYTES,
     read_stdio_bootstrap,
 )
 from binance_auto_trader.transport import SCHEMA_VERSION
+from binance_auto_trader.transport.app import _validate_allowed_origins
 from binance_auto_trader.transport.framing import (
     MAX_SIDECAR_FRAME_BYTES,
     read_json_frame,
@@ -195,6 +199,66 @@ class SidecarStdioTests(unittest.TestCase):
             stream.seek(0)
             with self.assertRaises((ValueError, TypeError)):
                 read_stdio_bootstrap(stream)
+
+    def test_windows_release_bootstrap_preserves_live_profiles_and_permissions(self) -> None:
+        """
+        함수 이름: test_windows_release_bootstrap_preserves_live_profiles_and_permissions()
+        기능: Windows release frame의 live 조회·주문 프로필을 같은 검증과 runtime 조립에 전달한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        for allow_orders in (False, True):
+            with self.subTest(allow_orders=allow_orders):
+                payload = self._bootstrap_payload()
+                payload["configuration"].update({
+                    "allowed_origin": "http://tauri.localhost",
+                    "history_path": str(Path.cwd() / "com.binance-auto.trader.live" / "trade-history.jsonl"),
+                    "execution_mode": "live",
+                    "credential_namespace": "com.binance-auto.trader.live",
+                    "allow_live_orders": allow_orders,
+                    "live_confirmation": "LIVE",
+                    "policy_version": 1,
+                    "max_notional": "10" if allow_orders else None,
+                })
+                stream = BytesIO()
+                write_json_frame(stream, payload)
+                stream.seek(0)
+                _, configuration = read_stdio_bootstrap(stream)
+
+                # 실제 거래소 객체를 만들지 않고 검증된 profile의 factory 전달만 확인한다.
+                with patch("binance_auto_trader.bootstrap.live.create_live_application_runtime") as create_live:
+                    _create_sidecar_runtime_factory(configuration)(None, None, None)
+                live_configuration = create_live.call_args.kwargs["configuration"]
+                self.assertIs(live_configuration.allow_live_orders, allow_orders)
+                self.assertEqual(live_configuration.max_notional, Decimal("10") if allow_orders else None)
+                self.assertEqual(create_live.call_args.kwargs["history_path"], configuration.history_path)
+                self.assertEqual(configuration.allowed_origin, "http://tauri.localhost")
+                with self.assertRaises(ValueError):
+                    configuration.to_testnet_environment()
+
+    def test_windows_release_origin_rejects_other_hosts_ports_and_paths(self) -> None:
+        """
+        함수 이름: test_windows_release_origin_rejects_other_hosts_ports_and_paths()
+        기능: WebView2 release origin 추가가 임의 host나 port의 승인을 허용하지 않게 한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        for origin in (
+            "http://tauri.localhost.evil.example", "http://tauri.localhost:5173",
+            "http://tauri.localhost/", "http://other.localhost", "http://tauri.localhost@evil.example",
+        ):
+            with self.subTest(origin=origin):
+                payload = self._bootstrap_payload()
+                payload["configuration"]["allowed_origin"] = origin
+                stream = BytesIO()
+                write_json_frame(stream, payload)
+                stream.seek(0)
+                with self.assertRaises(ValueError):
+                    read_stdio_bootstrap(stream)
+                with self.assertRaises(ValueError):
+                    _validate_allowed_origins((origin,))
 
     def test_bootstrap_specific_limit_rejects_oversized_frame(self) -> None:
         """

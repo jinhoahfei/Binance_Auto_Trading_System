@@ -172,7 +172,10 @@ pub(in crate::sidecar) fn ensure_private_app_data_directory(
     directory: &Path,
 ) -> Result<(), SidecarFailure> {
     let expected = resolve_app_data_directory()?;
-    if directory != expected {
+    if directory == expected.join(super::super::execution_profile::LIVE_SERVICE) {
+        // Only the fixed live namespace may sit under the base application directory.
+        ensure_private_app_data_directory(&expected)?;
+    } else if directory != expected {
         return Err(SidecarFailure::startup());
     }
 

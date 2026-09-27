@@ -11,5 +11,5 @@
       "capabilities": ["background-soak"]
     }
   },
-  "bundle": { "active": false }
+  "bundle": { "active": false, "externalBin": [] }
 }

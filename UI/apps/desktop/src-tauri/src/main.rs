@@ -1,3 +1,5 @@
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 // 데스크톱 앱의 공통 Tauri 실행 진입점을 호출한다.
 
 

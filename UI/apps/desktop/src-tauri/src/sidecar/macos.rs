@@ -1,7 +1,7 @@
 //! macOS Keychain, fixed FD 3~6, Unix ownership와 process/path adapter.
 
-use super::macos_profile::{
-    profile_directory, selected_profile, MacosExecutionProfile, LIVE_SERVICE,
+use super::execution_profile::{
+    profile_directory, selected_profile, ExecutionProfile, LIVE_SERVICE,
 };
 use super::*;
 use security_framework::passwords::{generic_password, PasswordOptions};
@@ -136,7 +136,7 @@ pub(super) fn platform_prepare_backend_sidecar(
         resolve_app_data_directory(app_handle).map_err(|_| SidecarFailure::startup())?;
     ensure_private_app_data_directory(&app_data_directory)?;
     let profile = selected_profile()?;
-    let history_path = if profile == MacosExecutionProfile::Testnet {
+    let history_path = if profile == ExecutionProfile::Testnet {
         build_history_path(&app_data_directory)?
     } else {
         app_data_directory
@@ -158,7 +158,7 @@ pub(super) fn platform_prepare_backend_sidecar(
         max_notional: None,
     };
     let configuration_payload =
-        super::macos_profile::serialize_profile_configuration(configuration, profile)?;
+        super::execution_profile::serialize_profile_configuration(configuration, profile)?;
 
     // 각 child end를 16 이상 CLOEXEC staging FD로 옮겨 dup2 target 3~6 충돌을 제거한다.
     let (token_writer, token_child_reader) =
@@ -295,7 +295,7 @@ pub(super) fn read_keychain_credentials() -> Result<NativeCredentials, SidecarFa
 /// 작성 날짜: 2026/08/24
 pub(super) fn read_keychain_secret(account: &str) -> Result<String, SidecarFailure> {
     // Credential과 history 선택은 같은 frozen native profile을 사용한다.
-    let service = if selected_profile()? == MacosExecutionProfile::Testnet {
+    let service = if selected_profile()? == ExecutionProfile::Testnet {
         KEYCHAIN_SERVICE
     } else {
         LIVE_SERVICE

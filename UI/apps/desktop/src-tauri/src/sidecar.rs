@@ -2,8 +2,7 @@
 
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "macos")]
-mod macos_profile;
+mod execution_profile;
 #[cfg(target_os = "macos")]
 use macos::*;
 #[cfg(target_os = "windows")]
@@ -45,7 +44,14 @@ type ReadyReader = std::process::ChildStdout;
 pub const BACKEND_SIDECAR_EXIT_EVENT: &str = "backend-sidecar-exited";
 
 const DEVELOPMENT_UI_ORIGIN: &str = "http://127.0.0.1:5173";
+#[cfg(target_os = "macos")]
 const PRODUCTION_UI_ORIGIN: &str = "tauri://localhost";
+#[cfg(target_os = "windows")]
+const PRODUCTION_UI_ORIGIN: &str = "http://tauri.localhost";
+
+// Tauri background_throttling은 Windows에서 적용되지 않아 WebView2에 직접 요청한다.
+#[cfg(target_os = "windows")]
+pub(crate) const WINDOWS_BROWSER_ARGUMENTS: &str = "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
 const HISTORY_FILE_NAME: &str = "history.jsonl";
 const PRODUCTION_HTTP_CSP_SENTINEL: &str = "http://127.0.0.1:0";
 const PRODUCTION_WS_CSP_SENTINEL: &str = "ws://127.0.0.1:0";
@@ -75,11 +81,21 @@ pub(crate) fn is_trusted_renderer_url(url: &tauri::Url, is_development: bool) ->
     if is_development {
         url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(5173)
     } else {
-        cfg!(target_os = "macos")
-            && url.scheme() == "tauri"
-            && url.host_str() == Some("localhost")
-            && url.port().is_none()
+        let expected = tauri::Url::parse(PRODUCTION_UI_ORIGIN).expect("fixed renderer origin");
+        url.scheme() == expected.scheme()
+            && url.host_str() == expected.host_str()
+            && url.port_or_known_default() == expected.port_or_known_default()
     }
+}
+
+
+/// Windows WebView2 URI와 macOS protocol URI에만 동적 CSP를 적용한다.
+fn is_app_resource_uri(uri: &tauri::http::Uri) -> bool {
+    (uri.scheme_str() == Some("tauri") && uri.host() == Some("localhost") && uri.port_u16().is_none())
+        || (cfg!(target_os = "windows")
+            && uri.scheme_str() == Some("http")
+            && uri.host() == Some("tauri.localhost")
+            && matches!(uri.port_u16(), None | Some(80)))
 }
 
 
@@ -1250,13 +1266,16 @@ pub fn create_ready_main_window(
     }
 
     // Tauri protocol response의 nonce/hash 보강을 보존하면서 sentinel만 assigned origin으로 바꾼다.
-    WebviewWindowBuilder::from_config(app_handle, &window_configuration)
-        .map_err(|_| SidecarFailure::startup())?
-        .background_color(tauri::utils::config::Color(11, 14, 17, 255))
+    let builder = WebviewWindowBuilder::from_config(app_handle, &window_configuration)
+        .map_err(|_| SidecarFailure::startup())?;
+    #[cfg(target_os = "windows")]
+    let builder = builder.additional_browser_args(WINDOWS_BROWSER_ARGUMENTS);
+    builder.background_color(tauri::utils::config::Color(11, 14, 17, 255))
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .on_navigation(|url| is_trusted_renderer_url(url, tauri::is_dev()))
         .on_web_resource_request(move |request, response| {
-            if request.uri().scheme_str() != Some("tauri") {
+            // Wry의 Windows custom protocol 요청은 http://tauri.localhost로 전달된다.
+            if !is_app_resource_uri(request.uri()) {
                 return;
             }
             let Some(header_value) = response.headers_mut().get_mut("content-security-policy")
@@ -1426,7 +1445,7 @@ fn generate_session_token() -> Result<String, SidecarFailure> {
 /// 인자: is_development -> Tauri dev build 여부
 /// 반환값: backend strict Origin allowlist 단일 값
 /// 작성 날짜: 2026/08/24
-fn select_allowed_origin(is_development: bool) -> &'static str {
+pub(crate) fn select_allowed_origin(is_development: bool) -> &'static str {
     if is_development {
         DEVELOPMENT_UI_ORIGIN
     } else {
@@ -1566,6 +1585,27 @@ fn recover_child_lock(child_handle: &Arc<Mutex<Child>>) -> MutexGuard<'_, Child>
     }
 }
 
+/// 함수 이름: prepare_backend_sidecar()
+/// 기능: 현재 OS adapter의 credential·IPC 준비 결과를 공통 lifecycle에 전달한다.
+/// 인자: app_handle -> native app-data와 process owner
+/// 반환값: ready 또는 ambiguous child 소유권
+/// 작성 날짜: 2026/09/06
+pub fn prepare_backend_sidecar(
+    app_handle: &AppHandle,
+) -> Result<BackendSidecarPreparation, SidecarFailure> {
+    platform_prepare_backend_sidecar(app_handle) // OS 별 IPC 세부사항은 renderer에 노출하지 않는다.
+}
+
+
+/// 함수 이름: disable_process_core_dumps()
+/// 기능: 현재 OS의 process crash-report 보호를 credential 조회 전에 적용한다.
+/// 인자: 없음
+/// 반환값: 보호 설정 성공 또는 startup failure
+/// 작성 날짜: 2026/09/06
+pub fn disable_process_core_dumps() -> Result<(), SidecarFailure> {
+    platform_disable_process_core_dumps() // 보호 설정 실패는 startup을 중단한다.
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1652,6 +1692,13 @@ mod tests {
                 false,
                 cfg!(target_os = "macos"),
             ),
+            ("http://tauri.localhost/index.html", false, cfg!(target_os = "windows")),
+            ("http://tauri.localhost:80/", false, cfg!(target_os = "windows")),
+            ("http://tauri.localhost:8080/", false, false),
+            ("http://tauri.localhost/", true, false),
+            ("http://user@tauri.localhost/", false, false),
+            ("http://tauri.localhost.evil/", false, false),
+            ("https://tauri.localhost/", false, false),
             ("https://example.com/", true, false),
             ("http://localhost:5173/", true, false),
             ("http://127.0.0.1:5174/", true, false),
@@ -1667,6 +1714,23 @@ mod tests {
                 "{url}"
             );
         }
+    }
+
+    #[test]
+    fn dynamic_csp_only_rewrites_application_resource_responses() {
+        for (uri, allowed) in [
+            ("tauri://localhost/index.html", true),
+            ("http://tauri.localhost/index.html", cfg!(target_os = "windows")),
+            ("http://tauri.localhost:80/index.html", cfg!(target_os = "windows")),
+            ("http://tauri.localhost:8080/index.html", false),
+            ("https://tauri.localhost/index.html", false),
+            ("tauri://external/index.html", false),
+            ("http://127.0.0.1:5173/", false),
+        ] {
+            assert_eq!(is_app_resource_uri(&uri.parse().unwrap()), allowed, "{uri}");
+        }
+        assert_eq!(select_allowed_origin(true), DEVELOPMENT_UI_ORIGIN);
+        assert_eq!(select_allowed_origin(false), PRODUCTION_UI_ORIGIN);
     }
 
     /// 함수 이름: renderer_startup_waits_for_an_actual_html_server()
@@ -2463,26 +2527,4 @@ mod tests {
         assert_eq!(mode, 0o700);
         fs::remove_dir(&test_directory).expect("temporary app-data directory must be removed");
     }
-}
-
-
-/// 함수 이름: prepare_backend_sidecar()
-/// 기능: 현재 OS adapter의 credential·IPC 준비 결과를 공통 lifecycle에 전달한다.
-/// 인자: app_handle -> native app-data와 process owner
-/// 반환값: ready 또는 ambiguous child 소유권
-/// 작성 날짜: 2026/09/06
-pub fn prepare_backend_sidecar(
-    app_handle: &AppHandle,
-) -> Result<BackendSidecarPreparation, SidecarFailure> {
-    platform_prepare_backend_sidecar(app_handle) // OS 별 IPC 세부사항은 renderer에 노출하지 않는다.
-}
-
-
-/// 함수 이름: disable_process_core_dumps()
-/// 기능: 현재 OS의 process crash-report 보호를 credential 조회 전에 적용한다.
-/// 인자: 없음
-/// 반환값: 보호 설정 성공 또는 startup failure
-/// 작성 날짜: 2026/09/06
-pub fn disable_process_core_dumps() -> Result<(), SidecarFailure> {
-    platform_disable_process_core_dumps() // 보호 설정 실패는 startup을 중단한다.
 }

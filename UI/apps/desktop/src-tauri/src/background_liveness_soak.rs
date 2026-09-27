@@ -136,7 +136,12 @@ pub fn run() {
         .create_new(true)
         .open(output.join("fixture-stderr.log"))
         .unwrap();
-    let mut child = Command::new(root.join("backend/.venv/bin/python"))
+    let python_relative = if cfg!(target_os = "windows") {
+        "backend/.venv/Scripts/python.exe"
+    } else {
+        "backend/.venv/bin/python"
+    };
+    let mut child = Command::new(root.join(python_relative))
         .arg(root.join("scripts/backend_connection_soak_fixture.py"))
         .arg(output.join("backend"))
         .env("BINANCE_RUN_TESTNET", "0")
@@ -187,8 +192,10 @@ pub fn run() {
             runtime_diagnostics::record_renderer_heartbeat, backend_connection_diagnostics::record_backend_connection_diagnostics,
             chart_diagnostics::record_chart_diagnostics, record_background_soak_summary])
         .setup(move |app| {
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("연결 유지 검증 · 주문 기능 없음").inner_size(640.0, 400.0)
+            let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()));
+            #[cfg(target_os = "windows")]
+            let builder = builder.additional_browser_args(sidecar::WINDOWS_BROWSER_ARGUMENTS);
+            let window = builder.title("연결 유지 검증 · 주문 기능 없음").inner_size(640.0, 400.0)
                 .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
                 .visible(phase != "hidden").build()?;
             if phase == "minimized" { window.minimize()?; }

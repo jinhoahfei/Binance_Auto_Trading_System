@@ -6,7 +6,7 @@ Figma의 1440×1024 데스크톱 화면을 TypeScript, React, Vite와 XState 기
 수수료와 backend의 손익을 표시하며 과거 BNB 거래를 현재 요율로 재계산하지 않습니다.
 현재 운영 기준은 [현물 수수료 정책](../SPOT_FEE_POLICY.md)입니다.
 
-데스크톱의 차트와 REGIME 계산은 Binance 실제 시장의 공개 REST 봉과 WebSocket 시세를 사용합니다. 계좌 조회와 계좌 stream은 Testnet을 유지하고 주문 전송은 비활성입니다. 상단에 `시세·REGIME 실제 시장`, `계좌 Testnet · 주문 비활성`을 항상 표시합니다. 숫자로 표시하던 Swing Low/High는 백엔드의 확정 HL/LL·HH/LH 판정으로 표시하며 0.30% 기준 미달은 `-`입니다.
+데스크톱의 차트와 REGIME 계산은 Binance 실제 시장의 공개 REST 봉과 WebSocket 시세를 사용합니다. 계좌 조회와 계좌 stream은 선택된 Testnet 또는 Live 프로필을 사용합니다. 기본 Testnet 프로필에서는 주문이 비활성이며, 화면의 환경 표시는 backend의 실제 실행 모드와 주문 허용 상태를 따릅니다. 숫자로 표시하던 Swing Low/High는 백엔드의 확정 HL/LL·HH/LH 판정으로 표시하며 0.30% 기준 미달은 `-`입니다.
 
 좌상단 연결됨/연결 끊김에 마우스를 올리거나 키보드로 포커스하면 Binance 연결 상태 툴팁이 열립니다. 백엔드의 인증 API 조회 결과와 시세·계좌 WebSocket 연결 여부를 각각 표시하며, `/v1/binance/connection-status`를 통해 응답 완료 후 5초마다 갱신합니다. 커서가 표시 영역을 벗어나거나 포커스를 잃거나 Escape를 누르면 즉시 닫히고 UI 조회와 타이머가 정리됩니다. 진단용 API 응답은 연결 확인에만 사용하며 계좌 상태에는 적용하지 않습니다.
 
@@ -22,60 +22,45 @@ Figma의 1440×1024 데스크톱 화면을 TypeScript, React, Vite와 XState 기
 
 만료 소유권의 `확인 후 해제·계속`은 동일 앱 프로세스에서 시작을 계속하므로 개발 서버가 함께 종료되지 않습니다. 개발 서버가 꺼져 있으면 backend와 흰 창을 먼저 만들지 않고 native `다시 시도`·`종료` 안내를 표시합니다.
 
-### Windows 11 x64 개발 실행
+### Windows x64 실행과 설치 파일 빌드
 
-2026-09-07 현재 이 PC에는 개발 환경이 준비되어 있습니다. 실제 검증 OS는 **Windows 10
-Enterprise 22H2 x64**이며 Windows 11에서 실행한 결과는 아닙니다.
-저장소 루트에서 다음 명령으로 로컬 도구 경로와 venv를 적용해 시작합니다.
+Windows에서도 `UI` 디렉터리의 **`pnpm desktop:dev`**와 **`pnpm desktop:build`**를 사용합니다.
+개발 실행은 `backend/.venv/Scripts/python.exe`로 현재 소스를 실행하고, 배포 빌드는 Python
+sidecar를 포함하는 현재 사용자용 NSIS 설치 프로그램을 만듭니다. Visual Studio C++ Build Tools와
+Windows SDK, Rust `x86_64-pc-windows-msvc`, WebView2, Node.js, `pnpm@11.16.0`,
+x64 Python 3.11 이상 및 `uv`가 필요합니다. Windows ARM64와 32-bit Python은 지원하지 않습니다.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\start_windows_development.ps1
-```
-
-이 스크립트는 이 checkout의 `.dev-tools`와 `backend/.venv`를 사용합니다.
-일반 개발 PowerShell에는 `scripts/enter_windows_development.ps1`을 dot-source할 수 있습니다.
-현재 shell에만 경로를 설정하며 전역 PATH와 영구 실행 정책은 바꾸지 않습니다.
-설치 구성·실제 READY/종료 결과·실패 기록은 [통합 로드맵 §16.20.9](../INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md#16209-session-6--windows-10-x64-개발-실행과-read-only-smoke)에 있습니다.
-
-Windows에서도 `UI`에서 **`pnpm desktop:dev`**를 사용합니다. Tauri debug 앱과 Vite를 실행하고
-`backend/.venv/Scripts/python.exe`가 현재 Python 소스를 직접 실행합니다. Python 변경 후에는 앱을
-정상 종료하고 다시 실행합니다. PyInstaller, sidecar 배포 `.exe`, NSIS 설치 프로그램은 필요하지 않습니다.
-
-먼저 Visual Studio Build Tools의 **Desktop development with C++**와 Windows SDK,
-Rust stable `x86_64-pc-windows-msvc`, WebView2 Runtime, Node.js 및 이 프로젝트의
-`pnpm@11.16.0`, Python **x64 3.11 이상**, `uv`를 준비합니다. Rust toolchain의 host가
-`x86_64-pc-windows-msvc`인지 `rustc -vV`로 확인합니다. Windows ARM64와 32-bit Python은 지원하지 않습니다.
-Tauri의 설치 항목은 [공식 prerequisites](https://v2.tauri.app/start/prerequisites/)를 따릅니다.
-
-저장소 루트의 PowerShell에서 최초 한 번 실행합니다.
+저장소 루트에서 개발 환경을 처음 준비하는 예시입니다.
 
 ```powershell
 cd backend
-uv sync --locked
+uv sync --locked --extra desktop
 cd ..
-powershell -NoProfile -File scripts/configure_testnet_credentials.ps1 -Action canary
 powershell -NoProfile -File scripts/configure_testnet_credentials.ps1 -Action set
 cd UI
 pnpm install --frozen-lockfile
 pnpm desktop:dev
+# 앱을 정상 종료한 뒤 설치 파일 빌드
+pnpm desktop:build
 ```
 
-`set`은 키와 secret을 숨김 입력으로 받아 현재 Windows 사용자의 Credential Manager에 저장합니다.
-PowerShell 실행 정책이 로컬 script를 차단하면 조직 정책을 확인한 뒤 허용된 방식으로 실행합니다.
-`check`는 저장된 두 항목의 유효 여부만 확인하고 `delete`는 이 앱의 Testnet 항목만 삭제합니다.
-고정 generic target은 `com.binance-auto.trader.testnet/api-key`,
-`com.binance-auto.trader.testnet/api-secret`이며 canary는 별도 `session5-canary` 항목을 사용하고 지웁니다.
-키를 명령행·환경변수·`.env`·renderer에 넣지 않습니다. 저장 도중 오류가 나면 두 값을 다시 설정한 뒤 시작합니다.
+기존 checkout의 `.dev-tools`가 있으면 `scripts/start_windows_development.ps1`도 사용할 수 있습니다.
+일반 PowerShell의 경로 설정은 `scripts/enter_windows_development.ps1`을 dot-source합니다.
+전역 PATH나 영구 실행 정책은 변경하지 않습니다.
 
-개발 화면 Origin은 정확히 `http://127.0.0.1:5173`입니다. 이미 5173 포트를 사용 중이면 해당 개발 서버를
-정상 종료한 뒤 재시도합니다. History와 runtime 소유권은 Windows의 현재 사용자 LocalAppData 아래
-`com.binance-auto.trader`에 보존됩니다. 창 닫기 → 일반 종료를 완료한 뒤 개발 터미널을 닫습니다.
-소유권 복구가 표시되면 살아 있는 backend와 계좌 상태를 먼저 확인하고 native 복구 안내를 따릅니다.
+macOS와 Windows는 같은 `TESTNET`, `LIVE_READ_ONLY`, `LIVE_ORDERS_V1` 프로필과 주문 제한을
+사용합니다. Windows의 키와 프로필은 Credential Manager에 저장하며, Live 키 등록·조회·주문
+활성화는 `scripts/configure_live_credentials.ps1`로 명시적으로 선택합니다. 선택값은 앱 실행 동안
+고정되므로 변경 후에는 정상 종료하고 다시 실행합니다. 프로필이 없으면 Testnet이며 주문은 비활성입니다.
 
-Session 5는 macOS에서 source와 공통 계약을 검증한 단계입니다. 2026-09-07에는 위 Windows 10 PC에서
-native compile, Credential Manager canary, 실제 READY·picker·정상 종료·fresh restart를 검증했습니다.
-사용자 지시에 따라 이 Windows 10 x64 개발 실행 통과로 Session 6을 완료했습니다.
-Windows 11 native 검증과 설치 배포는 별도 후속 작업이며 Windows release build는 계속 명시적으로 차단됩니다.
+개발 화면은 `http://127.0.0.1:5173`, 설치 앱은 `http://tauri.localhost`를 사용합니다. 데이터는
+현재 사용자의 LocalAppData 아래 `com.binance-auto.trader`에 보존되며 Live 이력과 소유권은 그 아래
+`com.binance-auto.trader.live`에 분리됩니다. 종료할 때는 창 닫기 → 일반 종료를 완료한 뒤 터미널을 닫습니다.
+
+이번 변경은 macOS에서 공통 계약과 회귀 테스트를 검증했습니다. 이전 Windows 10 x64 개발 실행
+검증 기록은 [통합 로드맵 §16.20.9](../INTEGRATED_SYSTEM_IMPLEMENTATION_ROADMAP.md#16209-session-6--windows-10-x64-개발-실행과-read-only-smoke)에 있으며,
+현재 변경의 Windows 실제 설치·WebView2·picker·백그라운드 동작 검증은 Windows PC에서 수행해야 합니다.
+설정·빌드·검증 절차는 [Windows 호환성 안내](../docs/windows-compatibility.md)를 참조합니다.
 
 ```bash
 pnpm install
@@ -98,7 +83,7 @@ pnpm build
 pnpm storybook
 ```
 
-`pnpm test:active-strategy`는 개발 서버와 Binance 연결 없이 ACTIVE STATE 및 거래 / 계좌 → 전략 상태 → 현재 상태의 일치를 검증합니다. 기존 backend 테스트 환경(`backend/.venv/bin/python`, 없으면 `python3`)에서 실제 TradingSTM에 Case B·C의 시장 조건과 가짜 주문·체결 응답을 입력한 뒤, 발행된 JSON event를 실제 UI adapter와 App에 전달합니다. 두 표시 영역과 Case별 현재 단계·지표 그룹의 자동 갱신, 5초 유지 판정의 색상 변화, C 트레일링의 이전 EMA 기준 보존, 청산 후 회복·B 인계, 중지·종료, 연결 단절 시 회색 표시와 event 유실 후 전체 snapshot 복원을 검사합니다. 지표 수치 비교는 backend의 순수 조건 평가를 전략 전이와 공유하고, UI는 true/false/null 판정만 초록/빨강/회색으로 표시합니다. Python 외부 socket 연결은 차단하고 UI HTTP·WebSocket은 메모리 대역을 사용하므로 5173 포트를 점유하지 않습니다.
+`pnpm test:active-strategy`는 개발 서버와 Binance 연결 없이 ACTIVE STATE 및 거래 / 계좌 → 전략 상태 → 현재 상태의 일치를 검증합니다. 기존 backend 테스트 환경(`backend/.venv/bin/python`, Windows는 `backend/.venv/Scripts/python.exe`; 없으면 각 OS의 Python)에서 실제 TradingSTM에 Case B·C의 시장 조건과 가짜 주문·체결 응답을 입력한 뒤, 발행된 JSON event를 실제 UI adapter와 App에 전달합니다. 두 표시 영역과 Case별 현재 단계·지표 그룹의 자동 갱신, 5초 유지 판정의 색상 변화, C 트레일링의 이전 EMA 기준 보존, 청산 후 회복·B 인계, 중지·종료, 연결 단절 시 회색 표시와 event 유실 후 전체 snapshot 복원을 검사합니다. 지표 수치 비교는 backend의 순수 조건 평가를 전략 전이와 공유하고, UI는 true/false/null 판정만 초록/빨강/회색으로 표시합니다. Python 외부 socket 연결은 차단하고 UI HTTP·WebSocket은 메모리 대역을 사용하므로 5173 포트를 점유하지 않습니다.
 
 `Case_B 실시간 지표`와 `Case_C 실시간 지표`를 별도 그룹으로 표시하며, 각 제목 아래에 backend가 전달한 현재 단계와 그 단계의 다음 전환 설명을 표시합니다. WAIT_SIGNAL에는 확정 30분봉 EMA 기울기·종가 %B·직전 3봉 저점 비교만 표시하고, 터치 BBW를 계속 감시하지 않습니다. Case C는 SETUP 안에서도 저점 확인 대기와 반등 회복 대기를 구분합니다. 주문·종료 상태처럼 지표가 없는 단계도 `indicators.phases`로 전달하며, Case C 보유 중 Case B의 신호 감시와 매수 일시정지를 구분합니다. 공통 상단 안전 종료 조건은 별도 그룹에서 한 번만 표시합니다.
 

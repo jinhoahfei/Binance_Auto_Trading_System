@@ -82,7 +82,7 @@ _RUNTIME_OWNER_ORPHANED = "ORPHANED"
 _RUNTIME_OWNER_RELEASED = "RELEASED"
 _PARENT_STOP_PIPE_EOF_REASON = "parent_stop_pipe_eof"
 _ORIGIN_PATTERN = re.compile(
-    r"^(?:tauri://[A-Za-z0-9.-]+|https?://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)$"
+    r"^(?:tauri://[A-Za-z0-9.-]+|http://tauri\.localhost|https?://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)$"
 )
 
 # Module을 가져온 interpreter의 PID와 UUID를 묶고 fork 뒤 PID가 달라지면 child identity를 새로 만든다.

@@ -66,12 +66,19 @@ class WindowsPlatformContractTests(unittest.TestCase):
 
         # 대소문자 비교는 Windows 경로 의미를 따르되 다른 사용자와 namespace 우회는 거부한다.
         windows_paths.validate_app_data_path(PureWindowsPath(str(expected).upper()), expected)
+        live_directory = expected / "com.binance-auto.trader.live"
+        windows_paths.validate_app_data_path(live_directory, expected)
+        windows_paths.validate_app_data_path(PureWindowsPath(str(live_directory).upper()), expected)
         for invalid in (
             r"C:\Users\other\AppData\Local\com.binance-auto.trader",
             r"\\server\share\com.binance-auto.trader",
             r"\\?\C:\Users\user\AppData\Local\com.binance-auto.trader",
             str(expected) + r"\..\com.binance-auto.trader",
             str(expected) + ":alternate",
+            str(expected / "unknown-profile"),
+            str(live_directory / "nested"),
+            str(expected / "com.binance-auto.trader.live.other"),
+            str(live_directory) + ":alternate",
             "com.binance-auto.trader",
         ):
             with self.subTest(path=invalid), self.assertRaises(OSError):

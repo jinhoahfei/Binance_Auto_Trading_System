@@ -3,11 +3,13 @@ using System.Runtime.InteropServices;
 using System.Security;
 
 // 클래스 이름: CredentialManager
-// 기능: 고정 Testnet target의 Windows generic credential을 secret 출력 없이 조작한다.
+// 기능: 고정 Testnet·Live target과 실행 profile을 secret 출력 없이 조작한다.
 // 작성 날짜: 2026/09/06
 public static class CredentialManager
 {
     private const string target_prefix = "com.binance-auto.trader.testnet/";
+    private const string live_target_prefix = "com.binance-auto.trader.live/";
+    private const string execution_profile_target = "com.binance-auto.trader.desktop-profile/execution-profile";
     private const uint generic_type = 1;
     private const int maximum_secret_bytes = 512;
 
@@ -79,6 +81,14 @@ public static class CredentialManager
         return target_prefix + account;  // Renderer나 environment가 target을 선택하지 않는다.
     }
 
+    // Live credential은 Testnet·canary namespace와 섞이지 않는 고정 pair만 허용한다.
+    private static string get_live_target(string account)
+    {
+        if (account != "api-key" && account != "api-secret")
+            throw new InvalidOperationException("Unsupported credential account.");
+        return live_target_prefix + account;
+    }
+
     // 함수 이름: validate_secret()
     // 기능: hidden input을 trim하지 않고 bounded printable ASCII인지 검사한다.
     // 인자: secret -> 호출자가 소유하는 SecureString
@@ -110,7 +120,30 @@ public static class CredentialManager
     // 작성 날짜: 2026/09/06
     public static void write_secret(string account, SecureString secret)
     {
-        string target = get_target(account);
+        write_to_target(get_target(account), account, secret);
+    }
+
+    public static void write_live_secret(string account, SecureString secret)
+    {
+        write_to_target(get_live_target(account), account, secret);
+    }
+
+    // Profile 값은 secret이 아니지만 native store 밖의 override를 허용하지 않는다.
+    public static void write_execution_profile(string profile)
+    {
+        if (profile != "TESTNET" && profile != "LIVE_READ_ONLY" && profile != "LIVE_ORDERS_V1")
+            throw new InvalidOperationException("Unsupported execution profile.");
+        using (SecureString value = new SecureString())
+        {
+            foreach (char character in profile) value.AppendChar(character);
+            write_to_target(execution_profile_target, "execution-profile", value);
+            if (!verify_target(execution_profile_target, value))
+                throw new InvalidOperationException("Execution profile verification failed.");
+        }
+    }
+
+    private static void write_to_target(string target, string account, SecureString secret)
+    {
         validate_secret(secret);
         IntPtr unicode_secret = IntPtr.Zero;
         IntPtr ascii_secret = IntPtr.Zero;
@@ -147,8 +180,18 @@ public static class CredentialManager
     // 작성 날짜: 2026/09/06
     public static bool verify_secret(string account, SecureString expected)
     {
+        return verify_target(get_target(account), expected);
+    }
+
+    public static bool verify_live_secret(string account, SecureString expected)
+    {
+        return verify_target(get_live_target(account), expected);
+    }
+
+    private static bool verify_target(string target, SecureString expected)
+    {
         IntPtr pointer;
-        if (!cred_read(get_target(account), generic_type, 0, out pointer))
+        if (!cred_read(target, generic_type, 0, out pointer))
         {
             if (Marshal.GetLastWin32Error() == 1168) return false;
             throw new InvalidOperationException("Credential read failed.");

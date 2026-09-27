@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from binance_auto_trader.adapters.filesystem.diagnostic_log_writer import DiagnosticLogWriter
 from binance_auto_trader.application.runtime_diagnostics import RuntimeDiagnostics
 from binance_auto_trader.application.trading_diagnostics import normalize_order_failure
+from binance_auto_trader.bootstrap import diagnostics as diagnostics_bootstrap
 from binance_auto_trader.bootstrap.diagnostics import create_runtime_diagnostics, resolve_log_directory
 
 
@@ -168,6 +170,54 @@ class DiagnosticLogWriterTests(unittest.TestCase):
             blocked_path.write_text("occupied", encoding="utf-8")
             with self.assertRaises(FileExistsError):
                 create_runtime_diagnostics("live", blocked_path)
+
+    def test_windows_packaged_logging_uses_known_folder_with_empty_environment(self) -> None:
+        """
+        함수 이름: test_windows_packaged_logging_uses_known_folder_with_empty_environment()
+        기능: frozen sidecar에 USERPROFILE이 없어도 native 사용자 경로에서 실제 운영 로그를 만든다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            known_app_data = root / "LocalAppData" / "com.binance-auto.trader"
+            expected = known_app_data / "logs" / "backend"
+            with (
+                patch.object(diagnostics_bootstrap.sys, "platform", "win32"),
+                patch.object(diagnostics_bootstrap.sys, "frozen", True, create=True),
+                patch.object(diagnostics_bootstrap, "__file__", str(root / "_MEIfixture" / "diagnostics.py")),
+                patch.dict(os.environ, {}, clear=True),
+                patch.object(Path, "home", side_effect=AssertionError("home environment must not be needed")),
+                patch("binance_auto_trader.adapters.platform.windows_paths.get_local_app_data_directory", return_value=known_app_data),
+            ):
+                self.assertEqual(resolve_log_directory(), expected)
+                for execution_mode in ("live", "testnet"):
+                    diagnostics = create_runtime_diagnostics(execution_mode)
+                    self.assertTrue(diagnostics.enabled)
+                    self.assertTrue(diagnostics.close())
+                    records = list(expected.glob(f"*_KST_{execution_mode}_*.log"))
+                    self.assertEqual(len(records), 1)
+                    first_record = json.loads(records[0].read_text(encoding="utf-8").splitlines()[0])
+                    self.assertEqual(first_record["event"], "logging_started")
+
+    def test_windows_source_logging_preserves_checkout_path_without_home_environment(self) -> None:
+        """
+        함수 이름: test_windows_source_logging_preserves_checkout_path_without_home_environment()
+        기능: Windows source 실행은 환경변수가 없어도 기존 checkout의 Log_History를 우선한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        expected = Path(__file__).resolve().parents[4] / "Log_History"
+        with (
+            patch.object(diagnostics_bootstrap.sys, "platform", "win32"),
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(Path, "home", side_effect=AssertionError("source path must not require home")),
+            patch("binance_auto_trader.adapters.platform.windows_paths.get_local_app_data_directory") as known_folder,
+        ):
+            self.assertEqual(resolve_log_directory(), expected)
+        known_folder.assert_not_called()
 
     def test_partial_write_is_repaired_before_next_day_rotation(self) -> None:
         """

@@ -18,6 +18,7 @@ from .windows_api import (
 
 _LOCAL_APP_DATA_FOLDER_ID = "f1b32785-6fba-4fcf-9d55-7b8e7f157091"
 _APP_DIRECTORY_NAME = "com.binance-auto.trader"
+_LIVE_DIRECTORY_NAME = "com.binance-auto.trader.live"
 
 
 def get_local_app_data_directory() -> Path:
@@ -53,7 +54,7 @@ def get_local_app_data_directory() -> Path:
 def validate_app_data_path(directory: PureWindowsPath, expected: PureWindowsPath) -> None:
     """
     함수 이름: validate_app_data_path()
-    기능: app-data가 known-folder 고정 경로와 같고 local absolute drive 경로인지 검증한다.
+    기능: known-folder app-data 또는 고정 live 하위 경로인 local absolute drive 경로를 검증한다.
     인자: directory -> backend가 사용할 directory
         expected -> native known folder로 결정한 application directory
     반환값: 없음
@@ -64,7 +65,7 @@ def validate_app_data_path(directory: PureWindowsPath, expected: PureWindowsPath
         not directory.is_absolute()
         or len(directory.drive) != 2
         or directory.drive[1] != ":"
-        or directory != expected
+        or directory not in (expected, expected / _LIVE_DIRECTORY_NAME)
         or any(part == ".." or ":" in part for part in directory.parts[1:])
     ):
         raise OSError("Windows runtime directory is outside user app-data")

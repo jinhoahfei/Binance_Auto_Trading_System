@@ -1,6 +1,7 @@
 //! Windows stdio의 bounded big-endian frame을 OS I/O와 분리한다.
 
-use super::{serialize_bootstrap_configuration, SidecarBootstrapConfiguration, SidecarFailure};
+use super::{SidecarBootstrapConfiguration, SidecarFailure};
+use super::execution_profile::{serialize_profile_configuration, ExecutionProfile};
 use serde::Serialize;
 use std::io::{self, Write};
 use zeroize::Zeroizing;
@@ -17,7 +18,7 @@ struct BootstrapFrame<'a> {
     #[serde(rename = "type")]
     message_type: &'static str,
     token: &'a str,
-    configuration: &'a SidecarBootstrapConfiguration<'a>,
+    configuration: &'a serde_json::value::RawValue,
 }
 
 
@@ -28,10 +29,13 @@ struct BootstrapFrame<'a> {
 /// 작성 날짜: 2026/09/06
 pub(super) fn serialize_bootstrap_frame(
     token: &str,
-    configuration: &SidecarBootstrapConfiguration<'_>,
+    configuration: SidecarBootstrapConfiguration<'_>,
+    profile: ExecutionProfile,
 ) -> Result<Zeroizing<Vec<u8>>, SidecarFailure> {
     // 내부 configuration의 기존 8 KiB 제한을 유지한 뒤 전체 bootstrap은 16 KiB로 제한한다.
-    let _validated_configuration = serialize_bootstrap_configuration(configuration)?;
+    let serialized_configuration = serialize_profile_configuration(configuration, profile)?;
+    let configuration = serde_json::from_slice::<&serde_json::value::RawValue>(&serialized_configuration)
+        .map_err(|_| SidecarFailure::startup())?;
     let frame = BootstrapFrame {
         message_type: "BOOTSTRAP",
         token,
@@ -151,7 +155,7 @@ mod tests {
             allow_testnet_orders: false,
             max_notional: None,
         };
-        let payload = serialize_bootstrap_frame(&token, &configuration).unwrap();
+        let payload = serialize_bootstrap_frame(&token, configuration, ExecutionProfile::Testnet).unwrap();
         let mut frame = Vec::new();
         write_frame(&mut frame, &payload, MAXIMUM_BOOTSTRAP_FRAME_BYTES).unwrap();
         let decoded: serde_json::Value = serde_json::from_slice(
@@ -169,5 +173,31 @@ mod tests {
             decoded["configuration"]["max_notional"],
             serde_json::Value::Null
         );
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn stdio_frame_preserves_live_profile_and_caps() {
+        for profile in [ExecutionProfile::LiveReadOnly, ExecutionProfile::LiveOrders] {
+            let configuration = SidecarBootstrapConfiguration {
+                schema_version: 3, allowed_origin: "http://tauri.localhost",
+                history_path: "C:\\fixture\\com.binance-auto.trader.live\\trade-history.jsonl",
+                api_key: "canary", api_secret: "canary", allow_testnet_orders: false, max_notional: None,
+            };
+            let payload = serialize_bootstrap_frame(&"A".repeat(43), configuration, profile).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+            let live = &value["configuration"];
+            assert_eq!(value.as_object().unwrap().len(), 3);
+            assert_eq!(live.as_object().unwrap().len(), 12);
+            assert_eq!(live["execution_mode"], "live");
+            assert_eq!(live["credential_namespace"], "com.binance-auto.trader.live");
+            assert_eq!(live["allow_live_orders"], profile == ExecutionProfile::LiveOrders);
+            assert_eq!(live["max_notional"], if profile == ExecutionProfile::LiveOrders { serde_json::json!("10") } else { serde_json::Value::Null });
+            assert_eq!(live["allow_testnet_orders"], false);
+        }
     }
 }

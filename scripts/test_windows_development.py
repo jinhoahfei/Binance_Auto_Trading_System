@@ -30,11 +30,17 @@ class WindowsDevelopmentContractTests(unittest.TestCase):
         # OS merge 뒤의 개발 hook과 외부 binary 요구사항을 동시에 검증한다.
         base = json.loads((TAURI_DIRECTORY / "tauri.conf.json").read_text())
         windows = json.loads((TAURI_DIRECTORY / "tauri.windows.conf.json").read_text())
+        development = json.loads((TAURI_DIRECTORY / "tauri.windows.dev.conf.json").read_text())
         self.assertIn("package_sidecar.sh", base["build"]["beforeDevCommand"])
         self.assertEqual(windows["build"]["beforeDevCommand"], "node scripts/desktopFrontend.mjs dev")
-        self.assertFalse(windows["bundle"]["active"])
-        self.assertEqual(windows["bundle"]["externalBin"], [])
-        self.assertEqual(windows["bundle"]["targets"], [])
+        self.assertFalse(development["bundle"]["active"])
+        self.assertEqual(development["bundle"]["externalBin"], [])
+        self.assertEqual(development["bundle"]["targets"], [])
+        self.assertTrue(windows["bundle"]["active"])
+        self.assertEqual(windows["bundle"]["externalBin"], ["binaries/binance-auto-sidecar"])
+        self.assertEqual(windows["bundle"]["targets"], ["nsis"])
+        self.assertEqual(windows["build"]["beforeBuildCommand"], "node scripts/desktopFrontend.mjs build")
+        self.assertEqual(windows["bundle"]["windows"]["nsis"]["installMode"], "currentUser")
         self.assertNotIn("app", windows)  # Origin/CSP/capability를 Windows에서 넓히지 않는다.
 
         # Native READY 뒤 renderer가 event bridge와 descriptor를 사용할 수 있어야 한다.
@@ -75,7 +81,7 @@ class WindowsDevelopmentContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
-        self.assertEqual(result.stderr.strip(), "desktop:dev: Windows 11 x64 source development is required.")
+        self.assertEqual(result.stderr.strip(), "desktop: Windows x64 development or build environment is required.")
 
     def test_credential_tool_uses_native_hidden_input_and_fixed_targets(self) -> None:
         """
@@ -112,8 +118,8 @@ class WindowsDevelopmentContractTests(unittest.TestCase):
         launcher_url = (REPOSITORY_ROOT / "UI/scripts/desktopLauncher.mjs").as_uri()
         program = (
             f"import {{ get_tauri_arguments }} from {json.dumps(launcher_url)};"
-            "console.log(JSON.stringify(['darwin', 'win32'].map(platform => "
-            "get_tauri_arguments('dev', platform))));"
+            "console.log(JSON.stringify(['dev', 'build'].flatMap(command => "
+            "['darwin', 'win32'].map(platform => get_tauri_arguments(command, platform)))));"
         )
         result = subprocess.run(
             ["node", "--input-type=module", "-e", program],
@@ -121,7 +127,9 @@ class WindowsDevelopmentContractTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(result.stdout), [
             ["dev", "--config", "apps/desktop/src-tauri/tauri.conf.json"],
-            ["dev", "--config", "apps/desktop/src-tauri/tauri.windows.conf.json"],
+            ["dev", "--config", "apps/desktop/src-tauri/tauri.windows.dev.conf.json"],
+            ["build", "--config", "apps/desktop/src-tauri/tauri.conf.json"],
+            ["build", "--config", "apps/desktop/src-tauri/tauri.windows.conf.json"],
         ])
 
 

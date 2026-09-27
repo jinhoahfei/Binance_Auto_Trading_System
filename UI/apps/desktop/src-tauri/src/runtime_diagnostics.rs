@@ -300,11 +300,7 @@ fn probe(descriptor: &BackendConnectionDescriptor) -> Result<BackendLiveness, &'
         .set_write_timeout(Some(remaining()?))
         .map_err(|_| "timeout")?;
     let request_id = new_id();
-    let origin = if tauri::is_dev() {
-        "http://127.0.0.1:5173"
-    } else {
-        "tauri://localhost"
-    };
+    let origin = crate::sidecar::select_allowed_origin(tauri::is_dev());
     let mut request = format!("GET /v1/diagnostics/liveness HTTP/1.1\r\nHost: {address}\r\nOrigin: {origin}\r\nAuthorization: Bearer {}\r\nX-Request-Id: {request_id}\r\nConnection: close\r\n\r\n", descriptor.token);
     // 인증 헤더는 전송 직후 메모리에서 지우며 진단 기록에 원문을 남기지 않는다.
     let sent = stream.write_all(request.as_bytes());
@@ -530,10 +526,10 @@ fn process_resources() -> Value {
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
         if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } == 0 {
             let usage = unsafe { usage.assume_init() };
-            let cpu_ms = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as i64 * 1000
+            let cpu_ms = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000
                 + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as i64 / 1000;
             let multiplier = if cfg!(target_os = "macos") { 1 } else { 1024 };
-            return json!({"cpu_total_ms":cpu_ms,"peak_rss_bytes":usage.ru_maxrss as i64 * multiplier,"scope":"native_process_only"});
+            return json!({"cpu_total_ms":cpu_ms,"peak_rss_bytes":usage.ru_maxrss * multiplier,"scope":"native_process_only"});
         }
     }
     json!({"status":"unavailable"})
@@ -587,7 +583,14 @@ fn monitor(app: AppHandle, shared: Arc<Shared>) {
                         }
                     }
                     #[cfg(not(target_os = "macos"))]
-                    let _ = handle;
+                    if let Some(window) = handle.get_webview_window("main") {
+                        if let Ok(mut env) = state.environment.try_lock() {
+                            env.minimized = window.is_minimized().ok();
+                            env.app_active = window.is_focused().ok();
+                            // Flags are requested; WebView2 does not expose a verified applied policy.
+                            env.actual_policy = Some("webview2_browser_arguments_requested");
+                        }
+                    }
                     state
                         .main_ack_ms
                         .store(state.epoch.elapsed().as_millis() as u64, Ordering::Relaxed);

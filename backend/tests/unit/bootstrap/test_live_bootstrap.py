@@ -131,10 +131,16 @@ class LiveBootstrapTests(unittest.TestCase):
             original = root / "history.jsonl"
             original.write_text("")
             for link in (os.symlink, os.link):
-                link(original, history)
-                with self.assertRaises(LiveConfigurationError):
-                    validate_live_history_path(history)
-                history.unlink()
+                with self.subTest(link=link.__name__):
+                    try:
+                        link(original, history)
+                    except OSError as error:
+                        if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                            self.skipTest("Windows symbolic links require Developer Mode or symlink privilege")
+                        raise
+                    with self.assertRaises(LiveConfigurationError):
+                        validate_live_history_path(history)
+                    history.unlink()
             with self.assertRaises(LiveConfigurationError):
                 validate_live_history_path(original)
 
@@ -314,7 +320,7 @@ class LiveBootstrapTests(unittest.TestCase):
         """
         wire = {
             "schema_version": SCHEMA_VERSION, "allowed_origin": "tauri://localhost",
-            "history_path": "/private/tmp/" + LIVE_CREDENTIAL_NAMESPACE + "/trade-history.jsonl",
+            "history_path": str(Path.cwd() / LIVE_CREDENTIAL_NAMESPACE / "trade-history.jsonl"),
             "api_key": "live-key-canary", "api_secret": "live-secret-canary",
             "allow_testnet_orders": False, "max_notional": None,
             "execution_mode": "live", "credential_namespace": LIVE_CREDENTIAL_NAMESPACE,

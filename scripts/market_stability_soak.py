@@ -6,10 +6,14 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-import resource
 import sys
 import threading
 import time
+
+if __package__:
+    from .diagnostic_process_metrics import peak_rss_bytes
+else:
+    from diagnostic_process_metrics import peak_rss_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'backend' / 'src'))
@@ -106,14 +110,14 @@ def main():
             seconds_since_evaluation=round(now-observer.last_evaluation, 3),
             failures=failures, last_failure_type=last_failure_type,
             recovery_pending=recover.is_set(), event_counts=event_counts,
-            thread_count=threading.active_count(), max_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            thread_count=threading.active_count(), max_rss=peak_rss_bytes(),
             gateway_fingerprint_count=gateway.kline_replay_buffer_size,
             last_success_seconds=None if last_success is None else round(last_success-start, 3),
             validation_scope='public market and production indicators only; no account/order validation')
-        with (args.output / 'metrics.jsonl').open('a') as stream:
+        with (args.output / 'metrics.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps(result, ensure_ascii=False) + '\n')
         temporary = args.output / 'status.tmp'
-        temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+        temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         temporary.replace(args.output / 'status.json')
 
     try:
