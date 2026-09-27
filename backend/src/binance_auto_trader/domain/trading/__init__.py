@@ -44,6 +44,7 @@ from .events import (
     EventPriority,
     ForceSellOutcomePayload,
     SellAttemptPayload,
+    SellPreparationDeferredPayload,
     TradingEvent,
     TradingEventType,
 )
@@ -121,6 +122,7 @@ __all__ = [
     "AssetBalance",
     "BuyAttemptPayload",
     "BuyRiskBlockedPayload",
+    "SellPreparationDeferredPayload",
     "CancelPendingOrder",
     "CancelScheduledEvaluation",
     "CaseBPositionState",

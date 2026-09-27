@@ -43,6 +43,7 @@ export interface RealtimeIndicatorTimerViewModel {
     readonly snapshot: BackendTradingTimer | null;
     readonly server_time: string | null;
     readonly received_at: number | null;
+    readonly paused?: boolean;
 }
 
 export interface RealtimeIndicatorGroupViewModel {

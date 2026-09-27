@@ -1226,6 +1226,7 @@ def _map_trading_indicators(snapshot: object | None) -> dict[str, object] | None
             "market_version": evaluation.market_version,
             "context_version": evaluation.context_version,
             "timer": _map_trading_timer(getattr(evaluation, "timer", None)),
+            "evaluation_state": evaluation.evaluation_state,
         })  # Decimal을 float로 변환하지 않아 비교 경계의 정밀도를 유지한다.
     captured_at = getattr(snapshot, "captured_at", None)
     return {
@@ -1680,6 +1681,7 @@ export interface BackendTradingCondition {{
     readonly market_version: number | null;
     readonly context_version: number | null;
     readonly timer?: BackendTradingTimer | null;
+    readonly evaluation_state?: 'active' | 'paused';
 }}
 
 export interface BackendTradingIndicatorSnapshot {{

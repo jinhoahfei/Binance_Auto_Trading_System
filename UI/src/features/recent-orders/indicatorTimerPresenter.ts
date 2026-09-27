@@ -47,6 +47,10 @@ export function present_indicator_timer(model: RealtimeIndicatorTimerViewModel, 
 
     // 두 서버 시각의 차이와 로컬 monotonic 차이만 써서 PC의 시간대·시각 오차를 배제한다.
     const duration = Number(timer.duration_seconds);
+    if (model.paused) {
+        return { time: format_timer_seconds(Number(timer.remaining_seconds), duration),
+            state: 'unavailable', label: '확인 대기', reason: null };
+    }
     const server_elapsed = Math.max(0, Date.parse(model.server_time) - Date.parse(timer.sampled_at)) / 1000;
     const local_elapsed = Math.max(0, now - model.received_at) / 1000;
     const remaining = timer.state === 'running'

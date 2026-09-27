@@ -93,6 +93,7 @@ from binance_auto_trader.domain.trading.events import (
     EventPriority,
     ForceSellOutcomePayload,
     SellAttemptPayload,
+    SellPreparationDeferredPayload,
     TradingEvent,
     TradingEventType,
 )
@@ -1081,6 +1082,21 @@ class _BuyBudgetWait:
     suppressed_count: int = 0
 
 
+@dataclass(slots=True)
+class _SellMinimumWait:
+    """
+    클래스 이름: _SellMinimumWait
+    기능: 청산 사유별 최소 주문 보류와 재확인 기한을 보존한다.
+    작성 날짜: 2026/09/27
+    """
+
+    fingerprint: tuple[object, ...]
+    retry_at: datetime
+    filter_reason: str
+    preview_quantity: Decimal | None
+    suppressed_count: int = 0
+
+
 class TradingController:
     """
     클래스 이름: TradingController
@@ -1276,6 +1292,7 @@ class TradingController:
         self._manual_kill_control_persistence_ambiguous = False
         self._last_risk_decision: RiskDecision | None = None
         self._buy_budget_waits: dict[StrategyType, _BuyBudgetWait] = {}
+        self._sell_minimum_waits: dict[tuple[StrategyType, ExitReason | None], _SellMinimumWait] = {}
         self._order_retry_jitter = (
             order_retry_jitter or _unit_order_retry_jitter_factor
         )  # Phase 8 fake는 factor 1.0, 실거래는 동일 경계에 난수 provider를 주입한다.
@@ -2142,6 +2159,7 @@ class TradingController:
             self._manual_kill_cleanup_verified = False
             if self._context.initialized:
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+                self._indicator_store.pause()
                 try:
                     self._context.apply_runtime_patch(
                         patch(
@@ -2202,6 +2220,7 @@ class TradingController:
                     patch(trading_phase=TradingPhase.STOPPING)
                 )
             self._status = TradingSessionStatus.STOPPING
+            self._indicator_store.pause()
 
         # Stable client ID 순서로 한 주문씩 처리해 다중 corruption에서도 effect 순서를 결정론적으로 만든다.
         unresolved_states = tuple(
@@ -2428,6 +2447,7 @@ class TradingController:
 
         # 이미 같은 phase면 version을 불필요하게 올리지 않고 공개 status만 다시 고정한다.
         self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+        self._indicator_store.pause()
         if self._context.runtime.trading_phase is not (
             TradingPhase.RECONCILIATION_REQUIRED
         ):
@@ -2467,6 +2487,7 @@ class TradingController:
                 TradingSessionStatus.STOPPING,
             ):
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+                self._indicator_store.pause()
             try:
                 if self._context.initialized:
                     self._context.apply_runtime_patch(
@@ -2640,12 +2661,16 @@ class TradingController:
                 self._active_stm,
                 self._context.runtime,
             )  # 선택된 REGIME의 이름으로 실행 전략을 추측하지 않는다.
+            if self._status is TradingSessionStatus.TERMINATED:
+                active_logic = None
 
             # 지표와 ACTIVE STATE를 같은 처리 단위의 상태로 publication에 묶는다.
             if active_logic is not None and self._active_stm is not None:
                 active_logic = replace(
                     active_logic,
-                    indicators=self._indicator_store.snapshot(self._active_stm, self._context.snapshot()),
+                    indicators=self._indicator_store.snapshot(self._active_stm, self._context.snapshot(),
+                        evaluation_running=self._status is TradingSessionStatus.RUNNING,
+                        entered_at=self._position.entered_at if self._position is not None else None),
                 )
 
             # mutable Context의 각 값을 session lock 아래 같은 publication에 묶는다.
@@ -3291,6 +3316,7 @@ class TradingController:
 
             # G-06를 공개한 뒤부터는 durable journal과 거래소 사실을 rollback하지 않는다.
             self._status = TradingSessionStatus.STOPPING
+            self._indicator_store.pause()
             previous_trace_event_id = self._active_trace_event_id
             self._active_trace_event_id = stop_event.event_id
             try:
@@ -3318,6 +3344,7 @@ class TradingController:
                     ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
                 )
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+                self._indicator_store.pause()
                 raise  # 예상 밖 effect 실패도 NOT_STARTED로 위장하지 않고 operator 복구를 요구한다.
             finally:
                 self._active_trace_event_id = previous_trace_event_id
@@ -4869,6 +4896,7 @@ class TradingController:
                     self._record_diagnostic("session_recovery_attempt_failed", causes=describe_exception(error), retryable=True)
                     raise
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+                self._indicator_store.pause()
                 self._block_market_auto_resume("RECOVERY_INVARIANT_FAILED", error=error)
                 for issue in self._session_recovery_issues.values():
                     issue.retryable = False
@@ -6395,6 +6423,7 @@ class TradingController:
                                 patch(trading_phase=TradingPhase.STOPPING)
                             )
                             self._status = TradingSessionStatus.STOPPING
+                            self._indicator_store.pause()
                         else:
                             self._context.apply_runtime_patch(
                                 patch(trading_phase=TradingPhase.IDLE)
@@ -6912,6 +6941,8 @@ class TradingController:
                 self._active_stm, result, context, self._context.snapshot(),
                 self._latest_market_evaluation_version,
                 entered_at=self._position.entered_at if self._position is not None else None,
+                evaluation_running=self._status is TradingSessionStatus.RUNNING,
+                fresh_market_evaluation=result.decision_id.startswith("market:"),
             )  # 표시를 위해 주문 로직을 실행하거나 Context를 수정하지 않는다.
 
         marker = self._session_recovery_waiting_evaluation
@@ -6954,12 +6985,15 @@ class TradingController:
         if isinstance(action, PatchRuntimeContext):
             trace_identity = self._prepare_order_patch_trace(action)
             self._context.apply_runtime_patch(action)
+            if self._context.runtime.pending_intent_id is None:
+                self._unsubmitted_preparation_intent = None
             self._complete_order_patch_trace(trace_identity)
             return ()
         if isinstance(action, OpenLowerEvent):
             self._context.open_lower_event(action)
             return ()
         if isinstance(action, CloseLowerEvent):
+            self._sell_minimum_waits.clear()
             for strategy in tuple(self._buy_budget_waits):
                 self._clear_buy_budget_wait(strategy, "lower_event_closed")
             self._context.close_lower_event(action)
@@ -7395,13 +7429,23 @@ class TradingController:
                     "recovered-position liquidation quantity is zero"
                 )
 
-            # 일반 세션의 0 수량은 기존 fail-closed 주문 재조정 정책을 유지한다.
+            # 미제출 증거를 남겨 잔고 재조정과 종료가 실제 전송 여부를 구별하게 한다.
+            self._unsubmitted_preparation_intent = action.idempotency_key
             self._enter_order_reconciliation(
                 None,
                 OrderExecutionFailureCode.ZERO_ORDER_QUANTITY,
                 message_id=None,
             )
             return ()  # 수량 0에서는 Gateway를 단 한 번도 호출하지 않는다.
+
+        if action.side is OrderSide.SELL and not force_sell and self._can_defer_sell_minimum(action):
+            wait = self._sell_minimum_waits.get((action.strategy, action.exit_reason))
+            if (wait is not None and wait.fingerprint == self._sell_wait_fingerprint()
+                    and self._clock() < wait.retry_at):
+                preview = self._api_gateway.preview_cached_sell_quantity(requested_quantity, market_price)
+                if preview is None or preview <= (wait.preview_quantity or Decimal("0")):
+                    return self._defer_sell_minimum(action, provisional_client_id, requested_quantity,
+                                                    market_price, wait.filter_reason, prepared=False)
 
         # 수량 확정 뒤 선택 REGIME과 filter 전 Order aggregate를 먼저 완성한다.
         active_stm = self._active_stm
@@ -7440,6 +7484,15 @@ class TradingController:
                 return self._block_buy_budget(action, provisional_client_id,
                     RiskDecision(False, budget, RiskBlockReason.RISK_BUY_BUDGET_INSUFFICIENT),
                     requested_quantity, market_price, prepared=True)
+            if (order.side is OrderSide.SELL and not force_sell and self._can_defer_sell_minimum(action)
+                    and isinstance(error, SymbolFilterError)
+                    and str(error) in {
+                        "FILTER_MARKET_QUANTITY_ZERO", "FILTER_LOT_SIZE_MINIMUM",
+                        "FILTER_MARKET_LOT_SIZE_MINIMUM", "FILTER_MIN_NOTIONAL_MINIMUM",
+                        "FILTER_NOTIONAL_MINIMUM",
+                    }):
+                return self._defer_sell_minimum(action, provisional_client_id, requested_quantity,
+                                                market_price, str(error), prepared=True)
             transient = isinstance(error, (OSError, TimeoutError)) or (
                 isinstance(error, BinanceAPIError) and (error.status_code >= 500 or error.status_code in (418, 429))
             )
@@ -7504,6 +7557,9 @@ class TradingController:
         self._preparation_retry_intent = None
 
         # 복구 청산은 부분 cap·LOT_SIZE 내림을 허용하지 않고 한 주문의 정확한 전량만 journal에 넣는다.
+        if action.side is OrderSide.SELL:
+            self._sell_minimum_waits.pop((action.strategy, action.exit_reason), None)
+
         if self._recovered_position_liquidation_session:
             current_position_quantity = self._require_position().quantity
             if (
@@ -7667,6 +7723,76 @@ class TradingController:
             self._append_order_trace(order, "6.1", gateway_version)
 
         return self._handle_order_result(state, result, initial=True)
+
+    def _can_defer_sell_minimum(self, action: SubmitOrder) -> bool:
+        """
+        함수 이름: _can_defer_sell_minimum()
+        기능: 정상 보유 단계의 동일 미제출 의도만 관찰 상태로 복귀하도록 제한한다.
+        인자: action -> 보류할 후보 매도
+        반환값: 현재 의도와 원래 포지션 단계가 모두 일치하면 True
+        작성 날짜: 2026/09/27
+        """
+        runtime = self._context.runtime
+        state = self._active_stm.current_state if self._active_stm is not None else None
+        position_state = None if state is None else (
+            state.case_b_position_state if action.strategy is StrategyType.CASE_B else state.case_c_position_state)
+        return (self._status is TradingSessionStatus.RUNNING and not self._shutdown_preparing
+            and not self._external_stop_requested.is_set() and self._context.snapshot().position.is_open
+            and state is not None and state.root_state is RootState.TRADE_MANAGEMENT
+            and runtime.pending_order_id is None and runtime.pending_intent_id == action.idempotency_key
+            and runtime.pending_strategy is action.strategy and runtime.position_owner is action.strategy
+            and runtime.pending_return_state is not None and position_state is not None
+            and runtime.pending_return_state.value == position_state.value)
+
+    def _sell_wait_fingerprint(self) -> tuple[object, ...]:
+        """
+        함수 이름: _sell_wait_fingerprint()
+        기능: 매도 보류의 세션·포지션·잔고·비율·규칙 변경만 식별한다.
+        인자: 없음
+        반환값: 시세 tick version을 제외한 재검사 기준
+        작성 날짜: 2026/09/27
+        """
+        position = self._require_position()
+        return (self._session_id, self._context.runtime.lower_event_id, position.entered_at,
+                position.quantity, self._account.version, self._get_effective_free_balance(_BASE_ASSET),
+                self._context.scale_out_ratio, self._risk_policy_state,
+                self._api_gateway.get_cached_symbol_trading_rules())
+
+    def _defer_sell_minimum(self, action: SubmitOrder, client_id: str, quantity: Decimal,
+                            price: Decimal, filter_reason: str, *, prepared: bool) -> tuple[TradingEvent, ...]:
+        """
+        함수 이름: _defer_sell_minimum()
+        기능: 미제출 최소 주문 미달만 보류하고 원래 포지션 평가를 다시 허용한다.
+        인자: action/client_id -> 미전송 의도, quantity/price -> 후보 크기,
+            filter_reason -> 최소 조건 코드, prepared -> 실제 준비 검사 여부
+        반환값: 제출 예산을 소비하지 않는 명시적 매도 보류 feedback
+        작성 날짜: 2026/09/27
+        """
+        key = (action.strategy, action.exit_reason)
+        fingerprint = self._sell_wait_fingerprint()
+        wait = self._sell_minimum_waits.get(key)
+        if wait is None or wait.fingerprint != fingerprint or prepared:
+            suppressed_count = wait.suppressed_count if wait is not None else 0
+            wait = _SellMinimumWait(fingerprint, self._clock() + timedelta(seconds=30), filter_reason,
+                self._api_gateway.preview_cached_sell_quantity(quantity, price))
+            self._sell_minimum_waits[key] = wait
+            self._record_diagnostic("sell_minimum_deferred", strategy=action.strategy,
+                exit_reason=action.exit_reason, filter_reason=filter_reason, quantity=quantity,
+                decision_price=price, scale_out=self._context.scale_out_ratio, retry_at=wait.retry_at,
+                rules=self._api_gateway.get_cached_symbol_trading_rules(), suppressed_count=suppressed_count)
+        else:
+            wait.suppressed_count += 1
+        self._unsubmitted_preparation_intent = action.idempotency_key  # feedback 전에 STOP이 오더라도 미제출 근거를 보존한다.
+        self._preparation_retry_attempt = 0
+        self._preparation_retry_due_at = None
+        self._preparation_retry_intent = None
+        return (TradingEvent(
+            event_type=TradingEventType.SELL_PREPARATION_DEFERRED, occurred_at=self._clock(),
+            priority=EventPriority.ORDER_OUTCOME,
+            event_id=f"{client_id}:minimum:{self._context.version}",
+            lower_event_id=self._context.runtime.lower_event_id, order_id=client_id,
+            payload=SellPreparationDeferredPayload(action.strategy, action.idempotency_key),
+        ),)
 
     def _buy_wait_fingerprint(self, strategy: StrategyType) -> tuple[object, ...]:
         """
@@ -9738,6 +9864,7 @@ class TradingController:
             self._register_session_recovery_issue(selected_cause_category, failure_code, state)
             self._record_reconciliation_cause_locked(selected_cause_category)
             self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+            self._indicator_store.pause()
             self._record_diagnostic(
                 "reconciliation_required", level="ERROR", failure_code=failure_code,
                 cause_category=selected_cause_category, message_id=message_id,
@@ -10069,6 +10196,7 @@ class TradingController:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
+        self._sell_minimum_waits.clear()
         for strategy in tuple(self._buy_budget_waits):
             self._clear_buy_budget_wait(strategy, "session_closed")
 
@@ -10125,6 +10253,7 @@ class TradingController:
             is TradingPhase.RECONCILIATION_REQUIRED
         ):
             self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+            self._indicator_store.pause()
         elif root_state is RootState.LOGIC_TERMINATED:
             self._status = TradingSessionStatus.TERMINATED
             self._selected_stm = None  # 다음 start는 정상 stop 뒤 새 REGIME 선택을 반드시 요구한다.
@@ -10134,8 +10263,10 @@ class TradingController:
                     ReconciliationCauseCategory.ORDER_OR_PERSISTENCE_AMBIGUOUS
                 )
                 self._status = TradingSessionStatus.RECONCILIATION_REQUIRED
+                self._indicator_store.pause()
             else:
                 self._status = TradingSessionStatus.STOPPING
+                self._indicator_store.pause()
         else:
             self._status = TradingSessionStatus.RUNNING
 

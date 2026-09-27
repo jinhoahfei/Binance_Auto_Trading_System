@@ -57,7 +57,7 @@ function use_countdown_clock(active: boolean): number {
  * 작성 날짜: 2026/09/05
  */
 export function IndicatorCountdown({ timer, visible }: IndicatorCountdownProps) {
-    const now = use_countdown_clock(visible && timer.snapshot?.state === 'running');
+    const now = use_countdown_clock(visible && !timer.paused && timer.snapshot?.state === 'running');
     const signature = JSON.stringify([timer.snapshot, timer.server_time]);
     const fallback = useRef({ signature, received_at: performance.now() });
 

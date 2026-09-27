@@ -9,12 +9,13 @@ import unittest
 from unittest.mock import patch
 
 from binance_auto_trader.adapters.persistence.trade_history_repository import TradeHistoryRepository
-from binance_auto_trader.application.shutdown_recovery import ShutdownPreparationBlocked, prepare_shutdown_cycle
+from binance_auto_trader.application.shutdown_recovery import ShutdownPreparationBlocked, prepare_shutdown_cycle, _clear_unsubmitted_intent
 from binance_auto_trader.application.trading_controller import OrderExecutionFailureCode, TradingSessionStatus
 from binance_auto_trader.bootstrap.shutdown_preparation import ShutdownPreparation
 from binance_auto_trader.domain.common import RegimeType
 from binance_auto_trader.domain.trading.order import OrderStatus
-from binance_auto_trader.domain.trading.states import OrderSide
+from binance_auto_trader.domain.trading.states import OrderSide, ExitReason, PositionReturnState, StrategyType
+from binance_auto_trader.domain.trading.action_requests import patch as runtime_patch
 from tests.integration.test_shutdown_preparation import ShutdownExchange
 from tests.integration.test_testnet_restart_reconciliation_flow import _create_recovery_controller, _submit_case_b_buy
 
@@ -76,6 +77,53 @@ class ShutdownOrderStorageRecoveryTests(unittest.TestCase):
         # 재확인 요청도 이미 종료한 포지션을 다시 매도하지 않는다.
         self.prepare()
         self.assert_liquidated_once()
+
+    def test_unsubmitted_exit_cleanup_is_atomic_and_idempotent(self):
+        """
+        함수 이름: test_unsubmitted_exit_cleanup_is_atomic_and_idempotent()
+        기능: 청산 사유·복귀 상태·주문 의도를 같은 version으로 지우고 반복해도 변경하지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        self.buy()
+        self.c._context.apply_runtime_patch(runtime_patch(pending_intent_id="unsent-sell",
+            pending_strategy=StrategyType.CASE_B, pending_order_side=OrderSide.SELL,
+            pending_exit_reason=ExitReason.TAKE_PROFIT, pending_return_state=PositionReturnState.CASE_B_HOLDING))
+        self.c._unsubmitted_preparation_intent = "unsent-sell"
+        version = self.c.context.version
+        position = self.position.get_snapshot()
+        _clear_unsubmitted_intent(self.c)
+        self.assertEqual(self.c.context.version, version + 1)
+        self.assertIsNone(self.c.context.runtime.pending_return_state)
+        self.assertIsNone(self.c.context.runtime.pending_exit_reason)
+        self.assertIsNone(self.c.context.runtime.pending_intent_id)
+        _clear_unsubmitted_intent(self.c)
+        self.assertEqual(self.c.context.version, version + 1)
+        self.assertEqual(self.position.get_snapshot(), position)
+        self.prepare()
+        self.assert_liquidated_once()
+        self.assertEqual(self.history.trade_history.trades[-1].exit_reason, ExitReason.STOP)
+        self.prepare()
+        self.assert_liquidated_once()
+
+    def test_invalid_final_cleanup_does_not_release_resources_before_validation(self):
+        """
+        함수 이름: test_invalid_final_cleanup_does_not_release_resources_before_validation()
+        기능: 마지막 runtime 검증 실패가 processor를 먼저 제거하지 않고 재시도를 허용한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        processor = self.c._event_processor
+        with patch.object(type(self.c._context), "clear_pending_order", side_effect=ValueError("invalid final runtime")):
+            with self.assertRaises(ValueError):
+                self.prepare()
+        self.assertIs(self.c._event_processor, processor)
+        self.assertFalse(self.c._cleanup_in_progress)
+        self.assertIsNone(self.c._shutdown_verified_version)
+        self.prepare()
+        self.assertIs(self.c.status, TradingSessionStatus.TERMINATED)
 
     def test_completed_buy_pending_journal_removal_is_recovered_before_sell(self):
         with patch.object(TradeHistoryRepository, 'delete_pending_order', side_effect=OSError('temporary remove fault')):

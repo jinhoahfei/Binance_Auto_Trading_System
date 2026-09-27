@@ -107,7 +107,9 @@ export function present_trading_indicators(
 ): ReadonlyArray<RealtimeIndicatorGroupViewModel> {
     const rows = snapshot?.conditions ?? [];
     const evaluation_running = is_trading && lifecycle_status === 'running';
-    const lifecycle_notice = lifecycle_status === 'reconciliation_required'
+    const awaiting_evaluation = evaluation_running && rows.length > 0
+        && rows.every((row) => row.evaluation_state === 'paused') && snapshot?.notice === null;
+    const lifecycle_notice = lifecycle_status === 'reconciliation_required' || awaiting_evaluation
         ? '전략 평가가 중단되었습니다. 주문 상태 확인이 필요합니다.'
         : lifecycle_status === 'stopping' ? '자동매매 종료를 처리하고 있습니다. 전략 지표 평가가 중단되었습니다.'
         : !is_trading && snapshot === null ? '실행 중인 전략이 없습니다.'
@@ -146,19 +148,22 @@ export function present_trading_indicators(
             notice: lifecycle_notice ?? (group.notice === null ? undefined : NOTICES[group.notice]),
             // backend가 제공한 단계와 행을 함께 읽고 조건의 수치나 충족 여부를 재계산하지 않는다.
             indicators: rows.filter((row) => row.strategy === group.strategy && (group.strategy === null || row.phase === group.phase)).map((row) => {
-                const available = is_online && evaluation_running && row.satisfied !== null;
+                const paused = !evaluation_running || row.evaluation_state === 'paused'
+                    || (row.evaluation_state === undefined && ['order_pending', 'other_order_pending'].includes(group.notice ?? snapshot?.notice ?? ''));
+                const available = is_online && row.satisfied !== null;
                 const has_timer = row.timer != null || row.hold_seconds !== null || row.source === 'elapsed' || row.condition_id === 'c_flush';
 
                 return {
                     id: `${row.strategy ?? 'common'}:${row.phase}:${row.condition_id}`,
                     label: CONDITION_LABELS[row.condition_id] ?? row.condition_id,
                     criterion: present_condition_criterion(row),
-                    tone: !available ? 'neutral' : row.satisfied ? 'positive' : 'negative',
+                    tone: !available || paused ? 'neutral' : row.satisfied ? 'positive' : 'negative',
                     value: available ? format_indicator_value(row.value, row.source) : '—',
                     ...(has_timer ? { timer: {
-                        snapshot: is_online && evaluation_running ? row.timer ?? null : null,
+                        snapshot: is_online ? row.timer ?? null : null,
                         server_time: snapshot?.server_time ?? null,
                         received_at,
+                        paused,
                     } } : {}),
                 };
             }),

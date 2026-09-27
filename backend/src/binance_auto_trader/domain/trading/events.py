@@ -83,6 +83,7 @@ class TradingEventType(StrEnum):
     CASE_B_ACTIVE_RESUME = "CASE_B_ACTIVE_RESUME"
     CASE_B_WAIT_ONLY = "CASE_B_WAIT_ONLY"
     BUY_RISK_BLOCKED = "BUY_RISK_BLOCKED"
+    SELL_PREPARATION_DEFERRED = "SELL_PREPARATION_DEFERRED"
 
     THIRTY_MINUTE_CANDLE_CLOSED = "THIRTY_MINUTE_CANDLE_CLOSED"
     START_CASE_B_WAIT_PULLBACK_CONDITION_CHECK = (
@@ -157,6 +158,31 @@ class BuyRiskBlockedPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class SellPreparationDeferredPayload:
+    """
+    클래스 이름: SellPreparationDeferredPayload
+    기능: 최소 주문 조건으로 미제출된 매도 의도를 정확히 식별한다.
+    작성 날짜: 2026/09/27
+    """
+
+    strategy: StrategyType
+    intent_id: str
+
+    def __post_init__(self) -> None:
+        """
+        함수 이름: __post_init__()
+        기능: 보류 결과가 올바른 전략과 비어 있지 않은 의도를 가지는지 검증한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        if not isinstance(self.strategy, StrategyType):
+            raise TypeError("strategy must be a StrategyType")
+        if not isinstance(self.intent_id, str) or not self.intent_id.strip():
+            raise ValueError("intent_id must be non-empty text")
+
+
+@dataclass(frozen=True, slots=True)
 class ForceSellOutcomePayload:
     """
     클래스 이름: ForceSellOutcomePayload
@@ -193,6 +219,7 @@ TradingEventPayload: TypeAlias = (
     | PreparationExpiredPayload
     | BuyRiskBlockedPayload
     | SellAttemptPayload
+    | SellPreparationDeferredPayload
     | ForceSellOutcomePayload
 )
 

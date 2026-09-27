@@ -163,6 +163,7 @@ export interface BackendTradingCondition {
     readonly market_version: number | null;
     readonly context_version: number | null;
     readonly timer?: BackendTradingTimer | null;
+    readonly evaluation_state?: 'active' | 'paused';
 }
 
 export interface BackendTradingIndicatorSnapshot {

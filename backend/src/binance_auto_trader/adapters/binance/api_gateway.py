@@ -1550,6 +1550,34 @@ class APIGateway:
             raise ValueError("invalid cached buy quantity")
         return result
 
+    def get_cached_symbol_trading_rules(self) -> SymbolTradingRules | None:
+        """
+        함수 이름: get_cached_symbol_trading_rules()
+        기능: 추가 조회 없이 보류 재검사에 사용할 ETHUSDT 규칙을 반환한다.
+        인자: 없음
+        반환값: 관측한 불변 규칙 또는 None
+        작성 날짜: 2026/09/27
+        """
+        read_rules = getattr(self._rest_client, "get_cached_symbol_trading_rules", None)
+        rules = read_rules(symbol="ETHUSDT") if callable(read_rules) else None
+        if rules is not None and not isinstance(rules, SymbolTradingRules):
+            raise TypeError("cached rules must be SymbolTradingRules")
+        return rules
+
+    def preview_cached_sell_quantity(self, quantity: Decimal, price: Decimal) -> Decimal | None:
+        """
+        함수 이름: preview_cached_sell_quantity()
+        기능: 매도 보류의 최소 조건 해소를 로컬 캐시로만 확인한다.
+        인자: quantity -> 후보 수량, price -> 전략 가격
+        반환값: 최소 조건 통과 수량, 미달 0 또는 캐시 미관측 None
+        작성 날짜: 2026/09/27
+        """
+        preview = getattr(self._rest_client, "preview_cached_market_quantity", None)
+        result = preview(symbol="ETHUSDT", quantity=quantity, price=price) if callable(preview) else None
+        if result is not None and (not isinstance(result, Decimal) or not result.is_finite() or result < 0):
+            raise ValueError("invalid cached sell quantity")
+        return result
+
     def discard_unsubmitted_preparation(self, order: Order) -> None:
         """
         함수 이름: discard_unsubmitted_preparation()

@@ -219,7 +219,7 @@ describe('현재 실행 TradingSTM 전략 표시', () => {
     });
 
     it.each(['reconciliation_required', 'stopping'] as const)(
-        '%s에서는 이전 지표를 숨기고 전체 재동기화와 이벤트 수신 후에도 정상 작동으로 표시하지 않는다',
+        '%s에서는 마지막 지표를 보존하고 전체 재동기화와 이벤트 수신 후에도 정상 작동으로 표시하지 않는다',
         (status) => {
             // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
             const logic: NonNullable<BackendTradingSnapshot['active_logic']> = {
@@ -262,7 +262,7 @@ describe('현재 실행 TradingSTM 전략 표시', () => {
                     expect(props.chart.activeState).toBe(props.account.strategy.status);
                     const group = props.trader.indicatorGroups![0]!;
                     expect(group.notice).toContain('중단');
-                    expect(group.indicators[0]).toMatchObject({ value: '—', tone: 'neutral' });
+                    expect(group.indicators[0]).toMatchObject({ value: '101.00', tone: 'neutral' });
                 }
 
                 // 복구 후 RUNNING snapshot을 받으면 현재 판정을 다시 표시한다.

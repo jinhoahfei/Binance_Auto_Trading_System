@@ -497,12 +497,12 @@ class _AccountStreamRecoveryWorker:
 
             return True  # Callback에는 REST/WS 실행 대신 thread 시작만 남긴다.
 
-    def close(self) -> None:
+    def close(self, timeout: float | None = None) -> bool:
         """
         함수 이름: close()
         기능: 새 복구 요청을 영구 차단하고 대기 중 worker를 깨운 뒤 현재 실행을 회수한다.
-        인자: 없음
-        반환값: 없음
+        인자: timeout -> 회수 제한 초, 생략하면 완료까지 대기
+        반환값: 실행 중인 worker가 없으면 True
         작성 날짜: 2026/08/22
         """
         # 중단 신호와 현재 thread identity를 같은 worker lock 아래에서 원자적으로 읽는다.
@@ -517,7 +517,8 @@ class _AccountStreamRecoveryWorker:
             active_thread is not None
             and active_thread is not current_thread()
         ):
-            active_thread.join()
+            active_thread.join(timeout)
+        return active_thread is None or not active_thread.is_alive()
 
     def _run(self) -> None:
         """
@@ -871,12 +872,12 @@ class _TradingEventRuntimeWorker:
             self._wake_event.set()
             return True  # 반복 wake는 Event 하나로 병합해 thread 수를 늘리지 않는다.
 
-    def close(self) -> None:
+    def close(self, timeout: float | None = None) -> bool:
         """
         함수 이름: close()
         기능: 새 wake를 차단하고 interruptible wait를 깨운 뒤 단일 worker thread를 회수한다.
-        인자: 없음
-        반환값: 없음
+        인자: timeout -> 회수 제한 초, 생략하면 완료까지 대기
+        반환값: 실행 중인 worker가 없으면 True
         작성 날짜: 2026/08/24
         """
         # Stop과 현재 thread identity를 worker lock 아래에서 원자적으로 확정한다.
@@ -888,7 +889,8 @@ class _TradingEventRuntimeWorker:
 
         # Controller/application RLock을 기다리는 thread와 교착하지 않도록 lock 밖에서 join한다.
         if active_thread is not None and active_thread is not current_thread():
-            active_thread.join()
+            active_thread.join(timeout)
+        return active_thread is None or not active_thread.is_alive()
 
     def _run(self) -> None:
         """

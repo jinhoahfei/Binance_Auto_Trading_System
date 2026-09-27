@@ -17,8 +17,8 @@ from ..action_requests import (
 # 표시와 주문 판단이 같은 순수 조건 평가를 공유한다.
 from ..conditions import condition_met
 from ..context import TradingContextView
-from ..events import ForceSellOutcomePayload, TradingEvent, TradingEventType
-from ..states import OrderSide, RootState, TradingPhase, TradingStateConfiguration
+from ..events import ForceSellOutcomePayload, SellPreparationDeferredPayload, TradingEvent, TradingEventType
+from ..states import OrderSide, RootState, StrategyType, TradingPhase, TradingStateConfiguration
 from .base import TransitionOutcome, create_transition_outcome
 from .helpers import (
     create_lower_event_initialization_patch,
@@ -199,6 +199,25 @@ def handle_global_transition(
     """
     event_type = event.event_type
     runtime = context.runtime
+
+    # 미제출 보류는 전략 단계를 바꾸지 않고 같은 의도의 주문 예약만 해제한다.
+    if event_type is TradingEventType.SELL_PREPARATION_DEFERRED:
+        payload = event.payload
+        if not isinstance(payload, SellPreparationDeferredPayload):
+            return None
+        position_state = (state.case_b_position_state if payload.strategy is StrategyType.CASE_B
+                          else state.case_c_position_state)
+        if (state.root_state is not RootState.TRADE_MANAGEMENT or not context.position.is_open
+                or runtime.position_owner is not payload.strategy or runtime.pending_strategy is not payload.strategy
+                or runtime.pending_intent_id != payload.intent_id or runtime.pending_order_id is not None
+                or runtime.pending_order_side is not OrderSide.SELL or runtime.pending_return_state is None
+                or position_state is None or position_state.value != runtime.pending_return_state.value):
+            return None
+        return TransitionOutcome((), state, (patch(
+            pending_strategy=None, pending_order_side=None, pending_order_id=None,
+            pending_order_attempt_kind=None, pending_intent_id=None, pending_exit_reason=None,
+            pending_exit_pct_b=None, pending_return_state=None, trading_phase=TradingPhase.IDLE,
+        ),), exclusive=True)  # 체결이나 전략 전이를 꾸미지 않는 제출 전 운영 feedback이다.
 
     # STOP은 신규 전략 action보다 우선하며 pending 주문 유무에 따라 경로를 분리한다.
     if event_type is TradingEventType.STOP_CONFIRMED:

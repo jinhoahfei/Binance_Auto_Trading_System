@@ -9,9 +9,9 @@ from binance_auto_trader.application.residual_settlement import ResidualSettleme
 from binance_auto_trader.application.balance_reconciliation import BalanceObservationChangedError
 from binance_auto_trader.application.session_recovery import SessionRecoveryRetry
 from binance_auto_trader.application.trade_history_controller import TradeHistoryPersistencePendingError
-from binance_auto_trader.domain.trading.action_requests import CancelPendingOrder, patch
+from binance_auto_trader.domain.trading.action_requests import CancelPendingOrder
 from binance_auto_trader.domain.trading.position import Position
-from binance_auto_trader.domain.trading.states import RootState, TradingPhase
+from binance_auto_trader.domain.trading.states import RootState
 
 
 class ShutdownPreparationBlocked(RuntimeError):
@@ -145,15 +145,12 @@ def prepare_shutdown_cycle(controller, operation) -> None:
             except Exception as error:
                 raise ShutdownPreparationBlocked("SHUTDOWN_HISTORY_SAVE_FAILED", True) from error
             operation.check()
+            if c._context.initialized:
+                c._context.clear_pending_order()  # 전체 runtime 검증을 자원 해제 전에 완료한다.
             c._cleanup_session_resources()
             if c.cleanup_failures:
                 # 기존 session cleanup은 실패한 handle을 재사용하지 않는다. 자동 재시도를 약속하지 않는다.
                 raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED")
-            if c._context.initialized:
-                c._context.update_pending_order(None)
-                c._context.apply_runtime_patch(patch(pending_intent_id=None, pending_strategy=None,
-                    pending_order_side=None, pending_order_attempt_kind=None, pending_exit_reason=None,
-                    pending_exit_pct_b=None, trading_phase=TradingPhase.IDLE))
             c._status = TradingSessionStatus.TERMINATED
             check_cleanup()
             c._shutdown_verified_version = c.context.version
@@ -227,10 +224,7 @@ def _clear_unsubmitted_intent(c) -> None:
             or c._find_active_state_for_intent(intent) is not None
             or c._api_gateway.get_order_submission_attempt_evidence(client_id) is not None):
         raise ShutdownPreparationBlocked("SHUTDOWN_ORDER_UNRESOLVED")
-    c._context.update_pending_order(None)
-    c._context.apply_runtime_patch(patch(pending_intent_id=None, pending_strategy=None,
-        pending_order_side=None, pending_order_attempt_kind=None, pending_exit_reason=None,
-        pending_exit_pct_b=None, trading_phase=TradingPhase.IDLE))
+    c._context.clear_pending_order()
     c._unsubmitted_preparation_intent = None
 
 

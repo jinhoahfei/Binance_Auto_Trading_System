@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch as mock_patch
 from binance_auto_trader.adapters.binance.mappers import BinancePayloadError
 from binance_auto_trader.application.shutdown_recovery import prepare_shutdown_cycle, ShutdownPreparationBlocked
 from binance_auto_trader.bootstrap import start_application, ApplicationStatus
+from binance_auto_trader.bootstrap.application import _AccountStreamRecoveryWorker
 from binance_auto_trader.bootstrap.lifecycle import request_application_shutdown, ShutdownBlockedError
 from binance_auto_trader.bootstrap.shutdown_preparation import ShutdownPreparation, start_shutdown_preparation, get_shutdown_preparation, _run
 from binance_auto_trader.domain.common import RegimeType
@@ -153,6 +154,53 @@ class ShutdownPreparationTests(unittest.TestCase):
         self.assertEqual((state['reason_code'], state['step']), ('SHUTDOWN_RESOURCE_CLEANUP_FAILED', 'workers'))
         self.assertTrue(state['retryable'])
         self.assertFalse(self.f.runtime.state.closed)
+
+    def test_worker_timeout_keeps_owner_and_blocks_shutdown_effects_until_joined(self):
+        """
+        함수 이름: test_worker_timeout_keeps_owner_and_blocks_shutdown_effects_until_joined()
+        기능: 종료 기한에 멈추지 않은 worker를 보존하고 후속 청산·새 복구를 차단한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        entered, release = Event(), Event()
+
+        def blocked_recovery():
+            """
+            함수 이름: blocked_recovery()
+            기능: 외부 요청에 머무는 복구 작업을 명시적인 해제까지 재현한다.
+            인자: 없음
+            반환값: 없음
+            작성 날짜: 2026/09/27
+            """
+            entered.set()
+            release.wait(2)
+
+        worker = _AccountStreamRecoveryWorker(blocked_recovery, lambda: True)
+        self.assertTrue(worker.request_recovery())
+        self.assertTrue(entered.wait(1))
+        original = self.f.runtime._account_stream_recovery_worker
+        object.__setattr__(self.f.runtime, "_account_stream_recovery_worker", worker)
+        self.c._shutdown_preparing = True
+        try:
+            operation = ShutdownPreparation("worker-timeout", self.c.context.version, False, deadline=monotonic() + 0.05)
+            with mock_patch('binance_auto_trader.bootstrap.shutdown_preparation.prepare_shutdown_cycle') as cycle:
+                started = monotonic()
+                _run(self.f.runtime, operation)
+                self.assertLess(monotonic() - started, 0.8)
+                self.assertEqual(operation.reason_code, 'SHUTDOWN_PREPARATION_TIMEOUT')
+                self.assertFalse(operation.active)
+                cycle.assert_not_called()
+                self.assertFalse(worker.request_recovery())
+                self.assertIsNotNone(worker._active_thread)
+                self.assertIsNone(self.c._shutdown_verified_version)
+                retry = ShutdownPreparation("worker-still-busy", self.c.context.version, False, deadline=monotonic() + 0.05)
+                _run(self.f.runtime, retry)
+                cycle.assert_not_called()
+        finally:
+            release.set()
+            self.assertTrue(worker.close(timeout=1))
+            object.__setattr__(self.f.runtime, "_account_stream_recovery_worker", original)
 
     def test_unverified_session_handle_cleanup_does_not_claim_safe_retry(self):
         handle = Mock()

@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from decimal import Decimal
+from typing import Literal
 
 from ..domain.trading.conditions import TradingCondition, condition_unmet, evaluate_condition, unevaluated_condition
 from ..domain.trading.context import TradingContextView
@@ -16,7 +18,7 @@ from ..domain.trading.states import (
 )
 from ..domain.trading.stm import TradingSTM
 from ..domain.trading.timers import TradingTimerSnapshot
-from .trading_indicator_timers import TradingIndicatorTimers
+from .trading_indicator_timers import TradingIndicatorTimers, seconds_between
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +48,7 @@ class TradingIndicatorEvaluation:
     market_version: int | None = None
     context_version: int | None = None
     timer: TradingTimerSnapshot | None = None
+    evaluation_state: Literal["active", "paused"] = "active"
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +240,35 @@ class TradingIndicatorStore:
         self._timers = TradingIndicatorTimers()
         self._market_version = 0
         self._market_origins: dict[str, object] = {}
+        self._display_state: TradingStateConfiguration | None = None
+        self._position_scope: tuple[object, ...] | None = None
+        self._paused_market_version: int | None = None
+        self._last_evaluated_at: datetime | None = None
+
+    def pause(self) -> None:
+        """
+        함수 이름: pause()
+        기능: 실제 중단 이후 새 시장 평가 전까지 마지막 확정 표시를 고정한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        self._paused_market_version = max(self._paused_market_version or 0, self._market_version)
+        self._evaluations = {slot: replace(value, evaluation_state="paused")
+                             for slot, value in self._evaluations.items()}
+
+    def _display_slots(self, state: TradingStateConfiguration, context: TradingContextView) -> tuple[tuple[IndicatorSlot, ...], str, str | None]:
+        """
+        함수 이름: _display_slots()
+        기능: 주문 예약과 독립된 현재 단계의 표시 자리만 선택한다.
+        인자: state -> 실제 전략 단계, context -> 불변 평가 입력
+        반환값: 표시 자리, 단계 키, 안내 코드
+        작성 날짜: 2026/09/27
+        """
+        display_context = replace(context, pending_order=None, runtime=replace(context.runtime,
+            pending_order_id=None, pending_intent_id=None, pending_exit_reason=None,
+            pending_exit_pct_b=None, pending_return_state=None))
+        return select_indicator_slots(state, display_context)
 
     def _synchronize(self, stm: TradingSTM, context: TradingContextView, slots: tuple[IndicatorSlot, ...]) -> None:
         """
@@ -255,6 +287,10 @@ class TradingIndicatorStore:
             self._timers = TradingIndicatorTimers()
             self._market_version = 0
             self._market_origins = {}
+            self._display_state = None
+            self._position_scope = None
+            self._last_evaluated_at = None
+            self._paused_market_version = None
         self._evaluations = {slot: value for slot, value in self._evaluations.items() if slot in slots}
 
     def observe(
@@ -265,6 +301,8 @@ class TradingIndicatorStore:
         after: TradingContextView,
         market_version: int,
         entered_at: datetime | None = None,
+        evaluation_running: bool = True,
+        fresh_market_evaluation: bool = True,
     ) -> None:
         """
         함수 이름: observe()
@@ -275,11 +313,26 @@ class TradingIndicatorStore:
             after -> action 적용 후 Context
             market_version -> 실제 적용된 시장 평가 version
             entered_at -> authoritative Position이 보존하는 최초 진입 시각
+            evaluation_running -> 현재 평가 허용 여부, fresh_market_evaluation -> 새 시장 처리 완료 여부
         반환값: 없음
         작성 날짜: 2026/09/05
         """
         slots, _, _ = select_indicator_slots(result.state_before, before)
-        self._synchronize(stm, before, slots)
+        before_display_state = (self._display_state if result.state_before.root_state is RootState.STOPPING
+            and self._scope == (stm, before.runtime.lower_event_id) else result.state_before)
+        display_slots, _, _ = self._display_slots(before_display_state or result.state_before, before)
+        self._synchronize(stm, before, display_slots)
+        position_scope = (before.runtime.position_owner, entered_at, before.position.entry_price)
+        if position_scope != self._position_scope:
+            self._evaluations = {slot: value for slot, value in self._evaluations.items()
+                                 if not slot.phase.startswith(("CASE_B_", "CASE_C_"))}
+        self._position_scope = position_scope
+        if not evaluation_running:
+            self.pause()
+        elif (fresh_market_evaluation and self._paused_market_version is not None
+                and market_version > self._paused_market_version):
+            self._paused_market_version = None
+        can_record = self._paused_market_version is None or market_version > self._paused_market_version
 
         # 경과 시간을 만든 시장 입력의 기준은 내부 microstep에서 runtime이 바뀌어도 보존한다.
         if market_version != self._market_version:
@@ -294,6 +347,8 @@ class TradingIndicatorStore:
 
         # 확정봉이 아닌 tick은 마지막 확정 평가를 덮어쓰지 않는다.
         for slot in slots:
+            if not can_record:
+                continue
             if slot.condition_id in ("c_recovery_window", "c_rebound", "c_entry_limit") and self._market_origins.get("c_recovery_window") != recovery_origin:
                 continue  # 새 회복 기준에 이전 시장 평가의 경과 시간과 판정을 결합하지 않는다.
             if slot.condition_id == "b_signal_age" and self._market_origins.get("b_signal_age") != before.runtime.signal_time:
@@ -306,6 +361,9 @@ class TradingIndicatorStore:
             if condition.source == "close_1m" and not before.market.confirmed_1m_close:
                 continue
             previous = self._evaluations.get(slot)
+            if (previous is not None and previous.evaluation_state == "paused"
+                    and (not fresh_market_evaluation or market_version <= (previous.market_version or 0))):
+                continue  # 복구·주문 feedback은 새 시장 입력을 평가한 사실을 대신하지 않는다.
             if previous is not None and condition.source in ("close_1m", "close_30m") and previous.market_version == market_version:
                 continue  # PC-15 기준 갱신 뒤에도 비교 당시 이전 기준을 그대로 보존한다.
             self._evaluations[slot] = TradingIndicatorEvaluation(
@@ -320,10 +378,21 @@ class TradingIndicatorStore:
         if before.runtime.signal_time != after.runtime.signal_time:
             invalidated.add("b_signal_age")
         self._evaluations = {slot: value for slot, value in self._evaluations.items() if slot.condition_id not in invalidated}
-        self._timers.observe(before, after, entered_at, self._market_origins)
+        if can_record:
+            self._timers.observe(before, after, entered_at, self._market_origins)
+            self._last_evaluated_at = after.evaluated_at
+            for slot in slots:
+                if slot in self._evaluations and self._evaluations[slot].evaluation_state == "active":
+                    self._evaluations[slot] = replace(self._evaluations[slot], timer=self._timers.get(slot.condition_id))
+        if not evaluation_running:
+            self.pause()
 
         # 새 단계의 첫 평가 전에는 새 목록의 자리를 미수신으로 남긴다.
-        next_slots, _, _ = select_indicator_slots(result.state_after, after)
+        display_state = result.state_after
+        if display_state.root_state is RootState.STOPPING:
+            display_state = self._display_state or result.state_before
+        self._display_state = display_state
+        next_slots, _, _ = self._display_slots(display_state, after)
         self._synchronize(stm, after, next_slots)
         if next_recovery_origin != recovery_origin and after.runtime.timer_base_time is not None:
             # 새 회복 목표는 이미 확정된 runtime 값이므로 회색 판정과 함께 즉시 공개한다.
@@ -332,27 +401,46 @@ class TradingIndicatorStore:
                     condition = replace(unevaluated_condition(slot.condition_id), threshold=after.runtime.entry_pct_b)
                     self._evaluations[slot] = TradingIndicatorEvaluation(slot, condition)  # 새 시장 평가 전까지 값·충족 여부는 비운다.
 
-    def snapshot(self, stm: TradingSTM, context: TradingContextView) -> TradingIndicatorSnapshot:
+    def snapshot(self, stm: TradingSTM, context: TradingContextView, *,
+                 evaluation_running: bool = True, entered_at: datetime | None = None) -> TradingIndicatorSnapshot:
         """
         함수 이름: snapshot()
         기능: 현재 단계와 저장된 평가를 묶고 미평가 항목의 값을 명시적으로 비운다.
         인자: stm -> 현재 STM
             context -> publication과 동일한 Context
+            evaluation_running -> 평가 실행 여부, entered_at -> 실제 포지션 진입 시각
         반환값: 전송 가능한 불변 지표 스냅샷
         작성 날짜: 2026/09/05
         """
-        slots, phase_key, notice = select_indicator_slots(stm.current_state, context)
-        self._synchronize(stm, context, slots)
+        state = stm.current_state
+        active_slots, _, notice = select_indicator_slots(state, context)
+        same_scope = self._scope == (stm, context.runtime.lower_event_id)
+        display_state = self._display_state if state.root_state is RootState.STOPPING and same_scope else state
+        slots, phase_key, _ = self._display_slots(display_state or state, context)
+        phase_key = f"{phase_key.rsplit(':', 1)[0]}:{notice or ''}"
+        same_position = (self._position_scope is not None
+            and self._position_scope[0] is context.runtime.position_owner
+            and self._position_scope[2] == context.position.entry_price
+            and (entered_at is None or self._position_scope[1] == entered_at))
 
         # 아직 평가하지 않은 동적 기준도 현재 runtime 값으로 추측해 표시하지 않는다.
         evaluations = []
         for slot in slots:
-            evaluation = self._evaluations.get(slot)
+            position_slot = slot.phase.startswith(("CASE_B_", "CASE_C_"))
+            evaluation = self._evaluations.get(slot) if same_scope and (not position_slot or same_position) else None
             if evaluation is None:
                 condition = unevaluated_condition(slot.condition_id)
                 evaluation = TradingIndicatorEvaluation(slot, condition)
-            evaluations.append(replace(evaluation, timer=self._timers.get(slot.condition_id)))
+            paused = (not evaluation_running or self._paused_market_version is not None
+                      or evaluation.evaluation_state == "paused" or slot not in active_slots)
+            timer = evaluation.timer if paused else (
+                self._timers.get(slot.condition_id) if same_scope and (not position_slot or same_position) else None)
+            frozen_at = evaluation.evaluated_at or self._last_evaluated_at
+            if paused and timer is not None and timer.state == "running" and frozen_at is not None:
+                timer = replace(timer, remaining_seconds=max(Decimal("0"), timer.remaining_seconds
+                    - seconds_between(frozen_at, timer.sampled_at)), sampled_at=frozen_at)
+            evaluations.append(replace(evaluation, timer=timer, evaluation_state="paused" if paused else "active"))
         return TradingIndicatorSnapshot(
             phase_key, notice, tuple(evaluations), context.evaluated_at,
-            select_indicator_phases(stm.current_state, context),
+            select_indicator_phases(display_state or state, context),
         )

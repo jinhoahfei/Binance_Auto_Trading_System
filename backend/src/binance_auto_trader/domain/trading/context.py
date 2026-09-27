@@ -803,6 +803,27 @@ class TradingContext:
             self._runtime = next_runtime
             self._version += 1  # 주문 snapshot과 runtime 패치는 항상 한 version을 공유한다.
 
+    def clear_pending_order(self) -> None:
+        """
+        함수 이름: clear_pending_order()
+        기능: 검증된 주문 종료 후 pending snapshot과 모든 청산 의도를 한 번에 정리한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        with self._lock:
+            next_runtime = replace(
+                self._runtime, pending_strategy=None, pending_order_side=None, pending_order_id=None,
+                pending_order_attempt_kind=None, pending_intent_id=None, pending_exit_reason=None,
+                pending_exit_pct_b=None, pending_return_state=None, trading_phase=TradingPhase.IDLE,
+            )
+            _validate_pending_alignment(next_runtime, None)
+            if self._pending_order is None and self._runtime == next_runtime:
+                return
+            self._pending_order = None
+            self._runtime = next_runtime
+            self._version += 1
+
     def apply_runtime_patch(self, action: PatchRuntimeContext) -> None:
         """
         함수 이름: apply_runtime_patch()

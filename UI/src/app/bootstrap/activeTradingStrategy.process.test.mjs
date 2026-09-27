@@ -210,7 +210,8 @@ async function expect_shared_strategy(application, step, connected = true) {
             const identity = `${row.strategy ?? 'common'}:${row.phase}:${row.condition_id}`;
             const displayed = panel.querySelector(`[data-condition-id="${identity}"]`);
             expect(displayed, identity).not.toBeNull();
-            expect(displayed).toHaveAttribute('data-tone', !connected || row.satisfied === null ? 'neutral' : row.satisfied ? 'positive' : 'negative');
+            const paused = row.evaluation_state === 'paused' || step.event.payload.trading.status !== 'running';
+            expect(displayed).toHaveAttribute('data-tone', !connected || paused || row.satisfied === null ? 'neutral' : row.satisfied ? 'positive' : 'negative');
             if (!connected || row.satisfied === null) expect(displayed.querySelector('strong')).toHaveTextContent('—');
         }
         expect(panel).not.toHaveTextContent('27s');

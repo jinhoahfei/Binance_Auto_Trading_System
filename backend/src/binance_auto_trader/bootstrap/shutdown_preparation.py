@@ -149,7 +149,11 @@ def _run(runtime, operation: ShutdownPreparation) -> None:
             operation.check()
             if worker is not None:
                 try:
-                    worker.close()
+                    stopped = worker.close(timeout=max(0, operation.deadline - monotonic()))
+                    if stopped is False:
+                        raise ShutdownPreparationBlocked("SHUTDOWN_PREPARATION_TIMEOUT", True)
+                except ShutdownPreparationBlocked:
+                    raise
                 except Exception as error:
                     raise ShutdownPreparationBlocked("SHUTDOWN_RESOURCE_CLEANUP_FAILED", True) from error
         operation.check()

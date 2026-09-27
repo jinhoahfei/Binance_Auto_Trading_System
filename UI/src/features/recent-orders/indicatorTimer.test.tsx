@@ -82,6 +82,29 @@ describe('실시간 지표 타이머', () => {
         expect(present_indicator_timer(model, 2000).time).toBe('02:29');  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
+    it('평가 중단의 마지막 타이머는 반복 수신·재접속에도 고정되고 새 평가부터 진행한다', () => {
+        const snapshot = create_snapshot(create_timer({ remaining_seconds: '90' }), { evaluation_state: 'paused' });
+        const view = render(<RealtimeIndicators groups={groups_for(snapshot)} />);
+        expect(screen.getByRole('timer')).toHaveTextContent('01:30');
+        expect(screen.getByRole('listitem')).toHaveAttribute('data-tone', 'neutral');
+        expect(vi.getTimerCount()).toBe(0);
+        act(() => vi.advanceTimersByTime(60_000));
+        view.rerender(<RealtimeIndicators groups={groups_for({ ...snapshot, server_time: '2026-09-05T01:01:00Z' }, true, performance.now())} />);
+        expect(screen.getByRole('timer')).toHaveTextContent('01:30');
+        view.rerender(<RealtimeIndicators groups={groups_for(snapshot, false)} />);
+        expect(screen.getByRole('timer')).toHaveTextContent('—');
+        view.rerender(<RealtimeIndicators groups={groups_for(snapshot, true, performance.now())} />);
+        expect(screen.getByRole('timer')).toHaveTextContent('01:30');
+        expect(vi.getTimerCount()).toBe(0);
+        const resumed = create_snapshot(create_timer({ remaining_seconds: '20', sampled_at: '2026-09-05T01:01:00Z' }),
+            { evaluation_state: 'active', evaluated_at: '2026-09-05T01:01:00Z', market_version: 2 }, '2026-09-05T01:01:00Z');
+        view.rerender(<RealtimeIndicators groups={groups_for(resumed, true, performance.now())} />);
+        expect(screen.getByRole('timer')).toHaveTextContent('00:20');
+        act(() => vi.advanceTimersByTime(1000));
+        expect(screen.getByRole('timer')).toHaveTextContent('00:19');
+        expect(screen.getByRole('listitem')).toHaveAttribute('data-tone', 'positive');
+    });
+
     it('매초 감소하고 0에서는 서버 완료를 기다리며 지표 색상을 바꾸지 않는다', () => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const snapshot = create_snapshot(create_timer({ kind: 'hold', duration_seconds: '5', remaining_seconds: '5' }), {

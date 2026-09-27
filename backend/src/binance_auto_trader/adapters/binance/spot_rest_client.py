@@ -1147,7 +1147,27 @@ class BinanceSpotRESTClient:
         반환값: 최소 조건을 충족한 내림 수량, 미달 0, 규칙 미관측 None
         작성 날짜: 2026/09/18
         """
-        rules = self._symbol_rules_by_symbol.get(symbol)
+        return self.preview_cached_market_quantity(symbol=symbol, quantity=quantity, price=price)
+
+    def get_cached_symbol_trading_rules(self, *, symbol: str) -> SymbolTradingRules | None:
+        """
+        함수 이름: get_cached_symbol_trading_rules()
+        기능: 보류 조건 변경 감지를 위해 이미 관측한 불변 규칙만 반환한다.
+        인자: symbol -> 종목
+        반환값: 관측한 규칙 또는 None
+        작성 날짜: 2026/09/27
+        """
+        return self._symbol_rules_by_symbol.get(symbol)
+
+    def preview_cached_market_quantity(self, *, symbol: str, quantity: Decimal, price: Decimal) -> Decimal | None:
+        """
+        함수 이름: preview_cached_market_quantity()
+        기능: 매수·매도의 로컬 최소 조건을 비교하고 실제 제출 전 fresh 검증은 유지한다.
+        인자: symbol -> 종목, quantity -> 후보 수량, price -> 최신 전략 가격
+        반환값: 최소 조건 통과 수량, 미달 0 또는 규칙 미관측 None
+        작성 날짜: 2026/09/27
+        """
+        rules = self.get_cached_symbol_trading_rules(symbol=symbol)
         if rules is None:
             return None
         if quantity <= Decimal("0"):

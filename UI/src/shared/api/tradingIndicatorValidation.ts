@@ -56,6 +56,7 @@ export function is_trading_indicator_snapshot(value: unknown): value is BackendT
         if (candidate === null || typeof candidate !== 'object') return false;
 
         const row = candidate as Record<string, unknown>;
+        if (row.evaluation_state !== undefined && row.evaluation_state !== 'active' && row.evaluation_state !== 'paused') return false;
 
         // 구버전은 timer 생략을 허용하되 새 타이머에는 서버 기준 시각이 반드시 동반되어야 한다.
         if (row.timer !== undefined && row.timer !== null

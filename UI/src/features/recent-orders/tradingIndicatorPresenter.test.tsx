@@ -22,6 +22,34 @@ function create_condition(changes: Partial<BackendTradingCondition> = {}): Backe
 }
 
 describe('현재 단계 실시간 지표 표시', () => {
+    it('중단 상태는 확정값과 행을 보존하며 새 평가 상태가 오기 전까지 중립으로 표시한다', () => {
+        const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'B_HOLDING', notice: null,
+            conditions: [create_condition({ evaluation_state: 'paused' })] };
+        for (const status of ['reconciliation_required', 'stopping', 'running'] as const) {
+            const group = present_trading_indicators(snapshot, 'Case_B', true, true, 0, status)[0]!;
+            expect(group.indicators[0]).toMatchObject({ value: '-0.08', tone: 'neutral', criterion: '< -0.08' });
+            expect(group.notice).toContain('중단');
+        }
+        const active = { ...snapshot, conditions: [create_condition({ evaluation_state: 'active' })] };
+        expect(present_trading_indicators(active, 'Case_B', true, true)[0]!.indicators[0]!.tone).toBe('positive');
+        expect(present_trading_indicators(active, 'Case_B', true, true, 0, 'reconciliation_required')[0]!.indicators[0]!.tone).toBe('neutral');
+    });
+
+    it('이전 계약은 주문 안내로 중단을 판별하고 실제 오프라인과 미수신 값은 유지한다', () => {
+        const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'B_HOLDING', notice: 'order_pending',
+            conditions: [create_condition()] };
+        expect(present_trading_indicators(snapshot, 'Case_B', true, true)[0]!.indicators[0])
+            .toMatchObject({ value: '-0.08', tone: 'neutral' });
+        expect(present_trading_indicators(snapshot, 'Case_B', false, true)[0]!.indicators[0])
+            .toMatchObject({ value: '—', tone: 'neutral' });
+        const missing = { ...snapshot, conditions: [create_condition({ evaluation_state: 'paused',
+            value: null, threshold: null, satisfied: null, evaluated_at: null, market_version: null, context_version: null })] };
+        expect(present_trading_indicators(missing, 'Case_B', true, true)[0]!.indicators[0]!.value).toBe('—');
+        expect(is_trading_indicator_snapshot(snapshot)).toBe(true);
+        expect(is_trading_indicator_snapshot(missing)).toBe(true);
+        expect(is_trading_indicator_snapshot({ ...snapshot, conditions: [{ ...create_condition(), evaluation_state: 'unknown' }] })).toBe(false);
+    });
+
     it('손절 충족은 초록이고 미충족·미수신은 빨강·회색이며 기준을 두 자리로 표시하면서 원본 판정을 유지한다', () => {
         // 같은 수치라도 backend 유지시간 판정이 false이면 UI는 녹색으로 바꾸지 않는다.
         const snapshot: BackendTradingIndicatorSnapshot = { phase_key: 'B_HOLDING', notice: null, conditions: [
