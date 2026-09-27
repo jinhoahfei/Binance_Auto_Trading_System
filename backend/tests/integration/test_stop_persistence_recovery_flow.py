@@ -1059,6 +1059,7 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(controller.context.pending_order)
 
             # 사용자 STOP event의 첫 query terminal partial이 취소 없이 잔량 force SELL로 직결되게 한다.
+            original_exit_reason = rest_client.submitted_orders[-1].exit_reason
             clock.advance(1)
             stop_result = controller.stop_trading(
                 command_id="stop-pre-query-terminal",
@@ -1086,6 +1087,11 @@ class StopPersistenceRecoveryIntegrationTests(unittest.TestCase):
             self.assertIs(controller.status, TradingSessionStatus.TERMINATED)
             self.assertEqual(Decimal("0"), position.quantity)
             self.assertEqual([], rest_client.canceled_orders)
+            # STOP 전 제출한 전략 주문 체결과 이후 잔량 강제매도의 사유를 각각 보존한다.
+            self.assertEqual(
+                (None, original_exit_reason, ExitReason.FORCE_SELL),
+                tuple(trade.exit_reason for trade in history_controller.trade_history.trades),
+            )
             self.assertEqual(
                 [
                     "submit:BUY",

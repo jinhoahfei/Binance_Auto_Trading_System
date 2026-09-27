@@ -623,7 +623,7 @@ class DeterministicProductionPathCase2FlowTests(unittest.TestCase):
             sell_order = fixture.rest_client.submitted_orders[1]
             self.assertIs(sell_order.side, OrderSide.SELL)
             self.assertIs(sell_order.strategy, StrategyType.CASE_C)
-            self.assertIs(sell_order.exit_reason, ExitReason.STOP)
+            self.assertIs(sell_order.exit_reason, ExitReason.FORCE_SELL)
             self.assertEqual(opened_quantity, sell_order.submitted_quantity)
 
             # BUY·SELL durable history와 Performance가 final zero Position/pending state와 일치해야 한다.

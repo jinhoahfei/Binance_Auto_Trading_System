@@ -7,3 +7,4 @@ export {
     format_signed_quote_amount,
 } from './decimalText';
 export { format_trading_logic_state } from './tradingLogicState';
+export { format_trade_execution_label } from './tradeExecutionLabel';

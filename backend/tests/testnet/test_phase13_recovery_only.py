@@ -268,7 +268,7 @@ class BinanceTestnetPhaseThirteenRecoveryOnlyTests(unittest.TestCase):
         self.assertEqual(1, len(run_trades))
         recovery_sell = run_trades[0]
         self.assertIs(recovery_sell.side, OrderSide.SELL)
-        self.assertIs(recovery_sell.exit_reason, ExitReason.STOP)
+        self.assertIs(recovery_sell.exit_reason, ExitReason.FORCE_SELL)
         self.assertEqual(recovered_quantity, recovery_sell.executed_quantity)
         self.assertEqual(Decimal("0"), position.quantity)
         self.assertEqual((), runtime.trade_history_controller.get_pending_orders())

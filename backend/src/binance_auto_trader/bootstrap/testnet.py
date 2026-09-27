@@ -301,17 +301,17 @@ class _TestnetOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
                 if attempt_index == 0
                 else OrderSide.SELL
             )
-            expected_exit_reason = (
-                ExitReason.STOP
+            expected_exit_reasons = (
+                (ExitReason.STOP, ExitReason.FORCE_SELL)
                 if self._phase13_recovery_only or attempt_index == 1
-                else None
+                else (None,)
             )
             if (
                 order.symbol != "ETHUSDT"
                 or order.strategy is not StrategyType.CASE_C
                 or order.submission_attempt != 0
                 or order.side is not expected_side
-                or order.exit_reason is not expected_exit_reason
+                or order.exit_reason not in expected_exit_reasons
             ):
                 raise TestnetConfigurationError(
                     "Phase 13 recovery requires ETHUSDT CASE_C initial STOP SELL"
@@ -383,7 +383,7 @@ class _TestnetOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
             or order.strategy is not StrategyType.CASE_C
             or order.submission_attempt != 0
             or order.side is not OrderSide.SELL
-            or order.exit_reason is not ExitReason.STOP
+            or order.exit_reason not in (ExitReason.STOP, ExitReason.FORCE_SELL)
         ):
             raise TestnetConfigurationError(
                 "Phase 13 recovery permits one exact STOP SELL only"
@@ -454,7 +454,7 @@ class _TestnetOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
         # STOP/recovery SELL은 이번 run의 authoritative Position을 닫는 경로이므로 BUY cap에서만 제외한다.
         if (
             prepared_order.side is OrderSide.SELL
-            and prepared_order.exit_reason is ExitReason.STOP
+            and prepared_order.exit_reason in (ExitReason.STOP, ExitReason.FORCE_SELL)
         ):
             return prepared_order
 

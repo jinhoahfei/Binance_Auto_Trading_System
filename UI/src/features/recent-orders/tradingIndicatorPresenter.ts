@@ -17,6 +17,31 @@ const CONDITION_LABELS: Readonly<Record<string, string>> = {
     c_stop: '손절 EMA9 기울기', c_time_exit: '시간청산', c_trail_fallback: '익절권 이탈 %B',
     c_trail_increase: '30분봉 EMA9 기울기 · 1분봉 종가 대입', c_handoff: 'B 인계 · TP_TRAIL 매도 시점 %B',
 };
+// 보유 중인 전략과 단계가 일치할 때만 매도·전환 용도를 표시하고 다른 단계의 문구는 보존한다.
+const POSITION_CONDITION_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+    'CASE_B:CASE_B_HOLDING': {
+        b_profit_zone: '기본 익절 / 추세 유지 전환 - 실시간 %B',
+        b_take_profit_slope: '기본 익절 - 실시간 EMA9 기울기',
+        b_trend_slope: '추세 유지 전환 - 실시간 EMA9 기울기',
+        b_stop: '손절 - 확정 30분봉 EMA9 기울기',
+        b_emergency_stop: '비상 손절 - 현재가(매수가 대비 −1%)',
+        b_time_exit: '시간청산 - 포지션 보유시간',
+    },
+    'CASE_B:CASE_B_TREND_HOLD': {
+        b_trend_exit_slope: '추세 유지 종료 - 실시간 EMA9 기울기',
+        b_trend_exit_pct_b: '추세 유지 종료 - 실시간 %B',
+    },
+    'CASE_C:CASE_C_HOLDING': {
+        c_profit_zone: '익절 추적 진입 - 실시간 %B',
+        c_stop: '손절 - 실시간 30분봉 EMA9 기울기',
+        c_time_exit: '시간청산 - 포지션 보유시간',
+    },
+    'CASE_C:CASE_C_TP_TRAILING': {
+        c_trail_fallback: '기본 익절(익절권 이탈) - 실시간 %B',
+        c_trail_increase: '익절 추적 유지 - 30분봉 EMA9 기울기(1분봉 종가)',
+        c_time_exit: '시간청산 - 포지션 보유시간',
+    },
+};
 const NOTICES: Readonly<Record<string, string>> = {
     order_pending: '주문 처리·재시도를 기다리고 있습니다. 현재 재평가하는 조건만 표시합니다.',
     other_order_pending: '다른 Case의 주문 처리가 끝날 때까지 지표 평가를 기다립니다.',
@@ -46,10 +71,23 @@ function format_indicator_value(value: string | null, source: string): string {
 
 
 /**
+ * 함수 이름: present_condition_label()
+ * 기능: 포지션 보유 조건의 매도·전환 용도를 표시하고 다른 조건은 기존 이름을 유지한다.
+ * 인자: row -> 전략과 단계가 포함된 불변 조건 평가
+ * 반환값: 해당 전략·단계·조건 ID에 대응하는 표시 문구
+ * 작성 날짜: 2026/09/27
+ */
+function present_condition_label(row: BackendTradingCondition): string {
+    return POSITION_CONDITION_LABELS[`${row.strategy}:${row.phase}`]?.[row.condition_id]
+        ?? CONDITION_LABELS[row.condition_id] ?? row.condition_id;
+}
+
+
+/**
  * 함수 이름: present_condition_criterion()
- * 기능: 실제 비교 당시 기준과 backend 유지시간 조건을 읽기 쉬운 문구로 표시한다.
+ * 기능: 실제 비교 기준과 유지시간을 표시하고 Case C 익절 추적의 매도 시점을 설명한다.
  * 인자: row -> 불변 조건 평가
- * 반환값: 비교식과 필요한 연속 유지시간
+ * 반환값: 비교식과 필요한 연속 유지시간 및 해당 조건의 매도 안내
  * 작성 날짜: 2026/09/05
  */
 function present_condition_criterion(row: BackendTradingCondition): string {
@@ -61,7 +99,12 @@ function present_condition_criterion(row: BackendTradingCondition): string {
         ? duration_labels[row.threshold] ?? format_indicator_value(row.threshold, row.source)
         : format_indicator_value(row.threshold, row.source);
 
-    return `${operator} ${reference}${threshold}${duration}`;
+    // EMA 상승 충족은 보유 유지이므로 비교식과 판정을 뒤집지 않고 실제 매도 시점만 안내한다.
+    const trailing_exit_notice = row.strategy === 'CASE_C' && row.phase === 'CASE_C_TP_TRAILING'
+        && row.condition_id === 'c_trail_increase'
+        ? ' · 1분봉 확정 시 이전 기준 이하이면 트레일링 익절' : '';
+
+    return `${operator} ${reference}${threshold}${duration}${trailing_exit_notice}`;
 }
 
 // 단계 이름은 backend의 상태를 번역하며 수치로 단계를 추측하지 않는다.
@@ -155,7 +198,7 @@ export function present_trading_indicators(
 
                 return {
                     id: `${row.strategy ?? 'common'}:${row.phase}:${row.condition_id}`,
-                    label: CONDITION_LABELS[row.condition_id] ?? row.condition_id,
+                    label: present_condition_label(row),
                     criterion: present_condition_criterion(row),
                     tone: !available || paused ? 'neutral' : row.satisfied ? 'positive' : 'negative',
                     value: available ? format_indicator_value(row.value, row.source) : '—',

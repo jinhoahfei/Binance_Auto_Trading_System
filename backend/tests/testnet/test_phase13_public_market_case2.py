@@ -12291,7 +12291,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
                 != final_guard.attempts[1].client_order_id
                 or final_run_trades[1].symbol != "ETHUSDT"
                 or final_run_trades[1].strategy is not StrategyType.CASE_C
-                or final_run_trades[1].exit_reason is not ExitReason.STOP
+                or final_run_trades[1].exit_reason not in (ExitReason.STOP, ExitReason.FORCE_SELL)
                 or final_run_trades[1].executed_quantity != position_quantity
             ):
                 raise AssertionError(
@@ -13374,7 +13374,7 @@ class BinanceTestnetPhaseThirteenPublicMarketCase2Tests(unittest.TestCase):
         self.assertEqual(2, len(run_trades))
         self.assertEqual((OrderSide.BUY, OrderSide.SELL), tuple(trade.side for trade in run_trades))
         sell_trade = run_trades[1]
-        self.assertEqual("STOP", sell_trade.exit_reason.value)
+        self.assertEqual("FORCE_SELL", sell_trade.exit_reason.value)
         if sell_trade.executed_quantity != authoritative_position_quantity:
             raise AssertionError(
                 "STOP SELL fill does not match the authoritative Position"

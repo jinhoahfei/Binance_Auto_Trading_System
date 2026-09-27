@@ -9620,12 +9620,16 @@ class TradingController:
             OrderAttemptKind.INITIAL if attempt == 0 else OrderAttemptKind.RETRY
         )
 
-        # Force sell도 일반 주문과 같은 message 1→Context patch→message 2 경계를 보존한다.
+        # 강제매도는 실패한 전략 청산 사유·복귀 상태를 새 주문으로 승계하지 않는다.
+        # 일반 주문과 같은 message 1→Context patch→message 2 경계를 보존한다.
         pending_patch = patch(
             pending_strategy=owner,
             pending_order_side=OrderSide.SELL,
             pending_order_attempt_kind=attempt_kind,
             pending_intent_id=intent_id,
+            pending_exit_reason=ExitReason.FORCE_SELL,
+            pending_exit_pct_b=None,
+            pending_return_state=None,
             trading_phase=TradingPhase.STOPPING,
         )
         trace_identity = self._prepare_order_patch_trace(pending_patch)
@@ -9636,10 +9640,7 @@ class TradingController:
             side=OrderSide.SELL,
             attempt_kind=attempt_kind,
             idempotency_key=intent_id,
-            exit_reason=(
-                self._context.runtime.pending_exit_reason
-                or ExitReason.STOP
-            ),
+            exit_reason=ExitReason.FORCE_SELL,
         )
         return self._submit_order_action(
             submit_action,

@@ -1,0 +1,20 @@
+{
+  "installed": "/Applications/Binance Auto Trader.app",
+  "backup": "/Users/oscar/Desktop/Binance_Auto/artifacts/force-sell-reason-20260927/previous-installed-app/Binance Auto Trader.app",
+  "previous_files": {
+    "Contents/Info.plist": "8d9ef71e4e0b32433149ab77ac2e82169b5fee502cc26b68894c64d4cab5ff81",
+    "Contents/MacOS/binance-auto-sidecar": "636630c0bd881f71a17c0ec4d5e3c3ee90d6671bca7874a7a3fb85e36da2db11",
+    "Contents/MacOS/binance-auto-trader": "67a5b76c8bd4641e5f936d89abc7ab8938a1c6770f8b29b943e231579a1a6c8a",
+    "Contents/Resources/icon.icns": "2cc657772e9cecbd47ae4a0572fb3cfed7e198ea236795f5f2573f3fc8736ec3",
+    "Contents/_CodeSignature/CodeResources": "7766f36f39586adbb42003dbf28b26800f84e1de06534721d733b1550372b292"
+  },
+  "installed_files": {
+    "Contents/Info.plist": "8d9ef71e4e0b32433149ab77ac2e82169b5fee502cc26b68894c64d4cab5ff81",
+    "Contents/MacOS/binance-auto-sidecar": "c7a64581e9b22df8b7319bd85a47dd7bf0ea122da900d079e7779f1130e56ae7",
+    "Contents/MacOS/binance-auto-trader": "65c7a8d7c2412716c7e0d5d52a6cdea35a027ab14c4afbe5d5303699bda2bd7d",
+    "Contents/Resources/icon.icns": "2cc657772e9cecbd47ae4a0572fb3cfed7e198ea236795f5f2573f3fc8736ec3",
+    "Contents/_CodeSignature/CodeResources": "8611ca70fd13ae5365a11ba4c03356cc3c2d1292c5251a02435c164ebd909aeb"
+  },
+  "all_files_match_build": true,
+  "codesign_verified": true
+}

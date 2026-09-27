@@ -1,0 +1,65 @@
+[
+  {
+    "file": "2026-09-26_19-56-52-063992_KST_live_54780_abef221dc8744e4293178b911d08021c_part0006.log",
+    "line": 8020,
+    "time": "2026-09-26T20:17:12.478628+09:00",
+    "event": "operation_failed",
+    "force_sell": null,
+    "intent_id": "StrategyType.CASE_B:SELL:ExitReason.TAKE_PROFIT:lower:ETHUSDT:30m:2026-09-26T09:30:00Z:842:3575",
+    "client_order_id": "bat-72101ab26ba23c6082ca46bc-0",
+    "exit_reason": null,
+    "causes": [
+      {
+        "exception_type": "SymbolFilterError",
+        "frames": [
+          {
+            "module": "binance_auto_trader.application.trading_controller",
+            "function": "_submit_order_action",
+            "line": 7389
+          },
+          {
+            "module": "binance_auto_trader.application.trading_controller",
+            "function": "_run_external_operation",
+            "line": 10267
+          },
+          {
+            "module": "binance_auto_trader.adapters.binance.api_gateway",
+            "function": "prepare_order",
+            "line": 1598
+          },
+          {
+            "module": "binance_auto_trader.bootstrap.live_permission",
+            "function": "prepare_order",
+            "line": 146
+          },
+          {
+            "module": "binance_auto_trader.adapters.binance.spot_rest_client",
+            "function": "prepare_order",
+            "line": 1246
+          },
+          {
+            "module": "binance_auto_trader.adapters.binance.mappers",
+            "function": "prepare_market_order",
+            "line": 1698
+          },
+          {
+            "module": "binance_auto_trader.adapters.binance.mappers",
+            "function": "validate_market_notional",
+            "line": 1462
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "2026-09-26_20-22-00-065403_KST_live_54780_abef221dc8744e4293178b911d08021c_part0007.log",
+    "line": 3143,
+    "time": "2026-09-26T20:41:29.767226+09:00",
+    "event": "order_submit_started",
+    "force_sell": true,
+    "intent_id": "force-sell:7ddfd416-00df-49e1-aa1e-b5049c8dbbc0",
+    "client_order_id": "bat-a5b87fd332130e5c496762b9-0",
+    "exit_reason": "TAKE_PROFIT",
+    "causes": null
+  }
+]

@@ -96,7 +96,7 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
             raise LiveConfigurationError("live order policy version mismatch")
         if order.symbol != "ETHUSDT":
             raise LiveConfigurationError("live pilot symbol mismatch")
-        if order.side is OrderSide.SELL and order.exit_reason is ExitReason.STOP:
+        if order.side is OrderSide.SELL and order.exit_reason in (ExitReason.STOP, ExitReason.FORCE_SELL):
             return  # 기존 STOP은 Controller가 소유한 정확한 잔여 Position만 정리한다.
         with localcontext() as decimal_context:
             decimal_context.prec = 34
@@ -161,7 +161,7 @@ class LiveOrderPermissionRESTClient(BinanceReadOnlyRESTFacade):
         # STOP/recovery SELL은 이번 run의 authoritative Position을 닫는 경로이므로 BUY cap에서만 제외한다.
         if (
             prepared_order.side is OrderSide.SELL
-            and prepared_order.exit_reason is ExitReason.STOP
+            and prepared_order.exit_reason in (ExitReason.STOP, ExitReason.FORCE_SELL)
         ):
             self._require_spot_fee_policy(prepared_order)
             return prepared_order

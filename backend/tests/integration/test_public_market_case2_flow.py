@@ -1413,7 +1413,7 @@ class PublicMarketCase2FlowTests(unittest.TestCase):
             self.assertIs(buy_order.side, OrderSide.BUY)
             self.assertIs(sell_order.side, OrderSide.SELL)
             self.assertIs(sell_order.strategy, StrategyType.CASE_C)
-            self.assertIs(sell_order.exit_reason, ExitReason.STOP)
+            self.assertIs(sell_order.exit_reason, ExitReason.FORCE_SELL)
             self.assertEqual(opened_quantity, sell_order.filled_quantity)
             self.assertNotEqual(
                 buy_order.exchange_order_id,
@@ -1433,7 +1433,7 @@ class PublicMarketCase2FlowTests(unittest.TestCase):
             self.assertEqual(2, len(trades))
             sell_trade = trades[1]
             self.assertIs(sell_trade.side, OrderSide.SELL)
-            self.assertIs(sell_trade.exit_reason, ExitReason.STOP)
+            self.assertIs(sell_trade.exit_reason, ExitReason.FORCE_SELL)
             self.assertEqual(opened_cost_basis, sell_trade.allocated_cost_basis)
             self.assertEqual(trades, fixture.repository.get_trade_history())
             self.assertEqual(2, len(fixture.trade_publications))

@@ -2598,6 +2598,26 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         )
         self.assertEqual(len(transport.requests), 6)
 
+    def test_configured_entry_cap_allows_force_sell_reason(self) -> None:
+        """
+        함수 이름: test_configured_entry_cap_allows_force_sell_reason()
+        기능: 전용 강제매도 사유가 거래소 필터를 거치면서 기존 청산 금액 예외를 유지한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        transport = QueueHTTPTransport(_preparation_responses(
+            exchange_info_payload=_exchange_info_payload(maximum_notional="100000"),
+        ))
+        client = _client(transport, maximum_order_notional=Decimal("100"))
+        order = _order()
+        order.side = OrderSide.SELL
+        order.exit_reason = ExitReason.FORCE_SELL
+        prepared = client.prepare_order(order)
+        self.assertEqual(prepared.exit_reason, ExitReason.FORCE_SELL)
+        self.assertGreater(prepared.submitted_quantity * prepared.market_price_at_decision, Decimal("100"))
+        self.assertEqual(len(transport.requests), 6)
+
     def test_configured_entry_cap_still_blocks_non_stop_sell(
         self,
     ) -> None:

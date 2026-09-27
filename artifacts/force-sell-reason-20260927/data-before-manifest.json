@@ -1,0 +1,14 @@
+{
+  "trade-history.jsonl": {
+    "sha256": "da4ba432251edbaa016440fb38d10f481470fa7ffcf02cd0ab334884b80d926d",
+    "bytes": 4651
+  },
+  "trade-history.jsonl.pending-orders.jsonl": {
+    "sha256": "38e1e157dc0f42da01db75b62216e80bccc01953c951283e2a8329aaa0a43bec",
+    "bytes": 4593
+  },
+  "residual-ledger.json": {
+    "sha256": "ac554f20aaad908bd2dd61e66bca02a3978a9b026f508e97b5ff2f8a2eb0500c",
+    "bytes": 464
+  }
+}

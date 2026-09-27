@@ -1,0 +1,48 @@
+{
+  "order_id": "50138412055",
+  "client_order_id": "bat-a5b87fd332130e5c496762b9-0",
+  "before_exit_reason": "TAKE_PROFIT",
+  "after_exit_reason": "FORCE_SELL",
+  "financial_state_unchanged": true,
+  "financial_state": {
+    "position": {
+      "symbol": "ETHUSDT",
+      "owner": null,
+      "quantity": "0",
+      "average_entry_price": "0",
+      "cost_basis": "0",
+      "entered_at": null,
+      "status": "CLOSED",
+      "entry_executed_quantity": "0",
+      "entry_executed_amount": "0"
+    },
+    "residual": [
+      "0.00018870",
+      "0.4849809929929929929929929929929930"
+    ],
+    "performance": {
+      "realized_pnl": "-0.281316337007007007007007007007007",
+      "total_fee": "0.0575565470000000",
+      "total_profit": "-0.281316337007007007007007007007007",
+      "completed_sell_count": 3,
+      "winning_sell_count": 0,
+      "losing_sell_count": 3,
+      "cumulative_return_rate": "-0.98148776"
+    }
+  },
+  "files": {
+    "trade-history.jsonl": {
+      "before": "da4ba432251edbaa016440fb38d10f481470fa7ffcf02cd0ab334884b80d926d",
+      "after": "19f9cedc7af3fe1025c38f21833750abb17cf3e749da33dc5d35a83af725630e"
+    },
+    "trade-history.jsonl.pending-orders.jsonl": {
+      "before": "38e1e157dc0f42da01db75b62216e80bccc01953c951283e2a8329aaa0a43bec",
+      "after": "cb149e89cb30beea45364e59832dff31091a4d1b72e563392033e4e881fa0068"
+    },
+    "residual-ledger.json": {
+      "before": "ac554f20aaad908bd2dd61e66bca02a3978a9b026f508e97b5ff2f8a2eb0500c",
+      "after": "1fbd5abbecc4c13a272e4ceb4a9ce35488fd152fc8b5f366f341a4cc1510792c"
+    }
+  },
+  "applied": false
+}

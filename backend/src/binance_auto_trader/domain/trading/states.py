@@ -143,6 +143,7 @@ class ExitReason(str, Enum):
 
     EMERGENCY_STOP = "EMERGENCY_STOP"
     STOP = "STOP"
+    FORCE_SELL = "FORCE_SELL"  # 사용자 중지·종료 청산을 전략 손절 STOP과 구분한다.
     TIME = "TIME"
     TAKE_PROFIT = "TAKE_PROFIT"
     TREND_HOLD = "TREND_HOLD"

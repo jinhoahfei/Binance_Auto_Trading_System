@@ -1286,7 +1286,7 @@ class BinanceSpotRESTClient:
             self._maximum_order_notional is not None
             and not (
                 prepared_order.side is OrderSide.SELL
-                and prepared_order.exit_reason is ExitReason.STOP
+                and prepared_order.exit_reason in (ExitReason.STOP, ExitReason.FORCE_SELL)
             )
         ):
             with localcontext() as decimal_context:

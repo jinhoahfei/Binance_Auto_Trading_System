@@ -6,7 +6,7 @@ import {
 } from '../../features/trade-history';
 import type { TradeHistoryPageProps } from '../../routes/trade-history';
 import type { TradeRecord } from '../../shared/contracts';
-import { format_decimal_text, format_eth_quantity, format_quote_amount } from '../../shared/formatting';
+import { format_decimal_text, format_eth_quantity, format_quote_amount, format_trade_execution_label } from '../../shared/formatting';
 import type { AppViewModel } from '../control';
 import type { UiApplicationController } from '../runtime';
 
@@ -227,7 +227,7 @@ function create_trade_row_view_model(trade_record: TradeRecord): TradeRowViewMod
         time: format_history_time(trade_record.occurred_at),
         side: trade_record.side.toUpperCase() as TradeRowViewModel['side'],
         regime: trade_record.regime,
-        strategy: trade_record.exit_reason === 'EXTERNAL_MANUAL' ? '외부 수동 매도' : trade_record.strategy,
+        strategy: format_trade_execution_label(trade_record),
         entryPrice: trade_record.entry_price === null
             ? '-'
             : format_quote_amount(trade_record.entry_price, trade_record.quote_asset),

@@ -147,7 +147,7 @@ class SellMinimumDeferralTests(unittest.TestCase):
         self.controller.stop_trading(command_id="stop-after-minimum", expected_version=self.controller.context.version)
         asyncio.run(self.controller.drain_events())
         self.assertEqual(len(self.fixture.rest_client.submitted_orders), 2)
-        self.assertEqual(self.fixture.rest_client.submitted_orders[-1].exit_reason, ExitReason.STOP)
+        self.assertEqual(self.fixture.rest_client.submitted_orders[-1].exit_reason, ExitReason.FORCE_SELL)
         self.assertEqual(self.fixture.position.quantity, 0)
         self.assertIs(self.controller.status, TradingSessionStatus.TERMINATED)
 

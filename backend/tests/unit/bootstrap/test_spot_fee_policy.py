@@ -203,6 +203,35 @@ class SpotFeePolicyTests(unittest.TestCase):
         self.assertEqual(delegate.get_account_commission.call_count, 2)
         delegate.submit_order.assert_not_called()
 
+    def test_force_sell_keeps_cleanup_cap_and_live_permission_checks(self) -> None:
+        """
+        함수 이름: test_force_sell_keeps_cleanup_cap_and_live_permission_checks()
+        기능: 강제매도 전용 사유도 청산 금액 예외와 수수료·실거래 권한 검사를 유지한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        delegate = Mock()
+        delegate.get_account_commission.return_value = spot_commission_payload()
+        order = live_order(quantity="1")
+        order.side = OrderSide.SELL
+        order.exit_reason = ExitReason.FORCE_SELL
+        delegate.prepare_order.return_value = order
+        permission = LiveOrderPermissionRESTClient(delegate, live_configuration(orders=True))
+        self.assertIs(permission.prepare_order(order=order), order)
+        self.assertEqual(delegate.get_account_commission.call_count, 2)
+        permission.submit_order(order=order)
+        delegate.submit_order.assert_called_once_with(order=order)
+
+        delegate.reset_mock()
+        disabled = LiveOrderPermissionRESTClient(delegate, live_configuration(orders=False))
+        with self.assertRaises(LiveConfigurationError):
+            disabled.prepare_order(order=order)
+        with self.assertRaises(LiveConfigurationError):
+            disabled.submit_order(order=order)
+        delegate.prepare_order.assert_not_called()
+        delegate.submit_order.assert_not_called()
+
     def test_base_fee_requires_residual_ledger_but_cancel_remains_available(self) -> None:
         """
         함수 이름: test_base_fee_requires_residual_ledger_but_cancel_remains_available()

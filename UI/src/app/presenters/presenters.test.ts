@@ -169,6 +169,33 @@ describe('application presenters', () => {
         expect(() => validate_trade_snapshot({ ...source, client_order_id: 'bat-app-order' })).toThrow();
     });
 
+    it.each(['CASE_B', 'CASE_C'])('%s의 종료 강제매도를 일반 전략 체결과 구분한다', (strategy) => {
+        const source = create_backend_snapshot_fixture().recent_trades[0]!;
+        const records = [
+            { side: 'BUY', exit_reason: null },
+            { side: 'SELL', exit_reason: 'FORCE_SELL' },
+            { side: 'SELL', exit_reason: 'TAKE_PROFIT' },
+            { side: 'SELL', exit_reason: 'EMERGENCY_STOP' },
+            { side: 'SELL', exit_reason: 'TIME' },
+            { side: 'SELL', exit_reason: 'STOP' },
+        ].map((fields, index) => map_trade_record(validate_trade_snapshot({
+            ...source, ...fields, strategy, trade_id: `exit-reason-${index}`,
+        })));
+        const view_model = create_demo_view_model();
+        const updated: AppViewModel = {
+            ...view_model,
+            trader_panel: { ...view_model.trader_panel, trades: records },
+            trade_history: { ...view_model.trade_history, records },
+        };
+        const { controller } = create_recording_controller(updated);
+
+        expect(present_dashboard_props(updated, controller).trader.orders.map((order) => order.strategy))
+            .toEqual([strategy, '강제매도', strategy, strategy, strategy, strategy]);
+        expect(present_trade_history_props(updated, controller).rows.map((row) => row.strategy))
+            .toEqual([strategy, '강제매도', strategy, strategy, strategy, strategy]);
+        expect(records.every((record) => record.strategy === strategy)).toBe(true);
+    });
+
     it('최근 체결과 상세 거래의 ETH 수량은 4자리, 금액과 수익률은 2자리로 표시한다', () => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const view_model = create_demo_view_model();

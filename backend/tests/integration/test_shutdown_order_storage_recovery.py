@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import replace
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic
@@ -103,9 +104,37 @@ class ShutdownOrderStorageRecoveryTests(unittest.TestCase):
         self.assertEqual(self.position.get_snapshot(), position)
         self.prepare()
         self.assert_liquidated_once()
-        self.assertEqual(self.history.trade_history.trades[-1].exit_reason, ExitReason.STOP)
+        self.assertEqual(self.history.trade_history.trades[-1].exit_reason, ExitReason.FORCE_SELL)
         self.prepare()
         self.assert_liquidated_once()
+
+    def test_shutdown_sell_does_not_inherit_stale_take_profit_reason(self):
+        """
+        함수 이름: test_shutdown_sell_does_not_inherit_stale_take_profit_reason()
+        기능: 실패한 일반익절 사유가 남아 있어도 종료 청산과 재시작 기록에는 FORCE_SELL을 저장한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/27
+        """
+        self.buy()
+        self.c._context.apply_runtime_patch(runtime_patch(
+            pending_exit_reason=ExitReason.TAKE_PROFIT,
+            pending_return_state=PositionReturnState.CASE_B_HOLDING,
+        ))
+        self.prepare()
+        self.assert_liquidated_once()
+
+        # 포지션 소유 전략은 유지하고 실제 종료 주문의 원인만 FORCE_SELL로 기록한다.
+        trades = TradeHistoryRepository(self.path).get_trade_history()
+        self.assertEqual(trades, self.history.trade_history.trades)
+        self.assertEqual(trades[-1].strategy, StrategyType.CASE_B)
+        self.assertEqual(trades[-1].exit_reason, ExitReason.FORCE_SELL)
+        journal_path = self.path.with_name(self.path.name + ".pending-orders.jsonl")
+        orders = [record["order"] for line in journal_path.read_text().splitlines()
+                  if (record := json.loads(line))["operation"] == "UPSERT"]
+        self.assertEqual(len(orders), 2)
+        self.assertTrue(orders[-1]["intent_id"].startswith("force-sell:"))
+        self.assertEqual(orders[-1]["exit_reason"], "FORCE_SELL")
 
     def test_invalid_final_cleanup_does_not_release_resources_before_validation(self):
         """
