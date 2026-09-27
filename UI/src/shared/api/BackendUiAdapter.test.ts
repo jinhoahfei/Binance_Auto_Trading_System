@@ -1721,32 +1721,39 @@ describe('BackendUiAdapter WebSocket lifecycle', () => {
             },
         });
 
-        adapter.start_live_events(snapshot, callbacks);
-        sockets[0]!.emit_message({
-            schema_version: BACKEND_SCHEMA_VERSION,
-            session_id: TEST_BACKEND_SESSION_ID,
-            type: 'RESYNC_REQUIRED',
-            reason: 'REPLAY_GAP',
-            last_sequence: 12,
-        });
+        vi.useFakeTimers();
+        try {
+            adapter.start_live_events(snapshot, callbacks);
+            sockets[0]!.emit_message({
+                schema_version: BACKEND_SCHEMA_VERSION,
+                session_id: TEST_BACKEND_SESSION_ID,
+                type: 'RESYNC_REQUIRED',
+                reason: 'REPLAY_GAP',
+                last_sequence: 12,
+            });
 
-        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
-        await waitFor(() => expect(sockets).toHaveLength(2));
-        sockets[1]!.emit_message(create_backend_event_fixture(
-            10,
-            'ACCOUNT_UPDATED',
-            { account: create_backend_account_fixture() },
-            SECOND_EVENT_ID,
-            '3fcb584c-0d34-4839-908d-4f3ef8f83442',
-        ));
+            // 최초 resync는 즉시, 안정화 전 session 변경은 지연 후 같은 descriptor를 다시 읽는다.
+            await vi.advanceTimersByTimeAsync(0);
+            expect(sockets).toHaveLength(2);
+            sockets[1]!.emit_message(create_backend_event_fixture(
+                10,
+                'ACCOUNT_UPDATED',
+                { account: create_backend_account_fixture() },
+                SECOND_EVENT_ID,
+                '3fcb584c-0d34-4839-908d-4f3ef8f83442',
+            ));
 
-        await waitFor(() => expect(sockets).toHaveLength(3));
-        expect(callbacks.on_full_resync).toHaveBeenCalledTimes(2);
-        expect(callbacks.on_reconnecting).toHaveBeenNthCalledWith(1, 'REPLAY_GAP');
-        expect(callbacks.on_reconnecting).toHaveBeenNthCalledWith(2, 'SESSION_CHANGED');
-
-        // 화면 또는 실행 수명의 종료를 요청한다.
-        adapter.stop();
+            await vi.advanceTimersByTimeAsync(999);
+            expect(sockets).toHaveLength(2);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(3);
+            expect(callbacks.on_full_resync).toHaveBeenCalledTimes(2);
+            expect(callbacks.on_reconnecting).toHaveBeenNthCalledWith(1, 'REPLAY_GAP');
+            expect(callbacks.on_reconnecting).toHaveBeenNthCalledWith(2, 'SESSION_CHANGED');
+        } finally {
+            adapter.stop();
+            vi.useRealTimers();
+        }
     });
 
     it('full resync snapshot이 launch descriptor session과 다르면 적용 없이 fail closed한다', async () => {

@@ -39,6 +39,6 @@ def create_runtime_diagnostics(execution_mode: str, log_directory: Path | None =
 
     # 파일 생성 실패는 이 factory에서 즉시 알려 기록 없는 LIVE 시작을 방지한다.
     writer = DiagnosticLogWriter(log_directory if log_directory is not None else resolve_log_directory(), execution_mode)
-    diagnostics = RuntimeDiagnostics(writer)
+    diagnostics = RuntimeDiagnostics(writer, asynchronous=True)
     diagnostics.record("logging_started", log_path=str(writer.path), rotation_bytes=16 * 1024 * 1024)
     return diagnostics  # 실제 주문 권한이나 금융 정책을 이 조립기에서 변경하지 않는다.

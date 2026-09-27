@@ -44,13 +44,17 @@ from binance_auto_trader.domain.trading.states import (
 _PENDING_ORDER_LEGACY_SCHEMA_VERSION = 1
 _PENDING_ORDER_LIFECYCLE_SCHEMA_VERSION = 2
 _PENDING_ORDER_POLICY_SCHEMA_VERSION = 3
+_PENDING_ORDER_EXIT_PCT_B_SCHEMA_VERSION = 4
 _PENDING_ORDER_SCHEMA_VERSION = 4
+_PENDING_ORDER_NON_SUBMISSION_SCHEMA_VERSION = 5
 _SUPPORTED_PENDING_ORDER_SCHEMA_VERSIONS = frozenset(
     {
         _PENDING_ORDER_LEGACY_SCHEMA_VERSION,
         _PENDING_ORDER_LIFECYCLE_SCHEMA_VERSION,
         _PENDING_ORDER_POLICY_SCHEMA_VERSION,
+        _PENDING_ORDER_EXIT_PCT_B_SCHEMA_VERSION,
         _PENDING_ORDER_SCHEMA_VERSION,
+        _PENDING_ORDER_NON_SUBMISSION_SCHEMA_VERSION,
     }
 )
 _PENDING_ORDER_RECORD_TYPE = "pending_order_event"
@@ -133,6 +137,7 @@ _PENDING_ORDER_LIFECYCLE_TRANSITIONS = {
             PendingOrderRecoveryLifecycle.PARTIAL,
             PendingOrderRecoveryLifecycle.TERMINAL,
             PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED,
+            PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED,
         }
     ),
     PendingOrderRecoveryLifecycle.SUBMITTED: frozenset(
@@ -141,6 +146,7 @@ _PENDING_ORDER_LIFECYCLE_TRANSITIONS = {
             PendingOrderRecoveryLifecycle.PARTIAL,
             PendingOrderRecoveryLifecycle.TERMINAL,
             PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED,
+            PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED,
         }
     ),
     PendingOrderRecoveryLifecycle.UNKNOWN: frozenset(
@@ -157,6 +163,7 @@ _PENDING_ORDER_LIFECYCLE_TRANSITIONS = {
     ),
     PendingOrderRecoveryLifecycle.HISTORY_COMMITTED: frozenset(),
     PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED: frozenset(),
+    PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED: frozenset(),
 }
 _KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
 
@@ -724,7 +731,7 @@ def _build_pending_transition_event(
     기능: active pending order의 durable lifecycle을 전진시키는 canonical event를 만든다.
     인자: client_order_id -> lifecycle을 변경할 application order ID
         lifecycle -> fsync할 다음 recovery lifecycle
-    반환값: sidecar schema v4 TRANSITION object
+    반환값: 기존 lifecycle은 v4, 확정 미전송은 v5인 TRANSITION object
     작성 날짜: 2026/08/25
     """
     if not isinstance(lifecycle, PendingOrderRecoveryLifecycle):
@@ -734,7 +741,11 @@ def _build_pending_transition_event(
 
     # 제출 응답 payload 대신 정규화 lifecycle과 client ID만 durable 증거로 남긴다.
     return {
-        "schema_version": _PENDING_ORDER_SCHEMA_VERSION,
+        "schema_version": (
+            _PENDING_ORDER_NON_SUBMISSION_SCHEMA_VERSION
+            if lifecycle is PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED
+            else _PENDING_ORDER_SCHEMA_VERSION
+        ),
         "record_type": _PENDING_ORDER_RECORD_TYPE,
         "operation": _PENDING_ORDER_TRANSITION,
         "client_order_id": _normalize_client_order_id(client_order_id),
@@ -837,7 +848,7 @@ def _pending_event_from_decoded_json(
                     schema_version < _PENDING_ORDER_POLICY_SCHEMA_VERSION
                 ),
                 legacy_exit_pct_b=(
-                    schema_version < _PENDING_ORDER_SCHEMA_VERSION
+                    schema_version < _PENDING_ORDER_EXIT_PCT_B_SCHEMA_VERSION
                 ),
             ),
             lifecycle=lifecycle,
@@ -860,6 +871,11 @@ def _pending_event_from_decoded_json(
         lifecycle = PendingOrderRecoveryLifecycle(
             decoded_record["lifecycle"]
         )
+        if (
+            lifecycle is PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED
+            and schema_version < _PENDING_ORDER_NON_SUBMISSION_SCHEMA_VERSION
+        ):
+            raise ValueError("confirmed non-submission requires pending-order schema v5")
         if lifecycle is PendingOrderRecoveryLifecycle.PREPARED:
             raise ValueError(
                 "pending-order TRANSITION must advance from PREPARED"
@@ -892,7 +908,7 @@ def _pending_event_from_decoded_json(
 class TradeHistoryRepository:
     """
     클래스 이름: TradeHistoryRepository
-    기능: local trade JSONL v1/v2/v3와 pending sidecar v1~v4의 streaming 복구 및 durable idempotent append를 관리한다.
+    기능: local trade JSONL v1/v2/v3와 pending sidecar v1~v5의 streaming 복구 및 durable idempotent append를 관리한다.
     작성 날짜: 2026/08/29
     """
 

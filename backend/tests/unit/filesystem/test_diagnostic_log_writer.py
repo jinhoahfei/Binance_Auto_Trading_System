@@ -161,6 +161,7 @@ class DiagnosticLogWriterTests(unittest.TestCase):
                 diagnostics = create_runtime_diagnostics("live")
             self.assertTrue(diagnostics.enabled)
             self.assertEqual(len(list(Path(temporary_directory).glob("*_KST_live_*.log"))), 1)
+            self.assertTrue(diagnostics.close())
 
             # 파일을 디렉터리로 가장한 경로는 logging 없는 runtime으로 완화되지 않아야 한다.
             blocked_path = Path(temporary_directory) / "blocked"

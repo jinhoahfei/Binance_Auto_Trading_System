@@ -130,9 +130,32 @@ class _TrackingLock:
         반환값: tracking lock 자신
         작성 날짜: 2026/08/21
         """
-        self._lock.acquire()
-        self._local_state.depth = getattr(self._local_state, "depth", 0) + 1
+        self.acquire()
         return self
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        """
+        함수 이름: acquire()
+        기능: 제한 시간 획득에서도 현재 thread의 publication 잠금 depth를 보존한다.
+        인자: blocking -> 잠금 대기 여부, timeout -> 대기 상한 초
+        반환값: underlying RLock 획득 성공 여부
+        작성 날짜: 2026/09/22
+        """
+        acquired = self._lock.acquire(blocking=blocking, timeout=timeout)
+        if acquired:
+            self._local_state.depth = getattr(self._local_state, "depth", 0) + 1
+        return acquired
+
+    def release(self) -> None:
+        """
+        함수 이름: release()
+        기능: 현재 thread depth와 underlying publication 잠금을 함께 해제한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        self._local_state.depth -= 1
+        self._lock.release()
 
     def __exit__(
         self,
@@ -149,8 +172,7 @@ class _TrackingLock:
         반환값: 없음
         작성 날짜: 2026/08/21
         """
-        self._local_state.depth -= 1
-        self._lock.release()
+        self.release()
 
 
 class _LockCheckingEventStream(BackendEventStream):
@@ -472,6 +494,42 @@ class LoopbackHttpServerTests(unittest.TestCase):
             ready_payload["data"]["account"]["quote_asset"],
             "USDT",
         )
+
+    def test_snapshot_lock_contention_returns_retryable_503_over_http(self) -> None:
+        """
+        함수 이름: test_snapshot_lock_contention_returns_retryable_503_over_http()
+        기능: 주문 worker의 잠금 점유 중 HTTP snapshot이 대기 상한으로 실패하고 이후 복구된다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        self.runtime.ready = True
+        self.runtime.state.status = "READY"
+        request_id = str(uuid4())
+
+        # Application 잠금은 계속 보유하되 HTTP handler가 503을 보낼 수 있어야 한다.
+        with self.runtime.application_lock:
+            status, payload, _ = _request_json(
+                self.server,
+                self.token,
+                "GET",
+                "/v1/snapshot",
+                request_id=request_id,
+            )
+
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["request_id"], request_id)
+        self.assertEqual(payload["error"]["code"], "BACKEND_NOT_READY")
+        self.assertTrue(payload["error"]["retryable"])
+        self.assertEqual(payload["error"]["details"], {"reason": "SNAPSHOT_BUSY"})
+        recovered_status, _, _ = _request_json(
+            self.server,
+            self.token,
+            "GET",
+            "/v1/snapshot",
+            request_id=str(uuid4()),
+        )
+        self.assertEqual(recovered_status, 200)
 
     def test_command_json_schema_and_idempotency_are_strict(self) -> None:
         """

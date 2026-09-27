@@ -1,0 +1,194 @@
+[
+  {
+    "frame": "01-realtime-indicator",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "4aebec778844ddec88470f672cd9ae08e63606518deccd042af9daf4d16cac30",
+    "after_sha256": "4aebec778844ddec88470f672cd9ae08e63606518deccd042af9daf4d16cac30"
+  },
+  {
+    "frame": "02-recent-orders",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "66af0b986a63224916540fda764494d00f34857e2bb7b01dcffbc58ddf6c593a",
+    "after_sha256": "66af0b986a63224916540fda764494d00f34857e2bb7b01dcffbc58ddf6c593a"
+  },
+  {
+    "frame": "03-indicator-settings",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "ed2a28516fbe42d940d8afbfd0341c3f840948b21e769c0f4d888b106853dcf2",
+    "after_sha256": "ed2a28516fbe42d940d8afbfd0341c3f840948b21e769c0f4d888b106853dcf2"
+  },
+  {
+    "frame": "04-trade-history",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "b401b6498a10148c14011ab4512d5e78f7c7f902488224be60a3e3be9c19ee6a",
+    "after_sha256": "b401b6498a10148c14011ab4512d5e78f7c7f902488224be60a3e3be9c19ee6a"
+  },
+  {
+    "frame": "05-start-confirmation",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "446289b0f75bea844855732f80b752b934eb50c5b01509b715117bdb22844c49",
+    "after_sha256": "446289b0f75bea844855732f80b752b934eb50c5b01509b715117bdb22844c49"
+  },
+  {
+    "frame": "06-stop-with-position",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "1f05170bdd6af548eb10d29880406c2978732365f4a752693d35f4db7ab87fd3",
+    "after_sha256": "1f05170bdd6af548eb10d29880406c2978732365f4a752693d35f4db7ab87fd3"
+  },
+  {
+    "frame": "07-stop-without-position",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "336aaf0e3a92a7360754afaeeb24f4e75c932c0dda65fced043b1b6dcecd251a",
+    "after_sha256": "336aaf0e3a92a7360754afaeeb24f4e75c932c0dda65fced043b1b6dcecd251a"
+  },
+  {
+    "frame": "08-csv-end-calendar",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "9c0bcba3ec51f48a9012b971fbe84f2948c01a1a63702df9a7f5c0e28ade3094",
+    "after_sha256": "9c0bcba3ec51f48a9012b971fbe84f2948c01a1a63702df9a7f5c0e28ade3094"
+  },
+  {
+    "frame": "09-csv-start-calendar",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "9a583367889fdb3efdb1f3340a3f883a1e95b0e95e4f668077cb30f63593fa2e",
+    "after_sha256": "9a583367889fdb3efdb1f3340a3f883a1e95b0e95e4f668077cb30f63593fa2e"
+  },
+  {
+    "frame": "10-csv-dialog",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "b75105b10a0f8a6bf9fe0ef577418b2730a9380b84a313d3b72ad750304d0c33",
+    "after_sha256": "b75105b10a0f8a6bf9fe0ef577418b2730a9380b84a313d3b72ad750304d0c33"
+  },
+  {
+    "frame": "11-regime-confirmation",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "012a1ac63c5e95dfcc5512f6e277965b351b17e50b74668091f5a3e6aba3e313",
+    "after_sha256": "012a1ac63c5e95dfcc5512f6e277965b351b17e50b74668091f5a3e6aba3e313"
+  },
+  {
+    "frame": "12-regime-required",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "c0f3f07db8c8a4e3be95d82a7cb8f7e9c30da988a95b904e7c0efe5cb55e5159",
+    "after_sha256": "c0f3f07db8c8a4e3be95d82a7cb8f7e9c30da988a95b904e7c0efe5cb55e5159"
+  },
+  {
+    "frame": "13-regime-highlight",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "bf9ec043dfba759ca88c47a392131c0b19db5896b88ab3657514798e5e0a1d3f",
+    "after_sha256": "bf9ec043dfba759ca88c47a392131c0b19db5896b88ab3657514798e5e0a1d3f"
+  },
+  {
+    "frame": "14-history-empty",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "9fbf8cf182586e6acc4d6f3857ee41c1a32c162380739b04fd8d79492d77894c",
+    "after_sha256": "9fbf8cf182586e6acc4d6f3857ee41c1a32c162380739b04fd8d79492d77894c"
+  },
+  {
+    "frame": "15-start-loading",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "255cf2675e73f93dfbd450fad72745c3fc4a86fd388bc8531611f34fc9f40064",
+    "after_sha256": "255cf2675e73f93dfbd450fad72745c3fc4a86fd388bc8531611f34fc9f40064"
+  },
+  {
+    "frame": "16-csv-validation-error",
+    "size": [
+      1440,
+      1024
+    ],
+    "mean_absolute_rgb_difference_0_255": 0.0,
+    "maximum_rgb_difference": 0,
+    "changed_pixel_count": 0,
+    "before_sha256": "626dce967247260c3c8cedd784dcd9ef16f9753163377442307e58bf47c14061",
+    "after_sha256": "626dce967247260c3c8cedd784dcd9ef16f9753163377442307e58bf47c14061"
+  }
+]

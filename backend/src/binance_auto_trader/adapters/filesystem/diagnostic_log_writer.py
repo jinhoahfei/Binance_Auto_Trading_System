@@ -1,57 +1,18 @@
 """날짜·실행·분할 번호별 UTF-8 JSON Lines 진단 파일을 저장한다."""
 
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from enum import Enum
 import json
 import os
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
+from binance_auto_trader.application.diagnostic_values import encode_diagnostic_value
+
 
 # KST는 고정 UTC+9이며 파일 분할과 사람이 읽는 시각에 같은 기준을 사용한다.
 KST = timezone(timedelta(hours=9), name="KST")
-_PRIVATE_FIELDS = frozenset({
-    "api_key", "api_secret", "secret", "token", "session_token", "signature",
-    "authorization", "headers", "body", "url", "payload", "failure_reason", "message",
-})
-
-
-def encode_diagnostic_value(value: object) -> object:
-    """
-    함수 이름: encode_diagnostic_value()
-    기능: 선택된 진단 값을 Decimal 정밀도를 보존하는 JSON 값으로 변환한다.
-    인자: value -> 명시적으로 기록 대상으로 선택한 값
-    반환값: JSON 호환 값 또는 비공개 타입의 고정 표식
-    작성 날짜: 2026/09/09
-    """
-    # Domain enum·시각·경과 시간은 문자열 또는 초 단위 Decimal 문자열로 표현한다.
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Decimal):
-        return str(value) if value.is_finite() else None
-    if isinstance(value, datetime):
-        return value.isoformat(timespec="microseconds")
-    if isinstance(value, timedelta):
-        return str(Decimal(value // timedelta(microseconds=1)) / Decimal("1000000"))
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-
-    # 재귀 변환에서도 credential·raw payload·예외 메시지와 private aggregate cache를 제외한다.
-    if is_dataclass(value) and not isinstance(value, type):
-        value = {field.name: getattr(value, field.name) for field in fields(value) if not field.name.startswith("_")}
-    if isinstance(value, Mapping):
-        return {
-            key: "[REDACTED]" if key.lower() in _PRIVATE_FIELDS else encode_diagnostic_value(item)
-            for key, item in value.items()
-            if isinstance(key, str) and not key.startswith("_")
-        }
-    if isinstance(value, (tuple, list)):
-        return [encode_diagnostic_value(item) for item in value]
-    return "[UNSUPPORTED]"  # 임의 객체의 repr에는 credential이 있을 수 있으므로 호출하지 않는다.
 
 
 class DiagnosticLogWriter:

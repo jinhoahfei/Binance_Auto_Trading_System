@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -11,8 +11,8 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 import hashlib
 import sys
-from threading import Event, RLock, get_ident
-from time import sleep
+from threading import Condition, Event, RLock, get_ident
+from time import monotonic, sleep
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -21,6 +21,9 @@ from binance_auto_trader.adapters.binance.api_gateway import (
     APIGateway,
 )
 from binance_auto_trader.adapters.binance.spot_rest_client import BinanceAPIError
+from binance_auto_trader.adapters.binance.request_deadline import (
+    operation_deadline, request_deadline_scope, submission_check_scope,
+)
 from binance_auto_trader.adapters.binance.mappers import SymbolFilterError, BinancePayloadError
 from binance_auto_trader.adapters.binance.websocket_gateway import (
     Subscription,
@@ -883,6 +886,7 @@ class _OrderExecutionState:
     allocated_cost_basis: Decimal = Decimal("0")
     terminal_summary: ExecutionSummary | None = None
     pending_outcome: TradingEvent | None = None
+    not_submitted_result: OrderResult | None = None
     persistence_pending: bool = False
     # Trade history 저장과 별개인 pending sidecar REMOVE durability를 독립적으로 보존한다.
     pending_recovery_pending: bool = False
@@ -1306,8 +1310,15 @@ class TradingController:
 
         # Account load와 session command는 transport publication과 같은 RLock을 공유한다.
         shared_application_lock = application_lock or RLock()
-        self._account_load_lock = shared_application_lock
         self._session_lock = shared_application_lock
+        # 외부 작업 중 관측 잠금을 양보해도 다른 STM/effect는 동일 owner 뒤에 직렬화한다.
+        self._effect_condition = Condition(shared_application_lock)
+        self._effect_owner: int | None = None
+        self._effect_depth = 0
+        self._external_operation_active = False
+        self._external_stop_requested = Event()
+        self._external_stop_reservations: set[object] = set()
+        self._inflight_stop_commands: dict[str, tuple[int, int]] = {}
         # 선택 준비 STM과 실행 중 STM을 분리해 active hot-swap을 구조적으로 막는다.
         self._selected_regime: RegimeType | None = None
         self._selected_stm: TradingSTM | None = None
@@ -2086,6 +2097,10 @@ class TradingController:
         if not self._requires_manual_kill_cleanup_locked():
             return
 
+        if self._effect_owner not in (None, get_ident()):
+            self._request_event_runtime_processing()
+            return  # Kill 상태는 즉시 닫되 진행 중 주문과 동시에 청산 effect를 만들지 않는다.
+
         # 시작 전 startup reconciliation은 pending 취소와 Position 복원까지 마친 뒤 재개하도록 대기한다.
         if not self._startup_reconciliation_complete and self._status is (
             TradingSessionStatus.NOT_STARTED
@@ -2330,7 +2345,8 @@ class TradingController:
         try:
             app_open_orders = tuple(
                 result
-                for result in self._api_gateway.list_open_order_results(
+                for result in self._run_external_operation(
+                    self._api_gateway.list_open_order_results,
                     _TRADING_SYMBOL
                 )
                 if result.client_order_id.startswith(
@@ -3334,125 +3350,170 @@ class TradingController:
         self._validate_expected_version_value(expected_version)
         fingerprint = (expected_version,)
 
-        # 긴 REST 검증이 session lock을 잡고 있어도 정지 의도는 commit 전에 관찰한다.
-        if (self._session_recovery_notifier is not None and self._session_recovery_in_progress
-                and ("stop", self._normalize_command_id(command_id)) not in self._command_records):
-            self._session_recovery_cancelled.set()
-
-        with self._session_effect_lock():
-            # exact replay를 먼저 반환하고 새 stop만 version·session 상태를 검증한다.
-            cached = self._read_command_record(
-                "stop",
-                command_id,
-                fingerprint,
-            )
+        normalized_command_id = self._normalize_command_id(command_id)
+        with self._session_lock:
+            cached = self._read_command_record("stop", command_id, fingerprint)
             if cached is not None:
                 return self._require_session_result(cached)
-            self._require_expected_version(expected_version)
-            if self._session_recovery_notifier is not None:
-                self._session_recovery_cancelled.set()
-                self._session_recovery_generation += 1
-                self._session_recovery_next_attempt_at = None
-                self._session_recovery_waiting_evaluation = None
-                self._session_recovery_latest_evaluation = None
-            self._preparation_retry_due_at = None
-            self._preparation_retry_intent = None
-            self._preparation_retry_attempt = 0
-            active_stm = self._active_stm
-            if active_stm is None or self._session_id is None:
+            inflight_command = self._inflight_stop_commands.get(normalized_command_id)
+            if inflight_command is None:
+                self._require_expected_version(expected_version)
+            elif inflight_command[0] != expected_version:
+                raise TradingSessionError(
+                    TradingSessionFailureCode.COMMAND_ID_REUSED,
+                    "Command ID cannot be reused with a different payload",
+                    current_version=self._context.version,
+                )
+            if self._active_stm is None or self._session_id is None:
                 raise TradingSessionError(
                     TradingSessionFailureCode.TRADING_NOT_STARTED,
                     "Trading session has not been started",
                     current_version=self._context.version,
                     expected_version=expected_version,
                 )
+            admitted_session_id = self._session_id
+            stop_reservation = object()
+            self._external_stop_reservations.add(stop_reservation)
+            self._inflight_stop_commands[normalized_command_id] = (
+                expected_version, 1 if inflight_command is None else inflight_command[1] + 1,
+            )
+            self._external_stop_requested.set()
 
-            # 종료된 세션의 재중지는 새 action 없는 성공 no-op으로 기록한다.
-            if self._status is TradingSessionStatus.TERMINATED:
-                result = self._create_session_result(None)
-                self._store_command_record(
+        try:
+            # 긴 REST 검증이 session lock을 잡고 있어도 정지 의도는 commit 전에 관찰한다.
+            if (self._session_recovery_notifier is not None and self._session_recovery_in_progress
+                    and ("stop", self._normalize_command_id(command_id)) not in self._command_records):
+                self._session_recovery_cancelled.set()
+
+            with self._session_effect_lock():
+                # exact replay를 먼저 반환하고 새 stop만 version·session 상태를 검증한다.
+                cached = self._read_command_record(
                     "stop",
                     command_id,
                     fingerprint,
-                    result,
                 )
-                return result
+                if cached is not None:
+                    return self._require_session_result(cached)
+                if admitted_session_id != self._session_id:
+                    raise TradingSessionError(
+                        TradingSessionFailureCode.INVALID_SESSION_STATE,
+                        "Stop reservation belongs to another session",
+                    )
+                if self._session_recovery_notifier is not None:
+                    self._session_recovery_cancelled.set()
+                    self._session_recovery_generation += 1
+                    self._session_recovery_next_attempt_at = None
+                    self._session_recovery_waiting_evaluation = None
+                    self._session_recovery_latest_evaluation = None
+                self._preparation_retry_due_at = None
+                self._preparation_retry_intent = None
+                self._preparation_retry_attempt = 0
+                active_stm = self._active_stm
+                if active_stm is None or self._session_id is None:
+                    raise TradingSessionError(
+                        TradingSessionFailureCode.TRADING_NOT_STARTED,
+                        "Trading session has not been started",
+                        current_version=self._context.version,
+                        expected_version=expected_version,
+                    )
 
-            # 시세만 끊긴 세션의 명시적 STOP은 복구 후에도 버리지 않는다.
-            # 주문/계좌/worker 원인이 섞인 상태는 기존 조정 절차를 우회하지 않는다.
-            if (
-                self._status is TradingSessionStatus.RECONCILIATION_REQUIRED
-                and self._market_stream_interrupted_running_session
-                and self._reconciliation_cause_status is ReconciliationCauseStatus.EXACT
-                and self._reconciliation_cause_category is ReconciliationCauseCategory.MARKET_STREAM_FAILED
-            ):
-                if self._market_stop_requested is None:
-                    self._market_stop_requested = command_id
+                # 종료된 세션의 재중지는 새 action 없는 성공 no-op으로 기록한다.
+                if self._status is TradingSessionStatus.TERMINATED:
+                    result = self._create_session_result(None)
+                    self._store_command_record(
+                        "stop",
+                        command_id,
+                        fingerprint,
+                        result,
+                    )
+                    return result
+
+                # 시세만 끊긴 세션의 명시적 STOP은 복구 후에도 버리지 않는다.
+                # 주문/계좌/worker 원인이 섞인 상태는 기존 조정 절차를 우회하지 않는다.
                 if (
-                    not self._market_stream_reconciliation_required
-                    and self._market_stream_ready
-                    and not self._stream_reconciliation_required
-                    and not self._process_lifetime_reconciliation_required_locked()
-                    and not self._startup_reconciliation_blocked
-                    and self._startup_reconciliation_complete
-                    and self.pending_order_query_count == 0
-                    and self._context.runtime.pending_order_id is None
-                    and self._context.runtime.pending_intent_id is None
-                    and self._context.runtime.pending_exit_reason is None
-                    and active_stm.current_state.root_state is not RootState.STOPPING
+                    self._status is TradingSessionStatus.RECONCILIATION_REQUIRED
+                    and self._market_stream_interrupted_running_session
+                    and self._reconciliation_cause_status is ReconciliationCauseStatus.EXACT
+                    and self._reconciliation_cause_category is ReconciliationCauseCategory.MARKET_STREAM_FAILED
                 ):
-                    self._market_stream_interrupted_running_session = False
-                    self._market_stop_requested = None
-                    # 같은 lock 안에서 곧바로 canonical STOP을 적용하므로 시장 평가를 재개하지 않는다.
-                    self._status = TradingSessionStatus.RUNNING
+                    if self._market_stop_requested is None:
+                        self._market_stop_requested = command_id
+                    if (
+                        not self._market_stream_reconciliation_required
+                        and self._market_stream_ready
+                        and not self._stream_reconciliation_required
+                        and not self._process_lifetime_reconciliation_required_locked()
+                        and not self._startup_reconciliation_blocked
+                        and self._startup_reconciliation_complete
+                        and self.pending_order_query_count == 0
+                        and self._context.runtime.pending_order_id is None
+                        and self._context.runtime.pending_intent_id is None
+                        and self._context.runtime.pending_exit_reason is None
+                        and active_stm.current_state.root_state is not RootState.STOPPING
+                    ):
+                        self._market_stream_interrupted_running_session = False
+                        self._market_stop_requested = None
+                        # 같은 lock 안에서 곧바로 canonical STOP을 적용하므로 시장 평가를 재개하지 않는다.
+                        self._status = TradingSessionStatus.RUNNING
 
-            # 이미 중지 중이면 terminal outcome queue를 건드리지 않고 현재 진행만 반환한다.
-            if self._status in (
-                TradingSessionStatus.STOPPING,
-                TradingSessionStatus.RECONCILIATION_REQUIRED,
-            ):
-                result = self._create_session_result(None)
+                # 이미 중지 중이면 terminal outcome queue를 건드리지 않고 현재 진행만 반환한다.
+                if self._status in (
+                    TradingSessionStatus.STOPPING,
+                    TradingSessionStatus.RECONCILIATION_REQUIRED,
+                ):
+                    result = self._create_session_result(None)
+                    self._store_command_record(
+                        "stop",
+                        command_id,
+                        fingerprint,
+                        result,
+                    )  # 다른 command ID도 새 force-sell intent 없이 idempotent 진행 조회가 된다.
+                    return result
+
+                # session과 command를 결합한 내부 STOP_CONFIRMED event를 정확히 한 번 만든다.
+                stop_event = TradingEvent(
+                    event_type=TradingEventType.STOP_CONFIRMED,
+                    occurred_at=self._clock(),
+                    priority=EventPriority.USER_COMMAND,
+                    event_id=f"stop-{self._session_id}-{command_id}",
+                )
+
+                # STOP 이전에 대기하던 시장·timer만 폐기해 이후 생성될 주문 outcome은 보존한다.
+                self._scheduler.clear()
+                if self._event_queue is not None:
+                    self._event_queue.clear()
+
+                # D05에 따라 cleanup이나 force-sell 기록 전에 STM.handle을 먼저 호출한다.
+                stop_result = active_stm.handle(
+                    stop_event,
+                    self._context.snapshot(),
+                )
+                previous_trace_event_id = self._active_trace_event_id
+                self._active_trace_event_id = stop_event.event_id
+                try:
+                    self._apply_stm_result(stop_result)
+                finally:
+                    self._active_trace_event_id = previous_trace_event_id
+                self._synchronize_status_from_context(active_stm)
+                result = self._create_session_result(stop_result)
                 self._store_command_record(
                     "stop",
                     command_id,
                     fingerprint,
                     result,
-                )  # 다른 command ID도 새 force-sell intent 없이 idempotent 진행 조회가 된다.
+                )  # 같은 command 재시도는 ForceSellAll을 중복 생성하지 않는다.
                 return result
-
-            # session과 command를 결합한 내부 STOP_CONFIRMED event를 정확히 한 번 만든다.
-            stop_event = TradingEvent(
-                event_type=TradingEventType.STOP_CONFIRMED,
-                occurred_at=self._clock(),
-                priority=EventPriority.USER_COMMAND,
-                event_id=f"stop-{self._session_id}-{command_id}",
-            )
-
-            # STOP 이전에 대기하던 시장·timer만 폐기해 이후 생성될 주문 outcome은 보존한다.
-            self._scheduler.clear()
-            if self._event_queue is not None:
-                self._event_queue.clear()
-
-            # D05에 따라 cleanup이나 force-sell 기록 전에 STM.handle을 먼저 호출한다.
-            stop_result = active_stm.handle(
-                stop_event,
-                self._context.snapshot(),
-            )
-            previous_trace_event_id = self._active_trace_event_id
-            self._active_trace_event_id = stop_event.event_id
-            try:
-                self._apply_stm_result(stop_result)
-            finally:
-                self._active_trace_event_id = previous_trace_event_id
-            self._synchronize_status_from_context(active_stm)
-            result = self._create_session_result(stop_result)
-            self._store_command_record(
-                "stop",
-                command_id,
-                fingerprint,
-                result,
-            )  # 같은 command 재시도는 ForceSellAll을 중복 생성하지 않는다.
-            return result
+        finally:
+            # 동일 STOP의 재전송도 자신의 예약만 회수해 다른 대기 STOP의 권한을 지우지 않는다.
+            with self._session_lock:
+                self._external_stop_reservations.discard(stop_reservation)
+                inflight_version, inflight_count = self._inflight_stop_commands[normalized_command_id]
+                if inflight_count == 1:
+                    del self._inflight_stop_commands[normalized_command_id]
+                else:
+                    self._inflight_stop_commands[normalized_command_id] = (inflight_version, inflight_count - 1)
+                if not self._external_stop_reservations:
+                    self._external_stop_requested.clear()
 
     def enqueue_event(self, event: TradingEvent) -> TradingEvent | None:
         """
@@ -3948,7 +4009,7 @@ class TradingController:
         반환값: 처리한 TradingSTMResult 또는 queue가 비었으면 None
         작성 날짜: 2026/08/21
         """
-        with self._session_lock:
+        with self._session_effect_lock():
             # cleanup·비활성 상태는 processor 참조를 사용하기 전에 빠르게 종료한다.
             processor = self._event_processor
             if self._cleanup_in_progress:
@@ -4230,8 +4291,9 @@ class TradingController:
         normalized_asset = self._normalize_asset(asset)
 
         # REST full snapshot 성공 뒤에만 stream을 열어 delta 순서를 보존한다.
-        with self._account_load_lock:
-            account_snapshot = self._api_gateway.fetch_account_snapshot(
+        with self._session_effect_lock():
+            account_snapshot = self._run_external_operation(
+                self._api_gateway.fetch_account_snapshot,
                 normalized_asset
             )
             current_price = self._market_snapshot.get_current_eth_price()
@@ -4239,7 +4301,7 @@ class TradingController:
             self._account_free_overlays.clear()  # 새 full snapshot이 이전 session fill 보정을 대체한다.
             self._account_subscription = None
             account_subscription = (
-                self._web_socket_gateway.start_account_info_stream()
+                self._run_external_operation(self._web_socket_gateway.start_account_info_stream)
             )
             self._account_subscription = account_subscription
 
@@ -4257,7 +4319,7 @@ class TradingController:
         if not isinstance(result, OrderResult):
             raise TypeError("result must be an OrderResult")
 
-        with self._session_lock:
+        with self._session_effect_lock():
             # Prefixless execution은 exchange ID가 앱 주문과 충돌해도 app-owned 결과로 승격하지 않는다.
             if not result.client_order_id.startswith(
                 APP_CLIENT_ORDER_ID_PREFIX
@@ -4614,7 +4676,7 @@ class TradingController:
         due = self._session_recovery_order_not_before.get(order.client_order_id)
         if due is not None and due > self._clock():
             raise SessionRecoveryRetry("exchange order query wait-not-before", retry_after=due - self._clock())
-        result = self._api_gateway.query_order_result(order)
+        result = self._run_external_operation(self._api_gateway.query_order_result, order)
         if result.retry_after is not None:
             self._session_recovery_order_not_before[order.client_order_id] = self._clock() + result.retry_after
         return result
@@ -4643,6 +4705,16 @@ class TradingController:
         작성 날짜: 2026/09/20
         """
         history = self._require_trade_history_controller()
+        # 현재 실행에서 받은 명시적 미전송 결과는 먼저 fsync·REMOVE를 완료하고 주문 실패 outcome으로 잇는다.
+        for state in tuple(self._order_states_by_client_id.values()):
+            if state.not_submitted_result is None:
+                continue
+            outcomes = self._handle_order_result(
+                state, state.not_submitted_result, initial=False
+            )
+            if state.pending_recovery_pending:
+                raise SessionRecoveryRetry("confirmed non-submission persistence is still pending")
+            self._enqueue_order_outcomes(outcomes)
         for order_id in tuple(history.dirty_order_ids):
             state = self._persistence_states_by_order_id.get(order_id)
             if state is None or state.terminal_summary is None:
@@ -4684,6 +4756,7 @@ class TradingController:
                     raise SessionRecoveryRetry("terminal journal removal is still pending")
                 self._enqueue_order_outcomes(outcomes)
 
+    @operation_deadline(30)
     def recover_interrupted_trading_session(
         self, *, reconcile_market: Callable[[], object], publish_evaluation: Callable[[], object],
         publish_commit: Callable[[], object] | None = None,
@@ -4992,7 +5065,7 @@ class TradingController:
         반환값: 설명 가능한 local·exchange 상태가 모두 복원되면 없음
         작성 날짜: 2026/08/22
         """
-        with self._session_lock:
+        with self._session_effect_lock():
             # 이전 callback이 남긴 process-lifetime blocker는 startup I/O나 완료 flag로 완화하지 않는다.
             if self._process_lifetime_reconciliation_required_locked():
                 raise StartupOrderReconciliationError(
@@ -5014,7 +5087,8 @@ class TradingController:
             # Signed stream ACK 뒤 REST 전체 계좌를 한 번 더 읽어 첫 snapshot과 구독 사이 공백을 닫는다.
             try:
                 startup_account_snapshot = (
-                    self._api_gateway.fetch_account_snapshot(
+                    self._run_external_operation(
+                        self._api_gateway.fetch_account_snapshot,
                         SUPPORTED_VALUATION_ASSET
                     )
                 )
@@ -5088,10 +5162,12 @@ class TradingController:
                 )
 
             # Exchange 조회 결과는 앱 prefix 주문만 local durable identity와 대조한다.
-            open_results = self._api_gateway.list_open_order_results(
+            open_results = self._run_external_operation(
+                self._api_gateway.list_open_order_results,
                 _TRADING_SYMBOL
             )
-            recent_results = self._api_gateway.list_recent_order_results(
+            recent_results = self._run_external_operation(
+                self._api_gateway.list_recent_order_results,
                 _TRADING_SYMBOL,
                 limit=100,
             )
@@ -5165,6 +5241,16 @@ class TradingController:
             self._startup_reconciliation_blocked = False
             for recovery_record in pending_records:
                 order = recovery_record.order
+                if recovery_record.lifecycle is PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED:
+                    if history_trades_by_client_id.get(order.client_order_id) or any(
+                        result.client_order_id == order.client_order_id
+                        for result in authoritative_order_results
+                    ):
+                        raise StartupOrderReconciliationError(
+                            "durable non-submission conflicts with an exchange order or history"
+                        )
+                    history_controller.delete_pending_order(order.client_order_id)
+                    continue  # 현재 프로세스의 메모리 부재가 아니라 v5 fsync 증거만 미전송을 확정한다.
                 absence_confirms_no_submission = (
                     recovery_record.lifecycle
                     is PendingOrderRecoveryLifecycle.SUBMISSION_REJECTED_CONFIRMED
@@ -5321,7 +5407,7 @@ class TradingController:
             selected_delay = self._jittered_order_retry_delay(base_delay)
             try:
                 self._order_retry_waiter(selected_delay)
-                result = self._api_gateway.query_order_result(order)
+                result = self._run_external_operation(self._api_gateway.query_order_result, order)
             except Exception as error:
                 last_error = error
                 continue  # 한 transport 실패를 주문 부재로 바꾸지 않고 남은 same-ID 예산을 사용한다.
@@ -5375,7 +5461,7 @@ class TradingController:
 
         # 개별 app client identity만 취소하고 응답은 성공·실패 어느 쪽도 terminal 사실로 신뢰하지 않는다.
         try:
-            self._api_gateway.cancel_order(order)
+            self._run_external_operation(self._api_gateway.cancel_order, order)
         except Exception:
             pass  # Binance 5xx·timeout의 UNKNOWN 의미 때문에 반드시 아래 same-ID query로 확정한다.
 
@@ -5386,7 +5472,7 @@ class TradingController:
             selected_delay = self._jittered_order_retry_delay(base_delay)
             try:
                 self._order_retry_waiter(selected_delay)
-                queried_result = self._api_gateway.query_order_result(order)
+                queried_result = self._run_external_operation(self._api_gateway.query_order_result, order)
             except Exception as error:
                 last_error = error
                 continue  # Transport 오류를 취소 완료로 바꾸지 않고 남은 same-ID 조회 예산을 사용한다.
@@ -5516,7 +5602,7 @@ class TradingController:
         """
         if self._residual_settlement is None or not 0 < submitted < requested:
             return False
-        rules = self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL)
+        rules = self._run_external_operation(self._api_gateway.fetch_symbol_trading_rules, _TRADING_SYMBOL)
         # 전량 매도 전·후 양쪽에서 현재 lot의 durable ETH fee 출처를 확인한다.
         return self._residual_settlement.allows_rounding(
             self._require_position(), self._require_trade_history_controller().trade_history.trades,
@@ -5533,7 +5619,7 @@ class TradingController:
         """
         if self._residual_settlement is None or self._require_position().quantity <= 0:
             return
-        rules = self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL)
+        rules = self._run_external_operation(self._api_gateway.fetch_symbol_trading_rules, _TRADING_SYMBOL)
         history = self._require_trade_history_controller().trade_history.trades
         if self._residual_settlement.settle(self._require_position(), history, rules.lot_size.step_size):
             self._publish_restored_position_snapshot(self._require_position())
@@ -5554,7 +5640,7 @@ class TradingController:
         if position.quantity <= 0 or not history:
             return
         anchor = history[-1].order_id
-        executions = self._api_gateway.list_account_executions_since(_TRADING_SYMBOL, anchor)
+        executions = self._run_external_operation(self._api_gateway.list_account_executions_since, _TRADING_SYMBOL, anchor)
         if executions is None:
             return  # 미지원 port는 기존 잔고 불일치 차단을 그대로 거친다.
         known = {trade.order_id: trade for trade in history}
@@ -5573,25 +5659,25 @@ class TradingController:
             new_executions.append(execution)
         if not new_executions:
             return
-        if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
+        if self._run_external_operation(self._api_gateway.has_any_exchange_open_orders) or self._run_external_operation(self._api_gateway.has_any_exchange_open_order_lists):
             raise StartupOrderReconciliationError("external recovery requires no account-wide open orders")
-        first_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
+        first_account = self._run_external_operation(self._api_gateway.fetch_account_snapshot, SUPPORTED_VALUATION_ASSET)
         settlement = self._residual_settlement
         residual_quantity, residual_cost = self.residual_totals
         # 외부 매도도 기존 잔여의 Earn 보관·보상을 포함한 같은 계좌 근거를 사용한다.
         since = history[settlement.transfers[0].history_count - 1].executed_at if settlement is not None and settlement.transfers else None
-        earn_evidence = self._api_gateway.fetch_earn_residual_evidence(since) if since is not None else None
+        earn_evidence = self._run_external_operation(self._api_gateway.fetch_earn_residual_evidence, since) if since is not None else None
         if earn_evidence is not None and not settlement.matches_earn_custody(earn_evidence, history):
             raise StartupOrderReconciliationError("external recovery Earn provenance is invalid")
         # 별도의 두 조회에서 동일 주문·fill과 잔고를 확인한 뒤에만 첫 durable write를 허용한다.
-        repeated = self._api_gateway.list_account_executions_since(_TRADING_SYMBOL, anchor)
-        repeated_earn = self._api_gateway.fetch_earn_residual_evidence(since) if since is not None else None
-        confirmed_account = self._api_gateway.fetch_account_snapshot(SUPPORTED_VALUATION_ASSET)
+        repeated = self._run_external_operation(self._api_gateway.list_account_executions_since, _TRADING_SYMBOL, anchor)
+        repeated_earn = self._run_external_operation(self._api_gateway.fetch_earn_residual_evidence, since) if since is not None else None
+        confirmed_account = self._run_external_operation(self._api_gateway.fetch_account_snapshot, SUPPORTED_VALUATION_ASSET)
         first_eth = tuple(balance for balance in first_account.balances if balance.asset == _BASE_ASSET)
         confirmed_eth = tuple(balance for balance in confirmed_account.balances if balance.asset == _BASE_ASSET)
         if repeated != executions or repeated_earn != earn_evidence or first_eth != confirmed_eth or len(confirmed_eth) != 1:
             raise StartupOrderReconciliationError("external recovery evidence changed during verification")
-        if self._api_gateway.has_any_exchange_open_orders() or self._api_gateway.has_any_exchange_open_order_lists():
+        if self._run_external_operation(self._api_gateway.has_any_exchange_open_orders) or self._run_external_operation(self._api_gateway.has_any_exchange_open_order_lists):
             raise StartupOrderReconciliationError("open orders appeared during external recovery")
         if not self._web_socket_gateway.account_ready or self._process_lifetime_reconciliation_required_locked():
             raise StartupOrderReconciliationError("external recovery account stream is not stable")
@@ -5606,7 +5692,7 @@ class TradingController:
                 eth_balance=principal_balance, residual_quantity=residual_quantity, residual_cost_basis=residual_cost)
             if settlement is not None:
                 preview = ResidualSettlement(settlement.storage)
-                preview.restore(Position(), (*history, *trades), self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL).lot_size.step_size)
+                preview.restore(Position(), (*history, *trades), self._run_external_operation(self._api_gateway.fetch_symbol_trading_rules, _TRADING_SYMBOL).lot_size.step_size)
                 if earn_evidence is not None and not preview.matches_earn_custody(earn_evidence, (*history, *trades)):
                     raise ValueError("external SELL consumed residual held in Earn")
         except (ValueError, TypeError) as error:
@@ -5649,7 +5735,8 @@ class TradingController:
             if self._residual_settlement is not None:
                 self._residual_settlement.restore(
                     position, trades,
-                    self._api_gateway.fetch_symbol_trading_rules(_TRADING_SYMBOL).lot_size.step_size if trades else None,
+                    self._run_external_operation(
+                        self._api_gateway.fetch_symbol_trading_rules, _TRADING_SYMBOL).lot_size.step_size if trades else None,
                 )
             else:
                 for trade in trades:
@@ -5896,7 +5983,8 @@ class TradingController:
 
             # Reconnect operation 전체에서 command gate를 닫고 REST full snapshot부터 다시 적용한다.
             self._stream_reconciliation_required = True
-            account_snapshot = self._api_gateway.fetch_account_snapshot(
+            account_snapshot = self._run_external_operation(
+                self._api_gateway.fetch_account_snapshot,
                 SUPPORTED_VALUATION_ASSET
             )
             try:
@@ -5913,10 +6001,11 @@ class TradingController:
 
             # 첫 full account 직후 signed stream ACK를 열어 이후 order REST의 체결 공백을 닫는다.
             shutdown_owner = self._shutdown_cleanup_owner == get_ident()
-            subscription = None if shutdown_owner else self._web_socket_gateway.start_account_info_stream()
+            subscription = None if shutdown_owner else self._run_external_operation(self._web_socket_gateway.start_account_info_stream)
             try:
                 # Exchange open order가 현재 memory의 app-owned state로 모두 설명되는지 먼저 확인한다.
-                open_results = self._api_gateway.list_open_order_results(
+                open_results = self._run_external_operation(
+                    self._api_gateway.list_open_order_results,
                     _TRADING_SYMBOL
                 )
                 open_app_order_results = tuple(
@@ -5928,7 +6017,8 @@ class TradingController:
                 )
                 recent_app_order_results = tuple(
                     result
-                    for result in self._api_gateway.list_recent_order_results(
+                    for result in self._run_external_operation(
+                        self._api_gateway.list_recent_order_results,
                         _TRADING_SYMBOL,
                         limit=100,
                     )
@@ -6132,7 +6222,7 @@ class TradingController:
                             continue
                     else:
                         result = (self._query_order_for_session_recovery(order) if self._session_recovery_in_progress
-                                  else self._api_gateway.query_order_result(order))
+                                  else self._run_external_operation(self._api_gateway.query_order_result, order))
                     if result.status is OrderStatus.UNKNOWN:
                         if self._session_recovery_in_progress:
                             raise SessionRecoveryRetry("same-ID order query remained unknown", retry_after=result.retry_after)
@@ -6247,7 +6337,8 @@ class TradingController:
 
                 # 첫 REST와 signed stream ACK 사이의 balance gap은 두 번째 full snapshot으로 닫는다.
                 post_subscribe_snapshot = (
-                    self._api_gateway.fetch_account_snapshot(
+                    self._run_external_operation(
+                        self._api_gateway.fetch_account_snapshot,
                         SUPPORTED_VALUATION_ASSET
                     )
                 )
@@ -7154,6 +7245,8 @@ class TradingController:
         # 외부 effect 입력과 optional residual 수량을 Gateway 호출 전에 검증한다.
         if not isinstance(action, SubmitOrder):
             raise TypeError("action must be a SubmitOrder")
+        if self._external_stop_requested.is_set() and not force_sell:
+            return ()  # 이미 접수한 STOP이 owner를 기다리는 동안 신규 의도를 실행하지 않는다.
         if self._shutdown_preparing and not (
             force_sell and self._shutdown_liquidation_allowed
             and self._shutdown_cleanup_owner == get_ident()
@@ -7332,7 +7425,7 @@ class TradingController:
         )
         # 최신 exchangeInfo filter는 요청 수량을 보존한 채 제출 수량만 내림 조정한다.
         try:
-            order = self._api_gateway.prepare_order(order)
+            order = self._run_external_operation(self._api_gateway.prepare_order, order)
         except Exception as error:
             # 정상적인 최소 주문 미달만 보류한다. 인증·규칙 불일치 등은 기존 오류 처리로 남긴다.
             self._api_gateway.discard_unsubmitted_preparation(order)
@@ -7397,6 +7490,13 @@ class TradingController:
                     ReconciliationCauseCategory.PREPARE_FILTER_OR_CAP_REJECTED),
             )
             return ()  # filter 위반 수량은 거래소 REST 경계에 도달하지 않는다.
+
+        if self._external_stop_requested.is_set() and not force_sell:
+            self._unsubmitted_preparation_intent = action.idempotency_key
+            self._api_gateway.discard_unsubmitted_preparation(order)
+            return (self._create_order_outcome_event(
+                _OrderExecutionState(order=order, force_sell=force_sell), succeeded=False,
+            ),)  # 미전송 의도만 종료하고 대기 중 STOP이 포지션·pending을 다시 확인한다.
 
         self._unsubmitted_preparation_intent = None
         self._preparation_retry_attempt = 0
@@ -7535,9 +7635,13 @@ class TradingController:
         self._record_diagnostic("order_submit_started", order=order, force_sell=force_sell)
         try:
             if force_sell:
-                result = self._api_gateway.sell_all_position(order)
+                result = self._run_external_operation(
+                    self._api_gateway.sell_all_position, order, submission_order=order,
+                )
             else:
-                result = self._api_gateway.submit_order(order)
+                result = self._run_external_operation(
+                    self._api_gateway.submit_order, order, submission_order=order,
+                )
         except Exception as error:
             self._append_order_trace(
                 order,
@@ -8028,6 +8132,15 @@ class TradingController:
             raise TypeError("result must be an OrderResult")
         if type(initial) is not bool:
             raise TypeError("initial must be a bool")
+        if (
+            result.failure_kind is OrderResultFailureKind.NOT_SUBMITTED_EXPIRED
+            and not initial
+            and state.not_submitted_result != result
+        ):
+            self._enter_order_reconciliation(
+                state, OrderExecutionFailureCode.ORDER_RESULT_INVALID, message_id=None
+            )
+            return ()  # Stream·조회가 새 미전송 증거를 주장해 이전 UNKNOWN을 해제하지 못한다.
 
         # Raw 응답 대신 정규화된 체결·수수료와 허용된 API 실패 코드만 기록한다.
         self._record_diagnostic(
@@ -8143,6 +8256,9 @@ class TradingController:
             )
             return ()
 
+        if result.failure_kind is OrderResultFailureKind.NOT_SUBMITTED_EXPIRED:
+            state.not_submitted_result = result
+
         # Typed pre-matching rejection은 후속 부재 조회와 결합할 별도 durable 증거로 보존한다.
         if (
             initial
@@ -8197,7 +8313,7 @@ class TradingController:
         # terminal zero-fill은 Trade 없이 같은 intent retry가 가능한 concrete 실패로 끝낸다.
         self._scheduled_order_queries.pop(order.client_order_id, None)
         if not order.fills:
-            if initial:
+            if initial and result.failure_kind is not OrderResultFailureKind.NOT_SUBMITTED_EXPIRED:
                 state.awaiting_terminal_zero_confirmation = True
                 self._schedule_order_query(
                     state,
@@ -8209,6 +8325,12 @@ class TradingController:
             # 조회로 terminal zero-fill을 확인한 뒤에만 제출 전 recovery journal을 제거한다.
             if not self._delete_pending_order_recovery(state):
                 return ()
+            if result.failure_kind is OrderResultFailureKind.NOT_SUBMITTED_EXPIRED:
+                # 다음 기존 backoff 재시도는 제출 예산을 유지하며 최신 신호의 유효성부터 다시 검사한다.
+                self._unsubmitted_preparation_intent = order.intent_id
+                self._preparation_retry_intent = order.intent_id
+                self._preparation_retry_due_at = None
+            state.not_submitted_result = None
 
             # 일반 retry는 직전 요청 수량을 보존해 residual SELL에 split ratio를 다시 적용하지 않는다.
             if not state.force_sell and not state.stop_after_reconciliation:
@@ -8279,6 +8401,9 @@ class TradingController:
         if not isinstance(result, OrderResult):
             raise TypeError("result must be an OrderResult")
 
+        if state.not_submitted_result is result:
+            return PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED
+
         # History fsync가 이미 증명된 state는 same-ID query 중에도 terminal 이전으로 후퇴하지 않는다.
         if (
             state.recovery_lifecycle
@@ -8329,6 +8454,11 @@ class TradingController:
         if not self._pending_order_recovery_enabled:
             state.recovery_lifecycle = lifecycle
             return True  # History-only fake는 기존 in-memory pipeline을 그대로 사용한다.
+        if (
+            lifecycle is PendingOrderRecoveryLifecycle.NOT_SUBMITTED_CONFIRMED
+            and state.recovery_lifecycle is lifecycle
+        ):
+            return True  # 앞선 fsync 성공 뒤 REMOVE 응답만 잃었어도 없는 pending에 재전이를 요구하지 않는다.
 
         history_controller = self._require_trade_history_controller()
         try:
@@ -9094,7 +9224,7 @@ class TradingController:
         self._record_diagnostic("order_query_started", order=order, reconciliation_attempts=state.reconciliation_attempts)
         # transport 예외는 체결 0으로 간주하지 않고 UNKNOWN으로 정규화해 same-order 조회를 계속한다.
         try:
-            result = self._api_gateway.query_order_result(order)
+            result = self._run_external_operation(self._api_gateway.query_order_result, order)
         except Exception as error:
             for message_id in ("8", "8.1", "8.2"):
                 self._append_order_trace(
@@ -9198,7 +9328,7 @@ class TradingController:
             self._shutdown_cleanup_check()
         self._record_diagnostic("order_cancel_started", order=state.order, reason=action.reason)
         try:
-            cancel_result = self._api_gateway.cancel_order(state.order)
+            cancel_result = self._run_external_operation(self._api_gateway.cancel_order, state.order)
         except Exception as error:
             self._diagnostics.record_exception(
                 "order_cancel", error, session_id=self._session_id, client_order_id=state.order.client_order_id,
@@ -9404,7 +9534,7 @@ class TradingController:
             raise ValueError("order_id must be a positive integer string")
 
         # Position을 rollback하지 않은 채 pending save state를 원자적으로 해제한다.
-        with self._session_lock:
+        with self._session_effect_lock():
             state = self._persistence_states_by_order_id.get(order_id)
             if state is None:
                 raise KeyError(f"order_id {order_id} has no pending persistence")
@@ -10100,17 +10230,100 @@ class TradingController:
         """
         return self._context.version, self._status.value  # 실제 종료 권한은 작업자 정리 후 다시 검증한다.
 
+    @contextmanager
     def _session_effect_lock(self):
         """
         함수 이름: _session_effect_lock()
-        기능: 작업자 정리 후 종료 담당 스레드의 네트워크 대기를 공용 잠금에서 분리한다.
+        기능: 외부 I/O가 관측 잠금을 양보해도 STM과 주문 결과 처리는 단일 owner로 직렬화한다.
         인자: 없음
-        반환값: 해당 단계의 처리 결과 또는 없음
-        작성 날짜: 2026/09/16
+        반환값: owner와 재진입 깊이를 복원하는 context manager
+        작성 날짜: 2026/09/22
         """
         if self._shutdown_preparing and self._shutdown_cleanup_owner == get_ident():
-            return nullcontext()
-        return self._session_lock
+            yield
+            return
+        with self._effect_condition:
+            owner = get_ident()
+            while self._effect_owner not in (None, owner):
+                # Condition은 바깥 route/worker의 RLock 재진입 깊이까지 양보해 교착을 막는다.
+                self._effect_condition.wait()
+            self._effect_owner = owner
+            self._effect_depth += 1
+            try:
+                with request_deadline_scope(30):
+                    yield
+            finally:
+                self._effect_depth -= 1
+                if self._effect_depth == 0:
+                    self._effect_owner = None
+                    self._effect_condition.notify_all()
+
+    def _run_external_operation(
+        self, operation: Callable, *arguments,
+        submission_order: Order | None = None, **keyword_arguments,
+    ):
+        """
+        함수 이름: _run_external_operation()
+        기능: 단일 effect 예약을 유지하며 외부 작업 동안 공통 잠금만 양보하고 다시 복원한다.
+        인자: operation -> 동기 Gateway 작업, arguments -> 위치 인자, keyword_arguments -> 이름 인자
+            submission_order -> POST 직전 권한을 검사할 정확한 예약 주문
+        반환값: 같은 owner가 반영할 외부 작업의 원 결과
+        작성 날짜: 2026/09/22
+        """
+        with self._session_effect_lock():
+            # shutdown owner도 동일 예산을 사용하되 이미 양보된 application lock은 건드리지 않는다.
+            lock_owned = self._session_lock._is_owned()
+            self._external_operation_active = True
+            started_at = monotonic()
+            submitted_order = submission_order
+            reserved_session_id = self._session_id
+            reserved_recovery_generation = self._session_recovery_generation
+            reserved_account_version = self._account.version
+            reserved_policy = self._risk_policy_state
+
+            def submission_allowed() -> bool:
+                """
+                함수 이름: submission_allowed()
+                기능: 잠금 양보 중 도착한 정지·연결·risk 변경을 POST 직전에 다시 확인한다.
+                인자: 없음
+                반환값: 예약된 주문의 현재 제출 허용 여부
+                작성 날짜: 2026/09/22
+                """
+                with self._session_lock:
+                    reserved_state = self._order_states_by_client_id.get(submitted_order.client_order_id)
+                    return (
+                        reserved_state is not None
+                        and (not self._external_stop_requested.is_set() or reserved_state.force_sell)
+                        and self._order_pipeline_enabled
+                        and self._session_id == reserved_session_id
+                        and self._session_recovery_generation == reserved_recovery_generation
+                        and reserved_state.order is submitted_order
+                        and (not self._shutdown_preparing or self._shutdown_cleanup_owner == get_ident())
+                        and (submitted_order.side is not OrderSide.BUY or (
+                            not self._manual_kill_active
+                            and self._account.version == reserved_account_version
+                            and isinstance(self._risk_policy_state, RiskPolicy)
+                            and self._risk_policy_state == reserved_policy
+                            and self._risk_policy_state.version == submitted_order.risk_policy_version
+                            and self._session_risk_policy_version == submitted_order.risk_policy_version
+                        ))
+                    )
+
+            lock_state = self._session_lock._release_save() if lock_owned else None
+            try:
+                with request_deadline_scope(30), submission_check_scope(
+                    submission_allowed if submitted_order is not None else None,
+                    guard=self._session_lock if submitted_order is not None else None,
+                ):
+                    return operation(*arguments, **keyword_arguments)
+            finally:
+                if lock_owned:
+                    self._session_lock._acquire_restore(lock_state)
+                self._external_operation_active = False
+                self._record_diagnostic(
+                    "external_operation_completed", operation=getattr(operation, "__name__", "external_call"),
+                    elapsed_ms=int((monotonic() - started_at) * 1000),
+                )  # 늦은 POST 결과도 폐기하지 않고 기존 same-ID 반영 경로로 돌려준다.
 
     def _require_expected_version(self, expected_version: int) -> None:
         """

@@ -514,6 +514,7 @@ class RuntimeLoggingFlowTests(unittest.TestCase):
                 with patch.object(type(controller._market_evaluation_builder), "__call__", side_effect=ValueError("private-builder-marker")):
                     with self.assertRaises(ValueError):
                         controller.observe_kline(kline)
+                self.assertTrue(fixture.runtime.diagnostics.flush())  # 운영 writer의 비동기 저장 완료 후 파일을 검사한다.
                 records = [json.loads(line) for path in log_directory.glob("*.log") for line in path.read_text().splitlines()]
                 failures = [record["details"] for record in records if record["event"] == "operation_failed" and record["details"]["stage"] == "market_kline_processing"]
                 self.assertTrue(failures)

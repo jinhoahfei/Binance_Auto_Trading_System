@@ -430,6 +430,7 @@ class SpotWebSocketClientTests(unittest.TestCase):
         )
         socket = factory.sockets[0]
         socket.emit({"stream": "ethusdt@kline_1m", "data": {"e": "kline"}})
+        self.assertTrue(subscription.wait_until_caught_up(1))
 
         self.assertEqual(
             socket.url,
@@ -485,6 +486,7 @@ class SpotWebSocketClientTests(unittest.TestCase):
         """
         factory = _ScriptedSocketFactory()
         disconnects: list[str] = []
+        notification_completed = Event()
         client = self._create_client(factory)
 
         # 정상 startup 뒤 on_error와 on_close가 연속 호출되는 실제 transport 종료 순서를 재현한다.
@@ -492,10 +494,12 @@ class SpotWebSocketClientTests(unittest.TestCase):
             symbol="ETHUSDT",
             intervals=("1m", "30m", "4h", "1d"),
             on_message=lambda _payload: None,
-            on_disconnect=lambda: disconnects.append("disconnected"),
+            on_disconnect=lambda: (disconnects.append("disconnected"), notification_completed.set()),
         )
         factory.sockets[0].fail_and_close()
 
+        self.assertFalse(subscription.connected)
+        self.assertTrue(notification_completed.wait(1))
         self.assertEqual(disconnects, ["disconnected"])
         subscription.close()
         self.assertEqual(disconnects, ["disconnected"])  # owner close도 알림을 중복하지 않는다.
@@ -618,6 +622,7 @@ class SpotWebSocketClientTests(unittest.TestCase):
         callback_started = Event()
         release_callback = Event()
         receive_returned = Event()
+        reconciliation_completed = Event()
         reconciliations: list[str] = []
         client = self._create_client(factory)
 
@@ -635,7 +640,7 @@ class SpotWebSocketClientTests(unittest.TestCase):
         gateway = WebSocketGateway(
             client,
             account_snapshot_callback=apply_snapshot,
-            reconciliation_required_callback=reconciliations.append,
+            reconciliation_required_callback=lambda reason: (reconciliations.append(reason), reconciliation_completed.set()),
         )
         subscription = gateway.start_account_info_stream()
         socket = factory.sockets[0]
@@ -663,6 +668,7 @@ class SpotWebSocketClientTests(unittest.TestCase):
             # 같은 receive 경로가 close를 관찰해 callback barrier보다 먼저 fail closed한다.
             socket.fail_and_close()
             self.assertFalse(gateway.account_connected)
+            self.assertTrue(reconciliation_completed.wait(1))
             self.assertEqual(reconciliations, ["account_stream_disconnected"])
         finally:
             release_callback.set()
@@ -844,10 +850,11 @@ class SpotWebSocketClientTests(unittest.TestCase):
         factory = _ScriptedSocketFactory()
         received_payloads: list[object] = []
         disconnects: list[str] = []
+        notification_completed = Event()
         client = self._create_client(factory)
         client.subscribe_account_info(
             on_message=received_payloads.append,
-            on_disconnect=lambda: disconnects.append("disconnected"),
+            on_disconnect=lambda: (disconnects.append("disconnected"), notification_completed.set()),
         )
         socket = factory.sockets[0]
 
@@ -864,6 +871,7 @@ class SpotWebSocketClientTests(unittest.TestCase):
         )
         socket.fail_and_close()
 
+        self.assertTrue(notification_completed.wait(1))
         self.assertEqual(received_payloads, [])
         self.assertEqual(disconnects, ["disconnected"])
 

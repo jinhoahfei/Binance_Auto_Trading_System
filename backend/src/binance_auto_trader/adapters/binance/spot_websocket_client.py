@@ -29,6 +29,7 @@ _DEFAULT_RECV_WINDOW_MILLISECONDS = 5_000
 _MAX_RECV_WINDOW_MILLISECONDS = 60_000
 _DEFAULT_STARTUP_TIMEOUT_SECONDS = 10
 _DEFAULT_ACCOUNT_EVENT_QUEUE_CAPACITY = 1_024
+_DEFAULT_MARKET_EVENT_QUEUE_CAPACITY = 1_024
 _DISPATCHER_STOP = object()
 
 
@@ -274,6 +275,92 @@ def _create_hmac_signature(secret: str, params: Mapping[str, object]) -> str:
     ).hexdigest()
 
 
+class _DisconnectNotifier:
+    """
+    클래스 이름: _DisconnectNotifier
+    기능: client당 단일 실행과 stream별 후속 알림 하나로 잠금 대기 callback을 분리한다.
+    작성 날짜: 2026/09/22
+    """
+
+    def __init__(self) -> None:
+        """
+        함수 이름: __init__()
+        기능: market·account 두 key의 대기 알림과 단일 thread identity를 준비한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        self._lock = RLock()
+        self._pending: dict[str, Callable[[], None]] = {}
+        self._active_thread: Thread | None = None
+        self._latest_generation = {"market": 0, "account": 0}
+
+    def reserve_generation(self, stream_name: str) -> int:
+        """
+        함수 이름: reserve_generation()
+        기능: 구독 생성 순서의 세대를 발급해 늦게 도착한 과거 장애 통지를 식별한다.
+        인자: stream_name -> market 또는 account
+        반환값: 해당 stream의 새 세대 번호
+        작성 날짜: 2026/09/27
+        """
+        if stream_name not in ("market", "account"):
+            raise ValueError("unsupported notification stream")
+        with self._lock:
+            self._latest_generation[stream_name] += 1
+            self._pending.pop(stream_name, None)
+            return self._latest_generation[stream_name]
+
+    def request_notification(
+        self,
+        stream_name: str,
+        callback: Callable[[], None],
+        *,
+        generation: int | None = None,
+    ) -> None:
+        """
+        함수 이름: request_notification()
+        기능: 현재 구독 세대의 알림만 병합하고 socket thread를 기다리지 않게 한다.
+        인자: stream_name -> market 또는 account, callback -> 세대를 검사하는 장애 통지
+            generation -> 구독 생성 때 발급한 세대 또는 직접 주입 관측자의 None
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        if stream_name not in ("market", "account"):
+            raise ValueError("unsupported notification stream")
+        with self._lock:
+            if generation is not None and generation != self._latest_generation[stream_name]:
+                return  # 과거 socket의 늦은 enqueue가 새 실패 세대의 복구 요청을 덮지 않는다.
+            self._pending[stream_name] = callback
+            if self._active_thread is not None:
+                return
+            self._active_thread = Thread(target=self._run, name="binance-stream-notifications", daemon=True)
+            try:
+                self._active_thread.start()
+            except Exception:
+                self._active_thread = None
+                raise  # 다음 장애 요청에서 후속 알림을 새 단일 owner가 회수할 수 있게 한다.
+
+    def _run(self) -> None:
+        """
+        함수 이름: _run()
+        기능: 잠금 밖에서 세대별 callback을 실행하고 대기 알림이 없으면 자원을 회수한다.
+        인자: 없음
+        반환값: 마지막 알림 처리 뒤 없음
+        작성 날짜: 2026/09/22
+        """
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._active_thread = None
+                    return
+                stream_name = next(iter(self._pending))
+                callback = self._pending.pop(stream_name)
+            try:
+                callback()
+            except BaseException:
+                pass  # 장애 통지의 예외 원문을 출력하거나 추가 알림 thread를 만들지 않는다.
+
+
 class _ConnectionLifecycle:
     """
     클래스 이름: _ConnectionLifecycle
@@ -281,15 +368,23 @@ class _ConnectionLifecycle:
     작성 날짜: 2026/08/22
     """
 
-    def __init__(self, on_disconnect: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        on_disconnect: Callable[[], None],
+        *,
+        disconnect_notifier: Callable[[Callable[[], None]], None] | None = None,
+    ) -> None:
         """
         함수 이름: __init__()
         기능: startup 대기 event와 disconnect 단일 알림 상태를 초기화한다.
         인자: on_disconnect -> 비정상 transport 종료 callback
+            disconnect_notifier -> application 장애 callback의 비동기 예약 경계 또는 테스트의 None
         반환값: 없음
         작성 날짜: 2026/08/22
         """
         self._on_disconnect = on_disconnect
+        self._disconnect_notifier = disconnect_notifier
+        self._stop_dispatcher: Callable[[], None] | None = None
         self._lock = RLock()
         self._startup_event = Event()
         self._established = False
@@ -307,7 +402,7 @@ class _ConnectionLifecycle:
         작성 날짜: 2026/08/22
         """
         with self._lock:
-            return self._established and not self._owner_closed
+            return self._established and not self._owner_closed and not self._disconnect_notified
 
     def mark_established(self) -> None:
         """
@@ -323,11 +418,14 @@ class _ConnectionLifecycle:
             self._established = True
             self._startup_event.set()
 
-    def record_transport_failure(self, error: Exception) -> None:
+    def record_transport_failure(
+        self, error: Exception, *, close_transport: Callable[[], object] | None = None,
+    ) -> None:
         """
         함수 이름: record_transport_failure()
         기능: credential 없는 transport 오류를 기록하고 disconnect callback을 최대 한 번 호출한다.
         인자: error -> 호출자에게 전달할 정규화된 transport 오류
+            close_transport -> application 통지 전에 종료할 socket 또는 None
         반환값: 없음
         작성 날짜: 2026/08/22
         """
@@ -342,11 +440,31 @@ class _ConnectionLifecycle:
                 self._disconnect_notified = True
                 should_notify = True
 
+        if self._stop_dispatcher is not None:
+            self._stop_dispatcher()  # socket thread에서는 sentinel만 보내고 consumer를 join하지 않는다.
+        if close_transport is not None:
+            try:
+                close_transport()
+            except Exception:
+                pass
         if should_notify:
             try:
-                self._on_disconnect()
+                if self._disconnect_notifier is None:
+                    self._on_disconnect()
+                else:
+                    self._disconnect_notifier(self._on_disconnect)
             except Exception:
                 return  # transport thread에서는 상위 callback 오류를 credential 포함 log로 바꾸지 않는다.
+
+    def configure_dispatcher_stop(self, stop_dispatcher: Callable[[], None]) -> None:
+        """
+        함수 이름: configure_dispatcher_stop()
+        기능: transport 장애 때 queue만 닫는 non-blocking dispatcher 종료 경계를 연결한다.
+        인자: stop_dispatcher -> join과 application callback을 실행하지 않는 종료 함수
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        self._stop_dispatcher = stop_dispatcher
 
     def mark_owner_closed(self) -> None:
         """
@@ -376,7 +494,7 @@ class _ConnectionLifecycle:
         with self._lock:
             if self._startup_failure is not None:
                 raise self._startup_failure
-            if not self._established or self._owner_closed:
+            if not self._established or self._owner_closed or self._disconnect_notified:
                 raise WebSocketConnectionError(
                     "Binance WebSocket subscription closed during startup"
                 )
@@ -472,6 +590,7 @@ class _BoundedMessageDispatcher:
             name=worker_name,
             daemon=True,
         )
+        lifecycle.configure_dispatcher_stop(self.request_close)
 
     @property
     def caught_up(self) -> bool:
@@ -596,6 +715,18 @@ class _BoundedMessageDispatcher:
         반환값: 없음
         작성 날짜: 2026/08/23
         """
+        self.request_close()
+        if current_thread() is not self._worker_thread:
+            self._worker_thread.join(timeout=1)  # 막힌 application callback을 무기한 기다리지 않는다.
+
+    def request_close(self) -> None:
+        """
+        함수 이름: request_close()
+        기능: 새 event를 거부하고 idle consumer만 깨우며 application 처리 완료는 기다리지 않는다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
         with self._lock:
             if self._closed:
                 return
@@ -605,9 +736,6 @@ class _BoundedMessageDispatcher:
                 self._queue.put_nowait(_DISPATCHER_STOP)
             except Full:
                 pass  # active consumer가 끝나면 closed 상태를 보고 남은 queue를 처리하지 않는다.
-
-        if current_thread() is not self._worker_thread:
-            self._worker_thread.join(timeout=1)  # 막힌 application callback을 무기한 기다리지 않는다.
 
     def _complete_one_event(self) -> bool:
         """
@@ -647,11 +775,7 @@ class _BoundedMessageDispatcher:
             return
 
         # 연결 상태를 먼저 fail closed한 뒤 socket close로 수신 loop까지 중단한다.
-        self._lifecycle.record_transport_failure(error)
-        try:
-            self._socket_application.close()
-        except Exception:
-            return  # close 오류가 원래 dispatcher 장애나 credential 정보를 덮지 않게 한다.
+        self._lifecycle.record_transport_failure(error, close_transport=self._socket_application.close)
 
 
 class _SocketSubscription:
@@ -686,6 +810,17 @@ class _SocketSubscription:
         self._closed = False
 
     @property
+    def connected(self) -> bool:
+        """
+        함수 이름: connected()
+        기능: application 장애 통지 완료를 기다리지 않고 실제 transport 실패 상태를 반환한다.
+        인자: 없음
+        반환값: startup이 완료되고 종료·장애가 없으면 True
+        작성 날짜: 2026/09/22
+        """
+        return self._lifecycle.established
+
+    @property
     def caught_up(self) -> bool:
         """
         함수 이름: caught_up()
@@ -695,7 +830,7 @@ class _SocketSubscription:
         작성 날짜: 2026/08/23
         """
         with self._lock:
-            if self._closed:
+            if self._closed or not self.connected:
                 return False
             message_dispatcher = self._message_dispatcher
 
@@ -713,7 +848,7 @@ class _SocketSubscription:
         작성 날짜: 2026/08/23
         """
         with self._lock:
-            if self._closed:
+            if self._closed or not self.connected:
                 return False
             message_dispatcher = self._message_dispatcher
 
@@ -737,10 +872,10 @@ class _SocketSubscription:
             self._lifecycle.mark_owner_closed()
 
         try:
-            if self._message_dispatcher is not None:
-                self._message_dispatcher.close()
             self._socket_application.close()
         finally:
+            if self._message_dispatcher is not None:
+                self._message_dispatcher.close()
             if current_thread() is not self._worker_thread:
                 self._worker_thread.join(timeout=1)  # close를 무기한 기다리지 않는다.
 
@@ -765,6 +900,7 @@ class BinanceSpotWebSocketClient:
         account_event_queue_capacity: int = (
             _DEFAULT_ACCOUNT_EVENT_QUEUE_CAPACITY
         ),
+        market_event_queue_capacity: int = _DEFAULT_MARKET_EVENT_QUEUE_CAPACITY,
         use_mainnet_market_data: bool = False,
         _live_endpoint_capability: object | None = None,
     ) -> None:
@@ -779,6 +915,7 @@ class BinanceSpotWebSocketClient:
             recv_window_milliseconds -> SIGNED 요청 허용 시간 창
             startup_timeout_seconds -> open 또는 subscription ACK 최대 대기 시간
             account_event_queue_capacity -> downstream 처리 전 대기할 최대 account event 수
+            market_event_queue_capacity -> downstream 처리 전 대기할 최대 공개 시세 event 수
             _live_endpoint_capability -> live adapter의 내부 endpoint 선택 표식
             use_mainnet_market_data -> 공개 Kline을 실제 시장 stream에서 구독할지 여부
         반환값: 없음
@@ -815,6 +952,8 @@ class BinanceSpotWebSocketClient:
             raise TypeError("account_event_queue_capacity must be an integer")
         if account_event_queue_capacity <= 0:
             raise ValueError("account_event_queue_capacity must be positive")
+        if type(market_event_queue_capacity) is not int or market_event_queue_capacity < 1:
+            raise ValueError("market_event_queue_capacity must be a positive integer")
 
         # 공개 시세만 두 공식 host 중 선택하며 서명 계좌 구독은 고정 Testnet URL을 사용한다.
         if type(use_mainnet_market_data) is not bool:
@@ -838,6 +977,8 @@ class BinanceSpotWebSocketClient:
         self._request_id_factory = request_id_factory or _create_request_id
         self._recv_window_milliseconds = recv_window_milliseconds
         self._startup_timeout_seconds = startup_timeout_seconds
+        self._market_event_queue_capacity = market_event_queue_capacity
+        self._disconnect_notifier = _DisconnectNotifier()
         self._account_event_queue_capacity = account_event_queue_capacity
 
     def subscribe_all_kline_streams(
@@ -866,7 +1007,13 @@ class BinanceSpotWebSocketClient:
             for interval in normalized_intervals
         )
         url = f"{self._market_stream_url}{stream_names}"  # 재연결도 최초와 같은 시세 환경을 사용한다.
-        lifecycle = _ConnectionLifecycle(on_disconnect)
+        notification_generation = self._disconnect_notifier.reserve_generation("market")
+        lifecycle = _ConnectionLifecycle(on_disconnect, disconnect_notifier=(
+            lambda callback: self._disconnect_notifier.request_notification(
+                "market", callback, generation=notification_generation,
+            )
+        ))
+        message_dispatcher_holder: list[_BoundedMessageDispatcher | None] = [None]
 
         def handle_open(_socket: object) -> None:
             """
@@ -881,14 +1028,17 @@ class BinanceSpotWebSocketClient:
         def handle_message(socket: object, payload: object) -> None:
             """
             함수 이름: handle_message()
-            기능: public payload를 Gateway callback에 전달하고 거부되면 연결을 닫는다.
+            기능: 공개 시세를 단일 FIFO에 예약하고 receive thread의 application 대기를 막는다.
             인자: socket -> 현재 socket application
                 payload -> 수신한 combined text frame
             반환값: 없음
             작성 날짜: 2026/08/22
             """
             try:
-                on_message(payload)
+                message_dispatcher = message_dispatcher_holder[0]
+                if message_dispatcher is None:
+                    raise WebSocketSubscriptionError("market event dispatcher is not initialized")
+                message_dispatcher.enqueue(payload)
             except Exception as error:
                 lifecycle.record_transport_failure(
                     WebSocketSubscriptionError(
@@ -942,10 +1092,16 @@ class BinanceSpotWebSocketClient:
             on_error=handle_error,
             on_close=handle_close,
         )
+        message_dispatcher = _BoundedMessageDispatcher(
+            consumer=on_message, socket_application=socket_application, lifecycle=lifecycle,
+            capacity=self._market_event_queue_capacity, worker_name="binance-market-events",
+        )
+        message_dispatcher_holder[0] = message_dispatcher
         return self._start_subscription(
             socket_application,
             lifecycle,
             worker_name="binance-public-kline",
+            message_dispatcher=message_dispatcher,
         )
 
     def subscribe_account_info(
@@ -964,7 +1120,12 @@ class BinanceSpotWebSocketClient:
         """
         self._validate_callbacks(on_message, on_disconnect)
         request_id = self._read_request_id()
-        lifecycle = _ConnectionLifecycle(on_disconnect)
+        notification_generation = self._disconnect_notifier.reserve_generation("account")
+        lifecycle = _ConnectionLifecycle(on_disconnect, disconnect_notifier=(
+            lambda callback: self._disconnect_notifier.request_notification(
+                "account", callback, generation=notification_generation,
+            )
+        ))
         subscription_id: list[int | None] = [None]
         subscription_lock = RLock()
         message_dispatcher_holder: list[

@@ -721,8 +721,10 @@ def close_application(runtime: ApplicationRuntime) -> ApplicationStateSnapshot:
                 "Additional shutdown cleanup failure: "
                 f"{resource_name} ({type(later_error).__name__})."
             )
+        runtime.diagnostics.close(timeout_seconds=1.0)
         raise first_error  # 최초 예외 identity와 원래 traceback을 호출자에게 그대로 보존한다.
 
+    runtime.diagnostics.close(timeout_seconds=1.0)  # 진단 디스크 지연으로 거래 자원 회수를 무한 대기하지 않는다.
     return closed_state
 
 

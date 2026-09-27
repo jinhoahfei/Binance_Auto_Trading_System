@@ -910,7 +910,7 @@ class _TradingEventRuntimeWorker:
                     _TradingEventRuntimeFailureStage.APPLICATION_LOCK
                 )
                 try:
-                    # Lifecycle Guard, Controller cycle과 publication을 같은 application snapshot에 묶는다.
+                    # 상태 전이와 publication은 잠금으로 묶고 Controller는 외부 I/O 동안 관측 잠금을 양보한다.
                     with self._application_lock:
                         failure_stage = (
                             _TradingEventRuntimeFailureStage.PROCESSING_GUARD

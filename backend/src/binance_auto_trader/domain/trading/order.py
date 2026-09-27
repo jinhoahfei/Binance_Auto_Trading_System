@@ -49,6 +49,7 @@ class OrderResultFailureKind(str, Enum):
 
     SUBMISSION_REJECTED = "SUBMISSION_REJECTED"
     ORDER_NOT_VISIBLE = "ORDER_NOT_VISIBLE"
+    NOT_SUBMITTED_EXPIRED = "NOT_SUBMITTED_EXPIRED"
 
 
 class PendingOrderRecoveryLifecycle(str, Enum):
@@ -65,6 +66,7 @@ class PendingOrderRecoveryLifecycle(str, Enum):
     TERMINAL = "TERMINAL"
     HISTORY_COMMITTED = "HISTORY_COMMITTED"
     SUBMISSION_REJECTED_CONFIRMED = "SUBMISSION_REJECTED_CONFIRMED"
+    NOT_SUBMITTED_CONFIRMED = "NOT_SUBMITTED_CONFIRMED"
 
 
 class PendingOrderSubmissionProvenance(str, Enum):
@@ -471,6 +473,14 @@ class OrderResult:
         ):
             raise ValueError(
                 "ORDER_NOT_VISIBLE requires a fill-free UNKNOWN result"
+            )
+        if self.failure_kind is OrderResultFailureKind.NOT_SUBMITTED_EXPIRED and (
+            self.status is not OrderStatus.REJECTED
+            or self.fills
+            or self.exchange_order_id is not None
+        ):
+            raise ValueError(
+                "NOT_SUBMITTED_EXPIRED requires a fill-free REJECTED result without an exchange ID"
             )
         if self.retry_after is not None:
             if not isinstance(self.retry_after, timedelta):

@@ -47,7 +47,7 @@ const CANONICAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab]
 const MAX_TRACKED_EVENT_IDS = 10_000;
 const MAX_PENDING_IDEMPOTENCY_KEYS = 128;
 const MAX_PUBLICATION_RECOVERY_ATTEMPTS = 3;
-const PUBLICATION_HEALTHY_WINDOW_MS = 60_000;
+const CONNECTION_HEALTHY_WINDOW_MS = 60_000;
 const NORMAL_CLIENT_CLOSE_CODE = 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_SHUTDOWN_WAIT_TIMEOUT_MS = 135_000;
@@ -956,7 +956,8 @@ export class BackendUiAdapter implements UiCommandPort {
     #client_connection_id: string | undefined;
     #retry_attempt = 0;
     #publication_recovery_attempts = 0;
-    #publication_healthy_since: number | null = null;
+    #connection_healthy_since: number | null = null;
+    #connection_is_unstable = false;
     #recovering = false;
     #retry_timer: ReturnType<typeof setTimeout> | null = null;
     #socket_timer: ReturnType<typeof setTimeout> | null = null;
@@ -2097,7 +2098,7 @@ export class BackendUiAdapter implements UiCommandPort {
                 return;
             }
             this.record_failure(new BackendAdapterError('EVENT_STREAM_CLOSED', '백엔드 연결이 끊어졌습니다.', true), 'receive', { close_code: event.code, clean: event.wasClean });
-            void this.full_resynchronize('EVENT_STREAM_CLOSED');
+            this.request_stream_resynchronization('EVENT_STREAM_CLOSED');
         };
     }
 
@@ -2115,7 +2116,7 @@ export class BackendUiAdapter implements UiCommandPort {
         if (!this.#recovering && this.event_stream_is_stale()) {
             const error = new BackendAdapterError('EVENT_STREAM_STALE', '화면 복귀 후 최신 상태를 다시 확인합니다.', true);
             this.record_failure(error, 'receive');
-            void this.full_resynchronize(error.code);
+            this.request_stream_resynchronization(error.code);
 
             return;
         }
@@ -2128,19 +2129,19 @@ export class BackendUiAdapter implements UiCommandPort {
                 ? parsed_message.event.session_id
                 : parsed_message.control.session_id;
             if (message_session_id !== this.#active_session_id) {
-                void this.full_resynchronize('SESSION_CHANGED');
+                this.request_stream_resynchronization('SESSION_CHANGED');
 
                 return;
             }
             if (parsed_message.kind === 'resync_required') {
-                void this.full_resynchronize(parsed_message.control.reason);
+                this.request_stream_resynchronization(parsed_message.control.reason);
 
                 return;
             }
 
             if (parsed_message.kind === 'heartbeat') {
                 if (parsed_message.control.last_sequence !== this.#last_sequence) {
-                    void this.full_resynchronize('SEQUENCE_GAP');
+                    this.request_stream_resynchronization('SEQUENCE_GAP');
 
                     return;
                 }
@@ -2153,7 +2154,7 @@ export class BackendUiAdapter implements UiCommandPort {
 
             const event = parsed_message.event;
             if (event.session_id !== this.#active_session_id) {
-                void this.full_resynchronize('SESSION_CHANGED');
+                this.request_stream_resynchronization('SESSION_CHANGED');
 
                 return;
             }
@@ -2165,13 +2166,13 @@ export class BackendUiAdapter implements UiCommandPort {
                     // ADR-005 event-id duplicate no-op은 payload를 재적용하지 않고 cursor만 소비한다.
                     this.#last_sequence = event.sequence;
                 } else {
-                    void this.full_resynchronize('SEQUENCE_GAP');
+                    this.request_stream_resynchronization('SEQUENCE_GAP');
                 }
 
                 return;
             }
             if (event.sequence !== this.#last_sequence + 1) {
-                void this.full_resynchronize('SEQUENCE_GAP');
+                this.request_stream_resynchronization('SEQUENCE_GAP');
 
                 return;
             }
@@ -2208,7 +2209,7 @@ export class BackendUiAdapter implements UiCommandPort {
      * 작성 날짜: 2026/09/15
      */
     private recover_publication(error: unknown): void {
-        this.#publication_healthy_since = null;
+        this.#connection_healthy_since = null;
         const retryable = this.#publication_recovery_attempts++ < MAX_PUBLICATION_RECOVERY_ATTEMPTS;
         const failure = new BackendAdapterError('UI_STATE_PUBLICATION_FAILED',
             '화면 정보를 갱신하지 못했습니다. 최신 상태를 다시 확인합니다.', retryable);
@@ -2296,6 +2297,29 @@ export class BackendUiAdapter implements UiCommandPort {
     }
 
     /**
+     * 함수 이름: request_stream_resynchronization()
+     * 기능: 최초 수신 장애는 즉시 복구하고 안정화 전 반복 장애는 공통 지연 경로로 보낸다.
+     * 인자: reason -> 검증된 연결 종료 또는 재동기화 사유 코드
+     * 반환값: 없음
+     * 작성 날짜: 2026/09/22
+     */
+    private request_stream_resynchronization(reason: string): void {
+        // 이전 수명의 callback이나 중복 통지가 진행 중 읽기·예약을 교체하지 않게 한다.
+        if (this.#is_stopped || this.#is_resynchronizing || this.#retry_timer !== null
+            || this.#shutdown_requested || this.#shutdown_was_accepted
+            || this.#shutdown_outcome_is_ambiguous) return;
+
+        // HTTP 성공이나 짧은 정상 수신 뒤 재발해도 같은 backoff 예산을 이어 간다.
+        if (this.#connection_is_unstable) {
+            this.handle_connection_failure(new BackendAdapterError(
+                reason, '백엔드 연결 상태를 다시 확인합니다.', true,
+            ), 'receive');
+        } else {
+            void this.full_resynchronize(reason);
+        }
+    }
+
+    /**
      * 함수 이름: full_resynchronize()
      * 기능: 기존 cache/socket을 이어 붙이지 않고 새 전체 snapshot을 적용한 뒤 그 sequence부터 재연결한다.
      * 인자: reason -> secret이 없는 reconnect 원인 code
@@ -2310,7 +2334,8 @@ export class BackendUiAdapter implements UiCommandPort {
         // 이전 연결과 이벤트 기록을 비우고 새 복구 세대를 만든다.
         this.clear_recovery_work();
         this.#recovering = true;
-        this.#publication_healthy_since = null;
+        this.#connection_is_unstable = true;
+        this.#connection_healthy_since = null;
         this.#is_resynchronizing = true;
         const generation = ++this.#connection_generation;
         this.close_current_socket('full resync');
@@ -2376,7 +2401,8 @@ export class BackendUiAdapter implements UiCommandPort {
         ++this.#connection_generation;
         this.close_current_socket('retry pending');
         this.#recovering = true;
-        this.#publication_healthy_since = null;
+        this.#connection_is_unstable = true;
+        this.#connection_healthy_since = null;
 
         // 재시도 횟수에 따른 지연을 선택하고 복구 안내와 타이머를 함께 갱신한다.
         const delays = [1_000, 2_000, 5_000, 10_000, 30_000];
@@ -2433,6 +2459,14 @@ export class BackendUiAdapter implements UiCommandPort {
         this.#last_received_monotonic = performance.now();
         if (this.#web_socket !== null) this.arm_socket_timeout(this.#stale_timeout_ms, 'EVENT_STREAM_STALE', this.#connection_generation, this.#web_socket);
 
+        // 한 frame 성공으로 반복 장애의 예산을 지우지 않고 정상 수신 구간을 확인한다.
+        this.#connection_healthy_since ??= this.#last_received_monotonic;
+        if (this.#last_received_monotonic - this.#connection_healthy_since >= CONNECTION_HEALTHY_WINDOW_MS) {
+            this.#retry_attempt = 0;
+            this.#publication_recovery_attempts = 0;
+            this.#connection_is_unstable = false;
+        }
+
         // 통신이 살아 있는 동안의 단일 HTTP 실패도 다음 정상 수신에서 사건 경계를 닫는다.
         // 저장된 최초 오류는 유지하고, 이후 독립 장애가 과거 오류에 묶이지 않게 한다.
         if (!this.#recovering && this.#incident_id !== undefined) {
@@ -2442,7 +2476,6 @@ export class BackendUiAdapter implements UiCommandPort {
         }
         if (this.#recovering) {
             this.#recovering = false;
-            this.#retry_attempt = 0;
             this.record_connection('connection_ready', { stage: 'receive' });
             this.#incident_id = undefined;
             this.#first_failure_code = null;
@@ -2453,12 +2486,6 @@ export class BackendUiAdapter implements UiCommandPort {
             this.#last_heartbeat_monotonic = performance.now();
             this.record_connection('heartbeat', { stage: 'receive' });
             this.publish_connection_status('live');
-        }
-
-        // 한 frame 성공만으로 반복 오류의 예산을 초기화하지 않는다.
-        this.#publication_healthy_since ??= performance.now();
-        if (performance.now() - this.#publication_healthy_since >= PUBLICATION_HEALTHY_WINDOW_MS) {
-            this.#publication_recovery_attempts = 0;
         }
     }
 

@@ -32,11 +32,11 @@ class Socket implements BackendWebSocket {
     /**
      * 함수 이름: disconnect()
      * 기능: 비정상 연결 종료를 현재 close callback에 알린다.
-     * 인자: 없음
+     * 인자: code -> peer가 보낸 WebSocket 종료 코드
      * 반환값: 없음
      * 작성 날짜: 2026/09/17
      */
-    disconnect() { this.onclose?.({ code: 1006, wasClean: false } as CloseEvent); }
+    disconnect(code = 1006) { this.onclose?.({ code, wasClean: false } as CloseEvent); }
 
     /**
      * 함수 이름: open()
@@ -99,9 +99,208 @@ function setup(fetcher: typeof fetch = async (_input, init) => response(init, cr
     return { adapter, sockets, logs, callbacks };
 }
 
+
+/**
+ * 함수 이름: interrupt_stream()
+ * 기능: snapshot이 정상인 상태에서 반복될 수 있는 네 종류의 수신 장애를 주입한다.
+ * 인자: socket -> 현재 연결 대역, failure -> 주입할 장애 종류
+ * 반환값: 없음
+ * 작성 날짜: 2026/09/22
+ */
+function interrupt_stream(socket: Socket, failure: 'close' | 'resync' | 'sequence_gap' | 'heartbeat_gap'): void {
+    if (failure === 'close') socket.disconnect(1011);
+    else if (failure === 'sequence_gap') socket.receive(12);
+    else if (failure === 'heartbeat_gap') socket.heartbeat(12);
+    else socket.onmessage?.({ data: JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION,
+        session_id: TEST_BACKEND_SESSION_ID, type: 'RESYNC_REQUIRED', reason: 'REPLAY_GAP',
+        last_sequence: 12 }) } as MessageEvent);
+}
+
 describe('long-running backend connection recovery', () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => { adapters.splice(0).forEach((adapter) => adapter.stop()); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+    it.each(['close', 'resync', 'sequence_gap', 'heartbeat_gap'] as const)(
+        'successful snapshots cannot bypass backoff during repeated %s failures', async (failure) => {
+            const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => response(init, create_backend_snapshot_fixture()));
+            const { adapter, sockets, callbacks, logs } = setup(fetcher);
+
+            // 최초 장애는 즉시 snapshot을 읽지만 이후 반복에는 하나의 지연만 예약한다.
+            sockets[0]!.open();
+            interrupt_stream(sockets[0]!, failure);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(fetcher).toHaveBeenCalledTimes(1);
+            expect(sockets).toHaveLength(2);
+            expect(callbacks.on_ready).not.toHaveBeenCalled();
+            for (const [index, delay] of [1_000, 2_000, 5_000, 10_000, 30_000, 30_000].entries()) {
+                const socket = sockets.at(-1)!;
+                socket.open();
+                interrupt_stream(socket, failure);
+                expect(socket.onmessage).toBeNull();
+                expect(socket.onclose).toBeNull();
+                expect(vi.getTimerCount()).toBe(1);
+                await expect(adapter.stop_trading()).rejects.toMatchObject({ code: 'BACKEND_CONNECTION_RECOVERING' });
+                await vi.advanceTimersByTimeAsync(delay - 1);
+                expect(fetcher).toHaveBeenCalledTimes(index + 1);
+                await vi.advanceTimersByTimeAsync(1);
+                expect(fetcher).toHaveBeenCalledTimes(index + 2);
+                expect(sockets).toHaveLength(index + 3);
+                expect(vi.getTimerCount()).toBe(1);
+            }
+
+            // 정상 snapshot만으로 거래를 재개하지 않고 수신 확인 뒤 기존 상태를 복원한다.
+            expect(callbacks.on_ready).not.toHaveBeenCalled();
+            sockets.at(-1)!.open();
+            sockets.at(-1)!.heartbeat();
+            expect(callbacks.on_ready).toHaveBeenCalledOnce();
+            expect(callbacks.on_failure).not.toHaveBeenCalled();
+            expect(logs.filter((record) => record.event === 'retry_scheduled').map((record) => record.delay_ms))
+                .toEqual([1_000, 2_000, 5_000, 10_000, 30_000, 30_000]);
+            expect(fetcher.mock.calls.every(([input, init]) => new URL(String(input)).pathname === '/v1/snapshot' && init?.method === 'GET')).toBe(true);
+        },
+    );
+
+    it('one healthy frame cannot reset backoff but sixty seconds of verified reception can', async () => {
+        const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => response(init, create_backend_snapshot_fixture()));
+        const { sockets, logs } = setup(fetcher);
+        sockets[0]!.disconnect();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 수신을 한 번 회복한 뒤 다시 끊어져도 1초와 2초 지연을 연속으로 적용한다.
+        for (const delay of [1_000, 2_000]) {
+            const socket = sockets.at(-1)!;
+            socket.open();
+            socket.heartbeat();
+            socket.disconnect();
+            await vi.advanceTimersByTimeAsync(delay);
+        }
+        expect(logs.filter((record) => record.event === 'retry_scheduled').map((record) => record.delay_ms)).toEqual([1_000, 2_000]);
+
+        // 60초 정상 구간 끝까지 실제 heartbeat가 도착한 다음 장애는 다시 즉시 복구한다.
+        const stable_socket = sockets.at(-1)!;
+        stable_socket.open();
+        stable_socket.heartbeat();
+        await vi.advanceTimersByTimeAsync(30_000);
+        stable_socket.heartbeat();
+        await vi.advanceTimersByTimeAsync(30_000);
+        stable_socket.heartbeat();
+        stable_socket.disconnect();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetcher).toHaveBeenCalledTimes(4);
+        sockets.at(-1)!.disconnect();
+        await vi.advanceTimersByTimeAsync(999);
+        expect(fetcher).toHaveBeenCalledTimes(4);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(fetcher).toHaveBeenCalledTimes(5);
+        expect(logs.filter((record) => record.event === 'retry_scheduled').map((record) => record.delay_ms)).toEqual([1_000, 2_000, 1_000]);
+    });
+
+    it('disposal cancels the delayed recovery after a successful snapshot and repeated close', async () => {
+        const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => response(init, create_backend_snapshot_fixture()));
+        const { adapter, sockets, callbacks } = setup(fetcher);
+        sockets[0]!.disconnect();
+        await vi.advanceTimersByTimeAsync(0);
+        sockets[1]!.disconnect(1011);
+        adapter.stop();
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(sockets).toHaveLength(2);
+        expect(callbacks.on_full_resync).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('shutdown cancels repeated-close backoff without creating another display request', async () => {
+        const paths: string[] = [];
+        const { adapter, sockets } = setup(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            paths.push(path);
+            if (path === '/v1/snapshot') return response(init, create_backend_snapshot_fixture());
+            if (path === '/v1/shutdown/state') return response(init, { session_id: TEST_BACKEND_SESSION_ID, status: 'not_started', version: 0 });
+            if (path === '/v1/shutdown/prepare') return response(init, shutdown_preparation_fixture(), 202);
+            if (path === '/v1/shutdown') return response(init, { accepted: true, status: 'accepted', version: 0 }, 202);
+            throw new Error('unexpected request');
+        });
+        sockets[0]!.disconnect();
+        await vi.advanceTimersByTimeAsync(0);
+        sockets[1]!.disconnect(1011);
+        expect(vi.getTimerCount()).toBe(1);
+
+        // 종료는 예약을 즉시 회수하고 명시적 종료 endpoint만 실행한다.
+        await adapter.shutdown_application();
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(paths).toEqual(['/v1/snapshot', '/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/shutdown']);
+        expect(adapter.is_disposed).toBe(true);
+        expect(sockets).toHaveLength(2);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('repeated-close recovery preserves an ambiguous command key without replaying the command', async () => {
+        const command_requests: RequestInit[] = [];
+        const { adapter, sockets } = setup(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/snapshot') return response(init, create_backend_snapshot_fixture());
+            if (path !== '/v1/trading/stop' || init === undefined) throw new Error('unexpected request');
+            command_requests.push(init);
+            if (command_requests.length === 1) throw new TypeError('response lost');
+
+            return response(init, { status: 'terminated', session_id: null, version: 1 });
+        });
+        sockets[0]!.open();
+        sockets[0]!.heartbeat();
+        await expect(adapter.stop_trading()).rejects.toMatchObject({ code: 'BACKEND_UNREACHABLE' });
+        sockets[0]!.disconnect();
+        await vi.advanceTimersByTimeAsync(0);
+        sockets[1]!.disconnect(1011);
+        await vi.advanceTimersByTimeAsync(1_000);
+        sockets[2]!.open();
+        sockets[2]!.heartbeat();
+        expect(command_requests).toHaveLength(1);
+
+        // 사용자가 같은 명령을 다시 호출한 경우에만 원래 body와 멱등 키를 재사용한다.
+        await expect(adapter.stop_trading()).resolves.toMatchObject({ status: 'terminated' });
+        expect(command_requests).toHaveLength(2);
+        expect(command_requests[1]!.body).toBe(command_requests[0]!.body);
+        expect(new Headers(command_requests[1]!.headers).get('Idempotency-Key'))
+            .toBe(new Headers(command_requests[0]!.headers).get('Idempotency-Key'));
+        expect(new Headers(command_requests[1]!.headers).get('X-Request-Id'))
+            .not.toBe(new Headers(command_requests[0]!.headers).get('X-Request-Id'));
+    });
+
+    it('old socket callbacks cannot duplicate a slow snapshot started by the retry timer', async () => {
+        let finish_snapshot!: (response: Response) => void;
+        let pending_request!: RequestInit;
+        let reads = 0;
+        const { sockets, callbacks } = setup(async (_input, init) => {
+            if (++reads === 1) return response(init, create_backend_snapshot_fixture());
+            pending_request = init!;
+
+            return new Promise<Response>((resolve) => { finish_snapshot = resolve; });
+        });
+        sockets[0]!.disconnect();
+        await vi.advanceTimersByTimeAsync(0);
+        const old_close = sockets[1]!.onclose;
+        const old_message = sockets[1]!.onmessage;
+        sockets[1]!.disconnect(1011);
+        await vi.advanceTimersByTimeAsync(1_000);
+        old_close?.({ code: 1011, wasClean: false } as CloseEvent);
+        old_message?.({ data: JSON.stringify({ schema_version: BACKEND_SCHEMA_VERSION,
+            session_id: TEST_BACKEND_SESSION_ID, type: 'STREAM_HEARTBEAT', last_sequence: 100 }) } as MessageEvent);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(reads).toBe(2);
+        expect(pending_request.signal?.aborted).toBe(false);
+        expect(sockets).toHaveLength(2);
+        expect(vi.getTimerCount()).toBe(1);
+
+        // 지연된 현재 snapshot을 한 번 적용한 후 정확히 그 cursor부터 새 수신을 시작한다.
+        finish_snapshot(response(pending_request, { ...create_backend_snapshot_fixture(), last_sequence: 100 }));
+        await vi.advanceTimersByTimeAsync(0);
+        sockets[2]!.open();
+        expect(JSON.parse(sockets[2]!.send.mock.calls[0]![0] as string)).toMatchObject({ after_sequence: 100 });
+        sockets[2]!.receive(101);
+        expect(callbacks.on_full_resync).toHaveBeenCalledTimes(2);
+        expect(callbacks.on_ready).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(1);
+    });
 
     it('transient snapshot failures preserve authentication and retry until a verified event resumes', async () => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
@@ -153,7 +352,8 @@ describe('long-running backend connection recovery', () => {
         expect(logs.some((record) => record.error_code === 'EVENT_STREAM_STALE')).toBe(true);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
 
         // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
-        await vi.advanceTimersByTimeAsync(1_000);
+        // 정상 frame 하나 뒤 silence는 안정화 완료가 아니므로 두 번째 지연을 유지한다.
+        await vi.advanceTimersByTimeAsync(2_000);
         expect(sockets).toHaveLength(3);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
     });
 
@@ -239,7 +439,7 @@ describe('long-running backend connection recovery', () => {
         expect(paths).toEqual(['/v1/shutdown/state', '/v1/shutdown/prepare', '/v1/snapshot']);
         expect(sockets).toHaveLength(2);
         sockets[1]!.open(); sockets[1]!.heartbeat();
-        expect(callbacks.on_connection_status).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'live', attempt: 0 }));
+        expect(callbacks.on_connection_status).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'live', attempt: recovering ? 1 : 0 }));
         expect(adapter.is_disposed).toBe(false);
         await vi.advanceTimersByTimeAsync(30_000);
         sockets[1]!.heartbeat();
@@ -353,7 +553,9 @@ describe('long-running backend connection recovery', () => {
         for (let index = 0; index < 100; index++) {
             const socket = sockets[index]!;
             socket.open(); socket.receive(); socket.disconnect();
-            await vi.advanceTimersByTimeAsync(0);
+            // 같은 불안정 구간의 반복도 지연 후 정확히 한 번만 복구한다.
+            const delay = [0, 1_000, 2_000, 5_000, 10_000][index] ?? 30_000;
+            await vi.advanceTimersByTimeAsync(delay);
             expect(socket.onmessage).toBeNull(); expect(socket.onclose).toBeNull();
             expect(vi.getTimerCount()).toBe(1);
         }
@@ -521,7 +723,7 @@ describe('long-running backend connection recovery', () => {
             socket.receive();
             vi.mocked(callbacks.on_event).mockImplementationOnce(() => { throw new Error('publication'); });
             socket.receive(11);
-            await vi.advanceTimersByTimeAsync(1_000);
+            await vi.advanceTimersByTimeAsync([1_000, 2_000, 5_000, 0][attempt]!);
         }
 
         // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.

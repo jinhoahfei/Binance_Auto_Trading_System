@@ -1,0 +1,308 @@
+[
+  {
+    "frame": "realtime-indicator",
+    "before": {
+      "frame": "realtime-indicator",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "realtime-indicator",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "recent-orders",
+    "before": {
+      "frame": "recent-orders",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "recent-orders",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "indicator-settings",
+    "before": {
+      "frame": "indicator-settings",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n지표 설정\n\n차트에 표시할 보조 지표를 선택하세요.\n\nEMA9\n지수 이동 평균\n볼린저밴드\n상단/하단 밴드\n거래량(Volume)\n하단 거래량 막대\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "indicator-settings",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n지표 설정\n\n차트에 표시할 보조 지표를 선택하세요.\n\nEMA9\n지수 이동 평균\n볼린저밴드\n상단/하단 밴드\n거래량(Volume)\n하단 거래량 막대\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "trade-history",
+    "before": {
+      "frame": "trade-history",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "trade-history",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "start-confirmation",
+    "before": {
+      "frame": "start-confirmation",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n자동매매를 시작할까요?\n\n확인을 누르면 선택한 타입 기준으로 실시간 주문 감시가 시작됩니다.\n\n거래 타입\nType 0(횡보)으로 거래를 시작하시겠습니까?\n취소\n거래 시작",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "start-confirmation",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n자동매매를 시작할까요?\n\n확인을 누르면 선택한 타입 기준으로 실시간 주문 감시가 시작됩니다.\n\n거래 타입\nType 0(횡보)으로 거래를 시작하시겠습니까?\n취소\n거래 시작",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "stop-with-position",
+    "before": {
+      "frame": "stop-with-position",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n보유 포지션이 있습니다\n\n매매를 중지하면 현재 보유 포지션이 강제 매도됩니다.\n\n중지 방식\n그래도 매매를 중지하시겠습니까?\n취소\n강제 매도 후 중지",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "stop-with-position",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n보유 포지션이 있습니다\n\n매매를 중지하면 현재 보유 포지션이 강제 매도됩니다.\n\n중지 방식\n그래도 매매를 중지하시겠습니까?\n취소\n강제 매도 후 중지",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "stop-without-position",
+    "before": {
+      "frame": "stop-without-position",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n매매를 중지할까요?\n\n현재 보유 중인 포지션이 없습니다.\n\n포지션 상태\n자동매매 감시와 신규 주문을 중지하시겠습니까?\n취소\n매매 중지",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "stop-without-position",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n매매를 중지할까요?\n\n현재 보유 중인 포지션이 없습니다.\n\n포지션 상태\n자동매매 감시와 신규 주문을 중지하시겠습니까?\n취소\n매매 중지",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "csv-end-calendar",
+    "before": {
+      "frame": "csv-end-calendar",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n선택된 폴더\n~/Downloads/binance-trades\n위치 선택\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n시작일 선택\n2026.06.22\n▦\n종료일 선택\n2026.06.29\n▦\n▦\n종료일 선택\n2026.06.29\n‹\n2023년\n2024년\n2025년\n2026년\n2027년\n2028년\n2029년\n1월\n2월\n3월\n4월\n5월\n6월\n7월\n8월\n9월\n10월\n11월\n12월\n›\n일\n월\n화\n수\n목\n금\n토\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "csv-end-calendar",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n선택된 폴더\n~/Downloads/binance-trades\n위치 선택\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n시작일 선택\n2026.06.22\n▦\n종료일 선택\n2026.06.29\n▦\n▦\n종료일 선택\n2026.06.29\n‹\n2023년\n2024년\n2025년\n2026년\n2027년\n2028년\n2029년\n1월\n2월\n3월\n4월\n5월\n6월\n7월\n8월\n9월\n10월\n11월\n12월\n›\n일\n월\n화\n수\n목\n금\n토\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "csv-start-calendar",
+    "before": {
+      "frame": "csv-start-calendar",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n선택된 폴더\n~/Downloads/binance-trades\n위치 선택\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n시작일 선택\n2026.05.09\n▦\n▦\n시작일 선택\n2026.05.09\n‹\n2023년\n2024년\n2025년\n2026년\n2027년\n2028년\n2029년\n1월\n2월\n3월\n4월\n5월\n6월\n7월\n8월\n9월\n10월\n11월\n12월\n›\n일\n월\n화\n수\n목\n금\n토\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n종료일 선택\n2026.06.29\n▦\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "csv-start-calendar",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n선택된 폴더\n~/Downloads/binance-trades\n위치 선택\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n시작일 선택\n2026.05.09\n▦\n▦\n시작일 선택\n2026.05.09\n‹\n2023년\n2024년\n2025년\n2026년\n2027년\n2028년\n2029년\n1월\n2월\n3월\n4월\n5월\n6월\n7월\n8월\n9월\n10월\n11월\n12월\n›\n일\n월\n화\n수\n목\n금\n토\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n종료일 선택\n2026.06.29\n▦\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "csv-dialog",
+    "before": {
+      "frame": "csv-dialog",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n선택된 폴더\n~/Downloads/binance-trades\n위치 선택\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n시작일 선택\n2026.06.22\n▦\n종료일 선택\n2026.06.29\n▦\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "csv-dialog",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n선택된 폴더\n~/Downloads/binance-trades\n위치 선택\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n시작일 선택\n2026.06.22\n▦\n종료일 선택\n2026.06.29\n▦\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "regime-confirmation",
+    "before": {
+      "frame": "regime-confirmation",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n적용 type2 · 강상승\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\nREGIME type을 선택할까요?\n\n확인을 누르면 선택한 REGIME type이 선택됩니다.\n\n선택 REGIME type\ntype2 · 강상승으로 선택하시겠습니까?\n취소\n확인",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "regime-confirmation",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n적용 type2 · 강상승\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\nREGIME type을 선택할까요?\n\n확인을 누르면 선택한 REGIME type이 선택됩니다.\n\n선택 REGIME type\ntype2 · 강상승으로 선택하시겠습니까?\n취소\n확인",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "regime-required",
+    "before": {
+      "frame": "regime-required",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\nREGIME type을 먼저 선택해주세요\n\nREGIME type이 선택되지 않아 자동매매 실행을 시작할 수 없습니다.\n\n허용되지 않은 동작\n자동매매 실행 전 REGIME type을 우선 선택해야 합니다.\n닫기\nREGIME 선택",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "regime-required",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\nREGIME type을 먼저 선택해주세요\n\nREGIME type이 선택되지 않아 자동매매 실행을 시작할 수 없습니다.\n\n허용되지 않은 동작\n자동매매 실행 전 REGIME type을 우선 선택해야 합니다.\n닫기\nREGIME 선택",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "regime-highlight",
+    "before": {
+      "frame": "regime-highlight",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "regime-highlight",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "history-empty",
+    "before": {
+      "frame": "history-empty",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n0.00%\n\n전체 매도 성과\n\n--%\n\n0/0\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩0\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n\n거래 내역이 없습니다\n\n자동매매가 시작되면 거래 내역이 이곳에 표시됩니다.\n\n날짜 필터를 변경하거나 새로운 매매를 시작해 보세요.\n\n자동매매 시작하기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "history-empty",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n0.00%\n\n전체 매도 성과\n\n--%\n\n0/0\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩0\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n\n거래 내역이 없습니다\n\n자동매매가 시작되면 거래 내역이 이곳에 표시됩니다.\n\n날짜 필터를 변경하거나 새로운 매매를 시작해 보세요.\n\n자동매매 시작하기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "start-loading",
+    "before": {
+      "captureStyle": "*, *::before, *::after { animation-play-state: paused !important; animation-delay: 0s !important; transition: none !important; }",
+      "frame": "start-loading",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n자동매매를 시작하고 있습니다…\n\n실시간 주문 감시를 연결하는 중입니다. 잠시만 기다려 주세요.\n\n거래 타입\nType 0(횡보)으로 거래를 시작하시겠습니까?\n연결 진행 중\n취소\n연결 중…",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "captureStyle": "*, *::before, *::after { animation-play-state: paused !important; animation-delay: 0s !important; transition: none !important; }",
+      "frame": "start-loading",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행\nREGIME 판단 패널\n추천 타입\ntype0 · 횡보\n수동 적용\n버튼 선택이 실제 적용입니다\ntype0\n횡보\ntype1\n약상승\ntype2\n강상승\ntype3\n약하락\ntype4\n강하락\n실시간 판단 지표 4개\nEMA 기울기\n+0.23\nEMA\n위 +0.84%\n스윙 저점\nHL\n스윙 고점\nHH\nETH 가격 차트\n\n2026.06.22 · 10:59 KST\n\n1분\n30분\n4시간\n1일\nACTIVE STATE\nCase_B\n지표 설정\n5.28M\n5.24M\n5.20M\n5.16M\n5.12M\n09:00\n09:30\n10:00\n10:30\n11:00\n거래 / 계좌\n전략 상태\n정상 작동\n현재 상태\nCase_B\n해당 상태 수익률\n+0.72%\n(+ ₩ 345,030)\n보유 자산\n₩ 6,184,200\nKRW\n₩ 1,748,200\nETH\n0.8421(₩ 4,436,000)\n평가 손익\n+₩ 184,240\n분할 매수/매도\n분할 매수\n40%\n−\n+\n분할 매도\n40%\n−\n+\n트레이딩 패널\n\n거래 결과와 실시간 지표\n\n체결 내역\n실시간 지표\n최근 체결\n전체 보기\n매수 · ETH (Basic Iterative)\n10:42:18\n₩ 5,218,000\n0.0958 ETH\n매도 · ETH (First Buy)\n09:54:06\n₩ 5,186,000\n+ 0.86%\n매수 · ETH (First Buy)\n08:31:40\n₩ 5,142,000\n0.0964 ETH\n자동매매를 시작하고 있습니다…\n\n실시간 주문 감시를 연결하는 중입니다. 잠시만 기다려 주세요.\n\n거래 타입\nType 0(횡보)으로 거래를 시작하시겠습니까?\n연결 진행 중\n취소\n연결 중…",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  },
+  {
+    "frame": "csv-validation-error",
+    "before": {
+      "frame": "csv-validation-error",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n저장 위치를 선택해 주세요\n​\n위치 선택\n\n⚠ 저장 위치를 선택해야 합니다\n\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n\n⚠ 시작일이 종료일보다 늦을 수 없습니다\n\n시작일 선택\n2026.06.22\n▦\n종료일 선택\n2026.06.29\n▦\n▦\n종료일 선택\n2026.06.22\n‹\n2023년\n2024년\n2025년\n2026년\n2027년\n2028년\n2029년\n1월\n2월\n3월\n4월\n5월\n6월\n7월\n8월\n9월\n10월\n11월\n12월\n›\n일\n월\n화\n수\n목\n금\n토\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    },
+    "after": {
+      "frame": "csv-validation-error",
+      "text": "ETH AUTO\nBinance TRADING\n화면 연결됨\n시세·REGIME 확인 불가\n계좌 확인 불가 · 주문 확인 불가\n매매 중지\n자동매매 실행 중\n←\n돌아가기\n거래 내역 상세\n\n2026.06.22 · ETH/KRW · Basic Iterative · 전체 체결 6건\n\n오늘 계좌 수익률\n\n+1.62%\n\n전체 매도 성과\n\n100%\n\n2 / 2\n\n평균 실현수익률\n+0.84%\n총 실현손익\n+₩11,928\n현재 ETH 보유량\n\n0.8421 ETH\n\n오늘 계좌 수수료\n\n₩1,758\n\n총 체결금액 ₩3,517,619 · 평균 슬리피지 0.04%\n\n필터\n오늘\n전체\n매도\nCSV 내보내기\n시간\t구분\tREGIME\t전략\t진입당시 ETH가격\t체결가\tETH 수량\t주문금액\t수수료\t직전 매수 수익률\t실현손익\n26/06/22 - 10:42:18\t\n매수\ttype0\tBasic Iterative\t₩5,218,000\t₩5,218,000\t0.0958\t₩499,984\t₩249\t-\t-\n26/06/22 - 09:54:06\t\n매도\ttype0\tFirst Buy\t₩5,142,000\t₩5,186,000\t0.0964\t₩499,930\t₩250\t+0.86%\t+₩4,240\n26/06/22 - 08:31:40\t\n매수\ttype0\tFirst Buy\t₩5,142,000\t₩5,142,000\t0.0964\t₩495,689\t₩248\t-\t-\n26/06/22 - 07:48:15\t\n매도\ttype0\tMomentum Exit\t₩5,086,000\t₩5,148,000\t0.1240\t₩638,352\t₩319\t+1.22%\t+₩7,688\n26/06/22 - 07:12:02\t\n매수\ttype0\tMomentum Entry\t₩5,086,000\t₩5,086,000\t0.1240\t₩630,664\t₩315\t-\t-\n26/06/22 - 06:34:51\t\n매수\ttype0\tBasic Iterative\t₩5,020,000\t₩5,020,000\t0.1500\t₩753,000\t₩377\t-\t-\n26/06/22 - 05:58:22\t\n매도\ttype0\tRange Exit\t₩4,982,000\t₩5,019,000\t0.1000\t₩501,900\t₩251\t+0.74%\t+₩3,700\n26/06/22 - 05:21:04\t\n매수\ttype0\tRange Entry\t₩4,982,000\t₩4,982,000\t0.1000\t₩498,200\t₩249\t-\t-\n26/06/22 - 04:44:38\t\n매수\ttype0\tAuto Re-entry\t₩4,955,000\t₩4,955,000\t0.0820\t₩406,310\t₩203\t-\t-\nCSV\nCSV 내보내기\n\n저장 위치와 날짜 범위를 선택한 뒤 CSV 파일로 내보냅니다.\n\n1. 저장 위치\n저장 위치를 선택해 주세요\n​\n위치 선택\n\n⚠ 저장 위치를 선택해야 합니다\n\n2. 내보낼 기간\n오늘\n최근 7일\n최근 30일\n날짜 선택\n\n⚠ 시작일이 종료일보다 늦을 수 없습니다\n\n시작일 선택\n2026.06.22\n▦\n종료일 선택\n2026.06.29\n▦\n▦\n종료일 선택\n2026.06.22\n‹\n2023년\n2024년\n2025년\n2026년\n2027년\n2028년\n2029년\n1월\n2월\n3월\n4월\n5월\n6월\n7월\n8월\n9월\n10월\n11월\n12월\n›\n일\n월\n화\n수\n목\n금\n토\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n파일 이름\n취소\n내보내기",
+      "viewport": [
+        1440,
+        1024
+      ]
+    }
+  }
+]

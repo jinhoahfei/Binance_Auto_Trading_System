@@ -191,6 +191,21 @@ class _ManagedSubscription:
             self._on_closed()
 
     @property
+    def connected(self) -> bool:
+        """
+        함수 이름: connected()
+        기능: 지연된 application 통지와 무관하게 transport의 즉시 장애 상태를 읽는다.
+        인자: 없음
+        반환값: 소유자가 닫지 않았고 transport가 연결되어 있으면 True
+        작성 날짜: 2026/09/22
+        """
+        with self._close_lock:
+            if self._closed:
+                return False
+            transport_subscription = self._transport_subscription
+        return _is_subscription_connected(transport_subscription)
+
+    @property
     def caught_up(self) -> bool:
         """
         함수 이름: caught_up()
@@ -215,6 +230,20 @@ class _ManagedSubscription:
             return False  # readiness 조회 자체가 실패하면 주문 가능 상태로 추측하지 않는다.
 
         return transport_caught_up is True
+
+
+def _is_subscription_connected(subscription: Subscription) -> bool:
+    """
+    함수 이름: _is_subscription_connected()
+    기능: 실제 transport 연결 상태와 기존 즉시 fake 계약을 안전하게 함께 지원한다.
+    인자: subscription -> 현재 세대 구독 handle
+    반환값: 연결 상태가 참이거나 기존 fake에 상태 accessor가 없으면 True
+    작성 날짜: 2026/09/22
+    """
+    try:
+        return getattr(subscription, "connected", True) is True
+    except Exception:
+        return False  # 연결 accessor 실패를 거래 허용 상태로 추측하지 않는다.
 
 
 def _normalize_symbol(symbol: object) -> str:
@@ -990,7 +1019,8 @@ class WebSocketGateway:
         작성 날짜: 2026/09/05
         """
         with self._lock:
-            return self._connected and self._active_subscription is not None
+            return (self._connected and self._active_subscription is not None
+                    and _is_subscription_connected(self._active_subscription))
 
     @property
     def kline_live_ready(self) -> bool:
@@ -1006,6 +1036,7 @@ class WebSocketGateway:
             return (
                 self._connected
                 and self._active_subscription is not None
+                and _is_subscription_connected(self._active_subscription)
                 and self._buffer_error is None
                 and self._kline_live_observer is not None
             )
@@ -1024,6 +1055,7 @@ class WebSocketGateway:
             return (
                 self._account_connected
                 and self._account_subscription is not None
+                and _is_subscription_connected(self._account_subscription)
             )  # transport handle이 실제 성립한 뒤에만 command readiness를 공개한다.
 
     @property
@@ -1310,7 +1342,7 @@ class WebSocketGateway:
 
         with self._lock:
             subscription_start_failed = (
-                generation != self._generation or not self._connected
+                generation != self._generation or not self._connected or not _is_subscription_connected(subscription)
             )
             if not subscription_start_failed:
                 self._active_subscription = subscription
@@ -1425,6 +1457,7 @@ class WebSocketGateway:
             subscription_start_failed = (
                 generation != self._account_generation
                 or not self._account_connected
+                or not _is_subscription_connected(subscription)
                 or self._account_error is not None
             )
             if not subscription_start_failed:
@@ -1456,7 +1489,7 @@ class WebSocketGateway:
                     raise KlineBufferStateError(
                         "subscription is not the active Kline buffer"
                     )
-                if not self._connected:
+                if not self._connected or not _is_subscription_connected(subscription):
                     raise KlineBufferStateError(
                         "Kline stream disconnected before buffer drain"
                     )
@@ -1523,7 +1556,7 @@ class WebSocketGateway:
                     raise KlineBufferStateError(
                         "subscription is not the active Kline buffer"
                     )
-                if not self._connected:
+                if not self._connected or not _is_subscription_connected(active_subscription):
                     raise KlineBufferStateError(
                         "Kline stream disconnected before live promotion"
                     )

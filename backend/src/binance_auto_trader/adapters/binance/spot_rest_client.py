@@ -10,7 +10,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING, localcontext
+from enum import Enum
 from functools import partial
+from numbers import Real
 import hashlib
 import hmac
 import json
@@ -50,6 +52,10 @@ from .mappers import (
     prepare_market_order,
     validate_account_relevant_filters,
     validate_market_notional,
+)
+from .request_deadline import (
+    RequestDeadlineExceeded, SubmissionPreflightRejected, check_submission_before_send,
+    remaining_request_timeout, request_deadline_scope,
 )
 
 
@@ -244,31 +250,54 @@ class UrllibHTTPTransport:
             if not callable(before_send):
                 raise TypeError("before_send must be callable or None")
             before_send()  # Guard가 실패하면 opener와 socket에는 어떤 요청도 전달하지 않는다.
-        try:
-            with self._opener.open(
-                request_value,
-                timeout=timeout_seconds,
-            ) as response:
-                response_headers = {
-                    header_name: header_value
-                    for header_name, header_value in response.headers.items()
-                }
-                return HTTPTransportResponse(
-                    status_code=response.status,
-                    headers=response_headers,
-                    body=response.read(),
-                )
-        except HTTPError as error:
-            # urllib의 HTTPError는 정상 HTTP 응답이므로 body와 Retry-After를 보존한다.
-            error_headers = {
-                header_name: header_value
-                for header_name, header_value in error.headers.items()
-            }
-            return HTTPTransportResponse(
-                status_code=error.code,
-                headers=error_headers,
-                body=error.read(),
-            )
+        with request_deadline_scope(timeout_seconds):
+            try:
+                with self._opener.open(
+                    request_value,
+                    timeout=remaining_request_timeout(timeout_seconds),
+                ) as response:
+                    response_headers = dict(response.headers.items())
+                    return HTTPTransportResponse(
+                        status_code=response.status,
+                        headers=response_headers,
+                        body=self._read_response_body(response, timeout_seconds),
+                    )
+            except HTTPError as error:
+                # 오류 body도 같은 시간 예산으로 읽고 자원을 반드시 회수한다.
+                try:
+                    return HTTPTransportResponse(
+                        status_code=error.code,
+                        headers=dict(error.headers.items()),
+                        body=self._read_response_body(error, timeout_seconds),
+                    )
+                finally:
+                    error.close()
+
+    @staticmethod
+    def _read_response_body(response: object, timeout_seconds: Real) -> bytes:
+        """
+        함수 이름: _read_response_body()
+        기능: body 조각마다 전체 작업 예산을 확인해 느린 연속 수신이 시간을 연장하지 못하게 한다.
+        인자: response -> urllib 응답, timeout_seconds -> 요청별 최대 초 제한
+        반환값: 수신이 완료된 응답 bytes
+        작성 날짜: 2026/09/22
+        """
+        chunks = []
+        read_chunk = getattr(response, "read1", None) or response.read
+        while True:
+            remaining = remaining_request_timeout(timeout_seconds)
+            response_stream = getattr(response, "fp", None)
+            if isinstance(response, HTTPError):
+                response_stream = getattr(response_stream, "fp", response_stream)
+            raw_stream = getattr(response_stream, "raw", None)
+            stream_socket = getattr(raw_stream, "_sock", None)
+            if stream_socket is not None:
+                stream_socket.settimeout(remaining)
+            chunk = read_chunk(64 * 1024)
+            remaining_request_timeout(timeout_seconds)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
 
 
 class BinanceAPIError(RuntimeError):
@@ -309,6 +338,26 @@ class OrderPreparationRequiredError(RuntimeError):
     기능: durable journal에 기록한 주문과 REST 제출 대상이 같음을 증명할 준비 표식이 없음을 나타낸다.
     작성 날짜: 2026/08/22
     """
+
+
+class _OrderPreparationExpiredError(OrderPreparationRequiredError):
+    """
+    클래스 이름: _OrderPreparationExpiredError
+    기능: 동일한 준비 증거의 유효 기간 만료만 다른 준비 불변식 오류와 구분한다.
+    작성 날짜: 2026/09/22
+    """
+
+
+class _OrderDispatchState(str, Enum):
+    """
+    클래스 이름: _OrderDispatchState
+    기능: 현재 adapter 실행이 직접 관측한 준비·전송 시작·미전송 확정을 단조롭게 보존한다.
+    작성 날짜: 2026/09/22
+    """
+
+    PREPARED = "PREPARED"
+    ATTEMPT_STARTED = "ATTEMPT_STARTED"
+    EXPIRED_WITHOUT_DISPATCH = "EXPIRED_WITHOUT_DISPATCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -701,6 +750,7 @@ class BinanceSpotRESTClient:
             str,
             OrderSubmissionAttemptEvidence,
         ] = {}
+        self._order_dispatch_states: dict[str, _OrderDispatchState] = {}
 
     def __repr__(self) -> str:
         """
@@ -1253,6 +1303,9 @@ class BinanceSpotRESTClient:
             reference_price=reference_price,
             reference_price_observed_at=reference_price_observed_at,
         )  # Journal과 POST 전 성공한 exact prepare만 read-only provenance로 공개한다.
+        self._order_dispatch_states.setdefault(
+            prepared_order.client_order_id, _OrderDispatchState.PREPARED
+        )  # 같은 ID 재준비가 이전 전송 시작 사실을 지우지 못한다.
 
         return prepared_order  # 원 aggregate identity와 requested_quantity를 그대로 유지한다.
 
@@ -1268,8 +1321,6 @@ class BinanceSpotRESTClient:
             raise TypeError("order must be an Order")
 
         # 표식을 먼저 소모해 동일 client ID의 중복 제출과 journal 이후 수량 변경을 막는다.
-        self._consume_prepared_order(order)
-
         # MARKET은 base quantity를 사용해 BUY/SELL 모두 domain requested quantity 의미를 유지한다.
         parameters = {
             "symbol": order.symbol,
@@ -1280,6 +1331,7 @@ class BinanceSpotRESTClient:
             "newOrderRespType": "FULL",
         }
         try:
+            self._consume_prepared_order(order)
             # Attempt evidence와 최종 freshness는 transport의 실제 I/O 직전 guard가 원자적으로 만든다.
             response = self._request_json(
                 method="POST",
@@ -1288,6 +1340,27 @@ class BinanceSpotRESTClient:
                 signed=True,
             )
             return self._map_order_payload(order, response.payload)
+        except (_OrderPreparationExpiredError, RequestDeadlineExceeded, SubmissionPreflightRejected) as error:
+            failure_prefix = (
+                "ORDER_PERMISSION_REVOKED" if isinstance(error, SubmissionPreflightRejected)
+                else "ORDER_DEADLINE_EXPIRED" if isinstance(error, RequestDeadlineExceeded)
+                else "ORDER_PREPARATION_EXPIRED"
+            )
+            # 정확한 fingerprint 검증과 명시적인 PREPARED 상태가 함께 증명한 최초 미전송만 확정한다.
+            if self._order_dispatch_states.get(order.client_order_id) is _OrderDispatchState.PREPARED:
+                self._order_dispatch_states[order.client_order_id] = (
+                    _OrderDispatchState.EXPIRED_WITHOUT_DISPATCH
+                )
+                return self._rejected_result(
+                    order,
+                    f"{failure_prefix}_BEFORE_DISPATCH",
+                    failure_kind=OrderResultFailureKind.NOT_SUBMITTED_EXPIRED,
+                )
+            # Timestamp 재시도 전에 만료돼도 첫 POST가 시작됐다면 실제 결과를 단정하지 않는다.
+            return self._unknown_result(
+                order,
+                f"{failure_prefix}_AFTER_DISPATCH",
+            )
         except BinanceAPIError as error:
             return self._submission_error_result(order, error)
         except (OSError, TimeoutError, socket.timeout):
@@ -1720,7 +1793,7 @@ class BinanceSpotRESTClient:
             selected_checked_at - earliest_observed_at
             > _MAXIMUM_ORDER_PREPARATION_AGE
         ):
-            raise OrderPreparationRequiredError(
+            raise _OrderPreparationExpiredError(
                 "prepared order filter evidence expired"
             )
 
@@ -1752,6 +1825,7 @@ class BinanceSpotRESTClient:
             client_order_id,
             checked_at=attempted_at,
         )
+        self._order_dispatch_states[client_order_id] = _OrderDispatchState.ATTEMPT_STARTED
         existing_attempt = self._submission_attempt_evidence_by_client_id.get(
             client_order_id
         )
@@ -1907,15 +1981,15 @@ class BinanceSpotRESTClient:
         before_send: Callable[[], None] | None = None
         if method == "POST" and endpoint == "/v3/order":
             before_send = partial(
-                self._begin_order_transport_attempt,
-                parameters,
+                check_submission_before_send,
+                partial(self._begin_order_transport_attempt, parameters),
             )
         transport_response = self._transport.request(
             method=method,
             url=request_url,
             headers=headers,
             body=request_body,
-            timeout_seconds=self._request_timeout_seconds,
+            timeout_seconds=remaining_request_timeout(self._request_timeout_seconds),
             before_send=before_send,
         )
         if not isinstance(transport_response, HTTPTransportResponse):

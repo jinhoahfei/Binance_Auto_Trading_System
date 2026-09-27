@@ -191,6 +191,12 @@ runtime startup, ready 사후조건, `127.0.0.1` random-port server와 cleanup�
 HTTP는 Bearer token, canonical request ID, exact Host/Origin과 command idempotency를
 검증하고, WebSocket은 2초 이내 첫 `AUTHENTICATE` frame 뒤 bounded replay를 제공합니다.
 snapshot과 `last_sequence`는 application lock 아래 원자적으로 읽습니다.
+snapshot 요청은 서버당 최대 4개, 잠금 획득 대기는 1초로 제한하며 초과하면
+재시도 가능한 `BACKEND_NOT_READY`와 `SNAPSHOT_BUSY` 사유를 반환합니다.
+주문·복구 REST 대기 동안에는 단일 effect owner를 유지한 채 관측 잠금을 양보합니다.
+production 진단 파일 기록도 용량 제한 queue로 분리합니다. 제출 직전 권한 검사,
+확정 미전송 pending schema v5와 검증 결과·시간 예산의 한계는
+[주문·연결 복구 실행 보고서](../docs/order-connection-resilience-implementation-20260927.md)에 기록합니다.
 
 현재 snapshot은 ETHUSDT/USDT, REGIME 추천/선택, 다섯 REGIME의
 `support_status`/`start_guard`와 trading session 상태를 제공합니다. 미지원 REGIME은

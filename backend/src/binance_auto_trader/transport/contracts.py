@@ -86,9 +86,29 @@ JsonObject = dict[str, JsonValue]
 class LockContext(Protocol):
     """
     클래스 이름: LockContext
-    기능: application snapshot publication lock의 context manager 계약을 정의한다.
+    기능: application publication lock의 context manager와 제한 시간 획득 계약을 정의한다.
     작성 날짜: 2026/08/21
     """
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        """
+        함수 이름: acquire()
+        기능: application publication 잠금을 지정한 시간 안에 획득한다.
+        인자: blocking -> 잠금 대기 여부, timeout -> 대기 상한 초 또는 무제한 -1
+        반환값: 잠금 획득 성공 여부
+        작성 날짜: 2026/09/22
+        """
+        ...
+
+    def release(self) -> None:
+        """
+        함수 이름: release()
+        기능: 현재 thread가 보유한 application publication 잠금을 해제한다.
+        인자: 없음
+        반환값: 없음
+        작성 날짜: 2026/09/22
+        """
+        ...
 
     def __enter__(self) -> object:
         """

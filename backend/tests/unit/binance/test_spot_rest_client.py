@@ -1101,11 +1101,9 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         )
 
         # Expired 표식은 한 번 소모하고 submission evidence나 order POST를 만들지 않는다.
-        with self.assertRaisesRegex(
-            OrderPreparationRequiredError,
-            "filter evidence expired",
-        ):
-            client.submit_order(order=order)
+        result = client.submit_order(order=order)
+        self.assertIs(result.status, OrderStatus.REJECTED)
+        self.assertIs(result.failure_kind, OrderResultFailureKind.NOT_SUBMITTED_EXPIRED)
 
         self.assertEqual(len(transport.requests), 6)
         self.assertIsNone(
@@ -1160,11 +1158,9 @@ class BinanceSpotRESTClientTests(unittest.TestCase):
         order = client.prepare_order(_order())
 
         # Transport before-send guard는 지연 뒤 stale evidence를 보고 fake I/O도 시작하지 않는다.
-        with self.assertRaisesRegex(
-            OrderPreparationRequiredError,
-            "filter evidence expired",
-        ):
-            client.submit_order(order=order)
+        result = client.submit_order(order=order)
+        self.assertIs(result.status, OrderStatus.REJECTED)
+        self.assertIs(result.failure_kind, OrderResultFailureKind.NOT_SUBMITTED_EXPIRED)
 
         self.assertEqual(len(transport.requests), 6)
         self.assertIsNone(

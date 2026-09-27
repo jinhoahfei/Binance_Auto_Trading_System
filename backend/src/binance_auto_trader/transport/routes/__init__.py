@@ -1,6 +1,7 @@
 """HTTP route가 공유하는 context와 fail-closed helper를 정의한다."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import BoundedSemaphore
 
 from ..contracts import (
     RuntimeSnapshotSource,
@@ -15,13 +16,19 @@ from ..event_stream import BackendEventStream
 class RouteContext:
     """
     클래스 이름: RouteContext
-    기능: route가 읽을 bootstrap runtime과 transport event stream을 조립한다.
+    기능: route의 runtime·event stream과 server별 snapshot 동시 요청 상한을 조립한다.
     작성 날짜: 2026/08/21
     """
 
     runtime: RuntimeSnapshotSource
     event_stream: BackendEventStream
     diagnostic_process_start_id: str | None = None
+    snapshot_request_slots: BoundedSemaphore = field(
+        default_factory=lambda: BoundedSemaphore(4),
+        init=False,
+        repr=False,
+        compare=False,
+    )  # 실행 중인 요청과 application 잠금을 기다리는 요청을 합쳐 최대 네 개로 제한한다.
 
     def __post_init__(self) -> None:
         """
