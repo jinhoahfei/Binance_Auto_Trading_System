@@ -30,13 +30,25 @@
 }
 
 /* 후보의 상태색과 확정된 선택 표시를 구분한다. */
-.positive {
+.type0 {
+    --button-tone: var(--color-text-secondary);
+}
+
+.type1 {
+    --button-tone: color-mix(in srgb, var(--color-status-positive) 70%, white);
+}
+
+.type2 {
     --button-tone: var(--color-status-positive);
 }
 
-.negative {
+.type3 {
+    --button-tone: var(--color-text-negative);
+}
+
+.type4 {
     --button-tone: var(--color-status-negative);
-    color: var(--color-text-negative);
+    color: color-mix(in srgb, var(--color-text-negative) 50%, var(--color-status-negative));
 }
 
 .selected {

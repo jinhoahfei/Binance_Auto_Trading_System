@@ -19,9 +19,7 @@ export interface RegimeTypeButtonProps extends RegimeOption {
  * 작성 날짜: 2026/08/12
  */
 function get_button_tone(regime_type: RegimeType): string {
-    return regime_type === 'type3' || regime_type === 'type4'
-        ? styles.negative!
-        : styles.positive!;
+    return styles[regime_type]!;
 }
 
 
