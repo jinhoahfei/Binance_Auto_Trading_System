@@ -70,6 +70,10 @@
     color: var(--color-text-positive);
 }
 
+.values .negativeValue {
+    color: var(--color-text-negative);
+}
+
 /* 최근 주문이 없을 때 안내 문구를 배치한다. */
 .empty {
     display: grid;

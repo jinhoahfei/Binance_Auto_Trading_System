@@ -6,6 +6,22 @@ export interface RecentOrdersListProps {
 }
 
 
+// 매수 수량은 기본색을 유지하고 매도 수익률의 부호에 따라 표시색을 구분한다.
+function get_secondary_value_class(order: RecentOrderViewModel): string | undefined {
+    if (order.side !== 'sell') {
+        return undefined;
+    }
+
+    const profit_rate = Number(order.secondaryValue.replace(/[,%\s]/gu, ''));
+
+    if (profit_rate < 0) {
+        return styles.negativeValue;
+    }
+
+    return profit_rate > 0 ? styles.positiveValue : undefined;
+}
+
+
 /**
  * 함수 이름: RecentOrdersList()
  * 기능: 최근 자동매매 체결을 매수·매도 의미와 함께 시간순 목록으로 표시한다.
@@ -32,7 +48,7 @@ export function RecentOrdersList({ orders }: RecentOrdersListProps) {
                     </div>
                     <div className={styles.values}>
                         <strong>{order.price}</strong>
-                        <span className={order.side === 'sell' ? styles.positiveValue : undefined}>
+                        <span className={get_secondary_value_class(order)}>
                             {order.secondaryValue}
                         </span>
                     </div>
