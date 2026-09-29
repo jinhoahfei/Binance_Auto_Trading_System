@@ -35,7 +35,7 @@
 }
 
 .type1 {
-    --button-tone: color-mix(in srgb, var(--color-status-positive) 70%, white);
+    --button-tone: color-mix(in srgb, var(--color-status-positive) 40%, white);
 }
 
 .type2 {
