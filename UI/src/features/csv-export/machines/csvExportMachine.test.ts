@@ -18,6 +18,50 @@ async function wait_for_actor_settlement(): Promise<void> {
 }
 
 describe('csvExportMachine', () => {
+    it.each([
+        ['2026-09-30', '2026-09-29'],
+        ['2026-10-03', '2026-09-29'],
+        ['2027-01-01', '2026-09-29'],
+        ['2026-09-29', '2026-09-29'],
+        ['2026-09-25', '2026-09-25'],
+    ])('종료일 %s 선택 시 화면 상태와 내보내기에 %s를 사용한다', async (selected_date, expected_date) => {
+        const command_adapter = new FakeUiCommandAdapter();
+        const actor = create_feature_test_actor(create_csv_export_machine, command_adapter, {
+            today: '2026-09-28',
+            get_current_kst_date: () => '2026-09-29',
+        });
+
+        actor.start();
+        actor.send({ type: 'CSV_EXPORT_CLICKED' });
+        actor.send({ type: 'SAVE_LOCATION_SELECT_CLICKED' });
+        await wait_for_actor_settlement();
+        actor.send({ type: 'SELECT_CSV_DATE' });
+        actor.send({ type: 'START_CSV_START_DATE_SELECTION' });
+        actor.send({ type: 'START_DATE_SELECTED', date: '2026-09-01' });
+        actor.send({ type: 'START_CSV_FINISH_DATE_SELECTION' });
+        actor.send({ type: 'FINISH_DATE_SELECTED', date: '2026-09-24' });
+        actor.send({ type: 'FINISH_DATE_SELECTED', date: selected_date });
+
+        expect(actor.getSnapshot().context).toMatchObject({
+            today: '2026-09-29',
+            start_date: '2026-09-01',
+            end_date: expected_date,
+            validation_errors: { date_range: null },
+        });
+
+        actor.send({ type: 'FINISH_DATE_CALENDAR_OUTSIDE_CLICKED' });
+        actor.send({ type: 'EXPORT_CSV' });
+        await wait_for_actor_settlement();
+
+        expect(command_adapter.command_records.filter((record) => record.name === 'export_csv')).toEqual([
+            {
+                name: 'export_csv',
+                payload: expect.objectContaining({ start_date: '2026-09-01', end_date: expected_date }),
+            },
+        ]);
+        actor.stop();
+    });
+
     it('dialog를 다시 열면 KST 날짜 source로 today·preset·기본 파일명을 갱신한다', () => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
         const command_adapter = new FakeUiCommandAdapter();

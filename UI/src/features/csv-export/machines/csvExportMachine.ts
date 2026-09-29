@@ -265,9 +265,12 @@ export function create_csv_export_machine(
             }),
             store_end_date: assign({
                 end_date: ({ context, event }) => {
-                    return event.type === 'FINISH_DATE_SELECTED'
-                        ? event.date
-                        : context.end_date;
+                    if (event.type !== 'FINISH_DATE_SELECTED') {
+                        return context.end_date;
+                    }
+
+                    // 미래 종료일은 KST 기준 오늘로 보정해 표시값과 내보내기 범위를 일치시킨다.
+                    return event.date > context.today ? context.today : event.date;
                 },
                 validation_errors: ({ context }) => ({
                     ...context.validation_errors,
