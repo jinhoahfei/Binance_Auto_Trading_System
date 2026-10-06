@@ -99,7 +99,7 @@ export function AppHeader({
             type="button"
           >
             <span className={styles.dot} aria-hidden="true" />
-            {isConnected ? '화면 연결됨' : '화면 연결 복구 중'}
+            {isConnected ? 'LIVE' : '화면 연결 복구 중'}
           </button>
           {is_connection_tooltip_open && (
             <div className={styles.connectionTooltip} id={connection_tooltip_id} role="tooltip">
