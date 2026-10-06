@@ -1,0 +1,362 @@
+{
+  "captured_at": "2026-09-27T23:42:31.097219+09:00",
+  "scope": "Read-only crash/log/code analysis; no application implementation or live trading actions.",
+  "crashes": [
+    {
+      "path": "C:\\Users\\OSCARMIKE\\AppData\\Local\\com.binance-auto.trader\\EBWebView\\Crashpad\\reports\\b8d72db2-e219-4a12-a25a-ee3714d10ca2.dmp",
+      "sha256": "21ed4b2930e2b450bb15ca95496c8fda34559b43bb4f28eadd92ccfe23098160",
+      "file_modified_kst": "2026-09-27T20:12:48.983373+09:00",
+      "exception_code": "0xe0000008",
+      "exception_parameters": [
+        2097152,
+        33441669120,
+        3386413056
+      ],
+      "annotations": {
+        "prod": "Edge WebView2",
+        "ver": "153.0.4234.48",
+        "chromium-version": "153.0.8010.53",
+        "ptype": "renderer",
+        "pid": "5788",
+        "devtools_present": "true",
+        "renderer_foreground": "true",
+        "view-count": "1",
+        "web-frame-count": "1",
+        "loaded-origin-0": "http://127.0.0.1:5173",
+        "oom-mem": "SL:58|CA:6720|PW:9034|PC:12630|CP:89"
+      },
+      "committed_private_bytes": 13167181824,
+      "committed_private_gib": 12.263,
+      "measurement_note": "Sum of MEM_COMMIT (0x1000) and MEM_PRIVATE (0x20000) regions in MINIDUMP_MEMORY_INFO_LIST; not resident RAM or JS heap."
+    },
+    {
+      "path": "C:\\Users\\OSCARMIKE\\AppData\\Local\\com.binance-auto.trader\\EBWebView\\Crashpad\\reports\\490e8c13-4919-4251-afb2-a7a6e076b77f.dmp",
+      "sha256": "29a8ea6b280c3c353f00da3484955dae19870c6c19e53a7b32433ca0c1afe6e3",
+      "file_modified_kst": "2026-09-27T21:39:01.462001+09:00",
+      "exception_code": "0xe0000008",
+      "exception_parameters": [
+        2097152,
+        32696287232,
+        4269428736
+      ],
+      "annotations": {
+        "prod": "Edge WebView2",
+        "ver": "153.0.4234.48",
+        "chromium-version": "153.0.8010.53",
+        "ptype": "renderer",
+        "pid": "13144",
+        "devtools_present": "true",
+        "renderer_foreground": "true",
+        "view-count": "1",
+        "web-frame-count": "1",
+        "loaded-origin-0": "http://127.0.0.1:5173",
+        "oom-mem": "SL:58|CA:6811|PW:8963|PC:12559|CP:86"
+      },
+      "committed_private_bytes": 13093404672,
+      "committed_private_gib": 12.194,
+      "measurement_note": "Sum of MEM_COMMIT (0x1000) and MEM_PRIVATE (0x20000) regions in MINIDUMP_MEMORY_INFO_LIST; not resident RAM or JS heap."
+    },
+    {
+      "path": "C:\\Users\\OSCARMIKE\\AppData\\Local\\com.binance-auto.trader\\EBWebView\\Crashpad\\reports\\a5383025-a8ab-4922-a209-9689e71ece19.dmp",
+      "sha256": "1d63067ab94f9e39aa7e9d10ff798e0d08c1288fbbefb126619c4c61ca72583b",
+      "file_modified_kst": "2026-09-27T22:55:32.966359+09:00",
+      "exception_code": "0xe0000008",
+      "exception_parameters": [
+        2097152,
+        33355239424,
+        3466809344
+      ],
+      "annotations": {
+        "prod": "Edge WebView2",
+        "ver": "153.0.4234.48",
+        "chromium-version": "153.0.8010.53",
+        "ptype": "renderer",
+        "pid": "17848",
+        "devtools_present": "true",
+        "renderer_foreground": "true",
+        "view-count": "1",
+        "web-frame-count": "1",
+        "loaded-origin-0": "http://127.0.0.1:5173",
+        "oom-mem": "SL:60|CA:6375|PW:9020|PC:12623|CP:89"
+      },
+      "committed_private_bytes": 13154463744,
+      "committed_private_gib": 12.251,
+      "measurement_note": "Sum of MEM_COMMIT (0x1000) and MEM_PRIVATE (0x20000) regions in MINIDUMP_MEMORY_INFO_LIST; not resident RAM or JS heap."
+    }
+  ],
+  "backend_event_counts": {
+    "logging_started": 1,
+    "runtime_configured": 1,
+    "application_state_changed": 5,
+    "stream_unavailable": 1,
+    "stream_reconciled": 1,
+    "startup_step": 3,
+    "external_operation_completed": 6,
+    "residual_custody_reconciled": 1,
+    "balance_reconciliation_checked": 1,
+    "market_input_observed": 30329,
+    "market_evaluation_deferred": 22480,
+    "runtime_heartbeat": 288,
+    "ui_http_request_started": 4,
+    "ui_http_request_completed": 8,
+    "ui_stream_opened": 4,
+    "ui_stream_authenticated": 4,
+    "ui_stream_heartbeat": 498,
+    "session_command_completed": 10,
+    "decision_started": 1,
+    "action_requested": 483,
+    "strategy_evaluated": 7850,
+    "market_boundary": 38158,
+    "evaluation_started": 7849,
+    "market_boundary_waiting": 12,
+    "ui_stream_closed": 3
+  },
+  "ui_connections": [
+    {
+      "timestamp_kst": "2026-09-27T18:54:07.704834+09:00",
+      "event": "ui_stream_opened",
+      "path": "Log_History\\2026-09-27_18-54-03-892730_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0001.log",
+      "line": 31,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "1d51b9be-6f57-4850-aa36-af85376e2f30"
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T18:54:07.721534+09:00",
+      "event": "ui_stream_authenticated",
+      "path": "Log_History\\2026-09-27_18-54-03-892730_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0001.log",
+      "line": 32,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "1d51b9be-6f57-4850-aa36-af85376e2f30",
+        "client_connection_id": "bdec0f06-c845-40d7-af57-a679fe06e812",
+        "after_sequence": 1
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T20:12:49.092000+09:00",
+      "event": "ui_stream_closed",
+      "path": "Log_History\\2026-09-27_19-47-50-025375_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0003.log",
+      "line": 9067,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "1d51b9be-6f57-4850-aa36-af85376e2f30",
+        "client_connection_id": "bdec0f06-c845-40d7-af57-a679fe06e812",
+        "stage": "receive",
+        "last_sequence": 2151,
+        "sent_count": 2150
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T20:17:06.079696+09:00",
+      "event": "ui_stream_opened",
+      "path": "Log_History\\2026-09-27_20-15-21-973532_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0004.log",
+      "line": 623,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "d949f936-d2f5-4e26-8af2-72e79e6f56ad"
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T20:17:06.114849+09:00",
+      "event": "ui_stream_authenticated",
+      "path": "Log_History\\2026-09-27_20-15-21-973532_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0004.log",
+      "line": 624,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "d949f936-d2f5-4e26-8af2-72e79e6f56ad",
+        "client_connection_id": "a664d131-7938-4c2f-a2e0-19cbab5d45f8",
+        "after_sequence": 2262
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T21:39:01.562602+09:00",
+      "event": "ui_stream_closed",
+      "path": "Log_History\\2026-09-27_21-11-11-955302_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0006.log",
+      "line": 9917,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "d949f936-d2f5-4e26-8af2-72e79e6f56ad",
+        "client_connection_id": "a664d131-7938-4c2f-a2e0-19cbab5d45f8",
+        "stage": "receive",
+        "last_sequence": 4418,
+        "sent_count": 2156
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T21:41:46.282249+09:00",
+      "event": "ui_stream_opened",
+      "path": "Log_History\\2026-09-27_21-39-05-929390_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0007.log",
+      "line": 949,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "d001b0c3-eccd-4812-8d7b-4662addc53e6"
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T21:41:46.315485+09:00",
+      "event": "ui_stream_authenticated",
+      "path": "Log_History\\2026-09-27_21-39-05-929390_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0007.log",
+      "line": 950,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "d001b0c3-eccd-4812-8d7b-4662addc53e6",
+        "client_connection_id": "d6fd33bd-985d-4446-8af8-cf2bbacd53af",
+        "after_sequence": 4491
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T22:55:33.062266+09:00",
+      "event": "ui_stream_closed",
+      "path": "Log_History\\2026-09-27_22-30-15-896190_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0009.log",
+      "line": 9712,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "d001b0c3-eccd-4812-8d7b-4662addc53e6",
+        "client_connection_id": "d6fd33bd-985d-4446-8af8-cf2bbacd53af",
+        "stage": "receive",
+        "last_sequence": 6607,
+        "sent_count": 2116
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T23:28:56.509127+09:00",
+      "event": "ui_stream_opened",
+      "path": "Log_History\\2026-09-27_23-23-19-835595_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0011.log",
+      "line": 2404,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "bbc13444-242f-4cba-a1ff-a8ba5f383552"
+      }
+    },
+    {
+      "timestamp_kst": "2026-09-27T23:28:56.542337+09:00",
+      "event": "ui_stream_authenticated",
+      "path": "Log_History\\2026-09-27_23-23-19-835595_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0011.log",
+      "line": 2405,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "details": {
+        "transport_session_id": "2b79c784-d093-493a-910e-3acccadba435",
+        "connection_id": "bbc13444-242f-4cba-a1ff-a8ba5f383552",
+        "client_connection_id": "ad44d12f-026c-47bc-a3ac-c4565502f3d5",
+        "after_sequence": 7523
+      }
+    }
+  ],
+  "market_stream_events": [
+    {
+      "timestamp_kst": "2026-09-27T18:54:03.892730+09:00",
+      "event": "stream_unavailable",
+      "path": "Log_History\\2026-09-27_18-54-03-892730_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0001.log",
+      "line": 4,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "reason": "market_stream_initializing"
+    },
+    {
+      "timestamp_kst": "2026-09-27T18:54:04.597496+09:00",
+      "event": "stream_reconciled",
+      "path": "Log_History\\2026-09-27_18-54-03-892730_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0001.log",
+      "line": 5,
+      "pid": 8892,
+      "run_id": "9804ab59c3a84864abfe42fffa9b47e1",
+      "reason": null
+    }
+  ],
+  "last_runtime_heartbeat": {
+    "timestamp_kst": "2026-09-27T23:41:35.856140+09:00",
+    "event": "runtime_heartbeat",
+    "path": "Log_History\\2026-09-27_23-23-19-835595_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0011.log",
+    "line": 7987,
+    "pid": 8892,
+    "run_id": "9804ab59c3a84864abfe42fffa9b47e1"
+  },
+  "last_market_input": {
+    "timestamp_kst": "2026-09-27T23:42:29.907351+09:00",
+    "event": "market_input_observed",
+    "path": "Log_History\\2026-09-27_23-23-19-835595_KST_live_8892_9804ab59c3a84864abfe42fffa9b47e1_part0011.log",
+    "line": 8394,
+    "pid": 8892,
+    "run_id": "9804ab59c3a84864abfe42fffa9b47e1"
+  },
+  "native_diagnostics": [
+    {
+      "path": "Log_History\\runtime_health\\runtime_1790502847004_19148_part0001.log",
+      "size_bytes": 0
+    },
+    {
+      "path": "Log_History\\backend_connection\\connection_1790502847502_19148_part0001.log",
+      "size_bytes": 0
+    },
+    {
+      "path": "Log_History\\chart\\chart_1790502847688_19148_part0001.log",
+      "size_bytes": 0
+    }
+  ],
+  "state_controller_probe": {
+    "runtime": "Node 24.19.0, Vite SSR, real UIStateController and mapper, FakeUiCommandAdapter",
+    "input": "Fresh coherent fixture full snapshots at each iteration; checkpoints 0 through 5000 inclusive (5001 dispatches). No browser, chart, native IPC, or network.",
+    "gc_heap_mib": [
+      [
+        0,
+        27.43
+      ],
+      [
+        1000,
+        28.05
+      ],
+      [
+        2000,
+        27.99
+      ],
+      [
+        3000,
+        27.96
+      ],
+      [
+        4000,
+        26.51
+      ],
+      [
+        5000,
+        25.85
+      ]
+    ],
+    "deferred_at_all_checkpoints": 0,
+    "conclusion_limit": "No sustained retained-heap increase in this bounded path. Does not establish browser or full application stability."
+  },
+  "windows_append_probe": {
+    "runtime": "rustc 1.98.1, isolated temporary file",
+    "append_true_then_set_len_0": "PermissionDenied, OS error 5",
+    "write_true_then_set_len_0": "Ok",
+    "target": "ChartLogWriter.append opens append-only then calls set_len before write_all"
+  },
+  "unresolved": [
+    "Exact retaining JS/native objects in renderer",
+    "Contribution of developer tools versus development bundle versus chart data/render path",
+    "Whether production WebView2 reproduces the same growth",
+    "No 24-hour stability or pre/post UI comparison performed"
+  ]
+}

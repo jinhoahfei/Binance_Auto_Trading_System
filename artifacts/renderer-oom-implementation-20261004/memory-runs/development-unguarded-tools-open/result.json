@@ -1,0 +1,18 @@
+{
+  "backend_alive": true,
+  "backend_pid": 1704,
+  "backend_process_start_id": "82217bed-baca-43b0-9a56-bde1e780ec49",
+  "devtools": true,
+  "devtools_open": false,
+  "launcher_child_pid": 20604,
+  "orders_enabled": false,
+  "passed": false,
+  "reload_count": 0,
+  "reload_pending": false,
+  "renderer_id": "b664d135-f255-44eb-9fe2-d188d0d99cee",
+  "same_backend_identity": true,
+  "same_session": true,
+  "scenario": "soak",
+  "session_id": "85f60959-8c3a-4cdb-be34-267ba0fbecb8",
+  "stage": "soak_stopped_by_guard"
+}

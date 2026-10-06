@@ -1,0 +1,241 @@
+{
+  "workload_completed": true,
+  "exit_code": 0,
+  "requested_seconds": 60,
+  "wall_seconds": 68.17,
+  "devtools": true,
+  "orders_enabled": false,
+  "native_result": {
+    "backend_alive": true,
+    "backend_pid": 16788,
+    "backend_process_start_id": "e71cf3bc-bd4d-4adb-88ab-4f342ea0232b",
+    "devtools": true,
+    "launcher_child_pid": 19072,
+    "orders_enabled": false,
+    "passed": true,
+    "reload_count": 0,
+    "reload_pending": false,
+    "renderer_id": "ac8f02bd-8fa0-47b2-a812-bff0c08e40c3",
+    "same_backend_identity": true,
+    "same_session": true,
+    "scenario": "soak",
+    "session_id": "c4905bce-fc6a-4ccd-9a0e-c3f90541d024",
+    "stage": "soak_completed"
+  },
+  "memory_stability_verdict": "requires_time_series_review_not_inferred_from_no_crash",
+  "metrics": {
+    "elapsed_ms": {
+      "count": 14,
+      "first": 2,
+      "last": 65005,
+      "minimum": 2,
+      "maximum": 65005
+    },
+    "ticks": {
+      "count": 14,
+      "first": 0,
+      "last": 257,
+      "minimum": 0,
+      "maximum": 257
+    },
+    "candle_count": {
+      "count": 14,
+      "first": 1000,
+      "last": 1000,
+      "minimum": 1000,
+      "maximum": 1000
+    },
+    "dom_nodes": {
+      "count": 14,
+      "first": 10,
+      "last": 76,
+      "minimum": 10,
+      "maximum": 76
+    },
+    "measure_count": {
+      "count": 14,
+      "first": 0,
+      "last": 0,
+      "minimum": 0,
+      "maximum": 0
+    },
+    "generated_measure_detail_characters": {
+      "count": 14,
+      "first": 0,
+      "last": 0,
+      "minimum": 0,
+      "maximum": 0
+    },
+    "js_heap_used_bytes": {
+      "count": 14,
+      "first": 3268173,
+      "last": 24090197,
+      "minimum": 3268173,
+      "maximum": 47820148
+    },
+    "js_heap_total_bytes": {
+      "count": 14,
+      "first": 4157877,
+      "last": 87265305,
+      "minimum": 4157877,
+      "maximum": 100635661
+    },
+    "errors": {
+      "count": 14,
+      "first": 0,
+      "last": 0,
+      "minimum": 0,
+      "maximum": 0
+    }
+  },
+  "processes": [
+    {
+      "kind": "native",
+      "process_id": 19640,
+      "private_commit_bytes": {
+        "count": 3,
+        "first": 4988928,
+        "last": 5713920,
+        "minimum": 4988928,
+        "maximum": 6119424
+      },
+      "working_set_bytes": {
+        "count": 3,
+        "first": 26759168,
+        "last": 27971584,
+        "minimum": 26759168,
+        "maximum": 27979776
+      }
+    },
+    {
+      "kind": "backend",
+      "process_id": 16788,
+      "private_commit_bytes": {
+        "count": 3,
+        "first": 28545024,
+        "last": 29663232,
+        "minimum": 28545024,
+        "maximum": 29663232
+      },
+      "working_set_bytes": {
+        "count": 3,
+        "first": 37834752,
+        "last": 38137856,
+        "minimum": 37834752,
+        "maximum": 38170624
+      }
+    },
+    {
+      "kind": "gpu",
+      "process_id": 5628,
+      "private_commit_bytes": {
+        "count": 3,
+        "first": 27426816,
+        "last": 245600256,
+        "minimum": 27426816,
+        "maximum": 249548800
+      },
+      "working_set_bytes": {
+        "count": 3,
+        "first": 45604864,
+        "last": 110964736,
+        "minimum": 45604864,
+        "maximum": 112304128
+      }
+    },
+    {
+      "kind": "utility",
+      "process_id": 8392,
+      "private_commit_bytes": {
+        "count": 3,
+        "first": 11796480,
+        "last": 12161024,
+        "minimum": 11796480,
+        "maximum": 12644352
+      },
+      "working_set_bytes": {
+        "count": 3,
+        "first": 36319232,
+        "last": 41013248,
+        "minimum": 36319232,
+        "maximum": 41070592
+      }
+    },
+    {
+      "kind": "browser",
+      "process_id": 8436,
+      "private_commit_bytes": {
+        "count": 3,
+        "first": 33652736,
+        "last": 48427008,
+        "minimum": 33652736,
+        "maximum": 49876992
+      },
+      "working_set_bytes": {
+        "count": 3,
+        "first": 109121536,
+        "last": 143872000,
+        "minimum": 109121536,
+        "maximum": 143872000
+      }
+    },
+    {
+      "kind": "utility",
+      "process_id": 13636,
+      "private_commit_bytes": {
+        "count": 3,
+        "first": 7561216,
+        "last": 7655424,
+        "minimum": 7561216,
+        "maximum": 7708672
+      },
+      "working_set_bytes": {
+        "count": 3,
+        "first": 19656704,
+        "last": 20762624,
+        "minimum": 19656704,
+        "maximum": 20762624
+      }
+    },
+    {
+      "kind": "renderer",
+      "process_id": 14976,
+      "private_commit_bytes": {
+        "count": 3,
+        "first": 18653184,
+        "last": 162193408,
+        "minimum": 18653184,
+        "maximum": 170323968
+      },
+      "working_set_bytes": {
+        "count": 3,
+        "first": 44765184,
+        "last": 214212608,
+        "minimum": 44765184,
+        "maximum": 220532736
+      }
+    },
+    {
+      "kind": "renderer",
+      "process_id": 17108,
+      "private_commit_bytes": {
+        "count": 2,
+        "first": 92123136,
+        "last": 76447744,
+        "minimum": 76447744,
+        "maximum": 92123136
+      },
+      "working_set_bytes": {
+        "count": 2,
+        "first": 136105984,
+        "last": 124141568,
+        "minimum": 124141568,
+        "maximum": 136105984
+      }
+    }
+  ],
+  "development_build": false,
+  "cleanup_enabled": true,
+  "process_failed_events": 0,
+  "stop_reason": null
+}

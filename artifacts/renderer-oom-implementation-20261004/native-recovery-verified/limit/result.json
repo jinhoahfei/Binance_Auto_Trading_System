@@ -1,0 +1,17 @@
+{
+  "backend_alive": true,
+  "backend_pid": 2840,
+  "backend_process_start_id": "a5a78d92-c85e-490e-94a5-70db2e6724a8",
+  "devtools": false,
+  "launcher_child_pid": 18776,
+  "orders_enabled": false,
+  "passed": true,
+  "reload_count": 3,
+  "reload_pending": false,
+  "renderer_id": "5159b4c6-e4c8-4531-be5e-8e6ef9ccc581",
+  "same_backend_identity": true,
+  "same_session": true,
+  "scenario": "limit",
+  "session_id": "6de6cfd5-04a5-4ac7-a3d4-d58eb26a1ac2",
+  "stage": "scenario_completed"
+}

@@ -1,0 +1,14 @@
+{
+  "backend_alive": false,
+  "backend_pid": 17316,
+  "devtools": false,
+  "orders_enabled": false,
+  "passed": true,
+  "reload_count": 0,
+  "reload_pending": false,
+  "renderer_id": "0cc008b8-2e00-4e40-8366-b993ba4e2c0a",
+  "same_session": false,
+  "scenario": "stopped",
+  "session_id": "7e2f688a-b3e0-4de2-853f-b76a7d678fa7",
+  "stage": "scenario_completed"
+}

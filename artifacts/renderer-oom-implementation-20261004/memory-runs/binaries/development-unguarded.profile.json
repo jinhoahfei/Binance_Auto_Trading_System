@@ -1,0 +1,6 @@
+{
+  "react_mode": "development",
+  "cleanup_enabled": false,
+  "candle_count": 1000,
+  "tick_interval_ms": 250
+}

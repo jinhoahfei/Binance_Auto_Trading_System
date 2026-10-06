@@ -22,6 +22,9 @@ mod os_evidence;
 #[cfg(target_os = "macos")]
 #[path = "runtime_diagnostics_macos.rs"]
 mod platform;
+#[cfg(target_os = "windows")]
+#[path = "runtime_diagnostics_windows.rs"]
+mod windows_resources;
 
 
 /// 함수 이름: now_ms()
@@ -99,6 +102,8 @@ pub(crate) struct Shared {
     epoch: Instant,
     renderer: Mutex<Option<(Instant, RendererHeartbeat)>>,
     environment: Mutex<Environment>,
+    #[cfg(target_os = "windows")]
+    webview_processes: Mutex<windows_resources::WebviewProcessSnapshot>,
     sender: Mutex<Option<SyncSender<Value>>>,
     main_pending: AtomicBool,
     main_ack_ms: AtomicU64,
@@ -126,6 +131,8 @@ impl Default for RuntimeDiagnosticsState {
             epoch: Instant::now(),
             renderer: Mutex::new(None),
             environment: Mutex::new(Environment::default()),
+            #[cfg(target_os = "windows")]
+            webview_processes: Mutex::new(windows_resources::WebviewProcessSnapshot::default()),
             sender: Mutex::new(None),
             main_pending: AtomicBool::new(false),
             main_ack_ms: AtomicU64::new(0),
@@ -141,6 +148,17 @@ impl Default for RuntimeDiagnosticsState {
 }
 
 impl Shared {
+    /// 함수 이름: record_write_failure()
+    /// 기능: 디스크 실패 시 해당 기록에 실린 이전 누락까지 다음 기록을 위해 보존한다.
+    /// 인자: self -> 공유 감시 상태, record -> 저장하지 못한 진단 기록
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/10/04
+    fn record_write_failure(&self, record: &Value) {
+        self.write_failures.fetch_add(1, Ordering::Relaxed);
+        let lost_records = 1 + record["dropped_before"].as_u64().unwrap_or(0);
+        self.dropped.fetch_add(lost_records, Ordering::Relaxed);
+    }
+
     /// 함수 이름: record()
     /// 기능: 네이티브 식별자·시각·누락 개수를 붙여 제한된 진단 채널에 비차단 전송한다.
     /// 인자: self -> 공유 감시 상태, record -> 기록할 진단 객체
@@ -181,6 +199,7 @@ impl Shared {
 #[tauri::command]
 pub fn record_renderer_heartbeat(
     window: WebviewWindow,
+    app: AppHandle,
     state: State<'_, RuntimeDiagnosticsState>,
     record: RendererHeartbeat,
 ) -> Result<(), &'static str> {
@@ -212,6 +231,14 @@ pub fn record_renderer_heartbeat(
         state.0.record(json!({"event":"renderer_delivery_resumed","renderer_id":record.renderer_id,
             "renderer_sequence":record.sequence,"timer_lag_ms":record.timer_lag_ms,"delivery_gap_ms":delivery_gap_ms}));
     }
+    #[cfg(target_os = "windows")]
+    if record.last_applied_at_ms.is_some() {
+        if let Some(session_id) = record.session_id.as_deref() {
+            crate::renderer_recovery::observe_renderer_ready(&app, &record.renderer_id, session_id);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
     *latest = Some((Instant::now(), record));
     Ok(())
 }
@@ -350,7 +377,32 @@ fn probe(descriptor: &BackendConnectionDescriptor) -> Result<BackendLiveness, &'
     Ok(data)
 }
 
+/// 함수 이름: probe_backend_identity_for_smoke()
+/// 기능: 격리 복구 검증에서 launcher PID 대신 검증된 backend 생존 신호의 실행 신원을 읽는다.
+/// 인자: descriptor -> 검증 전용 native 원본 descriptor
+/// 반환값: 실제 backend PID와 실행 식별자 또는 고정 probe 오류
+/// 작성 날짜: 2026/10/04
+#[cfg(feature = "renderer-recovery-smoke")]
+pub(crate) fn probe_backend_identity_for_smoke(
+    descriptor: &BackendConnectionDescriptor,
+) -> Result<(u32, String), &'static str> {
+    let liveness = probe(descriptor)?;
+    Ok((liveness.process_id, liveness.process_start_id))
+}
+
 impl RuntimeDiagnosticsState {
+    /// 함수 이름: renderer_process_candidates()
+    /// 기능: 마지막 WebView2 환경 관찰에서 renderer PID 후보와 표본 나이를 반환한다.
+    /// 인자: self -> 독립 진단 상태
+    /// 반환값: 확인한 후보 목록과 표본 상태; 종료된 renderer PID를 단정하지 않음
+    /// 작성 날짜: 2026/10/04
+    #[cfg(target_os = "windows")]
+    pub(crate) fn renderer_process_candidates(&self) -> Value {
+        self.0.webview_processes.try_lock().ok()
+            .map(|snapshot| snapshot.renderer_candidates())
+            .unwrap_or_else(|| json!({"process_ids":[], "sample_age_ms":null, "status":"unavailable"}))
+    }
+
     /// 함수 이름: start()
     /// 기능: 개발·배포 환경의 진단 디렉터리를 선택해 독립 감시를 시작한다.
     /// 인자: self -> 진단 수명 상태, app -> Tauri 앱 핸들
@@ -399,8 +451,7 @@ impl RuntimeDiagnosticsState {
                     if let Ok(mut bytes) = serde_json::to_vec(&record) {
                         bytes.push(b'\n');
                         if writer.append(&bytes).is_err() {
-                            shared.write_failures.fetch_add(1, Ordering::Relaxed);
-                            shared.dropped.fetch_add(1, Ordering::Relaxed);
+                            shared.record_write_failure(&record);
                         } else {
                             shared
                                 .written_bytes
@@ -409,6 +460,8 @@ impl RuntimeDiagnosticsState {
                         shared
                             .write_duration_ms
                             .store(began.elapsed().as_millis() as u64, Ordering::Relaxed);
+                    } else {
+                        shared.record_write_failure(&record);
                     }
                 }
                 shared.writer_done.store(true, Ordering::SeqCst);
@@ -516,11 +569,18 @@ fn collect_evidence(shared: &Arc<Shared>, incident: &str, backend_pid: Option<u3
 
 
 /// 함수 이름: process_resources()
-/// 기능: 지원되는 OS에서 네이티브 프로세스의 CPU 사용 시간과 최대 RSS를 읽는다.
-/// 인자: 없음
+/// 기능: 지원되는 OS에서 프로세스 자원을 읽고 Windows의 native·backend·WebView2를 분리한다.
+/// 인자: shared -> WebView2 PID 관찰 상태, backend_pid -> 현재 backend PID
 /// 반환값: 자원 관찰값 또는 사용 불가 상태의 JSON
 /// 작성 날짜: 2026/09/17
-fn process_resources() -> Value {
+fn process_resources(shared: &Shared, backend_pid: Option<u32>) -> Value {
+    #[cfg(target_os = "windows")]
+    {
+        let snapshot = shared.webview_processes.try_lock().ok().map(|value| value.clone());
+        windows_resources::collect_resources(snapshot.as_ref(), backend_pid)
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (shared, backend_pid);
     #[cfg(unix)]
     {
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
@@ -532,6 +592,7 @@ fn process_resources() -> Value {
             return json!({"cpu_total_ms":cpu_ms,"peak_rss_bytes":usage.ru_maxrss * multiplier,"scope":"native_process_only"});
         }
     }
+    #[cfg(not(target_os = "windows"))]
     json!({"status":"unavailable"})
 }
 
@@ -584,6 +645,8 @@ fn monitor(app: AppHandle, shared: Arc<Shared>) {
                     }
                     #[cfg(not(target_os = "macos"))]
                     if let Some(window) = handle.get_webview_window("main") {
+                        #[cfg(target_os = "windows")]
+                        windows_resources::refresh_processes(&window, state.clone());
                         if let Ok(mut env) = state.environment.try_lock() {
                             env.minimized = window.is_minimized().ok();
                             env.app_active = window.is_focused().ok();
@@ -636,7 +699,8 @@ fn monitor(app: AppHandle, shared: Arc<Shared>) {
         let mut sample = json!({"event":"runtime_sample", "sample_sequence":sample_sequence,
             "sampled_at_ms":now_ms(), "sample_monotonic_ms":shared.epoch.elapsed().as_millis() as u64,
             "renderer":renderer.as_ref().map(|(_, r)| r), "renderer_age_ms":renderer_age,
-            "main_thread_age_ms":main_age, "native_timer_lag_ms":jitter, "native_wall_gap_ms":wall_gap, "resources":process_resources(),
+            "main_thread_age_ms":main_age, "native_timer_lag_ms":jitter, "native_wall_gap_ms":wall_gap,
+            "resources":process_resources(&shared, identity.as_ref().map(|value| value.0).or_else(|| backend.as_ref().map(|value| value.process_id))),
             "backend":backend, "probe_status":probe_status, "probe_elapsed_ms":probe_started.elapsed().as_millis() as u64,
             "backend_pid":identity.as_ref().map(|v| v.0).or_else(|| backend.as_ref().map(|b| b.process_id)), "backend_process_start_id":identity.as_ref().map(|v| v.1.as_str()).or_else(|| backend.as_ref().map(|b| b.process_start_id.as_str())),
             "environment":shared.environment.try_lock().ok().map(|e| e.clone()),
@@ -674,7 +738,9 @@ fn monitor(app: AppHandle, shared: Arc<Shared>) {
         ring.push_back(sample.clone());
         if incident.is_some() || cycle >= next_summary || cycle < detail_until {
             shared.record(sample);
-            next_summary = cycle + Duration::from_secs(30);
+            // 격리된 메모리 검증은 중단 상한을 5초 표본으로 확인하고 운영 요약 주기는 유지한다.
+            let summary_seconds = if cfg!(feature = "renderer-recovery-smoke") { 5 } else { 30 };
+            next_summary = cycle + Duration::from_secs(summary_seconds);
         }
         // Shutdown을 bounded interval로 관찰하되 5초 주기 자체는 작업 소요시간과 분리한다.
         while cycle.elapsed() < Duration::from_secs(5) && !shared.stopped.load(Ordering::SeqCst) {
@@ -718,5 +784,25 @@ mod tests {
         rx.recv().unwrap();
         state.0.record(json!({"event":"next"}));
         assert_eq!(rx.recv().unwrap()["dropped_before"], 1);
+    }
+
+    /// 함수 이름: disk_failures_preserve_previous_drop_counts()
+    /// 기능: 누락 집계를 담은 기록도 저장 실패하면 이전 누락 수가 사라지지 않는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 누락 또는 실패 합계가 다르면 테스트 실패
+    /// 작성 날짜: 2026/10/04
+    #[test]
+    fn disk_failures_preserve_previous_drop_counts() {
+        let state = RuntimeDiagnosticsState::default();
+        let (sender, receiver) = sync_channel(1);
+        *state.0.sender.lock().unwrap() = Some(sender);
+        state.0.dropped.store(5, Ordering::Relaxed);
+        state.0.record(json!({"event":"first"}));
+        state.0.record_write_failure(&receiver.recv().unwrap());
+        state.0.record(json!({"event":"second"}));
+        state.0.record_write_failure(&receiver.recv().unwrap());
+        state.0.record(json!({"event":"recovered"}));
+        assert_eq!(receiver.recv().unwrap()["dropped_before"], 7);
+        assert_eq!(state.0.write_failures.load(Ordering::Relaxed), 2);
     }
 }

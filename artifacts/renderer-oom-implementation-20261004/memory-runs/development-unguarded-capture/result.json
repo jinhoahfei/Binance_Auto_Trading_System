@@ -1,0 +1,18 @@
+{
+  "backend_alive": true,
+  "backend_pid": 20700,
+  "backend_process_start_id": "0b14ced4-af41-49a8-a958-988b2f48bfd7",
+  "devtools": false,
+  "devtools_open": false,
+  "launcher_child_pid": 7200,
+  "orders_enabled": false,
+  "passed": true,
+  "reload_count": 0,
+  "reload_pending": false,
+  "renderer_id": "1a00e24c-0cb5-4f2b-ab5d-d06b7765629a",
+  "same_backend_identity": true,
+  "same_session": true,
+  "scenario": "soak",
+  "session_id": "db8d636d-66e4-4e1c-a409-fdead6c0ff7e",
+  "stage": "soak_completed"
+}

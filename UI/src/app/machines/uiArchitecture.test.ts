@@ -45,7 +45,7 @@ it('keeps every transitive STM dependency inside pure definitions, contracts and
         const file = pending.pop()!;
         if (visited.has(file)) continue;
         visited.add(file);
-        const relative = path.relative(source_root, file);
+        const relative = path.relative(source_root, file).split(path.sep).join('/');
         expect(relative, 'STM must not depend on Controller, ports, adapters, views or test helpers').toMatch(
             /^(?:app\/machines\/|features\/[^/]+\/machines\/|shared\/(?:contracts|errors)\/)/,
         );

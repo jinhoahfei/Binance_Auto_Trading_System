@@ -744,6 +744,64 @@ impl SidecarProcessState {
             .unwrap_or(true) // poisoned state에서는 native app exit를 허용하지 않는다.
     }
 
+    /// 함수 이름: permits_renderer_recovery()
+    /// 기능: 정상 종료나 모호한 lifecycle에서는 화면 자동 복구를 허용하지 않는다.
+    /// 인자: 없음
+    /// 반환값: 준비된 backend child가 종료 요청 없이 살아 있으면 true
+    /// 작성 날짜: 2026/10/04
+    pub(crate) fn permits_renderer_recovery(&self) -> bool {
+        self.shared
+            .lifecycle
+            .lock()
+            .map(|state| {
+                state.child_handle.is_some()
+                    && state.exit_record.is_none()
+                    && !state.expected_exit_requested
+                    && !state.late_ready_pending
+                    && !state.late_ready_terminal
+            })
+            .unwrap_or(false)
+    }
+
+    /// 함수 이름: install_recovery_fixture()
+    /// 기능: opt-in Windows 검증에서만 주문 없는 직접 자식을 실제 sidecar lifecycle에 연결한다.
+    /// 인자: child -> 검증 모듈이 생성한 Python fixture, app_handle -> 검증 전용 application
+    /// 반환값: process monitor 설치 결과
+    /// 작성 날짜: 2026/10/04
+    #[cfg(all(feature = "renderer-recovery-smoke", target_os = "windows"))]
+    pub(crate) fn install_recovery_fixture(
+        &self,
+        mut child: Child,
+        app_handle: AppHandle,
+    ) -> Result<(), SidecarFailure> {
+        let writer = child.stdin.take().ok_or_else(SidecarFailure::unavailable)?;
+        self.install(OwnedSidecarChild::new(child, None), writer, app_handle)
+    }
+
+    /// 함수 이름: stop_recovery_fixture()
+    /// 기능: 검증 앱이 직접 생성한 fixture의 stdin만 닫고 지연 시 소유한 자식만 정리한다.
+    /// 인자: 없음
+    /// 반환값: 없음
+    /// 작성 날짜: 2026/10/04
+    #[cfg(all(feature = "renderer-recovery-smoke", target_os = "windows"))]
+    pub(crate) fn stop_recovery_fixture(&self) {
+        let child = if let Ok(mut lifecycle) = self.shared.lifecycle.lock() {
+            lifecycle.expected_exit_requested = true;
+            lifecycle.stop_writer.take(); // Fixture protocol은 EOF로 종료하며 거래 명령을 받지 않는다.
+            lifecycle.child_handle.clone()
+        } else {
+            None
+        };
+        self.wait_for_startup_exit(Duration::from_secs(3));
+        if self.is_running() {
+            if let Some(child) = child {
+                let mut child = recover_child_lock(&child);
+                let _ = child.kill();
+            }
+            self.wait_for_startup_exit(Duration::from_secs(2));
+        }
+    }
+
     /// 함수 이름: wait_for_startup_exit()
     /// 기능: 시작 실패 뒤 실제 child 종료 관찰을 기다리며 신호·kill·CLOSED ACK를 보내지 않는다.
     /// 인자: timeout -> 종료 관찰 최대 대기 시간
@@ -1296,6 +1354,8 @@ pub fn create_ready_main_window(
         .map_err(|_| SidecarFailure::startup())?;
 
     app_handle.state::<crate::runtime_diagnostics::RuntimeDiagnosticsState>().start(app_handle);
+    #[cfg(target_os = "windows")]
+    crate::renderer_recovery::install(app_handle);
 
     Ok(())
 }

@@ -37,8 +37,7 @@ describe('independent backend connection log persistence', () => {
         expect(vi.getTimerCount()).toBe(0);
     });
 
-    it('bounds an unresponsive native call and retries the same record identities', async () => {
-        // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
+    it('keeps one hung IPC for an hour and resumes without duplicating its late successful batch', async () => {
         let release!: () => void;
         const batches: StoredConnectionDiagnostic[][] = [];
         const persist = vi.fn(async (batch: StoredConnectionDiagnostic[]) => {
@@ -47,15 +46,50 @@ describe('independent backend connection log persistence', () => {
         });
         const writer = new BackendConnectionDiagnosticWriter(persist);
         writer.record({ ...record, event: 'first_failure' });
+        expect(writer.flush()).toBe(writer.flush());
+        await vi.advanceTimersByTimeAsync(0);
+        for (let index = 0; index < 5000; index++) writer.record(record);
 
-        // 가짜 시간을 진행해 예약된 작업과 후속 상태 반영을 실행한다.
-        await vi.advanceTimersByTimeAsync(10_000);
+        // ACK 제한 시간이 지나도 취소되지 않은 native 호출을 다시 만들지 않는다.
+        await vi.advanceTimersByTimeAsync(3_600_000);
+        await writer.flush();
+        expect(persist).toHaveBeenCalledOnce();
+        expect(console.error).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
 
-        // 외부 경계의 호출 여부·인자와 관찰한 결과를 검증한다.
-        expect(persist).toHaveBeenCalledTimes(2);
-        expect(batches[0]).toEqual(batches[1]);
         release(); await vi.advanceTimersByTimeAsync(0);
-        expect(vi.getTimerCount()).toBe(0);  // 반환값과 관찰한 상태가 시나리오의 기대값과 일치하는지 검증한다.
+        const accepted = batches.flat();
+        expect(accepted).toHaveLength(257);
+        expect(accepted.filter(item => item.sequence === 1)).toHaveLength(1);
+        expect(accepted.at(-1)?.sequence).toBe(5001);
+        expect(accepted.reduce((total, item) => total + item.dropped_before, 0)).toBe(4744);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('retries a late rejection with the same identities and reports only one error per failure run', async () => {
+        let reject_write!: (reason: Error) => void;
+        const persist = vi.fn<(_: StoredConnectionDiagnostic[]) => Promise<unknown>>()
+            .mockImplementationOnce(() => new Promise((_, reject) => { reject_write = reject; }))
+            .mockRejectedValue(new Error('SECRET_NATIVE_ERROR'));
+        const writer = new BackendConnectionDiagnosticWriter(persist);
+        writer.record({ ...record, event: 'first_failure' });
+        await vi.advanceTimersByTimeAsync(60_000);
+        reject_write(new Error('SECRET_NATIVE_ERROR'));
+        await vi.advanceTimersByTimeAsync(25_000);
+        expect(persist).toHaveBeenCalledTimes(6);
+        expect(persist.mock.calls[1]?.[0]).toEqual(persist.mock.calls[0]?.[0]);
+        expect(console.error).toHaveBeenCalledOnce();
+
+        persist.mockResolvedValue(undefined);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(vi.getTimerCount()).toBe(0);
+        persist.mockRejectedValue(new Error('SECRET_NATIVE_ERROR'));
+        writer.record(record);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(console.error).toHaveBeenCalledTimes(2);
+        persist.mockResolvedValue(undefined);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it('keeps the native and UI allowlists equal and rejects free-form error text', () => {

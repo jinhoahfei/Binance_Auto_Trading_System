@@ -1,0 +1,7 @@
+[
+    "UI/src/app/machines/uiFeatureDefinitions.ts",
+    "UI/src/features/price-chart/data/chartDiagnostics.ts",
+    "UI/src/features/price-chart/machines/chartMachine.ts",
+    "UI/src/features/trade-history/machines/tradeHistoryMachine.ts",
+    "UI/src/shared/api/backendConnectionDiagnostics.ts"
+]

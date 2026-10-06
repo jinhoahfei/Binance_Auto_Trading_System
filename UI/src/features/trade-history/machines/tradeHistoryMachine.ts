@@ -25,6 +25,7 @@ export interface TradeHistoryMachineOptions {
     readonly symbol?: string;
     readonly period?: HistoryPeriod;
     readonly side?: TradeSideFilter;
+    readonly has_entered?: boolean;
     readonly records?: ReadonlyArray<TradeRecord>;
 }
 
@@ -234,7 +235,7 @@ export function create_trade_history_machine(
             records: options.records ?? [],
             error: null,
             request_version: 0,
-            has_entered: false,
+            has_entered: options.has_entered ?? false,
             refresh_pending: false,
             should_publish_summary: false,
         },

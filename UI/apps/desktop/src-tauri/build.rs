@@ -27,6 +27,8 @@ fn main() {
         "record_chart_diagnostics",
         "record_backend_connection_diagnostics",
         "record_renderer_heartbeat",
+        "set_renderer_recovery_shutdown",
+        "record_renderer_soak_sample",
         "record_background_soak_summary",
         "get_background_soak_descriptor",
         "choose_csv_export_directory",

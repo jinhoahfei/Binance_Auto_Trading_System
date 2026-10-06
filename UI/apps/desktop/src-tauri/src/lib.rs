@@ -3,6 +3,7 @@ mod dialog;
 mod chart_diagnostics;
 mod backend_connection_diagnostics;
 mod runtime_diagnostics;
+mod renderer_recovery;
 mod exit_bridge;
 #[cfg(target_os = "macos")]
 mod macos_quit_guard;
@@ -724,6 +725,7 @@ pub fn run() {
         .manage(chart_diagnostics::ChartDiagnosticsState::default())
         .manage(backend_connection_diagnostics::BackendConnectionDiagnosticsState::default())
         .manage(runtime_diagnostics::RuntimeDiagnosticsState::default())
+        .manage(renderer_recovery::RendererRecoveryState::default())
         .manage(sidecar_state)
         .manage(exit_intent_bridge)
         .invoke_handler(tauri::generate_handler![
@@ -731,6 +733,7 @@ pub fn run() {
             chart_diagnostics::record_chart_diagnostics,
             backend_connection_diagnostics::record_backend_connection_diagnostics,
             runtime_diagnostics::record_renderer_heartbeat,
+            renderer_recovery::set_renderer_recovery_shutdown,
             dialog::choose_csv_export_directory,
             sidecar::await_backend_sidecar_exit,
             exit_bridge::arm_native_exit_intent_bridge,
@@ -1029,3 +1032,6 @@ mod tests {
 mod background_liveness_soak;
 #[cfg(feature = "background-liveness-smoke")]
 pub use background_liveness_soak::run as run_background_liveness_soak;
+
+#[cfg(all(feature = "renderer-recovery-smoke", target_os = "windows"))]
+pub use renderer_recovery::smoke::run as run_renderer_recovery_smoke;

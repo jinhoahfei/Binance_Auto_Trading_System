@@ -1,0 +1,92 @@
+{
+    "all_equal": true,
+    "scope": "identical fixture/date App DOM with baseline HEAD module source versus working tree; not canvas pixel comparison",
+    "scenario_count": 14,
+    "results": [
+        {
+            "state": "dashboard-30m",
+            "equal": true,
+            "baseline_sha256": "0da3b35f899a761185f5dd23dd6fa75b74a25150be1e06f88acdd6a2b08ca70c",
+            "modified_sha256": "0da3b35f899a761185f5dd23dd6fa75b74a25150be1e06f88acdd6a2b08ca70c"
+        },
+        {
+            "state": "chart-1m",
+            "equal": true,
+            "baseline_sha256": "43e13ab8985daec4bd1dfee7951504296ead43893f02a3dc83db23aaedda218d",
+            "modified_sha256": "43e13ab8985daec4bd1dfee7951504296ead43893f02a3dc83db23aaedda218d"
+        },
+        {
+            "state": "chart-4h",
+            "equal": true,
+            "baseline_sha256": "366e77a5c7267c38841a1dac807ba4ed3f8fa85fb693604c21269ad7b13849ca",
+            "modified_sha256": "366e77a5c7267c38841a1dac807ba4ed3f8fa85fb693604c21269ad7b13849ca"
+        },
+        {
+            "state": "chart-1d",
+            "equal": true,
+            "baseline_sha256": "a2d835810a993ae85a1d2bdfa532a18a5b01376df0ce318f90522228f9fb89af",
+            "modified_sha256": "a2d835810a993ae85a1d2bdfa532a18a5b01376df0ce318f90522228f9fb89af"
+        },
+        {
+            "state": "chart-30m",
+            "equal": true,
+            "baseline_sha256": "0da3b35f899a761185f5dd23dd6fa75b74a25150be1e06f88acdd6a2b08ca70c",
+            "modified_sha256": "0da3b35f899a761185f5dd23dd6fa75b74a25150be1e06f88acdd6a2b08ca70c"
+        },
+        {
+            "state": "indicator-settings-open",
+            "equal": true,
+            "baseline_sha256": "bb07952adda0d34fac0ec5df0e3da716f93073b00131714800ac62d9177fa115",
+            "modified_sha256": "bb07952adda0d34fac0ec5df0e3da716f93073b00131714800ac62d9177fa115"
+        },
+        {
+            "state": "chart-fullscreen",
+            "equal": true,
+            "baseline_sha256": "8c6474fe34079196a99457086600ea527eb7c948fd37e1798f0c06a10b947935",
+            "modified_sha256": "8c6474fe34079196a99457086600ea527eb7c948fd37e1798f0c06a10b947935"
+        },
+        {
+            "state": "chart-committed-drawing",
+            "equal": true,
+            "baseline_sha256": "90bb08a0caddf79a5824c90b1fc928bdf9cd519d03fd7ad0e2b5fb97982ef2ea",
+            "modified_sha256": "90bb08a0caddf79a5824c90b1fc928bdf9cd519d03fd7ad0e2b5fb97982ef2ea"
+        },
+        {
+            "state": "realtime-indicators",
+            "equal": true,
+            "baseline_sha256": "8b7fcd6adf4c6be3fc09c00a7ef9cca619908f58740a73f92ef4c7da297613ef",
+            "modified_sha256": "8b7fcd6adf4c6be3fc09c00a7ef9cca619908f58740a73f92ef4c7da297613ef"
+        },
+        {
+            "state": "trade-history",
+            "equal": true,
+            "baseline_sha256": "bbb89b12296efd49578d711415a918c348dc425c8f4b671953936ef0733dc43b",
+            "modified_sha256": "bbb89b12296efd49578d711415a918c348dc425c8f4b671953936ef0733dc43b"
+        },
+        {
+            "state": "trade-history-filtered",
+            "equal": true,
+            "baseline_sha256": "7c89958cc00f24c725cc608b95d42a804f35aeee9b6706d83dfa2f738285d16e",
+            "modified_sha256": "7c89958cc00f24c725cc608b95d42a804f35aeee9b6706d83dfa2f738285d16e"
+        },
+        {
+            "state": "csv-modal",
+            "equal": true,
+            "baseline_sha256": "be31b5b913e9cc538e1ccca9aeb1ad69162ef6c8570ccdb714b8fb5d7f0e998e",
+            "modified_sha256": "be31b5b913e9cc538e1ccca9aeb1ad69162ef6c8570ccdb714b8fb5d7f0e998e"
+        },
+        {
+            "state": "exit-confirmation",
+            "equal": true,
+            "baseline_sha256": "d7c372297fd260b491cfa9f5f6d41fe55e717ae8284399586fb24ee4919c444d",
+            "modified_sha256": "d7c372297fd260b491cfa9f5f6d41fe55e717ae8284399586fb24ee4919c444d"
+        },
+        {
+            "state": "connection-recovery",
+            "equal": true,
+            "baseline_sha256": "a64ba79150bf215d42b07868c128f63485541ba386fc34c121c7a283dfa15921",
+            "modified_sha256": "a64ba79150bf215d42b07868c128f63485541ba386fc34c121c7a283dfa15921"
+        }
+    ],
+    "changed_style_assets": []
+}

@@ -96,7 +96,7 @@ fn validate_record(record: &ConnectionDiagnostic) -> bool {
 #[derive(Default)]
 pub struct BackendConnectionDiagnosticsState(Mutex<Option<ChartLogWriter>>);
 
-#[cfg(feature = "background-liveness-smoke")]
+#[cfg(any(feature = "background-liveness-smoke", feature = "renderer-recovery-smoke"))]
 impl BackendConnectionDiagnosticsState {
     /// 함수 이름: in_directory()
     /// 기능: 검증 실행의 지정 디렉터리에 연결 진단 writer를 준비한다.

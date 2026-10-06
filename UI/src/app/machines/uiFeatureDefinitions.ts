@@ -49,6 +49,8 @@ export function create_feature_definitions(options: Omit<UiApplicationFacadeOpti
             ...(options.chart_indicators === undefined ? {} : {
                 indicators: options.chart_indicators,
             }),
+            ...(options.chart_drawings === undefined ? {} : { drawings: options.chart_drawings }),
+            ...(options.chart_is_fullscreen === undefined ? {} : { is_fullscreen: options.chart_is_fullscreen }),
         }),
         recent_orders: create_recent_orders_machine({
             initial_monotonic_ms: options.initial_monotonic_ms ?? 0,
@@ -78,6 +80,9 @@ export function create_feature_definitions(options: Omit<UiApplicationFacadeOpti
         }),
         trade_history: create_trade_history_machine({
             symbol: options.trading_symbol ?? 'ETH/KRW',
+            ...(options.history_period === undefined ? {} : { period: options.history_period }),
+            ...(options.history_side === undefined ? {} : { side: options.history_side }),
+            ...(options.history_has_entered === undefined ? {} : { has_entered: options.history_has_entered }),
             ...(options.history_records === undefined ? {} : {
                 records: options.history_records,
             }),

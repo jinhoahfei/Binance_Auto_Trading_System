@@ -135,6 +135,7 @@ describe('production main bootstrap recovery', () => {
                 return { armed: true };
             }
             if (command === 'record_backend_connection_diagnostics') return undefined;
+            if (command === 'set_renderer_recovery_shutdown') return undefined;
             if (command === 'get_backend_connection_descriptor') {
                 return create_live_descriptor();
             }

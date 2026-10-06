@@ -45,6 +45,11 @@ export interface UiApplicationFacadeOptions {
     // 생략하면 CSV 상태 정의는 today를 고정 날짜 source로 사용한다.
     readonly get_current_kst_date?: () => LocalDateString;
     readonly chart_interval?: ChartInterval;
+    readonly chart_drawings?: Readonly<Record<ChartInterval, readonly ChartDrawing[]>>;
+    readonly chart_is_fullscreen?: boolean;
+    readonly history_period?: HistoryPeriod;
+    readonly history_side?: TradeSideFilter;
+    readonly history_has_entered?: boolean;
     readonly chart_indicators?: {
         readonly bollinger_bands?: boolean;
         readonly ema9?: boolean;

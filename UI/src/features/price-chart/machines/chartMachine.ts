@@ -24,6 +24,7 @@ export interface ChartMachineContext {
 
 export interface ChartMachineOptions {
     readonly interval?: ChartInterval;
+    readonly is_fullscreen?: boolean;
     readonly indicators?: Partial<ChartMachineContext['indicators']>;
     readonly active_trading_logic_state?: string;
     readonly drawings?: Partial<Record<ChartInterval, ReadonlyArray<ChartDrawing>>>;
@@ -204,7 +205,7 @@ export function create_chart_machine(options: ChartMachineOptions = {}) {
             interval: options.interval ?? '30m',
             indicators: initial_indicators,
             active_trading_logic_state: options.active_trading_logic_state ?? 'WAITING',
-            is_fullscreen: false,
+            is_fullscreen: options.is_fullscreen ?? false,
             drawing_mode: 'deactivated',
             selected_line_id: null,
             context_menu_position: null,
@@ -387,7 +388,7 @@ export function create_chart_machine(options: ChartMachineOptions = {}) {
                 },
             },
             viewport: {
-                initial: 'normal',
+                initial: options.is_fullscreen ? 'fullscreen' : 'normal',
                 states: {
                     normal: {
                         meta: { spec_ids: ['DC4-01', 'DC4-02', 'ER-17'] },

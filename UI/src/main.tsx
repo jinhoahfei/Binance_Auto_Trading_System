@@ -28,6 +28,7 @@ import {
 import { flush_backend_connection_diagnostics } from './shared/api/backendConnectionDiagnostics';
 import { connection_recovery_message } from './shared/api/connectionRecoveryMessage';
 import { start_renderer_liveness } from './shared/api/rendererLiveness';
+import { start_react_performance_retention_cleanup } from './shared/api/reactPerformanceRetention';
 import { shutdown_step_message } from './shared/api/shutdownMessages';
 import './shared/styles/global.css';
 
@@ -638,6 +639,9 @@ if (bootstrap_hot_data?.bootstrap_started === true) {
         import.meta.hot.accept();
     }
 
+    const stop_performance_cleanup = start_react_performance_retention_cleanup(import.meta.env.DEV);
+    window.addEventListener('pagehide', stop_performance_cleanup, { once: true });
+    import.meta.hot?.dispose(stop_performance_cleanup);
     const react_root = createRoot(root_element);
     const stop_liveness = start_renderer_liveness();
     window.addEventListener('pagehide', stop_liveness, { once: true });

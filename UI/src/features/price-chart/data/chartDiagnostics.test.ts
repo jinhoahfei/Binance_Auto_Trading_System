@@ -74,4 +74,29 @@ describe('chart diagnostic persistence', () => {
         expect(vi.getTimerCount()).toBe(0);
         expect(JSON.stringify(vi.mocked(invoke).mock.calls)).not.toContain('private native detail');
     });
+
+    it('응답 없는 IPC를 중복 호출하지 않고 연속 실패는 한 번만 출력한다', async () => {
+        vi.stubGlobal('__TAURI_INTERNALS__', {});
+        const report_error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        let reject_write: ((reason: Error) => void) | undefined;
+        vi.mocked(invoke).mockImplementationOnce(() => new Promise((_resolve, reject) => { reject_write = reject; }));
+        const { record_chart_diagnostic } = await import('./chartDiagnostics');
+        for (let index = 0; index < 5_000; index += 1) record_chart_diagnostic({ event: 'heartbeat' });
+        await vi.advanceTimersByTimeAsync(3_600_000);
+        expect(invoke).toHaveBeenCalledTimes(1);
+        expect(report_error).not.toHaveBeenCalled();
+        vi.mocked(invoke).mockRejectedValue(new Error('private native detail'));
+        reject_write!(new Error('private native detail'));
+        await vi.advanceTimersByTimeAsync(25_000);
+        expect(invoke).toHaveBeenCalledTimes(6);
+        expect(report_error).toHaveBeenCalledExactlyOnceWith('CHART_DIAGNOSTIC_WRITE_FAILED');
+        vi.mocked(invoke).mockResolvedValue(undefined);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(vi.getTimerCount()).toBe(0);
+        const stored = vi.mocked(invoke).mock.calls.slice(6).flatMap((call) =>
+            (call[1] as { records: Array<{ sequence: number; dropped_before: number }> }).records);
+        expect(stored).toHaveLength(256);
+        expect(stored.reduce((total, record) => total + record.dropped_before, 0)).toBe(4_744);
+        expect(stored.at(-1)?.sequence).toBe(5_000);
+    });
 });

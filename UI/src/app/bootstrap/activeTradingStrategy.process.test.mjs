@@ -38,7 +38,7 @@ function load_backend_replay() {
         '-m', 'tests.integration.active_trading_logic_replay',
     ], {
         cwd: backend_directory,
-        env: { ...process.env, PYTHONPATH: path.join(backend_directory, 'src') },
+        env: { ...process.env, PYTHONPATH: path.join(backend_directory, 'src'), PYTHONIOENCODING: 'utf-8' },
         encoding: 'utf8',
         timeout: 10_000,
         maxBuffer: 1_048_576,

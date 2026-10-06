@@ -1,0 +1,15 @@
+{
+    "$schema": "https://schema.tauri.app/config/2",
+    "productName": "Renderer Recovery Smoke",
+    "version": "0.1.0",
+    "identifier": "com.binance-auto.renderer-recovery-smoke",
+    "build": { "frontendDist": "../renderer-recovery-dist" },
+    "app": {
+        "windows": [],
+        "security": {
+            "csp": "default-src 'self'; script-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*",
+            "capabilities": ["renderer-recovery-smoke"]
+        }
+    },
+    "bundle": { "active": false, "externalBin": [] }
+}

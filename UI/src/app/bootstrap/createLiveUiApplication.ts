@@ -9,6 +9,11 @@ import {
 } from '../../shared/api';
 import type { LocalDateString } from '../../shared/contracts';
 import type { UiApplicationFactory, UiApplicationRuntime } from './types';
+import {
+    get_renderer_preference_storage,
+    load_renderer_ui_preferences,
+    start_renderer_ui_preference_persistence,
+} from './rendererUiPreferences';
 
 /**
  * live bootstrap에서 transport test seam과 LocalDate source를 주입하는 옵션이다.
@@ -108,14 +113,19 @@ export async function hydrate_live_ui_application(
         : () => fixed_today;
     const today = get_current_kst_date();
     const mapped_snapshot = map_backend_snapshot(initial_snapshot, today);
+    const preference_storage = get_renderer_preference_storage();
+    const saved_preferences = load_renderer_ui_preferences(initial_snapshot.session_id, preference_storage);
+    const { route: saved_route, ...saved_display_options } = saved_preferences ?? { route: 'dashboard' as const };
     const facade = new UiApplicationFacade(
         command_adapter,
         {
             ...mapped_snapshot.facade_options,
+            ...saved_display_options,
             get_current_kst_date,
         },
     );
     let is_active = false;
+    let stop_preference_persistence: (() => void) | null = null;
 
     return {
         command_adapter,
@@ -137,6 +147,10 @@ export async function hydrate_live_ui_application(
                 type: 'BACKEND_SNAPSHOT_SYNCHRONIZED',
                 snapshot: mapped_snapshot.server_snapshot,
             });
+            if (saved_route === 'trade_history') facade.dispatch({ type: 'SHOW_TRADE_HISTORY' });
+            stop_preference_persistence = start_renderer_ui_preference_persistence(
+                facade, initial_snapshot.session_id, preference_storage,
+            );
             command_adapter.start_live_events(initial_snapshot, {
                 on_event: (intents) => {
                     intents.forEach((intent) => facade.dispatch(intent));
@@ -178,6 +192,8 @@ export async function hydrate_live_ui_application(
             }
 
             is_active = false;
+            stop_preference_persistence?.();
+            stop_preference_persistence = null;
             command_adapter.stop();
             facade.stop();
         },

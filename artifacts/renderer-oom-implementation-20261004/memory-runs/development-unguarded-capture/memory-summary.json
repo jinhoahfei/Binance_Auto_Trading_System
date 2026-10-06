@@ -1,0 +1,135 @@
+{
+  "workload_completed": false,
+  "exit_code": 0,
+  "requested_seconds": 20,
+  "wall_seconds": 30.09,
+  "devtools": false,
+  "capture": true,
+  "orders_enabled": false,
+  "native_result": {
+    "backend_alive": true,
+    "backend_pid": 20700,
+    "backend_process_start_id": "0b14ced4-af41-49a8-a958-988b2f48bfd7",
+    "devtools": false,
+    "devtools_open": false,
+    "launcher_child_pid": 7200,
+    "orders_enabled": false,
+    "passed": true,
+    "reload_count": 0,
+    "reload_pending": false,
+    "renderer_id": "1a00e24c-0cb5-4f2b-ab5d-d06b7765629a",
+    "same_backend_identity": true,
+    "same_session": true,
+    "scenario": "soak",
+    "session_id": "db8d636d-66e4-4e1c-a409-fdead6c0ff7e",
+    "stage": "soak_completed"
+  },
+  "memory_stability_verdict": "requires_time_series_review_not_inferred_from_no_crash",
+  "metrics": {
+    "elapsed_ms": {
+      "count": 6,
+      "first": 1,
+      "last": 25005,
+      "minimum": 1,
+      "maximum": 25005
+    },
+    "ticks": {
+      "count": 6,
+      "first": 0,
+      "last": 4,
+      "minimum": 0,
+      "maximum": 4
+    },
+    "candle_count": {
+      "count": 6,
+      "first": 1000,
+      "last": 1000,
+      "minimum": 1000,
+      "maximum": 1000
+    },
+    "dom_nodes": {
+      "count": 6,
+      "first": 10,
+      "last": 76,
+      "minimum": 10,
+      "maximum": 76
+    },
+    "measure_count": {
+      "count": 6,
+      "first": 0,
+      "last": 24,
+      "minimum": 0,
+      "maximum": 24
+    },
+    "generated_measure_detail_characters": {
+      "count": 6,
+      "first": 0,
+      "last": 3604597,
+      "minimum": 0,
+      "maximum": 3604597
+    },
+    "js_heap_used_bytes": {
+      "count": 6,
+      "first": 3932001,
+      "last": 19921953,
+      "minimum": 3932001,
+      "maximum": 29429883
+    },
+    "js_heap_total_bytes": {
+      "count": 6,
+      "first": 5341653,
+      "last": 24272689,
+      "minimum": 5341653,
+      "maximum": 50747645
+    },
+    "errors": {
+      "count": 6,
+      "first": 0,
+      "last": 0,
+      "minimum": 0,
+      "maximum": 0
+    }
+  },
+  "processes": [
+    {
+      "kind": "native",
+      "process_id": 9232,
+      "private_commit_bytes": {
+        "count": 1,
+        "first": 5029888,
+        "last": 5029888,
+        "minimum": 5029888,
+        "maximum": 5029888
+      },
+      "working_set_bytes": {
+        "count": 1,
+        "first": 27025408,
+        "last": 27025408,
+        "minimum": 27025408,
+        "maximum": 27025408
+      }
+    },
+    {
+      "kind": "backend",
+      "process_id": 20700,
+      "private_commit_bytes": {
+        "count": 1,
+        "first": 28622848,
+        "last": 28622848,
+        "minimum": 28622848,
+        "maximum": 28622848
+      },
+      "working_set_bytes": {
+        "count": 1,
+        "first": 37998592,
+        "last": 37998592,
+        "minimum": 37998592,
+        "maximum": 37998592
+      }
+    }
+  ],
+  "development_build": true,
+  "cleanup_enabled": false,
+  "process_failed_events": 0,
+  "stop_reason": null
+}

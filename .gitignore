@@ -45,3 +45,9 @@ dist/
 
 # 주문 없는 WebView soak의 독립 빌드 산출물
 UI/apps/desktop/soak-dist/
+UI/apps/desktop/renderer-recovery-dist/
+# 검증 전용 WebView profile·crash dump는 수치형 결과와 분리해 보관한다.
+webview-profile/
+# 재현용 복사 실행 파일은 build profile·검증 결과만 남기고 제외한다.
+artifacts/renderer-oom-implementation-20261004/memory-runs/binaries/*.exe
+artifacts/renderer-oom-implementation-20261004/**/backend/

@@ -1129,6 +1129,7 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
         prepare?: (init: RequestInit) => unknown | Promise<unknown>;
         finish?: (init: RequestInit) => Response | Promise<Response>;
         wait?: () => Promise<unknown>;
+        set_recovery_shutdown?: (in_progress: boolean) => Promise<void>;
     } = {}) {
         const paths: string[] = [];
         const fetch_mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1144,12 +1145,64 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
             throw new Error(`Unexpected endpoint ${path}`);
         });
         const wait = vi.fn(options.wait ?? (async () => ({ exited: true, code: 0 })));
+        const recovery_gate = vi.fn(options.set_recovery_shutdown ?? (async () => {}));
         const adapter = new BackendUiAdapter(create_descriptor(), { fetch: fetch_mock as typeof fetch,
             create_uuid: () => crypto.randomUUID(), wait_for_sidecar_exit: wait,
+            set_renderer_recovery_shutdown: recovery_gate,
             shutdown_poll_interval_ms: 1, shutdown_wait_timeout_ms: 100 });
 
-        return { adapter, paths, fetch_mock, wait };
+        return { adapter, paths, fetch_mock, wait, recovery_gate };
     }
+
+    it('native recovery is blocked before HTTP preparation and stays blocked after acceptance', async () => {
+        let acknowledge_gate: (() => void) | undefined;
+        const f = fixture({ set_recovery_shutdown: () => new Promise<void>((resolve) => { acknowledge_gate = resolve; }) });
+        const shutdown = f.adapter.shutdown_application();
+        await waitFor(() => expect(f.recovery_gate).toHaveBeenCalledWith(true));
+        expect(f.fetch_mock).not.toHaveBeenCalled();
+        acknowledge_gate!();
+        await shutdown;
+        expect(f.recovery_gate.mock.calls).toEqual([[true]]);
+        expect(f.adapter.is_disposed).toBe(true);
+    });
+
+    it('native gate failure prevents backend commands and remains retryable', async () => {
+        const f = fixture({ set_recovery_shutdown: async (in_progress) => {
+            if (in_progress) throw new Error('native unavailable');
+        } });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({
+            code: 'SHUTDOWN_PREPARATION_INTERNAL_ERROR', retryable: true,
+        });
+        expect(f.fetch_mock).not.toHaveBeenCalled();
+        expect(f.recovery_gate.mock.calls).toEqual([[true], [false]]);
+        f.adapter.stop();
+    });
+
+    it('uncertain preparation keeps native recovery blocked until shutdown is resolved', async () => {
+        const f = fixture({ prepare: () => { throw new TypeError('response lost'); } });
+        await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_PREPARATION_TIMEOUT' });
+        expect(f.paths).not.toContain('/v1/shutdown');
+        expect(f.recovery_gate.mock.calls).toEqual([[true]]);
+        f.adapter.stop();
+    });
+
+    it('a stalled native gate times out without duplicate IPC or backend requests', async () => {
+        vi.useFakeTimers();
+        try {
+            let acknowledge_gate: (() => void) | undefined;
+            const f = fixture({ set_recovery_shutdown: () => new Promise<void>((resolve) => { acknowledge_gate = resolve; }) });
+            const result = expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_PREPARATION_INTERNAL_ERROR' });
+            await vi.advanceTimersByTimeAsync(5_000);
+            await result;
+            await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_PREPARATION_INTERNAL_ERROR' });
+            expect(f.recovery_gate.mock.calls).toEqual([[true]]);
+            expect(f.fetch_mock).not.toHaveBeenCalled();
+            expect(vi.getTimerCount()).toBe(0);
+            acknowledge_gate!();
+            await vi.advanceTimersByTimeAsync(0);
+            f.adapter.stop();
+        } finally { vi.useRealTimers(); }
+    });
 
     it.each(['normal', 'recovery'])('%s exit uses the same narrow APIs without dashboard or stream', async (mode) => {
         // 시나리오에 필요한 입력과 테스트용 의존성을 준비한다.
@@ -1255,7 +1308,9 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
         // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_LIQUIDATION_CONFIRMATION_REQUIRED' });
         expect(f.wait).not.toHaveBeenCalled();
+        expect(f.recovery_gate.mock.calls).toEqual([[true], [false]]);
         await f.adapter.shutdown_application(true);
+        expect(f.recovery_gate.mock.calls).toEqual([[true], [false], [true]]);
         expect(f.paths.filter((path) => path === '/v1/shutdown/state')).toHaveLength(2);
         expect(f.wait).toHaveBeenCalledOnce();
     });
@@ -1316,6 +1371,7 @@ describe('BackendUiAdapter backend-owned shutdown', () => {
         // 잘못된 입력이나 실행 실패가 정해진 오류로 전달되는지 검증한다.
         await expect(f.adapter.shutdown_application()).rejects.toMatchObject({ code: 'SHUTDOWN_OUTCOME_AMBIGUOUS' });
         await expect(f.adapter.apply_regime('type0')).rejects.toBeDefined();
+        expect(f.recovery_gate.mock.calls).toEqual([[true]]);
         await f.adapter.shutdown_application();
         const calls = f.fetch_mock.mock.calls.filter(([input]) => String(input).endsWith('/v1/shutdown'));
         expect(calls).toHaveLength(2);

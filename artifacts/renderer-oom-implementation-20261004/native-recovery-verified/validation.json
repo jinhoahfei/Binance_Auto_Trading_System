@@ -1,0 +1,106 @@
+{
+  "passed": true,
+  "orders_enabled": false,
+  "results": [
+    {
+      "scenario": "recover",
+      "passed": true,
+      "exit_code": 0,
+      "process_failed_events": 1,
+      "reloads": 1,
+      "ready_events": 1,
+      "native_result": {
+        "backend_alive": true,
+        "backend_pid": 7432,
+        "backend_process_start_id": "12d8136d-90b1-4256-9dce-09b01e688465",
+        "devtools": false,
+        "launcher_child_pid": 20092,
+        "orders_enabled": false,
+        "passed": true,
+        "reload_count": 1,
+        "reload_pending": false,
+        "renderer_id": "c60a86bc-7502-4a1e-adf7-7885acce4740",
+        "same_backend_identity": true,
+        "same_session": true,
+        "scenario": "recover",
+        "session_id": "ea716932-c2dd-4970-ac5c-011f0c73342a",
+        "stage": "scenario_completed"
+      }
+    },
+    {
+      "scenario": "limit",
+      "passed": true,
+      "exit_code": 0,
+      "process_failed_events": 4,
+      "reloads": 3,
+      "ready_events": 3,
+      "native_result": {
+        "backend_alive": true,
+        "backend_pid": 2840,
+        "backend_process_start_id": "a5a78d92-c85e-490e-94a5-70db2e6724a8",
+        "devtools": false,
+        "launcher_child_pid": 18776,
+        "orders_enabled": false,
+        "passed": true,
+        "reload_count": 3,
+        "reload_pending": false,
+        "renderer_id": "5159b4c6-e4c8-4531-be5e-8e6ef9ccc581",
+        "same_backend_identity": true,
+        "same_session": true,
+        "scenario": "limit",
+        "session_id": "6de6cfd5-04a5-4ac7-a3d4-d58eb26a1ac2",
+        "stage": "scenario_completed"
+      }
+    },
+    {
+      "scenario": "shutdown",
+      "passed": true,
+      "exit_code": 0,
+      "process_failed_events": 1,
+      "reloads": 0,
+      "ready_events": 0,
+      "native_result": {
+        "backend_alive": true,
+        "backend_pid": 19168,
+        "backend_process_start_id": "62318eee-57a9-4433-9180-448133504a6a",
+        "devtools": false,
+        "launcher_child_pid": 16680,
+        "orders_enabled": false,
+        "passed": true,
+        "reload_count": 0,
+        "reload_pending": false,
+        "renderer_id": "98cd8d61-0efa-4f88-9c01-8e0ed1a7c24c",
+        "same_backend_identity": true,
+        "same_session": true,
+        "scenario": "shutdown",
+        "session_id": "54936943-0808-4a42-8045-65a20dac393b",
+        "stage": "scenario_completed"
+      }
+    },
+    {
+      "scenario": "stopped",
+      "passed": true,
+      "exit_code": 0,
+      "process_failed_events": 1,
+      "reloads": 0,
+      "ready_events": 0,
+      "native_result": {
+        "backend_alive": false,
+        "backend_pid": 16220,
+        "backend_process_start_id": "1087d727-2181-4cc1-b476-e6756b5c4e8a",
+        "devtools": false,
+        "launcher_child_pid": 13396,
+        "orders_enabled": false,
+        "passed": true,
+        "reload_count": 0,
+        "reload_pending": false,
+        "renderer_id": "e24ba491-4673-41f9-8a17-8c01f30cf737",
+        "same_backend_identity": false,
+        "same_session": false,
+        "scenario": "stopped",
+        "session_id": "5920bbc4-000d-435a-8a3e-e447bebf515e",
+        "stage": "scenario_completed"
+      }
+    }
+  ]
+}

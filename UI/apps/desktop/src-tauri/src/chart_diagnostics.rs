@@ -1,7 +1,7 @@
 //! Backend와 독립적인 chart 진단을 크기 제한 JSONL 파일로 보존한다.
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -93,7 +93,7 @@ pub struct ChartDiagnostic {
 #[derive(Default)]
 pub struct ChartDiagnosticsState(Mutex<Option<ChartLogWriter>>);
 
-#[cfg(feature = "background-liveness-smoke")]
+#[cfg(any(feature = "background-liveness-smoke", feature = "renderer-recovery-smoke"))]
 impl ChartDiagnosticsState {
     /// 함수 이름: in_directory()
     /// 기능: 검증 산출물 디렉터리에 차트 진단 writer를 준비한다.
@@ -128,31 +128,54 @@ impl ChartLogWriter {
     /// 반환값: 파일 처리 결과
     /// 작성 날짜: 2026/09/11
     pub(crate) fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        // 파일 크기 상한을 넘으면 새 part로 이동해 과거 로그를 보존한다.
+        const MAX_PART_BYTES: u64 = 5 * 1024 * 1024;
+        if bytes.len() as u64 > MAX_PART_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "diagnostic_batch_exceeds_part_limit",
+            ));
+        }
         fs::create_dir_all(&self.directory)?;
-        if self.size + bytes.len() as u64 > 5 * 1024 * 1024 {
+
+        // 분할하기 전에 이전 실패가 남긴 부분 기록부터 복구한다.
+        let mut file = self.open_committed_part()?;
+        if self.size + bytes.len() as u64 > MAX_PART_BYTES {
             self.part += 1;
             self.size = 0;
+            file = self.open_committed_part()?;
         }
+        file.write_all(bytes)?;
+        file.sync_data()?;
+        self.size += bytes.len() as u64;
+        Ok(())
+    }
+
+    /// 함수 이름: open_committed_part()
+    /// 기능: Windows 절단 권한을 확보하고 마지막 확정 byte 이후의 부분 기록을 복구한다.
+    /// 인자: self -> 단일 writer의 현재 분할 파일과 확정 크기
+    /// 반환값: 확정 위치에 커서가 놓인 파일 또는 파일 처리 오류
+    /// 작성 날짜: 2026/10/04
+    fn open_committed_part(&self) -> std::io::Result<std::fs::File> {
         let path = self
             .directory
             .join(format!("{}_part{:04}.log", self.run_name, self.part));
 
-        // append 모드와 사용자 전용 파일 권한을 준비한다.
+        // Windows append 전용 handle은 set_len에 필요한 쓰기 권한이 없다.
+        // 기존 Mutex 또는 단일 worker가 직렬화하므로 write와 명시적 seek를 사용한다.
         let mut options = OpenOptions::new();
-        options.create(true).append(true);
+        options.create(true).write(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
         let mut file = options.open(path)?;
-        // 직전 write/sync 실패가 남긴 부분 기록은 마지막 확정 byte 이후에서 복구한다.
-        file.set_len(self.size)?;
-        file.write_all(bytes)?;
-        file.sync_data()?;
-        self.size += bytes.len() as u64;
-        Ok(())
+        if file.metadata()?.len() != self.size {
+            file.set_len(self.size)?;
+            file.sync_data()?;
+        }
+        file.seek(SeekFrom::Start(self.size))?;
+        Ok(file)
     }
 }
 
@@ -213,15 +236,45 @@ mod tests {
             "{\"sequence\":1}\n{\"sequence\":2}\n"
         );
 
-        // 파일 경계에 도달한 다음 append가 기존 파일을 보존하고 새 part를 만드는지 검증한다.
-        writer.size = 5 * 1024 * 1024;
+        // 경계의 실패한 tail을 복구한 다음 새 part로 분할해야 과거 JSONL이 손상되지 않는다.
+        let remaining_bytes = 5 * 1024 * 1024 - writer.size as usize;
+        let mut padding = vec![b' '; remaining_bytes];
+        padding[remaining_bytes - 1] = b'\n';
+        writer.append(&padding).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&first_path)
+            .unwrap()
+            .write_all(b"partial_before_rotation")
+            .unwrap();
         writer.append(b"{\"sequence\":3}\n").unwrap();
-        assert!(first_path.exists());
+        assert_eq!(fs::metadata(&first_path).unwrap().len(), 5 * 1024 * 1024);
+        assert!(fs::read_to_string(&first_path).unwrap()
+            .starts_with("{\"sequence\":1}\n{\"sequence\":2}\n"));
         assert_eq!(
             fs::read_to_string(directory.join("test_part0002.log")).unwrap(),
             "{\"sequence\":3}\n"
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// 함수 이름: rejects_oversized_batch_without_advancing_writer()
+    /// 기능: 단일 batch가 분할 상한을 넘으면 파일과 writer 상태를 바꾸지 않는지 검증한다.
+    /// 인자: 없음
+    /// 반환값: 없음; 상한 또는 상태 보존 계약 실패 시 테스트 실패
+    /// 작성 날짜: 2026/10/04
+    #[test]
+    fn rejects_oversized_batch_without_advancing_writer() {
+        let directory = std::env::temp_dir().join(format!(
+            "chart-log-oversize-{}-{}", std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        let mut writer = ChartLogWriter::new(directory.clone(), "test".into());
+        let error = writer.append(&vec![b' '; 5 * 1024 * 1024 + 1]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(writer.part, 1);
+        assert_eq!(writer.size, 0);
+        assert!(!directory.exists());
     }
 }
 

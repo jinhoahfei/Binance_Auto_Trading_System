@@ -56,6 +56,8 @@ export class BackendConnectionDiagnosticWriter {
     private dropped = 0;
     private in_flight: Promise<void> | null = null;
     private retry_timer: ReturnType<typeof setTimeout> | null = null;
+    private native_write_is_pending = false;
+    private failure_is_reported = false;
 
     /**
      * 함수 이름: BackendConnectionDiagnosticWriter.constructor()
@@ -85,19 +87,20 @@ export class BackendConnectionDiagnosticWriter {
             const [removed] = this.pending.splice(ordinary < 0 ? 0 : ordinary, 1);
             this.dropped += 1 + (removed?.dropped_before ?? 0);
         }
-        if (this.retry_timer === null) void this.flush();
+        if (this.retry_timer === null && this.in_flight === null && !this.native_write_is_pending) void this.flush();
     }
 
     /**
      * 함수 이름: flush()
-     * 기능: 동시에 한 저장 작업만 진행하고 실패한 batch를 복구해 재시도를 예약한다.
+     * 기능: 응답 대기는 제한하되 native 응답 전에는 새 IPC나 Promise 구독을 누적하지 않는다.
      * 인자: 없음
      * 반환값: 현재 저장 시도의 완료 Promise
      * 작성 날짜: 2026/09/17
      */
-    async flush(): Promise<void> {
+    flush(): Promise<void> {
         // 동시 flush는 현재 Promise를 공유하여 같은 batch를 중복 저장하지 않는다.
         if (this.in_flight !== null) return this.in_flight;
+        if (this.native_write_is_pending) return Promise.resolve();
         if (this.retry_timer !== null) {
             clearTimeout(this.retry_timer);
             this.retry_timer = null;
@@ -111,40 +114,78 @@ export class BackendConnectionDiagnosticWriter {
          * 작성 날짜: 2026/09/17
          */
         const drain = async () => {
-            while (this.pending.length > 0) {
+            while (this.pending.length > 0 && this.retry_timer === null) {
                 // 원래 순서를 보존한다. 실패 시 in-flight batch도 queue와 합쳐 상한을 적용한다.
                 const batch = this.pending.splice(0, 32);
                 batch[0] = { ...batch[0]!, dropped_before: batch[0]!.dropped_before + this.dropped };
                 this.dropped = 0;
                 let timeout: ReturnType<typeof setTimeout> | undefined;
+                this.native_write_is_pending = true;
+                // 시간 초과는 native 호출 취소가 아니다. 원래 응답이 올 때까지 해당 batch를 소유한다.
+                const write = Promise.resolve().then(() => this.persist(batch)).then(
+                    () => this.finish_write(batch, true),
+                    () => this.finish_write(batch, false),
+                );
                 try {
-                    await Promise.race([this.persist(batch), new Promise<never>((_, reject) => {
-                        timeout = setTimeout(() => reject(new Error('DIAGNOSTIC_ACK_TIMEOUT')), 5_000);
+                    await Promise.race([write, new Promise<void>((resolve) => {
+                        timeout = setTimeout(() => {
+                            this.report_failure();
+                            resolve();
+                        }, 5_000);
                     })]);
-                }
-                catch {
-                    this.pending.unshift(...batch);
-                    while (this.pending.length > 256) {
-                        const ordinary = this.pending.findIndex((record) => record.event !== 'first_failure');
-                        const [removed] = this.pending.splice(ordinary < 0 ? 0 : ordinary, 1);
-                        this.dropped += 1 + (removed?.dropped_before ?? 0);
-                    }
-                    console.error('BACKEND_CONNECTION_DIAGNOSTIC_WRITE_FAILED');
-                    this.retry_timer = setTimeout(() => { this.retry_timer = null; void this.flush(); }, 5_000);
-
-                    return;
                 } finally { if (timeout !== undefined) clearTimeout(timeout); }
+                if (this.native_write_is_pending) return;
             }
         };
 
         // Promise를 먼저 등록해 동기 record 재진입도 한 writer로 직렬화한다.
-        this.in_flight = Promise.resolve().then(drain);
-        try { await this.in_flight; } finally {
+        this.in_flight = Promise.resolve().then(drain).finally(() => {
             this.in_flight = null;
 
             // drain 종료와 finally 사이에 들어온 record도 다음 사건을 기다리지 않고 저장한다.
-            if (this.pending.length > 0 && this.retry_timer === null) void this.flush();
+            if (this.pending.length > 0 && this.retry_timer === null && !this.native_write_is_pending) void this.flush();
+        });
+
+        return this.in_flight;
+    }
+
+    /**
+     * 함수 이름: finish_write()
+     * 기능: 늦게 도착한 성공은 재전송하지 않고 확정 실패만 원래 순번으로 큐에 돌려놓는다.
+     * 인자: batch -> native가 소유한 진단 묶음, succeeded -> 저장 응답 성공 여부
+     * 반환값: 없음
+     * 작성 날짜: 2026/10/04
+     */
+    private finish_write(batch: StoredConnectionDiagnostic[], succeeded: boolean): void {
+        this.native_write_is_pending = false;
+        if (succeeded) {
+            this.failure_is_reported = false;
+        } else {
+            this.pending.unshift(...batch);
+            while (this.pending.length > 256) {
+                const ordinary = this.pending.findIndex((record) => record.event !== 'first_failure');
+                const [removed] = this.pending.splice(ordinary < 0 ? 0 : ordinary, 1);
+                this.dropped += 1 + (removed?.dropped_before ?? 0);
+            }
+            this.report_failure();
+            this.retry_timer = setTimeout(() => { this.retry_timer = null; void this.flush(); }, 5_000);
         }
+
+        // ACK 제한 시간이 지난 뒤의 실제 응답도 남은 큐를 한 writer로 다시 진행시킨다.
+        if (this.in_flight === null && this.retry_timer === null && this.pending.length > 0) void this.flush();
+    }
+
+    /**
+     * 함수 이름: report_failure()
+     * 기능: 연속된 저장 장애는 한 번만 출력해 개발자 도구의 오류 보관량을 제한한다.
+     * 인자: 없음
+     * 반환값: 없음
+     * 작성 날짜: 2026/10/04
+     */
+    private report_failure(): void {
+        if (this.failure_is_reported) return;
+        this.failure_is_reported = true;
+        console.error('BACKEND_CONNECTION_DIAGNOSTIC_WRITE_FAILED');
     }
 }
 

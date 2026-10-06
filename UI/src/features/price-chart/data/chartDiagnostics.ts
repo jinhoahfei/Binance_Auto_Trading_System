@@ -44,6 +44,7 @@ let sequence = 0;
 let dropped_records = 0;
 let flush_is_running = false;
 let retry_timer: ReturnType<typeof setTimeout> | null = null;
+let failure_is_reported = false;
 
 
 /**
@@ -63,6 +64,7 @@ async function flush_chart_diagnostics(): Promise<void> {
     }
     try {
         await invoke('record_chart_diagnostics', { records });
+        failure_is_reported = false;
     } catch {
         pending_records.unshift(...records);
         if (pending_records.length > 256) {
@@ -71,7 +73,10 @@ async function flush_chart_diagnostics(): Promise<void> {
         }
 
         // 저장 장애가 차트 수신을 막지 않으며 임의 native 오류 원문은 출력하지 않는다.
-        console.error('CHART_DIAGNOSTIC_WRITE_FAILED');
+        if (!failure_is_reported) {
+            failure_is_reported = true;
+            console.error('CHART_DIAGNOSTIC_WRITE_FAILED');
+        }
         retry_timer = setTimeout(() => {
             retry_timer = null;
             void flush_chart_diagnostics();

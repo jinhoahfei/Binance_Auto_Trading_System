@@ -1,0 +1,209 @@
+{
+  "results": [
+    {
+      "run": "development-unguarded-capture",
+      "completed": false,
+      "stop_reason": null,
+      "stage": "soak_completed",
+      "devtools_open": false,
+      "heap_MiB": {
+        "count": 6,
+        "first": 3.75,
+        "last": 19.0,
+        "minimum": 3.75,
+        "maximum": 28.07
+      },
+      "ticks": {
+        "count": 6,
+        "first": 0,
+        "last": 4,
+        "minimum": 0,
+        "maximum": 4
+      },
+      "measure_count": {
+        "count": 6,
+        "first": 0,
+        "last": 24,
+        "minimum": 0,
+        "maximum": 24
+      },
+      "renderer_private_commit_MiB": [],
+      "devtools_requested": false,
+      "cleanup_configured": false,
+      "cleanup_effective": false
+    },
+    {
+      "run": "development-unguarded-tools-open",
+      "completed": false,
+      "stop_reason": "renderer_private_commit_limit",
+      "stage": "soak_stopped_by_guard",
+      "devtools_open": false,
+      "heap_MiB": {
+        "count": 13,
+        "first": 3.75,
+        "last": 545.67,
+        "minimum": 3.75,
+        "maximum": 545.67
+      },
+      "ticks": {
+        "count": 13,
+        "first": 0,
+        "last": 237,
+        "minimum": 0,
+        "maximum": 237
+      },
+      "measure_count": {
+        "count": 13,
+        "first": 0,
+        "last": 1149,
+        "minimum": 0,
+        "maximum": 1149
+      },
+      "renderer_private_commit_MiB": [
+        {
+          "pid": 18408,
+          "count": 2,
+          "first": 622.32,
+          "last": 1065.35,
+          "minimum": 622.32,
+          "maximum": 1065.35
+        }
+      ],
+      "devtools_requested": true,
+      "cleanup_configured": false,
+      "cleanup_effective": false
+    },
+    {
+      "run": "production-tools-closed",
+      "completed": true,
+      "stop_reason": null,
+      "stage": "soak_completed",
+      "devtools_open": null,
+      "heap_MiB": {
+        "count": 14,
+        "first": 3.13,
+        "last": 15.13,
+        "minimum": 3.13,
+        "maximum": 45.89
+      },
+      "ticks": {
+        "count": 14,
+        "first": 0,
+        "last": 258,
+        "minimum": 0,
+        "maximum": 258
+      },
+      "measure_count": {
+        "count": 14,
+        "first": 0,
+        "last": 0,
+        "minimum": 0,
+        "maximum": 0
+      },
+      "renderer_private_commit_MiB": [
+        {
+          "pid": 18348,
+          "count": 2,
+          "first": 161.52,
+          "last": 150.2,
+          "minimum": 150.2,
+          "maximum": 161.52
+        }
+      ],
+      "devtools_requested": false,
+      "cleanup_configured": true,
+      "cleanup_effective": false
+    },
+    {
+      "run": "production-tools-open",
+      "completed": true,
+      "stop_reason": null,
+      "stage": "soak_completed",
+      "devtools_open": null,
+      "heap_MiB": {
+        "count": 14,
+        "first": 3.12,
+        "last": 22.97,
+        "minimum": 3.12,
+        "maximum": 45.6
+      },
+      "ticks": {
+        "count": 14,
+        "first": 0,
+        "last": 257,
+        "minimum": 0,
+        "maximum": 257
+      },
+      "measure_count": {
+        "count": 14,
+        "first": 0,
+        "last": 0,
+        "minimum": 0,
+        "maximum": 0
+      },
+      "renderer_private_commit_MiB": [
+        {
+          "pid": 14976,
+          "count": 3,
+          "first": 17.79,
+          "last": 154.68,
+          "minimum": 17.79,
+          "maximum": 162.43
+        },
+        {
+          "pid": 17108,
+          "count": 2,
+          "first": 87.86,
+          "last": 72.91,
+          "minimum": 72.91,
+          "maximum": 87.86
+        }
+      ],
+      "devtools_requested": true,
+      "cleanup_configured": true,
+      "cleanup_effective": false
+    }
+  ],
+  "owned_process_ids": [
+    1704,
+    2120,
+    3500,
+    5628,
+    5924,
+    7200,
+    8392,
+    8436,
+    9232,
+    11436,
+    13636,
+    14976,
+    16788,
+    17108,
+    17204,
+    18348,
+    18408,
+    19036,
+    19072,
+    19152,
+    19416,
+    19640,
+    20224,
+    20604,
+    20700,
+    20776,
+    21316,
+    21356
+  ],
+  "guarded_native_run_performed": false,
+  "long_run_started": false,
+  "stopped_at_user_request": true,
+  "cleanup_checked_at": "2026-10-04T22:56:04.5562852+09:00",
+  "unrelated_reused_process_ids": [
+    {
+      "Id": 18348,
+      "ProcessName": "svchost",
+      "StartTime": null
+    }
+  ],
+  "owned_processes_still_alive": []
+}

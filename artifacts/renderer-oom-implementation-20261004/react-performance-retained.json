@@ -1,0 +1,67 @@
+{
+    "runtime": "v24.19.0",
+    "react": "19.2.8",
+    "mode": "retained",
+    "candle_count": 1000,
+    "samples": [
+        {
+            "iteration": 0,
+            "heap_used_mib": 46.60859680175781,
+            "measures": 1,
+            "last_entry_properties": 0,
+            "last_entry_json_bytes": 0
+        },
+        {
+            "iteration": 100,
+            "heap_used_mib": 194.64432525634766,
+            "measures": 300,
+            "last_entry_properties": 4013,
+            "last_entry_json_bytes": 335761
+        },
+        {
+            "iteration": 200,
+            "heap_used_mib": 341.8032913208008,
+            "measures": 600,
+            "last_entry_properties": 4013,
+            "last_entry_json_bytes": 335761
+        },
+        {
+            "iteration": 300,
+            "heap_used_mib": 488.924560546875,
+            "measures": 900,
+            "last_entry_properties": 4013,
+            "last_entry_json_bytes": 335761
+        },
+        {
+            "iteration": 400,
+            "heap_used_mib": 635.8912734985352,
+            "measures": 1200,
+            "last_entry_properties": 4013,
+            "last_entry_json_bytes": 335761
+        },
+        {
+            "iteration": 500,
+            "heap_used_mib": 782.884521484375,
+            "measures": 1500,
+            "last_entry_properties": 4013,
+            "last_entry_json_bytes": 335761
+        },
+        {
+            "iteration": 600,
+            "heap_used_mib": 929.9990539550781,
+            "measures": 1800,
+            "last_entry_properties": 4013,
+            "last_entry_json_bytes": 335761
+        },
+        {
+            "iteration": "after-clear",
+            "heap_used_mib": 49.848167419433594,
+            "measures": 0,
+            "last_entry_properties": 0,
+            "last_entry_json_bytes": 0
+        }
+    ],
+    "external_measure_preserved": true,
+    "external_mark_preserved": true,
+    "entry_bytes_per_update": 671522
+}

@@ -167,6 +167,7 @@ export interface BackendUiAdapterDependencies {
     readonly shutdown_wait_timeout_ms?: number;
     readonly shutdown_poll_interval_ms?: number;
     readonly wait_for_sidecar_exit?: () => Promise<unknown>;
+    readonly set_renderer_recovery_shutdown?: (in_progress: boolean) => Promise<void>;
 }
 
 /**
@@ -243,6 +244,19 @@ async function invoke_default_csv_directory_picker(): Promise<unknown> {
  */
 async function invoke_default_sidecar_exit_waiter(): Promise<unknown> {
     return invoke<unknown>('await_backend_sidecar_exit');
+}
+
+
+/**
+ * 함수 이름: invoke_renderer_recovery_shutdown()
+ * 기능: 종료 준비 전에 native 렌더러 재시작을 차단하고 확정된 취소 뒤에만 해제한다.
+ * 인자: in_progress -> 종료 준비가 진행 중인지 여부
+ * 반환값: native gate 저장 완료 Promise
+ * 작성 날짜: 2026/10/04
+ */
+async function invoke_renderer_recovery_shutdown(in_progress: boolean): Promise<void> {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    await invoke<void>('set_renderer_recovery_shutdown', { inProgress: in_progress });
 }
 
 
@@ -979,6 +993,8 @@ export class BackendUiAdapter implements UiCommandPort {
     readonly #shutdown_wait_timeout_ms: number;
     readonly #shutdown_poll_interval_ms: number;
     readonly #wait_for_sidecar_exit: () => Promise<unknown>;
+    readonly #set_renderer_recovery_shutdown: (in_progress: boolean) => Promise<void>;
+    #recovery_gate_operation: { in_progress: boolean; pending: boolean; wait: Promise<void> } | null = null;
     readonly #http_origin: string;
     readonly #web_socket_url: string;
 
@@ -1058,6 +1074,8 @@ export class BackendUiAdapter implements UiCommandPort {
         this.#shutdown_poll_interval_ms = shutdown_poll_interval_ms;
         this.#wait_for_sidecar_exit = dependencies.wait_for_sidecar_exit
             ?? invoke_default_sidecar_exit_waiter;
+        this.#set_renderer_recovery_shutdown = dependencies.set_renderer_recovery_shutdown
+            ?? invoke_renderer_recovery_shutdown;
 
         // 검증한 loopback 포트에서 HTTP와 WebSocket 주소를 구성한다.
         this.#http_origin = `http://127.0.0.1:${validated_descriptor.port}`;
@@ -1568,6 +1586,7 @@ export class BackendUiAdapter implements UiCommandPort {
          * 작성 날짜: 2026/09/17
          */
         const operation = async () => {
+            await this.set_recovery_shutdown_gate(true);
             if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
                 await this.prepare_shutdown(liquidation_confirmed);
             }
@@ -1579,6 +1598,13 @@ export class BackendUiAdapter implements UiCommandPort {
         try { await this.#shutdown_task; }
         catch (error) { this.record_failure(error, 'shutdown'); throw error; }
         finally {
+            if (!this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous
+                && this.#shutdown_prepare_body === null && !this.#recovery_gate_operation?.pending) {
+                // 준비 응답 유실·시간 초과는 backend 작업의 취소가 아니므로 gate를 유지한다.
+                try { await this.set_recovery_shutdown_gate(false); }
+                catch { this.record_failure(new BackendAdapterError('SHUTDOWN_PREPARATION_INTERNAL_ERROR',
+                    shutdown_failure_message('SHUTDOWN_PREPARATION_INTERNAL_ERROR'), true), 'shutdown'); }
+            }
             this.#shutdown_task = null;
             this.#shutdown_requested = false;
             if (!this.#is_stopped && !this.#shutdown_was_accepted && !this.#shutdown_outcome_is_ambiguous) {
@@ -1587,6 +1613,34 @@ export class BackendUiAdapter implements UiCommandPort {
                 void this.full_resynchronize(this.#first_failure_code ?? 'EVENT_STREAM_CLOSED');
             }
         }
+    }
+
+    /**
+     * 함수 이름: set_recovery_shutdown_gate()
+     * 기능: native 종료 gate 응답 대기를 제한하고 미완료 IPC에 중복 호출·구독을 만들지 않는다.
+     * 인자: in_progress -> native renderer 복구를 차단할지 여부
+     * 반환값: 저장 확인 또는 고정된 재시도 가능 종료 오류 Promise
+     * 작성 날짜: 2026/10/04
+     */
+    private set_recovery_shutdown_gate(in_progress: boolean): Promise<void> {
+        const failure = () => new BackendAdapterError('SHUTDOWN_PREPARATION_INTERNAL_ERROR',
+            shutdown_failure_message('SHUTDOWN_PREPARATION_INTERNAL_ERROR'), true);
+        if (this.#recovery_gate_operation?.pending) {
+            return this.#recovery_gate_operation.in_progress === in_progress
+                ? this.#recovery_gate_operation.wait : Promise.reject(failure());
+        }
+        const operation = { in_progress, pending: true, wait: Promise.resolve() };
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const native_call = Promise.resolve().then(() => this.#set_renderer_recovery_shutdown(in_progress))
+            .finally(() => { operation.pending = false; });
+        operation.wait = Promise.race([native_call, new Promise<void>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(failure()), Math.min(this.#request_timeout_ms, 5_000));
+        })]).catch(() => { throw failure(); }).finally(() => {
+            if (timeout !== undefined) clearTimeout(timeout);
+        });
+        this.#recovery_gate_operation = operation;
+
+        return operation.wait;
     }
 
     /**
